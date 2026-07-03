@@ -16,11 +16,18 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-DATA_DIR = REPO_ROOT / "Data"
+DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", REPO_ROOT / "Data")).expanduser()
 RUNS_DIR = SCRIPT_DIR / "runs"
 RESULTS_DIR = SCRIPT_DIR / "results"
 ALGORITHM_PATH = SCRIPT_DIR / "DockerDemoAlgorithm.py"
 PLOT_SCRIPT = SCRIPT_DIR / "plot_results.py"
+
+
+def display_path(path):
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def die(message, code=1):
@@ -116,7 +123,7 @@ def write_lean_daily_zip(symbol, rows, source, overwrite=False):
         "rows": len(csv_lines),
         "first_date": normalized[0][0].isoformat(),
         "last_date": normalized[-1][0].isoformat(),
-        "lean_file": str(output.relative_to(REPO_ROOT)),
+        "lean_file": display_path(output),
         "written_at_utc": datetime.now(timezone.utc).isoformat(),
         "notes": [
             "Imported as raw daily TradeBar data.",

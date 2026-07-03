@@ -5,7 +5,7 @@ The frontend is a React/Vite app for the local LEAN workbench. It uses Ant Desig
 Run in development:
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/frontend
+cd /Users/kaermax/lean-platform/web/frontend
 npm install
 npm run dev
 ```
@@ -27,7 +27,6 @@ npm run build
 Pages:
 
 - Dashboard
-- LEAN capabilities
 - Workspace
 - Projects
 - Data
@@ -37,11 +36,12 @@ Pages:
 - Reports
 - Object Store
 - Tasks and logs
+- Settings
 
 Main workflow:
 
 1. Open `Workspace`.
-2. Create or select the DJIA EMA project.
-3. Use the `Data` tab to download current Dow Jones Industrial Average components into local LEAN data.
-4. Use the `Backtest` tab to run Docker LEAN against the selected project and symbol.
+2. Create or select a project and choose a strategy template.
+3. Use the `Data` tab to download US, A-share, or Hong Kong symbols into local LEAN data.
+4. Use the `Backtest` tab to run Docker LEAN against the selected project, market, symbol, and strategy parameters.
 5. Open `Results` to inspect metrics, charts, order markers, artifacts, and reports.

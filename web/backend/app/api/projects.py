@@ -11,6 +11,9 @@ class ProjectCreate(BaseModel):
     name: str
     language: str = "Python"
     algorithmClass: str | None = None
+    templateKey: str | None = None
+    market: str = "usa"
+    parameters: dict | None = None
 
 
 class FileWrite(BaseModel):
@@ -26,7 +29,14 @@ def list_projects():
 @router.post("")
 def create_project(request: ProjectCreate):
     try:
-        return project_service.create_project(request.name, request.language, request.algorithmClass)
+        return project_service.create_project(
+            request.name,
+            request.language,
+            request.algorithmClass,
+            template_key=request.templateKey,
+            market=request.market,
+            parameters=request.parameters,
+        )
     except LeanWebError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -42,8 +52,7 @@ def get_project(project_id: str):
 @router.delete("/{project_id}")
 def delete_project(project_id: str):
     try:
-        project_service.delete_project(project_id)
-        return {"deleted": True}
+        return {"deleted": True, "details": project_service.delete_project(project_id)}
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

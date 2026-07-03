@@ -36,8 +36,12 @@ def fetch_data_batch_task(task_id: str):
     parameters = task["parameters"]
     symbols = parameters.get("symbols") or []
     provider = parameters.get("provider") or "stooq"
+    market = parameters.get("market") or "usa"
     overwrite = bool(parameters.get("overwrite", False))
     outputsize = parameters.get("outputsize") or "compact"
+    start_date = parameters.get("startDate") or None
+    end_date = parameters.get("endDate") or None
+    adjust = parameters.get("adjust") or ""
     api_key = parameters.get("apiKey") or None
     update_task(task_id, status="running", started_at=utc_now(), error=None)
     results = []
@@ -47,14 +51,18 @@ def fetch_data_batch_task(task_id: str):
             symbol = str(symbol).upper().strip()
             if not symbol:
                 continue
-            append_log(task_id, f"Fetching {symbol} from {provider}.")
+            append_log(task_id, f"Fetching {symbol} from {provider} ({market}).")
             try:
                 asset = fetch_and_import_symbol(
                     symbol,
                     provider,
+                    market=market,
                     overwrite=overwrite,
                     api_key=api_key,
                     outputsize=outputsize,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
                 )
                 append_log(task_id, f"Imported {symbol}: {asset['rows']} rows ({asset['first_date']} -> {asset['last_date']}).")
                 results.append(asset)

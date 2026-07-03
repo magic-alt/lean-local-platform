@@ -8,6 +8,7 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+from urllib.error import URLError
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,11 +29,84 @@ class LeanPlatformError(LeanWebError, ValueError):
     pass
 
 
+MARKET_CONFIG: dict[str, dict[str, Any]] = {
+    "usa": {
+        "name": "US Equity",
+        "currency": "USD",
+        "timezone": "America/New_York",
+        "open": "09:30:00",
+        "close": "16:00:00",
+        "lot_size": "1",
+        "tick_size": "0.01",
+        "market_id": 1,
+    },
+    "china": {
+        "name": "China A Share",
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+        "open": "09:30:00",
+        "close": "15:00:00",
+        "lot_size": "100",
+        "tick_size": "0.01",
+        "market_id": 101,
+    },
+    "hongkong": {
+        "name": "Hong Kong Equity",
+        "currency": "HKD",
+        "timezone": "Asia/Hong_Kong",
+        "open": "09:30:00",
+        "close": "16:00:00",
+        "lot_size": "100",
+        "tick_size": "0.01",
+        "market_id": 102,
+    },
+}
+
+
+def market_key(market: str | None = None) -> str:
+    value = (market or "usa").strip().lower().replace("-", "").replace("_", "")
+    aliases = {
+        "us": "usa",
+        "usa": "usa",
+        "america": "usa",
+        "cn": "china",
+        "a": "china",
+        "ashare": "china",
+        "china": "china",
+        "zh": "china",
+        "hk": "hongkong",
+        "hkg": "hongkong",
+        "hongkong": "hongkong",
+    }
+    key = aliases.get(value, value)
+    if key not in MARKET_CONFIG:
+        raise LeanPlatformError(f"Unsupported market: {market!r}")
+    return key
+
+
 def symbol_key(symbol: str) -> str:
     cleaned = symbol.strip().lower()
     if not cleaned or not all(ch.isalnum() or ch in ".-" for ch in cleaned):
         raise LeanPlatformError(f"Invalid symbol: {symbol!r}")
     return cleaned
+
+
+def normalize_symbol(symbol: str, market: str | None = None) -> str:
+    key = market_key(market)
+    value = symbol_key(symbol).upper().replace("_", ".")
+    if key == "usa":
+        return value.replace("-", ".")
+    if key == "china":
+        value = value.replace("SH", "").replace("SZ", "").replace("BJ", "").replace(".", "")
+        if not value.isdigit() or len(value) != 6:
+            raise LeanPlatformError("A-share symbols must be 6 digits, e.g. 600519 or 000001.")
+        return value
+    if key == "hongkong":
+        value = value.replace("HK", "").replace(".", "")
+        if not value.isdigit():
+            raise LeanPlatformError("Hong Kong symbols must be numeric, e.g. 00700.")
+        return value.zfill(5)
+    return value
 
 
 def parse_date(value: str) -> date:
@@ -46,32 +120,80 @@ def lean_price(value: str | float) -> str:
     return str(int(round(float(value) * 10000)))
 
 
-def daily_zip_path(symbol: str) -> Path:
-    return DATA_DIR / "equity" / "usa" / "daily" / f"{symbol_key(symbol)}.zip"
+def daily_zip_path(symbol: str, market: str | None = None) -> Path:
+    market = market_key(market)
+    return DATA_DIR / "equity" / market / "daily" / f"{symbol_key(normalize_symbol(symbol, market))}.zip"
 
 
-def list_local_symbols() -> list[str]:
-    daily_dir = DATA_DIR / "equity" / "usa" / "daily"
+def list_local_symbols(market: str | None = None) -> list[str]:
+    daily_dir = DATA_DIR / "equity" / market_key(market) / "daily"
     if not daily_dir.exists():
         return []
     return sorted(path.stem.upper() for path in daily_dir.glob("*.zip"))
 
 
-def ensure_equity_dirs() -> None:
-    for relative in ("equity/usa/daily", "equity/usa/map_files", "equity/usa/factor_files"):
+def ensure_market_database(market: str) -> None:
+    market = market_key(market)
+    if market == "usa":
+        return
+    config = MARKET_CONFIG[market]
+
+    symbol_properties = DATA_DIR / "symbol-properties" / "symbol-properties-database.csv"
+    symbol_properties.parent.mkdir(parents=True, exist_ok=True)
+    if not symbol_properties.exists():
+        symbol_properties.write_text(
+            "market,symbol,type,description,quote_currency,contract_multiplier,minimum_price_variation,lot_size,market_ticker,minimum_order_size,price_magnifier,strike_multiplier\n",
+            encoding="utf-8",
+        )
+    text = symbol_properties.read_text(encoding="utf-8", errors="replace")
+    entry = f"{market},[*],equity,,{config['currency']},1,{config['tick_size']},{config['lot_size']},,1\n"
+    if f"{market},[*],equity" not in text:
+        with symbol_properties.open("a", encoding="utf-8") as file:
+            file.write(entry)
+
+    market_hours = DATA_DIR / "market-hours" / "market-hours-database.json"
+    market_hours.parent.mkdir(parents=True, exist_ok=True)
+    data = {"entries": {}} if not market_hours.exists() else json.loads(market_hours.read_text(encoding="utf-8"))
+    entries = data.setdefault("entries", {})
+    entry_key = f"Equity-{market}-[*]"
+    if entry_key not in entries:
+        weekday = [{"start": config["open"], "end": config["close"], "state": "market"}]
+        entries[entry_key] = {
+            "dataTimeZone": config["timezone"],
+            "exchangeTimeZone": config["timezone"],
+            "sunday": [],
+            "monday": weekday,
+            "tuesday": weekday,
+            "wednesday": weekday,
+            "thursday": weekday,
+            "friday": weekday,
+            "saturday": [],
+            "holidays": [],
+            "earlyCloses": {},
+            "lateOpens": {},
+            "regularHolidays": [],
+        }
+        market_hours.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def ensure_equity_dirs(market: str | None = None) -> None:
+    market = market_key(market)
+    ensure_market_database(market)
+    for relative in (f"equity/{market}/daily", f"equity/{market}/map_files", f"equity/{market}/factor_files"):
         (DATA_DIR / relative).mkdir(parents=True, exist_ok=True)
 
 
-def write_auxiliary_files(symbol: str, first_date: date) -> None:
-    ticker = symbol_key(symbol)
-    ensure_equity_dirs()
+def write_auxiliary_files(symbol: str, first_date: date, market: str | None = None) -> None:
+    market = market_key(market)
+    ticker = symbol_key(normalize_symbol(symbol, market))
+    ensure_equity_dirs(market)
     start = first_date.strftime("%Y%m%d")
 
-    map_file = DATA_DIR / "equity" / "usa" / "map_files" / f"{ticker}.csv"
+    map_file = DATA_DIR / "equity" / market / "map_files" / f"{ticker}.csv"
     if not map_file.exists():
         map_file.write_text(f"{start},{ticker},P\n20501231,{ticker},P\n", encoding="utf-8")
 
-    factor_file = DATA_DIR / "equity" / "usa" / "factor_files" / f"{ticker}.csv"
+    factor_file = DATA_DIR / "equity" / market / "factor_files" / f"{ticker}.csv"
     if not factor_file.exists():
         factor_file.write_text(f"{start},1,1,0\n20501231,1,1,0\n", encoding="utf-8")
 
@@ -103,13 +225,15 @@ def write_lean_daily_zip(
     rows: list[dict[str, str]],
     source: str,
     overwrite: bool = False,
+    market: str | None = None,
 ) -> dict[str, Any]:
-    ticker = symbol_key(symbol)
+    market = market_key(market)
+    ticker = symbol_key(normalize_symbol(symbol, market))
     normalized = normalize_rows(rows)
-    ensure_equity_dirs()
-    write_auxiliary_files(ticker, normalized[0][0])
+    ensure_equity_dirs(market)
+    write_auxiliary_files(ticker, normalized[0][0], market)
 
-    output = daily_zip_path(ticker)
+    output = daily_zip_path(ticker, market)
     if output.exists() and not overwrite:
         raise LeanPlatformError(f"{output} already exists; enable overwrite to replace it.")
 
@@ -125,6 +249,7 @@ def write_lean_daily_zip(
 
     return {
         "symbol": ticker.upper(),
+        "market": market,
         "source": source,
         "rows": len(csv_lines),
         "first_date": normalized[0][0].isoformat(),
@@ -171,9 +296,18 @@ def rows_from_csv(
 
 
 def download_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "lean-local-platform/1.0"})
-    with urllib.request.urlopen(request, timeout=40) as response:
-        return response.read().decode("utf-8-sig")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) lean-local-platform/1.0",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            return response.read().decode("utf-8-sig")
+    except (OSError, URLError) as exc:
+        raise LeanPlatformError(f"Data provider request failed: {exc}") from exc
 
 
 def fetch_alpha_vantage_rows(symbol: str, api_key: str, outputsize: str) -> list[dict[str, str]]:
@@ -285,6 +419,255 @@ def fetch_yahoo_rows(symbol: str, start: str = "2000-01-01", end: str | None = N
     return rows
 
 
+def _date_param(value: str | None, fallback: str) -> str:
+    return parse_date(value).strftime("%Y%m%d") if value else fallback
+
+
+def _adjust_param(adjust: str | None) -> str:
+    value = (adjust or "").strip().lower()
+    if value in {"none", "raw", "normal"}:
+        return ""
+    if value not in {"", "qfq", "hfq"}:
+        raise LeanPlatformError("adjust must be one of raw, qfq, or hfq.")
+    return value
+
+
+def _china_prefixed_symbol(symbol: str) -> str:
+    ticker = normalize_symbol(symbol, "china")
+    if ticker.startswith(("6", "9")):
+        return f"sh{ticker}"
+    if ticker.startswith(("0", "2", "3")):
+        return f"sz{ticker}"
+    if ticker.startswith(("4", "8")):
+        return f"bj{ticker}"
+    return ticker
+
+
+def _eastmoney_secid(symbol: str, market: str) -> str:
+    ticker = normalize_symbol(symbol, market)
+    if market == "china":
+        exchange = "1" if ticker.startswith(("6", "9")) else "0"
+        return f"{exchange}.{ticker}"
+    if market == "hongkong":
+        return f"116.{ticker}"
+    if market == "usa":
+        return ticker
+    raise LeanPlatformError(f"EastMoney does not support market {market}.")
+
+
+def _records_to_rows(records: list[dict[str, Any]], columns: dict[str, str]) -> list[dict[str, str]]:
+    rows = []
+    for record in records:
+        try:
+            rows.append(
+                {
+                    "date": str(record[columns["date"]])[:10],
+                    "open": str(record[columns["open"]]),
+                    "high": str(record[columns["high"]]),
+                    "low": str(record[columns["low"]]),
+                    "close": str(record[columns["close"]]),
+                    "volume": str(record[columns["volume"]]),
+                }
+            )
+        except KeyError as exc:
+            raise LeanPlatformError(f"Provider response is missing column {exc.args[0]!r}.") from exc
+    if not rows:
+        raise LeanPlatformError("Provider returned no OHLCV rows.")
+    return rows
+
+
+def _akshare_module():
+    try:
+        import akshare as ak  # type: ignore
+    except ImportError as exc:
+        raise LeanPlatformError("AKShare is not installed. Run: pip install -r web/backend/requirements.txt") from exc
+    return ak
+
+
+def _ak_dataframe_rows(frame, columns: dict[str, str]) -> list[dict[str, str]]:
+    if frame is None or getattr(frame, "empty", True):
+        raise LeanPlatformError("Provider returned an empty data frame.")
+    return _records_to_rows(frame.to_dict("records"), columns)
+
+
+def _filter_rows_by_date(rows: list[dict[str, str]], start: str | None, end: str | None, provider_name: str, symbol: str) -> list[dict[str, str]]:
+    start_date = parse_date(start) if start else None
+    end_date = parse_date(end) if end else None
+    filtered = [
+        row
+        for row in rows
+        if (start_date is None or parse_date(row["date"]) >= start_date)
+        and (end_date is None or parse_date(row["date"]) <= end_date)
+    ]
+    if not filtered:
+        raise LeanPlatformError(f"{provider_name} returned no daily rows for {symbol}.")
+    return filtered
+
+
+def fetch_eastmoney_rows(
+    symbol: str,
+    market: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str | None = None,
+) -> list[dict[str, str]]:
+    market = market_key(market)
+    if market not in {"china", "hongkong"}:
+        raise LeanPlatformError("EastMoney provider supports China A-share and Hong Kong daily data in this platform.")
+    fqt = {"": "0", "qfq": "1", "hfq": "2"}[_adjust_param(adjust)]
+    params = urllib.parse.urlencode(
+        {
+            "secid": _eastmoney_secid(symbol, market),
+            "klt": "101",
+            "fqt": fqt,
+            "beg": _date_param(start, "19900101"),
+            "end": _date_param(end, "20500101"),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        }
+    )
+    text = download_text("https://push2his.eastmoney.com/api/qt/stock/kline/get?" + params)
+    data = json.loads(text)
+    klines = ((data.get("data") or {}).get("klines") or [])
+    rows = []
+    for line in klines:
+        fields = str(line).split(",")
+        if len(fields) < 6:
+            continue
+        rows.append(
+            {
+                "date": fields[0],
+                "open": fields[1],
+                "close": fields[2],
+                "high": fields[3],
+                "low": fields[4],
+                "volume": fields[5],
+            }
+        )
+    if not rows:
+        raise LeanPlatformError(f"EastMoney returned no daily rows for {symbol}.")
+    return rows
+
+
+def fetch_akshare_rows(
+    symbol: str,
+    market: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str | None = None,
+) -> list[dict[str, str]]:
+    market = market_key(market)
+    ak = _akshare_module()
+    adjust_value = _adjust_param(adjust)
+    start_value = _date_param(start, "19900101")
+    end_value = _date_param(end, date.today().strftime("%Y%m%d"))
+    if market == "china":
+        try:
+            frame = ak.stock_zh_a_hist(
+                symbol=normalize_symbol(symbol, market),
+                period="daily",
+                start_date=start_value,
+                end_date=end_value,
+                adjust=adjust_value,
+            )
+            return _ak_dataframe_rows(
+                frame,
+                {"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量"},
+            )
+        except Exception as primary_exc:
+            try:
+                frame = ak.stock_zh_a_daily(
+                    symbol=_china_prefixed_symbol(symbol),
+                    start_date=start_value,
+                    end_date=end_value,
+                    adjust=adjust_value,
+                )
+                return _ak_dataframe_rows(
+                    frame,
+                    {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+                )
+            except Exception as fallback_exc:
+                raise LeanPlatformError(
+                    f"AKShare request failed for {symbol}: {fallback_exc}; primary endpoint failed with {primary_exc}"
+                ) from fallback_exc
+    if market == "hongkong":
+        try:
+            frame = ak.stock_hk_daily(symbol=normalize_symbol(symbol, market), adjust=adjust_value)
+            rows = _ak_dataframe_rows(
+                frame,
+                {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+            )
+            return _filter_rows_by_date(rows, start, end, "AKShare", symbol)
+        except LeanPlatformError:
+            raise
+        except Exception as exc:
+            raise LeanPlatformError(f"AKShare request failed for {symbol}: {exc}") from exc
+    if market == "usa":
+        try:
+            frame = ak.stock_us_daily(symbol=normalize_symbol(symbol, market), adjust=adjust_value)
+            return _ak_dataframe_rows(
+                frame,
+                {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+            )
+        except LeanPlatformError:
+            raise
+        except Exception as exc:
+            raise LeanPlatformError(f"AKShare request failed for {symbol}: {exc}") from exc
+    raise LeanPlatformError(f"AKShare does not support market {market}.")
+
+
+def fetch_sina_rows(
+    symbol: str,
+    market: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str | None = None,
+) -> list[dict[str, str]]:
+    market = market_key(market)
+    ak = _akshare_module()
+    adjust_value = _adjust_param(adjust)
+    if market == "china":
+        frame = ak.stock_zh_a_daily(
+            symbol=_china_prefixed_symbol(symbol),
+            start_date=_date_param(start, "19900101"),
+            end_date=_date_param(end, date.today().strftime("%Y%m%d")),
+            adjust=adjust_value,
+        )
+        return _ak_dataframe_rows(
+            frame,
+            {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+        )
+    if market == "hongkong":
+        frame = ak.stock_hk_daily(symbol=normalize_symbol(symbol, market), adjust=adjust_value)
+        rows = _ak_dataframe_rows(
+            frame,
+            {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+        )
+        return _filter_rows_by_date(rows, start, end, "Sina", symbol)
+    if market == "usa":
+        frame = ak.stock_us_daily(symbol=normalize_symbol(symbol, market), adjust=adjust_value)
+        return _ak_dataframe_rows(
+            frame,
+            {"date": "date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"},
+        )
+    raise LeanPlatformError(f"Sina provider does not support market {market}.")
+
+
+def fetch_tonghuashun_rows(
+    symbol: str,
+    market: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str | None = None,
+) -> list[dict[str, str]]:
+    market = market_key(market)
+    if market != "china":
+        raise LeanPlatformError("TongHuaShun provider is enabled for A-share daily data only.")
+    # AKShare does not expose a stable TongHuaShun individual daily endpoint. Use
+    # its A-share history adapter for the same normalized OHLCV contract.
+    return fetch_akshare_rows(symbol, market, start=start, end=end, adjust=adjust)
+
+
 def lean_job_parameters(parameters: dict[str, Any]) -> dict[str, str]:
     excluded = {"dockerImage", "fastValues", "slowValues"}
     clean: dict[str, str] = {}
@@ -363,28 +746,33 @@ def base_config(
 
 
 def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
-    ticker = symbol_key(str(parameters["ticker"])).upper()
+    market = market_key(str(parameters.get("market", "usa")))
+    ticker = normalize_symbol(str(parameters["ticker"]), market).upper()
     start = parse_date(str(parameters["start"]))
     end = parse_date(str(parameters["end"]))
     if end <= start:
         raise LeanPlatformError("End date must be after start date.")
-    fast = int(parameters.get("fast", 10))
-    slow = int(parameters.get("slow", 30))
-    if fast <= 0 or slow <= 0:
-        raise LeanPlatformError("EMA periods must be positive.")
     cash = float(parameters.get("cash", 100000))
     if cash <= 0:
         raise LeanPlatformError("Cash must be positive.")
-    if not daily_zip_path(ticker).exists():
-        raise LeanPlatformError(f"Missing LEAN daily data for {ticker}.")
-    return {
+    if not daily_zip_path(ticker, market).exists():
+        raise LeanPlatformError(f"Missing LEAN daily data for {ticker} in {market}.")
+
+    clean: dict[str, Any] = {
         "ticker": ticker,
+        "market": market,
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "fast": fast,
-        "slow": slow,
         "cash": cash,
     }
+    for key, value in parameters.items():
+        if key in {"ticker", "symbol", "market", "start", "end", "cash", "dockerImage", "projectId", "parameters"}:
+            continue
+        if value is None:
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            clean[key] = value
+    return clean
 
 
 def docker_command(
@@ -469,15 +857,17 @@ def point_series(chart: dict[str, Any], name: str) -> list[dict[str, Any]]:
 
 def read_lean_daily_price_series(
     symbol: str,
+    market: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
-    path = daily_zip_path(symbol)
+    market = market_key(market)
+    path = daily_zip_path(symbol, market)
     if not path.exists():
         return []
     start_date = parse_date(start) if start else None
     end_date = parse_date(end) if end else None
-    ticker = symbol_key(symbol)
+    ticker = symbol_key(normalize_symbol(symbol, market))
     points: list[dict[str, Any]] = []
     with zipfile.ZipFile(path) as archive:
         name = f"{ticker}.csv"
@@ -530,6 +920,7 @@ def _nearest_value(points: list[dict[str, Any]], time_value: str | None) -> floa
 def extract_chart_data(
     result_json: Path,
     symbol: str | None = None,
+    market: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, Any]:
@@ -556,7 +947,7 @@ def extract_chart_data(
         )
 
     inferred_symbol = symbol or next((order["symbol"] for order in orders if order["symbol"]), None)
-    price = read_lean_daily_price_series(inferred_symbol, start, end) if inferred_symbol else []
+    price = read_lean_daily_price_series(inferred_symbol, market, start, end) if inferred_symbol else []
     equity_series = point_series(equity, "Equity")
     order_markers = [
         {

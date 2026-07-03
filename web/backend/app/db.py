@@ -187,6 +187,12 @@ def init_db() -> None:
                 updated_at text not null
             );
 
+            create table if not exists settings (
+                key text primary key,
+                value_json text not null,
+                updated_at text not null
+            );
+
             create index if not exists idx_backtest_runs_created_at
                 on backtest_runs(created_at desc);
             create index if not exists idx_backtest_runs_symbol

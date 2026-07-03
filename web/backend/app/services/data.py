@@ -3,10 +3,16 @@ from typing import Any
 
 from ..db import db, json_dump, utc_now
 from ..lean import (
+    fetch_akshare_rows,
     fetch_alpha_vantage_rows,
+    fetch_eastmoney_rows,
+    fetch_sina_rows,
     fetch_stooq_rows,
+    fetch_tonghuashun_rows,
     fetch_yahoo_rows,
     list_local_symbols,
+    market_key,
+    normalize_symbol,
     write_lean_daily_zip,
 )
 
@@ -47,8 +53,34 @@ DJIA_COMPONENTS = [
 ]
 
 
+def markets() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "usa",
+            "name": "US Equity",
+            "currency": "USD",
+            "defaultProvider": "yahoo",
+            "providers": ["yahoo", "stooq", "alpha_vantage", "akshare", "sina"],
+        },
+        {
+            "key": "china",
+            "name": "A Share",
+            "currency": "CNY",
+            "defaultProvider": "eastmoney",
+            "providers": ["eastmoney", "sina", "akshare", "tonghuashun"],
+        },
+        {
+            "key": "hongkong",
+            "name": "Hong Kong",
+            "currency": "HKD",
+            "defaultProvider": "sina",
+            "providers": ["eastmoney", "sina", "akshare"],
+        },
+    ]
+
+
 def djia_universe() -> dict[str, Any]:
-    local = set(list_local_symbols())
+    local = set(list_local_symbols("usa"))
     components = [{**item, "hasLocalData": item["symbol"] in local} for item in DJIA_COMPONENTS]
     return {"key": "djia", "name": "Dow Jones Industrial Average", "asOf": DJIA_AS_OF, "source": DJIA_SOURCE, "components": components}
 
@@ -56,10 +88,43 @@ def djia_universe() -> dict[str, Any]:
 def data_providers() -> list[dict[str, Any]]:
     return [
         {
+            "key": "eastmoney",
+            "name": "EastMoney",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["china", "hongkong"],
+            "notes": "Direct EastMoney daily K-line endpoint for A-share equities; Hong Kong availability depends on network/provider behavior.",
+        },
+        {
+            "key": "sina",
+            "name": "Sina Finance",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["usa", "china", "hongkong"],
+            "notes": "Uses AKShare's Sina adapters. Public endpoints may throttle or change.",
+        },
+        {
+            "key": "akshare",
+            "name": "AKShare",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["usa", "china", "hongkong"],
+            "notes": "Requires the Python akshare package. Uses AKShare adapters for public US/CN/HK daily data.",
+        },
+        {
+            "key": "tonghuashun",
+            "name": "TongHuaShun",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["china"],
+            "notes": "A-share daily data only in v1; Hong Kong should use EastMoney, Sina, or AKShare.",
+        },
+        {
             "key": "yahoo",
             "name": "Yahoo Finance",
             "requiresApiKey": False,
             "supportsBatch": True,
+            "markets": ["usa"],
             "notes": "Free chart endpoint when not rate-limited. Use for local demos only; review terms and data quality.",
         },
         {
@@ -67,6 +132,7 @@ def data_providers() -> list[dict[str, Any]]:
             "name": "Stooq",
             "requiresApiKey": False,
             "supportsBatch": True,
+            "markets": ["usa"],
             "notes": "Free daily OHLCV CSV. Suitable for local demos; review data quality before production research.",
         },
         {
@@ -74,6 +140,7 @@ def data_providers() -> list[dict[str, Any]]:
             "name": "Alpha Vantage",
             "requiresApiKey": True,
             "supportsBatch": True,
+            "markets": ["usa"],
             "notes": "Daily OHLCV API. Free keys are rate-limited and may not allow full history.",
         },
     ]
@@ -107,14 +174,34 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
 def fetch_provider_rows(
     provider: str,
     symbol: str,
+    market: str = "usa",
     api_key: str | None = None,
     outputsize: str = "compact",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    adjust: str = "",
 ) -> list[dict[str, str]]:
+    market = market_key(market)
+    symbol = normalize_symbol(symbol, market)
+    if provider == "eastmoney":
+        return fetch_eastmoney_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
+    if provider == "sina":
+        return fetch_sina_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
+    if provider == "akshare":
+        return fetch_akshare_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
+    if provider == "tonghuashun":
+        return fetch_tonghuashun_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
     if provider == "stooq":
+        if market != "usa":
+            raise ValueError("Stooq only supports US equities in this platform.")
         return fetch_stooq_rows(symbol)
     if provider == "yahoo":
-        return fetch_yahoo_rows(symbol)
+        if market != "usa":
+            raise ValueError("Yahoo only supports US equities in this platform.")
+        return fetch_yahoo_rows(symbol, start=start_date or "2000-01-01", end=end_date)
     if provider == "alpha_vantage":
+        if market != "usa":
+            raise ValueError("Alpha Vantage only supports US equities in this platform.")
         key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY")
         if not key:
             raise ValueError("Alpha Vantage API key is required.")
@@ -125,13 +212,30 @@ def fetch_provider_rows(
 def fetch_and_import_symbol(
     symbol: str,
     provider: str,
+    market: str = "usa",
     overwrite: bool = False,
     api_key: str | None = None,
     outputsize: str = "compact",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    adjust: str = "",
 ) -> dict[str, Any]:
-    rows = fetch_provider_rows(provider, symbol, api_key=api_key, outputsize=outputsize)
+    market = market_key(market)
+    symbol = normalize_symbol(symbol, market)
+    rows = fetch_provider_rows(
+        provider,
+        symbol,
+        market=market,
+        api_key=api_key,
+        outputsize=outputsize,
+        start_date=start_date,
+        end_date=end_date,
+        adjust=adjust,
+    )
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
-    metadata = write_lean_daily_zip(symbol, rows, source, overwrite=overwrite)
+    metadata = write_lean_daily_zip(symbol, rows, source, overwrite=overwrite, market=market)
     metadata["provider"] = provider
+    metadata["market"] = market
+    metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
     return record_data_asset(metadata)

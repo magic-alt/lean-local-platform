@@ -4,12 +4,13 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 WEB_DIR = BACKEND_DIR.parent
-DOCKER_DEMO_DIR = WEB_DIR.parent
-REPO_ROOT = DOCKER_DEMO_DIR.parent
+PLATFORM_DIR = WEB_DIR.parent
+WORKSPACE_ROOT = PLATFORM_DIR.parent
+REPO_ROOT = WORKSPACE_ROOT
 
-DATA_DIR = REPO_ROOT / "Data"
-ALGORITHM_PATH = DOCKER_DEMO_DIR / "DockerDemoAlgorithm.py"
-PLOT_SCRIPT = DOCKER_DEMO_DIR / "plot_results.py"
+DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", WORKSPACE_ROOT / "Data")).expanduser()
+ALGORITHM_PATH = PLATFORM_DIR / "DockerDemoAlgorithm.py"
+PLOT_SCRIPT = PLATFORM_DIR / "plot_results.py"
 FRONTEND_DIST = WEB_DIR / "frontend" / "dist"
 
 RUNTIME_DIR = WEB_DIR / "runtime"

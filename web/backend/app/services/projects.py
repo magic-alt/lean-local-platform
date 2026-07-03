@@ -1,4 +1,5 @@
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -7,44 +8,7 @@ from ..core.config import PROJECTS_DIR
 from ..core.errors import LeanWebError, NotFoundError
 from ..core.files import ensure_child_path, slugify
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-
-
-PYTHON_TEMPLATE = '''from AlgorithmImports import *
-from datetime import datetime
-
-
-class {class_name}(QCAlgorithm):
-    def initialize(self):
-        ticker = self.get_parameter("ticker", "SPY").upper()
-        start = datetime.strptime(self.get_parameter("start", "2013-01-01"), "%Y-%m-%d")
-        end = datetime.strptime(self.get_parameter("end", "2013-06-30"), "%Y-%m-%d")
-        cash = float(self.get_parameter("cash", 100000))
-        fast_period = int(self.get_parameter("fast", 10))
-        slow_period = int(self.get_parameter("slow", 30))
-
-        self.set_start_date(start.year, start.month, start.day)
-        self.set_end_date(end.year, end.month, end.day)
-        self.set_cash(cash)
-
-        equity = self.add_equity(ticker, Resolution.DAILY, data_normalization_mode=DataNormalizationMode.RAW)
-        self.symbol = equity.symbol
-        self.fast = self.ema(self.symbol, fast_period, Resolution.DAILY)
-        self.slow = self.ema(self.symbol, slow_period, Resolution.DAILY)
-        self.set_warm_up(max(fast_period, slow_period), Resolution.DAILY)
-
-    def on_data(self, data):
-        if self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
-            return
-
-        invested = self.portfolio[self.symbol].invested
-        if self.fast.current.value > self.slow.current.value and not invested:
-            self.set_holdings(self.symbol, 1)
-        elif self.fast.current.value < self.slow.current.value and invested:
-            self.liquidate(self.symbol)
-
-        self.plot("EMA", "Fast", self.fast.current.value)
-        self.plot("EMA", "Slow", self.slow.current.value)
-'''
+from .strategies import render_python_template
 
 
 def _class_name(name: str) -> str:
@@ -67,7 +31,14 @@ def list_projects() -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
-def create_project(name: str, language: str = "Python", algorithm_class: str | None = None) -> dict[str, Any]:
+def create_project(
+    name: str,
+    language: str = "Python",
+    algorithm_class: str | None = None,
+    template_key: str | None = None,
+    market: str = "usa",
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     language = language or "Python"
     if language not in {"Python", "CSharp"}:
         raise LeanWebError("Only Python and CSharp projects are supported.")
@@ -80,7 +51,7 @@ def create_project(name: str, language: str = "Python", algorithm_class: str | N
     if language == "Python":
         algorithm_class = algorithm_class or _class_name(name)
         main_file = "main.py"
-        (project_path / main_file).write_text(PYTHON_TEMPLATE.format(class_name=algorithm_class), encoding="utf-8")
+        (project_path / main_file).write_text(render_python_template(algorithm_class, template_key), encoding="utf-8")
     else:
         algorithm_class = algorithm_class or _class_name(name)
         main_file = "Main.cs"
@@ -91,7 +62,14 @@ def create_project(name: str, language: str = "Python", algorithm_class: str | N
             encoding="utf-8",
         )
 
-    config = {"language": language, "algorithmClass": algorithm_class, "mainFile": main_file}
+    config = {
+        "language": language,
+        "algorithmClass": algorithm_class,
+        "mainFile": main_file,
+        "templateKey": template_key or "ema_cross",
+        "market": market,
+        "parameters": parameters or {},
+    }
     (project_path / "project.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     now = utc_now()
     with db() as connection:
@@ -106,18 +84,44 @@ def create_project(name: str, language: str = "Python", algorithm_class: str | N
     return get_project(project_id)
 
 
-def delete_project(project_id: str) -> None:
+def _remove_path(path: str | None) -> None:
+    if not path:
+        return
+    target = Path(path)
+    if target.is_dir():
+        shutil.rmtree(target, ignore_errors=True)
+    elif target.exists():
+        target.unlink()
+
+
+def delete_project(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
-    path = Path(project["project_path"])
-    if path.exists():
-        for child in sorted(path.rglob("*"), reverse=True):
-            if child.is_file():
-                child.unlink()
-            elif child.is_dir():
-                child.rmdir()
-        path.rmdir()
+    deleted = {"runs": 0, "tasks": 0, "reports": 0, "project": project_id}
     with db() as connection:
+        runs = connection.execute("select * from backtest_runs where project_id = ?", (project_id,)).fetchall()
+        run_ids = [row["id"] for row in runs]
+        for row in runs:
+            _remove_path(Path(row["results_dir"]).parent.as_posix() if row["results_dir"] else None)
+            deleted["runs"] += 1
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            reports = connection.execute(f"select * from reports where run_id in ({placeholders})", run_ids).fetchall()
+            for row in reports:
+                _remove_path(row["report_path"])
+                deleted["reports"] += 1
+            connection.execute(f"delete from reports where run_id in ({placeholders})", run_ids)
+            connection.execute(f"delete from backtest_runs where id in ({placeholders})", run_ids)
+
+        tasks = connection.execute("select * from tasks where project_id = ?", (project_id,)).fetchall()
+        for row in tasks:
+            _remove_path(row["log_path"])
+            deleted["tasks"] += 1
+        connection.execute("delete from tasks where project_id = ?", (project_id,))
+        connection.execute("delete from optimization_runs where project_id = ?", (project_id,))
+        connection.execute("delete from research_sessions where project_id = ?", (project_id,))
         connection.execute("delete from projects where id = ?", (project_id,))
+    _remove_path(project["project_path"])
+    return deleted
 
 
 def file_tree(project_id: str) -> list[dict[str, Any]]:

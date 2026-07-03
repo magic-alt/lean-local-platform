@@ -6,7 +6,7 @@ This platform wraps the open-source `quantconnect/lean` Docker image with a loca
 
 - Backend: FastAPI, SQLite, Redis, Celery.
 - Frontend: React, Vite, TypeScript, Ant Design, ECharts, Monaco Editor.
-- Runtime state: `docker-demo/web/runtime/`.
+- Runtime state: `web/runtime/`.
 - LEAN data: repository `Data/`.
 - Docker execution: local `quantconnect/lean` image with mounted project, data, config, results, and object store.
 
@@ -29,7 +29,7 @@ docker run --rm -p 6379:6379 redis:7-alpine
 Start the backend API:
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/backend
+cd /Users/kaermax/lean-platform/web/backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -39,7 +39,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 Start the Celery worker in another backend terminal:
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/backend
+cd /Users/kaermax/lean-platform/web/backend
 source .venv/bin/activate
 celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
 ```
@@ -47,7 +47,7 @@ celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
 Start the frontend:
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/frontend
+cd /Users/kaermax/lean-platform/web/frontend
 npm install
 npm run dev
 ```
@@ -69,7 +69,7 @@ If port `8000` is already in use, either stop the old process or run the API on 
 ## Production-Style Local Build
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/frontend
+cd /Users/kaermax/lean-platform/web/frontend
 npm run build
 
 cd ../backend
@@ -81,13 +81,14 @@ When `frontend/dist` exists, FastAPI serves it at `/`; API routes remain under `
 
 ## Web Features
 
-- Capabilities matrix for local Docker support versus cloud/live functions.
 - Single-user project workspace with overview, code, data, backtest, results, and logs tabs.
-- Project creation and Monaco-based project editing.
+- Project creation, deletion, strategy-template selection, and Monaco-based project editing.
 - Current Dow Jones Industrial Average component universe, as of 2026-06-29, with local-data readiness flags.
-- CSV import, Yahoo Finance, Stooq, and Alpha Vantage daily data import into LEAN zip format.
+- CSV import plus Yahoo Finance, Stooq, Alpha Vantage, Sina Finance, EastMoney, AKShare, and TongHuaShun daily data import into LEAN zip format.
+- US, China A-share, and Hong Kong daily equity data workflows.
 - Docker backtests with persisted logs, artifacts, charts, and HTML reports.
 - Equity and asset-price charts with order time markers.
+- Settings page for default market, provider, strategy, Docker images, cash, and date ranges.
 - Local grid optimization through Celery tasks.
 - Detached research container launcher.
 - Local Object Store file upload/download/delete.
@@ -97,8 +98,12 @@ When `frontend/dist` exists, FastAPI serves it at `/`; API routes remain under `
 
 The web UI writes imported daily bars into the repository `Data/` directory in LEAN's expected zip format. The backtest engine then reads the same files through the mounted Docker volume.
 
-- `Yahoo Finance`: no API key, useful for demos, but the chart endpoint can rate-limit shared networks.
-- `Stooq`: no API key, useful when CSV downloads are allowed, but it can return browser-verification pages from some networks.
-- `Alpha Vantage`: requires an API key and is rate-limited, but is the most practical option here for repeatable automated downloads.
+- `Yahoo Finance`: US equities, no API key, useful for demos, but the chart endpoint can rate-limit shared networks.
+- `Stooq`: US equities, no API key, useful when CSV downloads are allowed, but it can return browser-verification pages from some networks.
+- `Alpha Vantage`: US equities, requires an API key and is rate-limited.
+- `EastMoney`: A-share and Hong Kong daily bars through the direct public K-line endpoint.
+- `Sina Finance`: US, A-share, and Hong Kong daily bars through AKShare adapters.
+- `AKShare`: US, A-share, and Hong Kong daily bars; install backend requirements first.
+- `TongHuaShun`: A-share daily workflow only in v1.
 
 For a reliable DJIA workflow, open `Workspace` or `Data`, select `Alpha Vantage`, enter an API key or set `ALPHAVANTAGE_API_KEY`, choose missing symbols, then fetch. After local data exists, use `Workspace -> Backtest` to run a real symbol such as `AAPL`, `MSFT`, or `GOOGL`.

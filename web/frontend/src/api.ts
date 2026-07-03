@@ -1,14 +1,5 @@
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
 
-export interface Capability {
-  key: string;
-  name: string;
-  group: string;
-  status: "enabled" | "experimental" | "disabled";
-  surface: string;
-  notes: string;
-}
-
 export interface DataAsset {
   id: number;
   symbol: string;
@@ -26,7 +17,44 @@ export interface DataProvider {
   name: string;
   requiresApiKey: boolean;
   supportsBatch: boolean;
+  markets: string[];
   notes: string;
+}
+
+export interface MarketInfo {
+  key: "usa" | "china" | "hongkong";
+  name: string;
+  currency: string;
+  defaultProvider: string;
+  providers: string[];
+}
+
+export interface StrategyParameter {
+  key: string;
+  label: string;
+  type: "number" | "string";
+  default?: string | number;
+  min?: number;
+}
+
+export interface StrategyTemplate {
+  key: string;
+  name: string;
+  description: string;
+  parameters: StrategyParameter[];
+}
+
+export interface AppSettings {
+  defaultMarket: string;
+  defaultProvider: string;
+  defaultAdjust: string;
+  defaultStrategyTemplate: string;
+  defaultCash: number;
+  defaultStart: string;
+  defaultEnd: string;
+  dockerImage: string;
+  researchImage: string;
+  chartPointLimit: number;
 }
 
 export interface UniverseComponent {
@@ -85,11 +113,13 @@ export interface BacktestRun {
   symbol: string;
   parameters: {
     ticker: string;
+    market?: string;
     start: string;
     end: string;
-    fast: number;
-    slow: number;
+    fast?: number;
+    slow?: number;
     cash: number;
+    [key: string]: unknown;
   };
   project_id?: string | null;
   task_id?: string | null;
@@ -210,10 +240,25 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string; redis: boolean }>("/api/health"),
-  capabilities: () => request<Capability[]>("/api/capabilities"),
+  settings: () => request<AppSettings>("/api/settings"),
+  updateSettings: (payload: Partial<AppSettings>) =>
+    request<AppSettings>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  strategyTemplates: () => request<StrategyTemplate[]>("/api/strategies/templates"),
+  markets: () => request<MarketInfo[]>("/api/markets"),
   djiaUniverse: () => request<Universe>("/api/universes/djia"),
   projects: () => request<Project[]>("/api/projects"),
-  createProject: (payload: { name: string; language: "Python" | "CSharp"; algorithmClass?: string }) =>
+  createProject: (payload: {
+    name: string;
+    language: "Python" | "CSharp";
+    algorithmClass?: string;
+    templateKey?: string;
+    market?: string;
+    parameters?: Record<string, unknown>;
+  }) =>
     request<Project>("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -232,14 +277,22 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, content })
     }),
-  symbols: () => request<{ symbols: string[]; count: number }>("/api/symbols"),
+  symbols: (market = "usa") => request<{ symbols: string[]; count: number }>(`/api/symbols?market=${encodeURIComponent(market)}`),
+  searchSecurities: (market: string, keyword: string) =>
+    request<{ items: Array<{ symbol: string; market: string; name: string; hasLocalData: boolean }>; count: number }>(
+      `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}`
+    ),
   dataAssets: () => request<DataAsset[]>("/api/data-assets"),
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   fetchData: (payload: {
     symbol: string;
+    market: string;
     provider: string;
     apiKey?: string;
     outputsize: "compact" | "full";
+    startDate?: string;
+    endDate?: string;
+    adjust?: string;
     overwrite: boolean;
   }) =>
     request<DataAsset>("/api/data/fetch", {
@@ -249,9 +302,13 @@ export const api = {
     }),
   fetchBatchData: (payload: {
     symbols: string[];
+    market: string;
     provider: string;
     apiKey?: string;
     outputsize: "compact" | "full";
+    startDate?: string;
+    endDate?: string;
+    adjust?: string;
     overwrite: boolean;
   }) =>
     request<Task>("/api/data/fetch-batch", {
@@ -278,13 +335,15 @@ export const api = {
   backtests: () => request<BacktestRun[]>("/api/backtests"),
   createBacktest: (payload: {
     symbol: string;
+    market?: string;
     start: string;
     end: string;
-    fast: number;
-    slow: number;
+    fast?: number;
+    slow?: number;
     cash: number;
     dockerImage: string;
     projectId?: string;
+    parameters?: Record<string, unknown>;
   }) =>
     request<BacktestRun>("/api/backtests", {
       method: "POST",

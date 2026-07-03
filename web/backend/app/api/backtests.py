@@ -3,7 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
@@ -17,14 +17,18 @@ router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 
 
 class BacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     symbol: str
+    market: str = "usa"
     start: str
     end: str
-    fast: int = Field(default=10, ge=1)
-    slow: int = Field(default=30, ge=1)
+    fast: int | None = Field(default=None, ge=1)
+    slow: int | None = Field(default=None, ge=1)
     cash: float = Field(default=100000, gt=0)
     dockerImage: str = DEFAULT_DOCKER_IMAGE
     projectId: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 def _with_artifacts(run: dict[str, Any]) -> dict[str, Any]:
@@ -43,14 +47,22 @@ def backtests():
 @router.post("")
 def create_backtest(request: BacktestRequest):
     try:
+        template_parameters = dict(request.parameters or {})
+        if request.fast is not None:
+            template_parameters["fast"] = request.fast
+        if request.slow is not None:
+            template_parameters["slow"] = request.slow
+        for key, value in (request.model_extra or {}).items():
+            if key not in template_parameters:
+                template_parameters[key] = value
         parameters = validate_backtest_parameters(
             {
                 "ticker": request.symbol,
+                "market": request.market,
                 "start": request.start,
                 "end": request.end,
-                "fast": request.fast,
-                "slow": request.slow,
                 "cash": request.cash,
+                **template_parameters,
             }
         )
         if request.projectId:
@@ -119,6 +131,7 @@ def chart_data(run_id: str):
     return extract_chart_data(
         Path(result_path),
         symbol=run.get("symbol"),
+        market=parameters.get("market"),
         start=parameters.get("start"),
         end=parameters.get("end"),
     )

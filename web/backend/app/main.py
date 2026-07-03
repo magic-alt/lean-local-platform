@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import backtests, capabilities, data, health, object_store, optimization, projects, reports, research, tasks, universes
+from .api import backtests, data, health, object_store, optimization, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .db import init_db
 
@@ -13,7 +13,7 @@ class SPAStaticFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404:
+            if exc.status_code == 404 and not path.startswith("api/"):
                 return await super().get_response("index.html", scope)
             raise
 
@@ -34,8 +34,9 @@ def startup() -> None:
 
 
 app.include_router(health.router)
-app.include_router(capabilities.router)
 app.include_router(universes.router)
+app.include_router(settings.router)
+app.include_router(strategies.router)
 app.include_router(projects.router)
 app.include_router(data.router)
 app.include_router(tasks.router)
