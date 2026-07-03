@@ -1,0 +1,12 @@
+results/
+runs/
+data-metadata/
+__pycache__/
+.DS_Store
+web/runtime/
+web/backend/.venv/
+web/backend/dump.rdb
+web/backend/app/__pycache__/
+web/frontend/node_modules/
+web/frontend/dist/
+web/frontend/tsconfig.tsbuildinfo

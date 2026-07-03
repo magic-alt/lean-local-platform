@@ -1,0 +1,61 @@
+{
+  "environment": "backtesting",
+  "algorithm-id": "docker-demo-backtest",
+  "backtest-name": "Docker Demo SPY EMA",
+  "algorithm-type-name": "DockerDemoAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "/Lean/DockerDemoAlgorithm.py",
+  "data-folder": "/Lean/Data",
+  "results-destination-folder": "/Lean/Results",
+  "close-automatically": true,
+  "debugging": false,
+  "debugging-method": "LocalCmdline",
+
+  "log-handler": "QuantConnect.Logging.CompositeLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "map-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskMapFileProvider",
+  "factor-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskFactorFileProvider",
+  "data-provider": "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider",
+  "data-channel-provider": "DataChannelProvider",
+  "object-store": "QuantConnect.Lean.Engine.Storage.LocalObjectStore",
+  "data-aggregator": "QuantConnect.Lean.Engine.DataFeeds.AggregationManager",
+
+  "symbol-minute-limit": 10000,
+  "symbol-second-limit": 10000,
+  "symbol-tick-limit": 10000,
+  "seed-lookback-period": 5,
+  "seed-retry-minute-lookback-period": 1440,
+  "seed-retry-hour-lookback-period": 24,
+  "seed-retry-daily-lookback-period": 10,
+  "ignore-unknown-asset-holdings": true,
+  "show-missing-data-logs": true,
+  "maximum-warmup-history-days-look-back": 5,
+  "maximum-data-points-per-chart-series": 1000000,
+  "maximum-chart-series": 30,
+  "force-exchange-always-open": false,
+  "transaction-log": "",
+  "reserved-words-prefix": "@",
+
+  "job-user-id": "0",
+  "project-id": "0",
+  "api-access-token": "",
+  "job-organization-id": "",
+  "parameters": {},
+  "python-additional-paths": [],
+
+  "environments": {
+    "backtesting": {
+      "live-mode": false,
+      "setup-handler": "QuantConnect.Lean.Engine.Setup.BacktestingSetupHandler",
+      "result-handler": "QuantConnect.Lean.Engine.Results.BacktestingResultHandler",
+      "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.FileSystemDataFeed",
+      "real-time-handler": "QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler",
+      "history-provider": [
+        "QuantConnect.Lean.Engine.HistoricalData.SubscriptionDataReaderHistoryProvider"
+      ],
+      "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler"
+    }
+  }
+}

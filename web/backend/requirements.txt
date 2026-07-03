@@ -1,0 +1,6 @@
+celery>=5.4,<6
+fastapi>=0.115,<1
+httpx2>=2,<3
+python-multipart>=0.0.20,<1
+redis>=5,<6
+uvicorn[standard]>=0.34,<1
