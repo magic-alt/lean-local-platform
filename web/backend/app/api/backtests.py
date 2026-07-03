@@ -20,7 +20,11 @@ class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     symbol: str
+    assetClass: str = "equity"
     market: str = "usa"
+    venue: str | None = None
+    resolution: str = "daily"
+    dataType: str = "trade"
     start: str
     end: str
     fast: int | None = Field(default=None, ge=1)
@@ -58,7 +62,11 @@ def create_backtest(request: BacktestRequest):
         parameters = validate_backtest_parameters(
             {
                 "ticker": request.symbol,
+                "assetClass": request.assetClass,
                 "market": request.market,
+                "venue": request.venue,
+                "resolution": request.resolution,
+                "dataType": request.dataType,
                 "start": request.start,
                 "end": request.end,
                 "cash": request.cash,
@@ -82,14 +90,18 @@ def create_backtest(request: BacktestRequest):
         connection.execute(
             """
             insert into backtest_runs
-                (id, task_id, project_id, symbol, parameters_json, status, docker_image, results_dir, log_path, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, task_id, project_id, symbol, asset_class, venue, resolution, data_type, parameters_json, status, docker_image, results_dir, log_path, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
                 task["id"],
                 request.projectId,
                 parameters["ticker"],
+                parameters.get("assetClass", "equity"),
+                parameters.get("venue") or parameters.get("market"),
+                parameters.get("resolution", "daily"),
+                parameters.get("dataType", "trade"),
                 json_dump(parameters),
                 "queued",
                 request.dockerImage,
@@ -134,6 +146,10 @@ def chart_data(run_id: str):
         market=parameters.get("market"),
         start=parameters.get("start"),
         end=parameters.get("end"),
+        asset_class=parameters.get("assetClass"),
+        venue=parameters.get("venue"),
+        resolution=parameters.get("resolution"),
+        data_type=parameters.get("dataType"),
     )
 
 

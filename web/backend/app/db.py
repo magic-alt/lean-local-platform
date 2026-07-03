@@ -81,6 +81,10 @@ def init_db() -> None:
             create table if not exists data_assets (
                 id integer primary key autoincrement,
                 symbol text not null,
+                asset_class text not null default 'equity',
+                venue text,
+                resolution text not null default 'daily',
+                data_type text not null default 'trade',
                 source text not null,
                 rows integer not null,
                 first_date text not null,
@@ -124,6 +128,10 @@ def init_db() -> None:
                 task_id text,
                 project_id text,
                 symbol text not null,
+                asset_class text not null default 'equity',
+                venue text,
+                resolution text not null default 'daily',
+                data_type text not null default 'trade',
                 parameters_json text not null,
                 status text not null,
                 docker_image text not null,
@@ -193,6 +201,23 @@ def init_db() -> None:
                 updated_at text not null
             );
 
+            create table if not exists paper_sessions (
+                id text primary key,
+                project_id text,
+                name text not null,
+                status text not null,
+                symbol text not null,
+                asset_class text not null,
+                venue text not null,
+                resolution text not null,
+                cash real not null,
+                equity real not null,
+                parameters_json text not null,
+                created_at text not null,
+                updated_at text not null,
+                finished_at text
+            );
+
             create index if not exists idx_backtest_runs_created_at
                 on backtest_runs(created_at desc);
             create index if not exists idx_backtest_runs_symbol
@@ -203,10 +228,26 @@ def init_db() -> None:
                 on projects(name);
             create index if not exists idx_data_assets_symbol
                 on data_assets(symbol);
+            create index if not exists idx_paper_sessions_created_at
+                on paper_sessions(created_at desc);
             """
         )
         _add_column(connection, "backtest_runs", "task_id", "text")
         _add_column(connection, "backtest_runs", "project_id", "text")
+        _add_column(connection, "backtest_runs", "asset_class", "text not null default 'equity'")
+        _add_column(connection, "backtest_runs", "venue", "text")
+        _add_column(connection, "backtest_runs", "resolution", "text not null default 'daily'")
+        _add_column(connection, "backtest_runs", "data_type", "text not null default 'trade'")
+        _add_column(connection, "data_assets", "asset_class", "text not null default 'equity'")
+        _add_column(connection, "data_assets", "venue", "text")
+        _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")
+        _add_column(connection, "data_assets", "data_type", "text not null default 'trade'")
+        connection.execute(
+            "create index if not exists idx_backtest_runs_asset on backtest_runs(asset_class, venue, symbol)"
+        )
+        connection.execute(
+            "create index if not exists idx_data_assets_asset on data_assets(asset_class, venue, symbol)"
+        )
         connection.execute(
             """
             update backtest_runs

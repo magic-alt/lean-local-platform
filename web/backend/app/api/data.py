@@ -5,8 +5,24 @@ from .common import dispatch_task
 from ..core.config import UPLOADS_DIR
 from ..core.errors import LeanWebError
 from ..db import db, rows_to_dicts, utc_now
-from ..lean import list_local_symbols, market_key, normalize_symbol, rows_from_csv, write_lean_daily_zip
-from ..services.data import data_providers, fetch_and_import_symbol, markets, record_data_asset
+from ..lean import (
+    list_local_symbols,
+    market_key,
+    normalize_symbol,
+    rows_from_csv,
+    write_lean_crypto_daily_zip,
+    write_lean_daily_zip,
+    write_lean_future_daily_zip,
+)
+from ..services.data import (
+    asset_classes,
+    data_providers,
+    fetch_and_import_symbol,
+    local_data_index,
+    markets,
+    record_data_asset,
+    symbols_for_asset,
+)
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -22,7 +38,11 @@ class AlphaVantageRequest(BaseModel):
 
 class DataFetchRequest(BaseModel):
     symbol: str
+    assetClass: str = "equity"
     market: str = "usa"
+    venue: str | None = None
+    resolution: str = "daily"
+    dataType: str = "trade"
     provider: str = "yahoo"
     apiKey: str | None = None
     outputsize: str = "compact"
@@ -34,7 +54,11 @@ class DataFetchRequest(BaseModel):
 
 class BatchDataFetchRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
+    assetClass: str = "equity"
     market: str = "usa"
+    venue: str | None = None
+    resolution: str = "daily"
+    dataType: str = "trade"
     provider: str = "yahoo"
     apiKey: str | None = None
     outputsize: str = "compact"
@@ -45,8 +69,14 @@ class BatchDataFetchRequest(BaseModel):
 
 
 @router.get("/symbols")
-def symbols(market: str = "usa"):
-    items = list_local_symbols(market)
+def symbols(
+    market: str = "usa",
+    assetClass: str = "equity",
+    venue: str | None = None,
+    resolution: str = "daily",
+    dataType: str = "trade",
+):
+    items = symbols_for_asset(assetClass, venue=venue, market=market, resolution=resolution, data_type=dataType)
     return {"symbols": items, "count": len(items)}
 
 
@@ -82,6 +112,17 @@ def providers():
     return data_providers()
 
 
+@router.get("/asset-classes")
+def available_asset_classes():
+    return asset_classes()
+
+
+@router.get("/data/files")
+def data_files(assetClass: str | None = None, venue: str | None = None):
+    items = local_data_index(assetClass, venue)
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/markets")
 def available_markets():
     return markets()
@@ -94,6 +135,10 @@ def fetch_data(request: DataFetchRequest):
             request.symbol,
             request.provider,
             market=request.market,
+            asset_class=request.assetClass,
+            venue=request.venue,
+            resolution=request.resolution,
+            data_type=request.dataType,
             overwrite=request.overwrite,
             api_key=request.apiKey,
             outputsize=request.outputsize,
@@ -107,14 +152,22 @@ def fetch_data(request: DataFetchRequest):
 
 @router.post("/data/fetch-batch")
 def fetch_batch(request: BatchDataFetchRequest):
-    market = market_key(request.market)
-    symbols = [normalize_symbol(symbol, market).upper() for symbol in request.symbols if symbol.strip()]
+    if request.assetClass == "equity":
+        market = market_key(request.market)
+        symbols = [normalize_symbol(symbol, market).upper() for symbol in request.symbols if symbol.strip()]
+    else:
+        market = request.venue or request.market
+        symbols = [symbol.strip().upper().replace("/", "").replace("-", "") for symbol in request.symbols if symbol.strip()]
     task = create_task(
         "data_fetch",
         f"Fetch {len(symbols)} symbol(s)",
         {
             "symbols": symbols,
+            "assetClass": request.assetClass,
             "market": market,
+            "venue": request.venue,
+            "resolution": request.resolution,
+            "dataType": request.dataType,
             "provider": request.provider,
             "apiKey": request.apiKey,
             "outputsize": request.outputsize,
@@ -131,7 +184,10 @@ def fetch_batch(request: BatchDataFetchRequest):
 @router.post("/data/import-csv")
 async def import_csv(
     symbol: str = Form(...),
+    assetClass: str = Form("equity"),
     market: str = Form("usa"),
+    venue: str = Form(""),
+    dataType: str = Form("trade"),
     overwrite: bool = Form(False),
     dateCol: str = Form("timestamp"),
     openCol: str = Form("open"),
@@ -146,7 +202,13 @@ async def import_csv(
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         upload_path.write_bytes(await file.read())
         rows = rows_from_csv(upload_path, dateCol, openCol, highCol, lowCol, closeCol, volumeCol)
-        metadata = write_lean_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, market=market)
+        if assetClass == "crypto":
+            metadata = write_lean_crypto_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, venue=venue or market, data_type=dataType)
+        elif assetClass == "future":
+            metadata = write_lean_future_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, venue=venue or market, data_type=dataType)
+        else:
+            metadata = write_lean_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, market=market)
+            metadata.update({"asset_class": "equity", "venue": market, "resolution": "daily", "data_type": "trade"})
         return record_data_asset(metadata)
     except LeanWebError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -82,6 +82,8 @@ export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: 
       columns={[
         { title: "Run", dataIndex: "id", ellipsis: true },
         { title: "Symbol", dataIndex: "symbol" },
+        { title: "Asset", render: (_, run) => run.asset_class ?? run.parameters.assetClass ?? "equity" },
+        { title: "Venue", render: (_, run) => run.venue ?? run.parameters.venue ?? run.parameters.market ?? "-" },
         { title: "Status", dataIndex: "status", render: (status: RunStatus) => <StatusTag status={status} /> },
         { title: "Period", render: (_, run) => `${run.parameters.start} -> ${run.parameters.end}` },
         { title: "Net Profit", render: (_, run) => run.statistics?.["Net Profit"] ?? "-" },
@@ -123,15 +125,17 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
         </Card>
       )}
       <div className="two-column">
-        <Card title="EMA">
-          <ReactECharts
-            style={{ height: 320 }}
-            option={lineOption("EMA", [
-              { name: "Fast", points: chartData.series.emaFast },
-              { name: "Slow", points: chartData.series.emaSlow }
-            ])}
-          />
-        </Card>
+        {(chartData.series.emaFast.length > 0 || chartData.series.emaSlow.length > 0) && (
+          <Card title="EMA">
+            <ReactECharts
+              style={{ height: 320 }}
+              option={lineOption("EMA", [
+                { name: "Fast", points: chartData.series.emaFast },
+                { name: "Slow", points: chartData.series.emaSlow }
+              ])}
+            />
+          </Card>
+        )}
         <Card title="Drawdown">
           <ReactECharts
             style={{ height: 320 }}

@@ -37,6 +37,10 @@ def create_project(
     algorithm_class: str | None = None,
     template_key: str | None = None,
     market: str = "usa",
+    asset_class: str = "equity",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     language = language or "Python"
@@ -67,7 +71,11 @@ def create_project(
         "algorithmClass": algorithm_class,
         "mainFile": main_file,
         "templateKey": template_key or "ema_cross",
+        "assetClass": asset_class,
         "market": market,
+        "venue": venue or market,
+        "resolution": resolution,
+        "dataType": data_type,
         "parameters": parameters or {},
     }
     (project_path / "project.json").write_text(json.dumps(config, indent=2), encoding="utf-8")

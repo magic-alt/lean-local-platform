@@ -5,6 +5,7 @@ from ..db import db, json_dump, utc_now
 from ..lean import (
     fetch_akshare_rows,
     fetch_alpha_vantage_rows,
+    fetch_binance_crypto_rows,
     fetch_eastmoney_rows,
     fetch_sina_rows,
     fetch_stooq_rows,
@@ -13,7 +14,17 @@ from ..lean import (
     list_local_symbols,
     market_key,
     normalize_symbol,
+    write_lean_crypto_daily_zip,
     write_lean_daily_zip,
+)
+from ..domain.assets import (
+    asset_class_key,
+    asset_request,
+    data_type_key,
+    list_local_data_files,
+    list_local_symbols_for_asset,
+    resolution_key,
+    venue_key,
 )
 
 
@@ -79,6 +90,70 @@ def markets() -> list[dict[str, Any]]:
     ]
 
 
+def asset_classes() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "equity",
+            "name": "Equity",
+            "defaultVenue": "usa",
+            "defaultResolution": "daily",
+            "venues": ["usa", "china", "hongkong"],
+            "dataTypes": ["trade"],
+            "notes": "US, A-share, and Hong Kong daily equities are supported by public providers and CSV import.",
+        },
+        {
+            "key": "crypto",
+            "name": "Crypto",
+            "defaultVenue": "coinbase",
+            "defaultResolution": "daily",
+            "venues": ["coinbase", "binance", "bybit", "bitfinex", "kraken"],
+            "dataTypes": ["trade", "quote"],
+            "notes": "LEAN sample data is available locally; Binance daily OHLCV import is enabled for spot pairs.",
+        },
+        {
+            "key": "crypto_future",
+            "name": "Crypto Future",
+            "defaultVenue": "binance",
+            "defaultResolution": "minute",
+            "venues": ["binance", "bybit"],
+            "dataTypes": ["trade", "quote", "open_interest"],
+            "notes": "Scans local LEAN-format data. Public import adapters should be added per exchange contract type.",
+        },
+        {
+            "key": "future",
+            "name": "Future",
+            "defaultVenue": "comex",
+            "defaultResolution": "daily",
+            "venues": ["comex", "cme", "cbot", "nymex", "ice", "eurex", "hkfe", "sgx"],
+            "dataTypes": ["trade", "quote", "open_interest"],
+            "notes": "Uses local LEAN-format futures data and CSV import. Complete public futures data needs vendor-quality contract metadata.",
+        },
+    ]
+
+
+def local_data_index(asset_class: str | None = None, venue: str | None = None) -> list[dict[str, Any]]:
+    items = list_local_data_files()
+    if asset_class:
+        key = asset_class_key(asset_class)
+        items = [item for item in items if item["assetClass"] == key]
+    if venue:
+        venue_value = venue.strip().lower()
+        items = [item for item in items if item["venue"] == venue_value]
+    return items
+
+
+def symbols_for_asset(
+    asset_class: str = "equity",
+    venue: str | None = None,
+    market: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+) -> list[str]:
+    if asset_class_key(asset_class) == "equity":
+        return list_local_symbols(market or venue or "usa")
+    return list_local_symbols_for_asset(asset_class, venue=venue, market=market, resolution=resolution, data_type=data_type)
+
+
 def djia_universe() -> dict[str, Any]:
     local = set(list_local_symbols("usa"))
     components = [{**item, "hasLocalData": item["symbol"] in local} for item in DJIA_COMPONENTS]
@@ -88,11 +163,23 @@ def djia_universe() -> dict[str, Any]:
 def data_providers() -> list[dict[str, Any]]:
     return [
         {
+            "key": "binance",
+            "name": "Binance",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["crypto"],
+            "assetClasses": ["crypto"],
+            "venues": ["binance"],
+            "notes": "Public spot kline endpoint for crypto OHLCV. Availability depends on region, symbol, and Binance limits.",
+        },
+        {
             "key": "eastmoney",
             "name": "EastMoney",
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["china", "hongkong"],
+            "assetClasses": ["equity"],
+            "venues": ["china", "hongkong"],
             "notes": "Direct EastMoney daily K-line endpoint for A-share equities; Hong Kong availability depends on network/provider behavior.",
         },
         {
@@ -101,6 +188,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["usa", "china", "hongkong"],
+            "assetClasses": ["equity"],
+            "venues": ["usa", "china", "hongkong"],
             "notes": "Uses AKShare's Sina adapters. Public endpoints may throttle or change.",
         },
         {
@@ -109,6 +198,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["usa", "china", "hongkong"],
+            "assetClasses": ["equity"],
+            "venues": ["usa", "china", "hongkong"],
             "notes": "Requires the Python akshare package. Uses AKShare adapters for public US/CN/HK daily data.",
         },
         {
@@ -117,6 +208,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
             "notes": "A-share daily data only in v1; Hong Kong should use EastMoney, Sina, or AKShare.",
         },
         {
@@ -125,6 +218,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["usa"],
+            "assetClasses": ["equity"],
+            "venues": ["usa"],
             "notes": "Free chart endpoint when not rate-limited. Use for local demos only; review terms and data quality.",
         },
         {
@@ -133,6 +228,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": False,
             "supportsBatch": True,
             "markets": ["usa"],
+            "assetClasses": ["equity"],
+            "venues": ["usa"],
             "notes": "Free daily OHLCV CSV. Suitable for local demos; review data quality before production research.",
         },
         {
@@ -141,6 +238,8 @@ def data_providers() -> list[dict[str, Any]]:
             "requiresApiKey": True,
             "supportsBatch": True,
             "markets": ["usa"],
+            "assetClasses": ["equity"],
+            "venues": ["usa"],
             "notes": "Daily OHLCV API. Free keys are rate-limited and may not allow full history.",
         },
     ]
@@ -153,11 +252,15 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
         cursor = connection.execute(
             """
             insert into data_assets
-                (symbol, source, rows, first_date, last_date, lean_file, metadata_json, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+                (symbol, asset_class, venue, resolution, data_type, source, rows, first_date, last_date, lean_file, metadata_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata["symbol"],
+                metadata.get("asset_class") or metadata.get("assetClass") or "equity",
+                metadata.get("venue") or metadata.get("market"),
+                metadata.get("resolution") or "daily",
+                metadata.get("data_type") or metadata.get("dataType") or "trade",
                 metadata["source"],
                 metadata["rows"],
                 metadata["first_date"],
@@ -175,12 +278,25 @@ def fetch_provider_rows(
     provider: str,
     symbol: str,
     market: str = "usa",
+    asset_class: str = "equity",
+    venue: str | None = None,
+    resolution: str = "daily",
     api_key: str | None = None,
     outputsize: str = "compact",
     start_date: str | None = None,
     end_date: str | None = None,
     adjust: str = "",
 ) -> list[dict[str, str]]:
+    asset_class = asset_class_key(asset_class)
+    if asset_class == "crypto":
+        request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution)
+        if provider == "binance":
+            if request.resolution != "daily":
+                raise ValueError("Binance import currently writes LEAN crypto daily bars only; use local sample data for intraday.")
+            return fetch_binance_crypto_rows(request.symbol, start=start_date, end=end_date, interval="1d")
+        raise ValueError(f"Unsupported crypto data provider: {provider}")
+    if asset_class != "equity":
+        raise ValueError(f"Provider downloads are not enabled for asset class {asset_class}; use local LEAN data or CSV import.")
     market = market_key(market)
     symbol = normalize_symbol(symbol, market)
     if provider == "eastmoney":
@@ -213,6 +329,10 @@ def fetch_and_import_symbol(
     symbol: str,
     provider: str,
     market: str = "usa",
+    asset_class: str = "equity",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
     overwrite: bool = False,
     api_key: str | None = None,
     outputsize: str = "compact",
@@ -220,12 +340,25 @@ def fetch_and_import_symbol(
     end_date: str | None = None,
     adjust: str = "",
 ) -> dict[str, Any]:
-    market = market_key(market)
-    symbol = normalize_symbol(symbol, market)
+    asset_class = asset_class_key(asset_class)
+    resolution = resolution_key(resolution)
+    data_type = data_type_key(data_type)
+    if asset_class == "equity":
+        market = market_key(market)
+        venue = market
+        symbol = normalize_symbol(symbol, market)
+    else:
+        request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
+        market = request.venue
+        venue = request.venue
+        symbol = request.symbol
     rows = fetch_provider_rows(
         provider,
         symbol,
         market=market,
+        asset_class=asset_class,
+        venue=venue,
+        resolution=resolution,
         api_key=api_key,
         outputsize=outputsize,
         start_date=start_date,
@@ -233,9 +366,20 @@ def fetch_and_import_symbol(
         adjust=adjust,
     )
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
-    metadata = write_lean_daily_zip(symbol, rows, source, overwrite=overwrite, market=market)
+    if asset_class == "crypto":
+        metadata = write_lean_crypto_daily_zip(symbol, rows, source, overwrite=overwrite, venue=venue or market, data_type=data_type)
+    else:
+        metadata = write_lean_daily_zip(symbol, rows, source, overwrite=overwrite, market=market)
+        metadata["asset_class"] = "equity"
+        metadata["venue"] = market
+        metadata["resolution"] = "daily"
+        metadata["data_type"] = "trade"
     metadata["provider"] = provider
     metadata["market"] = market
+    metadata["asset_class"] = asset_class
+    metadata["venue"] = venue or market
+    metadata["resolution"] = resolution
+    metadata["data_type"] = data_type
     metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
     return record_data_asset(metadata)

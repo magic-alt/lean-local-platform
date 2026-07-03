@@ -17,6 +17,11 @@ router = APIRouter(prefix="/api/optimize", tags=["optimization"])
 class OptimizationRequest(BaseModel):
     projectId: str
     symbol: str
+    assetClass: str = "equity"
+    market: str = "usa"
+    venue: str | None = None
+    resolution: str = "daily"
+    dataType: str = "trade"
     start: str
     end: str
     cash: float = Field(default=100000, gt=0)
@@ -40,6 +45,11 @@ def create_optimization(request: OptimizationRequest):
             raise LeanPlatformError("CSharp optimization is not enabled in this local web version yet.")
         base = validate_backtest_parameters({
             "ticker": request.symbol,
+            "assetClass": request.assetClass,
+            "market": request.market,
+            "venue": request.venue,
+            "resolution": request.resolution,
+            "dataType": request.dataType,
             "start": request.start,
             "end": request.end,
             "fast": min(request.fastValues or [10]),

@@ -12,7 +12,11 @@ class ProjectCreate(BaseModel):
     language: str = "Python"
     algorithmClass: str | None = None
     templateKey: str | None = None
+    assetClass: str = "equity"
     market: str = "usa"
+    venue: str | None = None
+    resolution: str = "daily"
+    dataType: str = "trade"
     parameters: dict | None = None
 
 
@@ -34,7 +38,11 @@ def create_project(request: ProjectCreate):
             request.language,
             request.algorithmClass,
             template_key=request.templateKey,
+            asset_class=request.assetClass,
             market=request.market,
+            venue=request.venue,
+            resolution=request.resolution,
+            data_type=request.dataType,
             parameters=request.parameters,
         )
     except LeanWebError as exc:

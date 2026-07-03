@@ -5,7 +5,11 @@ from ..db import db, json_dump, utc_now
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
+    "defaultAssetClass": "equity",
     "defaultMarket": "usa",
+    "defaultVenue": "usa",
+    "defaultResolution": "daily",
+    "defaultDataType": "trade",
     "defaultProvider": "yahoo",
     "defaultAdjust": "",
     "defaultStrategyTemplate": "ema_cross",

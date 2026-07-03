@@ -114,7 +114,7 @@ docker info
 
 ## Web 平台
 
-Web 平台现在是一个本地工作台：FastAPI 提供 API，React 提供浏览器界面，Redis + Celery 负责后台回测/优化/报告任务，SQLite 记录项目、任务和结果索引。
+Web 平台现在是一个本地多资产工作台：FastAPI 提供 API，React 提供浏览器界面，Redis + Celery 负责后台回测/优化/报告任务，SQLite 记录项目、任务和结果索引。LEAN Docker 仍是唯一回测执行引擎，平台不依赖 Lean CLI 或 QuantConnect 付费账号。
 
 安装：
 
@@ -160,14 +160,18 @@ http://127.0.0.1:8000
 Web 端支持：
 
 - 项目制工作区：项目概览、代码编辑、数据准备、回测提交、结果和任务日志在一个页面完成
+- 多资产项目：`equity`、`crypto`、`crypto_future`、`future` 的 asset class、venue、resolution、data type 统一配置
 - 创建/编辑本地 Python/C# 策略项目
-- 策略模板选择：EMA Cross、SMA Cross、MACD、RSI Mean Reversion、Buy & Hold、Blank Custom
-- 查看本地 LEAN daily 标的，支持美股、A 股和港股日线
-- CSV 导入并转换成 LEAN 格式
+- 策略模板选择：EMA Cross、SMA Cross、MACD、RSI Mean Reversion、Crypto Momentum、Futures Trend、Buy & Hold、Blank Custom
+- Data Library：扫描本地 LEAN `Data/` 目录，展示股票、加密币、期货等 zip 数据文件和可回测 symbol
+- 查看本地 LEAN 标的，支持美股、A 股、港股、Coinbase/Binance 等 crypto 样例和 COMEX/CME 等 futures 样例
+- CSV 导入并转换成 LEAN 格式，支持股票、crypto daily、futures daily
 - 当前道指 30 只成分股数据面板，支持批量选择缺失标的并下载到本地 LEAN 数据目录
 - Yahoo Finance、Stooq、Alpha Vantage、新浪财经、东方财富、AKShare、同花顺日线数据导入
+- Binance spot 日线 crypto OHLCV 导入
 - 选择项目、市场、股票、日期、资金和策略参数并运行 Docker 回测
 - 参数网格优化
+- Paper Replay 会话管理：本地模拟会话登记、启动/暂停/停止状态管理，不连接真实券商、不发真实订单
 - Research 容器启动
 - Object Store 文件管理
 - 后台任务和日志查看
@@ -175,6 +179,7 @@ Web 端支持：
 - 项目删除，级联清理关联任务、回测、报告和 runtime 文件
 - 查看状态、日志、指标、图表、订单和原始结果文件
 - 回测曲线显示权益、基准、标的价格、EMA、回撤，并在权益/价格曲线上标记订单时间点
+- 回测记录和图表按资产类型读取本地价格序列，crypto/future 样例可以和股票共用报告页
 
 如果 `8000` 已被占用，可以先找出旧进程：
 
@@ -189,6 +194,8 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 - Yahoo Finance 和 Stooq 是免费公开端点，适合本地实验，但可能因网络、限流、验证码或服务条款变化而失败。
 - Alpha Vantage 需要 API key，免费额度有限，但在公开 API 里通常更稳定，适合先搭建可靠的自动化下载流程。
 - 东方财富直接用于 A 股和港股日线；新浪和 AKShare Provider 需要安装 `akshare`；同花顺第一版只支持 A 股日线入口。
+- Crypto 第一版可通过 Binance spot 公共接口下载日线，也可以直接使用 `/Users/kaermax/Data/crypto` 中已有的 LEAN 样例。
+- Futures 第一版优先使用本地 LEAN 格式数据或 CSV 导入；严肃期货研究需要校验合约乘数、mapping/factor 文件、保证金和连续合约规则。
 - A 股和港股第一版只支持日线回测；平台会自动补 LEAN 本地 market-hours 和 symbol-properties 配置，不修改 LEAN 引擎源码。
 - Web 平台会把下载后的日线数据转换成 LEAN zip 格式并登记到 SQLite；回测时仍由 Docker 版 LEAN 读取本地 `Data/`。
 

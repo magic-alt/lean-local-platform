@@ -36,7 +36,11 @@ def fetch_data_batch_task(task_id: str):
     parameters = task["parameters"]
     symbols = parameters.get("symbols") or []
     provider = parameters.get("provider") or "stooq"
+    asset_class = parameters.get("assetClass") or "equity"
     market = parameters.get("market") or "usa"
+    venue = parameters.get("venue") or None
+    resolution = parameters.get("resolution") or "daily"
+    data_type = parameters.get("dataType") or "trade"
     overwrite = bool(parameters.get("overwrite", False))
     outputsize = parameters.get("outputsize") or "compact"
     start_date = parameters.get("startDate") or None
@@ -51,12 +55,16 @@ def fetch_data_batch_task(task_id: str):
             symbol = str(symbol).upper().strip()
             if not symbol:
                 continue
-            append_log(task_id, f"Fetching {symbol} from {provider} ({market}).")
+            append_log(task_id, f"Fetching {symbol} from {provider} ({asset_class}/{venue or market}/{resolution}).")
             try:
                 asset = fetch_and_import_symbol(
                     symbol,
                     provider,
                     market=market,
+                    asset_class=asset_class,
+                    venue=venue,
+                    resolution=resolution,
+                    data_type=data_type,
                     overwrite=overwrite,
                     api_key=api_key,
                     outputsize=outputsize,

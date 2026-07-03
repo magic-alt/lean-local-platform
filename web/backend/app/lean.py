@@ -23,6 +23,17 @@ from .core.config import (
     PLOT_SCRIPT,
     REPO_ROOT,
 )
+from .domain.assets import (
+    AssetRequest,
+    asset_class_key,
+    asset_request,
+    canonical_symbol,
+    data_type_key,
+    has_lean_data,
+    parse_lean_zip_price_series,
+    resolution_key,
+    venue_key,
+)
 
 
 class LeanPlatformError(LeanWebError, ValueError):
@@ -130,6 +141,33 @@ def list_local_symbols(market: str | None = None) -> list[str]:
     if not daily_dir.exists():
         return []
     return sorted(path.stem.upper() for path in daily_dir.glob("*.zip"))
+
+
+def crypto_daily_zip_path(symbol: str, venue: str = "coinbase", data_type: str = "trade") -> Path:
+    request = asset_request(symbol, "crypto", venue=venue, resolution="daily", data_type=data_type)
+    return DATA_DIR / "crypto" / request.venue / "daily" / f"{request.symbol.lower()}_{request.lean_data_type}.zip"
+
+
+def future_daily_zip_path(symbol: str, venue: str = "comex", data_type: str = "trade") -> Path:
+    request = asset_request(symbol, "future", venue=venue, resolution="daily", data_type=data_type)
+    return DATA_DIR / "future" / request.venue / "daily" / f"{request.symbol.lower()}_{request.lean_data_type}.zip"
+
+
+def ensure_crypto_dirs(venue: str = "coinbase") -> None:
+    for resolution in ("daily", "hour", "minute", "second"):
+        (DATA_DIR / "crypto" / venue / resolution).mkdir(parents=True, exist_ok=True)
+
+
+def ensure_future_dirs(venue: str = "comex") -> None:
+    for relative in (
+        f"future/{venue}/daily",
+        f"future/{venue}/hour",
+        f"future/{venue}/minute",
+        f"future/{venue}/map_files",
+        f"future/{venue}/factor_files",
+        f"future/{venue}/margins",
+    ):
+        (DATA_DIR / relative).mkdir(parents=True, exist_ok=True)
 
 
 def ensure_market_database(market: str) -> None:
@@ -259,6 +297,92 @@ def write_lean_daily_zip(
             "Imported as raw daily TradeBar data.",
             "Factor and map files are minimal placeholders.",
             "Corporate actions are not reconstructed unless the source data already reflects them.",
+        ],
+    }
+
+
+def write_lean_crypto_daily_zip(
+    symbol: str,
+    rows: list[dict[str, str]],
+    source: str,
+    overwrite: bool = False,
+    venue: str = "coinbase",
+    data_type: str = "trade",
+) -> dict[str, Any]:
+    request = asset_request(symbol, "crypto", venue=venue, resolution="daily", data_type=data_type)
+    normalized = normalize_rows(rows)
+    ensure_crypto_dirs(request.venue)
+    output = crypto_daily_zip_path(request.symbol, request.venue, request.data_type)
+    if output.exists() and not overwrite:
+        raise LeanPlatformError(f"{output} already exists; enable overwrite to replace it.")
+
+    csv_lines = []
+    for item_date, open_price, high, low, close, volume in normalized:
+        csv_lines.append(
+            f"{item_date:%Y%m%d} 00:00,{open_price:g},{high:g},{low:g},{close:g},{volume}"
+        )
+
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{request.symbol.lower()}.csv", "\n".join(csv_lines) + "\n")
+
+    return {
+        "symbol": request.symbol,
+        "market": request.venue,
+        "venue": request.venue,
+        "asset_class": "crypto",
+        "resolution": "daily",
+        "data_type": request.data_type,
+        "source": source,
+        "rows": len(csv_lines),
+        "first_date": normalized[0][0].isoformat(),
+        "last_date": normalized[-1][0].isoformat(),
+        "lean_file": str(output.relative_to(REPO_ROOT)),
+        "notes": [
+            "Imported as crypto daily TradeBar data.",
+            "Crypto market hours are handled by LEAN's crypto market model.",
+        ],
+    }
+
+
+def write_lean_future_daily_zip(
+    symbol: str,
+    rows: list[dict[str, str]],
+    source: str,
+    overwrite: bool = False,
+    venue: str = "comex",
+    data_type: str = "trade",
+) -> dict[str, Any]:
+    request = asset_request(symbol, "future", venue=venue, resolution="daily", data_type=data_type)
+    normalized = normalize_rows(rows)
+    ensure_future_dirs(request.venue)
+    output = future_daily_zip_path(request.symbol, request.venue, request.data_type)
+    if output.exists() and not overwrite:
+        raise LeanPlatformError(f"{output} already exists; enable overwrite to replace it.")
+
+    csv_lines = []
+    for item_date, open_price, high, low, close, volume in normalized:
+        csv_lines.append(
+            f"{item_date:%Y%m%d} 00:00,{open_price:g},{high:g},{low:g},{close:g},{volume}"
+        )
+
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{request.symbol.lower()}_{request.lean_data_type}.csv", "\n".join(csv_lines) + "\n")
+
+    return {
+        "symbol": request.symbol,
+        "market": request.venue,
+        "venue": request.venue,
+        "asset_class": "future",
+        "resolution": "daily",
+        "data_type": request.data_type,
+        "source": source,
+        "rows": len(csv_lines),
+        "first_date": normalized[0][0].isoformat(),
+        "last_date": normalized[-1][0].isoformat(),
+        "lean_file": str(output.relative_to(REPO_ROOT)),
+        "notes": [
+            "Imported as futures daily TradeBar data.",
+            "Contract metadata, mapping, factors, and margins should be validated before production futures research.",
         ],
     }
 
@@ -416,6 +540,47 @@ def fetch_yahoo_rows(symbol: str, start: str = "2000-01-01", end: str | None = N
         )
     if not rows:
         raise LeanPlatformError(f"No Yahoo Finance rows found for {symbol}.")
+    return rows
+
+
+def fetch_binance_crypto_rows(
+    symbol: str,
+    start: str | None = None,
+    end: str | None = None,
+    interval: str = "1d",
+) -> list[dict[str, str]]:
+    if interval not in {"1d", "1h", "1m"}:
+        raise LeanPlatformError("Binance crypto interval must be 1d, 1h, or 1m.")
+    ticker = canonical_symbol(symbol, "crypto")
+    params: dict[str, str | int] = {"symbol": ticker, "interval": interval, "limit": 1000}
+    if start:
+        params["startTime"] = int(datetime.combine(parse_date(start), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
+    if end:
+        params["endTime"] = int(datetime.combine(parse_date(end), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
+    url = "https://api.binance.com/api/v3/klines?" + urllib.parse.urlencode(params)
+    text = download_text(url)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LeanPlatformError("Binance did not return JSON kline data.") from exc
+    if isinstance(payload, dict) and payload.get("code"):
+        raise LeanPlatformError(f"Binance error for {ticker}: {payload.get('msg') or payload}")
+    rows = []
+    for item in payload:
+        if not isinstance(item, list) or len(item) < 6:
+            continue
+        rows.append(
+            {
+                "date": datetime.fromtimestamp(int(item[0]) / 1000, tz=timezone.utc).date().isoformat(),
+                "open": str(item[1]),
+                "high": str(item[2]),
+                "low": str(item[3]),
+                "close": str(item[4]),
+                "volume": str(item[5]),
+            }
+        )
+    if not rows:
+        raise LeanPlatformError(f"No Binance rows found for {ticker}.")
     return rows
 
 
@@ -689,7 +854,7 @@ def base_config(
     return {
         "environment": "backtesting",
         "algorithm-id": algorithm_id,
-        "backtest-name": f"Local {parameters['ticker']} EMA Backtest",
+        "backtest-name": f"Local {parameters.get('assetClass', 'equity')} {parameters['ticker']} Backtest",
         "algorithm-type-name": algorithm_class,
         "algorithm-language": language,
         "algorithm-location": algorithm_location,
@@ -746,8 +911,17 @@ def base_config(
 
 
 def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
-    market = market_key(str(parameters.get("market", "usa")))
-    ticker = normalize_symbol(str(parameters["ticker"]), market).upper()
+    requested_asset_class = asset_class_key(str(parameters.get("assetClass") or parameters.get("asset_class") or "equity"))
+    requested_resolution = resolution_key(str(parameters.get("resolution") or "daily"))
+    requested_data_type = data_type_key(str(parameters.get("dataType") or parameters.get("data_type") or "trade"))
+    if requested_asset_class == "equity":
+        market = market_key(str(parameters.get("market", parameters.get("venue", "usa"))))
+        ticker = normalize_symbol(str(parameters["ticker"]), market).upper()
+        venue = market
+    else:
+        venue = venue_key(requested_asset_class, str(parameters.get("venue") or parameters.get("market") or ""), None)
+        market = venue
+        ticker = canonical_symbol(str(parameters["ticker"]), requested_asset_class)
     start = parse_date(str(parameters["start"]))
     end = parse_date(str(parameters["end"]))
     if end <= start:
@@ -755,18 +929,48 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     cash = float(parameters.get("cash", 100000))
     if cash <= 0:
         raise LeanPlatformError("Cash must be positive.")
-    if not daily_zip_path(ticker, market).exists():
-        raise LeanPlatformError(f"Missing LEAN daily data for {ticker} in {market}.")
+    data_request = AssetRequest(
+        requested_asset_class,
+        ticker,
+        venue,
+        requested_resolution,
+        requested_data_type,
+    )
+    if not has_lean_data(data_request):
+        raise LeanPlatformError(
+            f"Missing LEAN {requested_resolution} {requested_data_type} data for "
+            f"{ticker} ({requested_asset_class}/{venue})."
+        )
 
     clean: dict[str, Any] = {
         "ticker": ticker,
+        "assetClass": requested_asset_class,
         "market": market,
+        "venue": venue,
+        "resolution": requested_resolution,
+        "dataType": requested_data_type,
         "start": start.isoformat(),
         "end": end.isoformat(),
         "cash": cash,
     }
     for key, value in parameters.items():
-        if key in {"ticker", "symbol", "market", "start", "end", "cash", "dockerImage", "projectId", "parameters"}:
+        if key in {
+            "ticker",
+            "symbol",
+            "assetClass",
+            "asset_class",
+            "market",
+            "venue",
+            "resolution",
+            "dataType",
+            "data_type",
+            "start",
+            "end",
+            "cash",
+            "dockerImage",
+            "projectId",
+            "parameters",
+        }:
             continue
         if value is None:
             continue
@@ -860,37 +1064,22 @@ def read_lean_daily_price_series(
     market: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    asset_class: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
 ) -> list[dict[str, Any]]:
-    market = market_key(market)
-    path = daily_zip_path(symbol, market)
-    if not path.exists():
-        return []
     start_date = parse_date(start) if start else None
     end_date = parse_date(end) if end else None
-    ticker = symbol_key(normalize_symbol(symbol, market))
-    points: list[dict[str, Any]] = []
-    with zipfile.ZipFile(path) as archive:
-        name = f"{ticker}.csv"
-        members = archive.namelist()
-        if name not in members and members:
-            name = members[0]
-        with archive.open(name) as file:
-            for raw_line in file:
-                line = raw_line.decode("utf-8").strip()
-                if not line:
-                    continue
-                fields = line.split(",")
-                if len(fields) < 5:
-                    continue
-                item_date = datetime.strptime(fields[0].split()[0], "%Y%m%d").date()
-                if start_date and item_date < start_date:
-                    continue
-                if end_date and item_date > end_date:
-                    continue
-                timestamp = datetime(item_date.year, item_date.month, item_date.day, 21, tzinfo=timezone.utc)
-                close = float(fields[4]) / 10000
-                points.append({"time": timestamp.isoformat(), "value": close})
-    return points
+    try:
+        if asset_class_key(asset_class or "equity") == "equity":
+            market_value = market_key(market or venue)
+            request = AssetRequest("equity", normalize_symbol(symbol, market_value).upper(), market_value, resolution_key(resolution), data_type_key(data_type))
+        else:
+            request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
+    except LeanWebError:
+        return []
+    return parse_lean_zip_price_series(request, start_date, end_date)
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -923,6 +1112,10 @@ def extract_chart_data(
     market: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    asset_class: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
 ) -> dict[str, Any]:
     data = load_json(result_json)
     charts = data.get("charts") or {}
@@ -947,7 +1140,20 @@ def extract_chart_data(
         )
 
     inferred_symbol = symbol or next((order["symbol"] for order in orders if order["symbol"]), None)
-    price = read_lean_daily_price_series(inferred_symbol, market, start, end) if inferred_symbol else []
+    price = (
+        read_lean_daily_price_series(
+            inferred_symbol,
+            market,
+            start,
+            end,
+            asset_class=asset_class,
+            venue=venue,
+            resolution=resolution,
+            data_type=data_type,
+        )
+        if inferred_symbol
+        else []
+    )
     equity_series = point_series(equity, "Equity")
     order_markers = [
         {

@@ -3,6 +3,10 @@ export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "interru
 export interface DataAsset {
   id: number;
   symbol: string;
+  asset_class?: string;
+  venue?: string;
+  resolution?: string;
+  data_type?: string;
   source: string;
   rows: number;
   first_date: string;
@@ -18,15 +22,39 @@ export interface DataProvider {
   requiresApiKey: boolean;
   supportsBatch: boolean;
   markets: string[];
+  assetClasses?: string[];
+  venues?: string[];
   notes: string;
 }
 
 export interface MarketInfo {
-  key: "usa" | "china" | "hongkong";
+  key: string;
   name: string;
   currency: string;
   defaultProvider: string;
   providers: string[];
+}
+
+export interface AssetClassInfo {
+  key: "equity" | "crypto" | "crypto_future" | "future";
+  name: string;
+  defaultVenue: string;
+  defaultResolution: string;
+  venues: string[];
+  dataTypes: string[];
+  notes: string;
+}
+
+export interface LocalDataFile {
+  assetClass: string;
+  symbol: string;
+  venue: string;
+  market?: string | null;
+  resolution: string;
+  dataType: string;
+  file: string;
+  rows?: number | null;
+  size: number;
 }
 
 export interface StrategyParameter {
@@ -45,7 +73,11 @@ export interface StrategyTemplate {
 }
 
 export interface AppSettings {
+  defaultAssetClass: string;
   defaultMarket: string;
+  defaultVenue: string;
+  defaultResolution: string;
+  defaultDataType: string;
   defaultProvider: string;
   defaultAdjust: string;
   defaultStrategyTemplate: string;
@@ -111,9 +143,17 @@ export interface Task {
 export interface BacktestRun {
   id: string;
   symbol: string;
+  asset_class?: string;
+  venue?: string;
+  resolution?: string;
+  data_type?: string;
   parameters: {
     ticker: string;
+    assetClass?: string;
     market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     start: string;
     end: string;
     fast?: number;
@@ -182,6 +222,23 @@ export interface ObjectStoreItem {
   updated_at: string;
 }
 
+export interface PaperSession {
+  id: string;
+  project_id?: string | null;
+  name: string;
+  status: string;
+  symbol: string;
+  asset_class: string;
+  venue: string;
+  resolution: string;
+  cash: number;
+  equity: number;
+  parameters?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+}
+
 export interface ChartPoint {
   time: string;
   value: number;
@@ -248,6 +305,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   strategyTemplates: () => request<StrategyTemplate[]>("/api/strategies/templates"),
+  assetClasses: () => request<AssetClassInfo[]>("/api/asset-classes"),
   markets: () => request<MarketInfo[]>("/api/markets"),
   djiaUniverse: () => request<Universe>("/api/universes/djia"),
   projects: () => request<Project[]>("/api/projects"),
@@ -256,7 +314,11 @@ export const api = {
     language: "Python" | "CSharp";
     algorithmClass?: string;
     templateKey?: string;
+    assetClass?: string;
     market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     parameters?: Record<string, unknown>;
   }) =>
     request<Project>("/api/projects", {
@@ -277,16 +339,27 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, content })
     }),
-  symbols: (market = "usa") => request<{ symbols: string[]; count: number }>(`/api/symbols?market=${encodeURIComponent(market)}`),
+  symbols: (market = "usa", assetClass = "equity", venue?: string, resolution = "daily", dataType = "trade") =>
+    request<{ symbols: string[]; count: number }>(
+      `/api/symbols?market=${encodeURIComponent(market)}&assetClass=${encodeURIComponent(assetClass)}&venue=${encodeURIComponent(venue ?? "")}&resolution=${encodeURIComponent(resolution)}&dataType=${encodeURIComponent(dataType)}`
+    ),
   searchSecurities: (market: string, keyword: string) =>
     request<{ items: Array<{ symbol: string; market: string; name: string; hasLocalData: boolean }>; count: number }>(
       `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}`
     ),
   dataAssets: () => request<DataAsset[]>("/api/data-assets"),
+  dataFiles: (assetClass?: string, venue?: string) =>
+    request<{ items: LocalDataFile[]; count: number }>(
+      `/api/data/files?assetClass=${encodeURIComponent(assetClass ?? "")}&venue=${encodeURIComponent(venue ?? "")}`
+    ),
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   fetchData: (payload: {
     symbol: string;
+    assetClass?: string;
     market: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     provider: string;
     apiKey?: string;
     outputsize: "compact" | "full";
@@ -302,7 +375,11 @@ export const api = {
     }),
   fetchBatchData: (payload: {
     symbols: string[];
+    assetClass?: string;
     market: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     provider: string;
     apiKey?: string;
     outputsize: "compact" | "full";
@@ -335,7 +412,11 @@ export const api = {
   backtests: () => request<BacktestRun[]>("/api/backtests"),
   createBacktest: (payload: {
     symbol: string;
+    assetClass?: string;
     market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     start: string;
     end: string;
     fast?: number;
@@ -362,6 +443,11 @@ export const api = {
   createOptimization: (payload: {
     projectId: string;
     symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
     start: string;
     end: string;
     cash: number;
@@ -397,5 +483,29 @@ export const api = {
       body: formData
     }),
   deleteObjectStoreItem: (key: string) =>
-    request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" })
+    request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
+  paperSessions: () => request<PaperSession[]>("/api/paper"),
+  createPaperSession: (payload: {
+    name?: string;
+    projectId?: string;
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    cash?: number;
+    parameters?: Record<string, unknown>;
+  }) =>
+    request<PaperSession>("/api/paper", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  updatePaperSessionStatus: (id: string, status: string) =>
+    request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    })
 };

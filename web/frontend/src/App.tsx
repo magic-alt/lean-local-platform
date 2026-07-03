@@ -39,13 +39,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   AppSettings,
+  AssetClassInfo,
   BacktestRun,
   ChartData,
   DataAsset,
   DataProvider,
+  LocalDataFile,
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
+  PaperSession,
   Project,
   ProjectFile,
   ReportRecord,
@@ -78,7 +81,11 @@ function useAsyncData<T>(loader: () => Promise<T>, initial: T) {
 }
 
 const defaultSettings: AppSettings = {
+  defaultAssetClass: "equity",
   defaultMarket: "usa",
+  defaultVenue: "usa",
+  defaultResolution: "daily",
+  defaultDataType: "trade",
   defaultProvider: "yahoo",
   defaultAdjust: "",
   defaultStrategyTemplate: "ema_cross",
@@ -115,6 +122,34 @@ function projectMarket(project?: Project) {
   return String(project?.config?.market ?? "usa");
 }
 
+function projectAssetClass(project?: Project) {
+  return String(project?.config?.assetClass ?? "equity");
+}
+
+function projectVenue(project?: Project) {
+  return String(project?.config?.venue ?? projectMarket(project));
+}
+
+function projectResolution(project?: Project) {
+  return String(project?.config?.resolution ?? "daily");
+}
+
+function projectDataType(project?: Project) {
+  return String(project?.config?.dataType ?? "trade");
+}
+
+function defaultVenueFor(assetClass: string, assets: AssetClassInfo[], market = "usa") {
+  return assetClass === "equity"
+    ? market
+    : assets.find((item) => item.key === assetClass)?.defaultVenue ?? market;
+}
+
+function defaultTemplateFor(assetClass: string) {
+  if (assetClass === "crypto") return "crypto_momentum";
+  if (assetClass === "future") return "future_trend";
+  return "ema_cross";
+}
+
 function Dashboard() {
   const navigate = useNavigate();
   const runs = useAsyncData(api.backtests, []);
@@ -132,6 +167,7 @@ function Dashboard() {
           <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => navigate("/projects")}>New Project</Button>
           <Button icon={<DatabaseOutlined />} onClick={() => navigate("/data")}>Fetch Data</Button>
           <Button icon={<PlayCircleOutlined />} onClick={() => navigate("/backtests")}>Run Backtest</Button>
+          <Button icon={<ExperimentOutlined />} onClick={() => navigate("/paper")}>Paper Replay</Button>
           <Button icon={<SettingOutlined />} onClick={() => navigate("/settings")}>Settings</Button>
         </Space>
       </Card>
@@ -146,7 +182,22 @@ function Dashboard() {
   );
 }
 
-function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boolean; forcedMarket?: string }) {
+function MarketDataDownloader({
+  compact = false,
+  forcedAssetClass,
+  forcedMarket,
+  forcedVenue,
+  forcedResolution,
+  forcedDataType
+}: {
+  compact?: boolean;
+  forcedAssetClass?: string;
+  forcedMarket?: string;
+  forcedVenue?: string;
+  forcedResolution?: string;
+  forcedDataType?: string;
+}) {
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const universe = useAsyncData<Universe>(api.djiaUniverse, { key: "djia", name: "Dow Jones Industrial Average", asOf: "", source: "", components: [] });
@@ -154,20 +205,37 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [localSymbols, setLocalSymbols] = useState<string[]>([]);
   const [form] = Form.useForm();
+  const selectedAssetClass = forcedAssetClass ?? (Form.useWatch("assetClass", form) || "equity");
   const selectedMarket = forcedMarket ?? (Form.useWatch("market", form) || "usa");
+  const selectedVenue = forcedVenue ?? (Form.useWatch("venue", form) || defaultVenueFor(selectedAssetClass, assetClasses.data, selectedMarket));
+  const selectedResolution = forcedResolution ?? (Form.useWatch("resolution", form) || "daily");
+  const selectedDataType = forcedDataType ?? (Form.useWatch("dataType", form) || "trade");
   const selectedProvider = Form.useWatch("provider", form) || markets.data.find((item) => item.key === selectedMarket)?.defaultProvider || "yahoo";
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
 
   useEffect(() => {
+    form.setFieldValue("assetClass", forcedAssetClass ?? form.getFieldValue("assetClass") ?? "equity");
     form.setFieldValue("market", forcedMarket ?? form.getFieldValue("market") ?? "usa");
-  }, [forcedMarket, form]);
+    form.setFieldValue("venue", forcedVenue ?? form.getFieldValue("venue") ?? defaultVenueFor(selectedAssetClass, assetClasses.data, selectedMarket));
+    form.setFieldValue("resolution", forcedResolution ?? form.getFieldValue("resolution") ?? "daily");
+    form.setFieldValue("dataType", forcedDataType ?? form.getFieldValue("dataType") ?? "trade");
+  }, [assetClasses.data, forcedAssetClass, forcedDataType, forcedMarket, forcedResolution, forcedVenue, form, selectedAssetClass, selectedMarket]);
 
   useEffect(() => {
-    api.symbols(selectedMarket).then((result) => setLocalSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
+    api.symbols(selectedMarket, selectedAssetClass, selectedVenue, selectedResolution, selectedDataType)
+      .then((result) => setLocalSymbols(result.symbols))
+      .catch((error) => message.error((error as Error).message));
     const market = markets.data.find((item) => item.key === selectedMarket);
-    if (market && !market.providers.includes(selectedProvider)) {
+    const compatible = providers.data.filter((provider) => (
+      provider.assetClasses?.includes(selectedAssetClass) ||
+      (selectedAssetClass === "equity" && provider.markets.includes(selectedMarket))
+    ));
+    if (compatible.length > 0 && !compatible.some((provider) => provider.key === selectedProvider)) {
+      form.setFieldValue("provider", compatible[0].key);
+    } else if (market && selectedAssetClass === "equity" && !market.providers.includes(selectedProvider)) {
       form.setFieldValue("provider", market.defaultProvider);
     }
-  }, [selectedMarket, selectedProvider, markets.data, form]);
+  }, [selectedAssetClass, selectedDataType, selectedMarket, selectedProvider, selectedResolution, selectedVenue, markets.data, providers.data, form]);
 
   function addTypedSymbols() {
     const typed = symbolsText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean);
@@ -183,7 +251,11 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
     }
     const task = await api.fetchBatchData({
       symbols,
+      assetClass: selectedAssetClass,
       market: selectedMarket,
+      venue: selectedVenue,
+      resolution: selectedResolution,
+      dataType: selectedDataType,
       provider: values.provider,
       apiKey: values.apiKey,
       outputsize: values.outputsize,
@@ -195,9 +267,15 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
     message.success(`Data fetch queued: ${task.id}`);
   }
 
-  const marketProviders = providers.data.filter((provider) => provider.markets.includes(selectedMarket));
-  const djiaReady = selectedMarket === "usa";
+  const marketProviders = providers.data.filter((provider) => (
+    provider.assetClasses?.includes(selectedAssetClass) ||
+    (selectedAssetClass === "equity" && provider.markets.includes(selectedMarket))
+  ));
+  const djiaReady = selectedAssetClass === "equity" && selectedMarket === "usa";
   const localRows = localSymbols.map((symbol) => ({ symbol, hasLocalData: true }));
+  const venueOptions = selectedAssetInfo?.venues.map((venue) => ({ value: venue, label: venue })) ?? [];
+  const resolutionOptions = ["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }));
+  const dataTypeOptions = (selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }));
 
   return (
     <Card title={compact ? "Market Data" : "Market Data Download"}>
@@ -205,11 +283,41 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
         form={form}
         layout="vertical"
         onFinish={submit}
-        initialValues={{ market: forcedMarket ?? "usa", provider: "yahoo", outputsize: "compact", adjust: "", overwrite: false }}
+        initialValues={{
+          assetClass: forcedAssetClass ?? "equity",
+          market: forcedMarket ?? "usa",
+          venue: forcedVenue ?? "usa",
+          resolution: forcedResolution ?? "daily",
+          dataType: forcedDataType ?? "trade",
+          provider: "yahoo",
+          outputsize: "compact",
+          adjust: "",
+          overwrite: false
+        }}
       >
         <div className="field-grid six">
+          <Form.Item name="assetClass" label="Asset Class">
+            <Select
+              disabled={Boolean(forcedAssetClass)}
+              options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+              onChange={(value) => {
+                const nextVenue = defaultVenueFor(value, assetClasses.data, selectedMarket);
+                form.setFieldValue("venue", nextVenue);
+                form.setFieldValue("provider", value === "crypto" ? "binance" : markets.data.find((item) => item.key === selectedMarket)?.defaultProvider ?? "yahoo");
+              }}
+            />
+          </Form.Item>
           <Form.Item name="market" label="Market">
             <Select disabled={Boolean(forcedMarket)} options={markets.data.map((item) => ({ value: item.key, label: item.name }))} />
+          </Form.Item>
+          <Form.Item name="venue" label="Venue">
+            <Select disabled={Boolean(forcedVenue) || selectedAssetClass === "equity"} options={venueOptions} />
+          </Form.Item>
+          <Form.Item name="resolution" label="Resolution">
+            <Select disabled={Boolean(forcedResolution)} options={resolutionOptions} />
+          </Form.Item>
+          <Form.Item name="dataType" label="Data Type">
+            <Select disabled={Boolean(forcedDataType)} options={dataTypeOptions} />
           </Form.Item>
           <Form.Item name="provider" label="Provider">
             <Select options={marketProviders.map((provider) => ({ value: provider.key, label: provider.name }))} />
@@ -228,7 +336,11 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
           <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>
         </div>
         <Space.Compact style={{ width: "100%", marginBottom: 12 }}>
-          <Input value={symbolsText} onChange={(event) => setSymbolsText(event.target.value)} placeholder={selectedMarket === "china" ? "600519, 000001" : selectedMarket === "hongkong" ? "00700, 00941" : "AAPL, MSFT"} />
+          <Input
+            value={symbolsText}
+            onChange={(event) => setSymbolsText(event.target.value)}
+            placeholder={selectedAssetClass === "crypto" ? "BTCUSDT, ETHUSDT" : selectedAssetClass === "future" ? "GC, ES" : selectedMarket === "china" ? "600519, 000001" : selectedMarket === "hongkong" ? "00700, 00941" : "AAPL, MSFT"}
+          />
           <Button onClick={addTypedSymbols}>Add</Button>
           <Button type="primary" icon={<CloudDownloadOutlined />} htmlType="submit">Fetch</Button>
         </Space.Compact>
@@ -240,6 +352,9 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
         <Button onClick={() => setSelectedSymbols([])}>Clear</Button>
         {selectedSymbols.map((symbol) => <Tag key={symbol} closable onClose={() => setSelectedSymbols(selectedSymbols.filter((item) => item !== symbol))}>{symbol}</Tag>)}
       </Space>
+      {selectedAssetClass !== "equity" && selectedProvider !== "binance" && (
+        <Alert style={{ marginBottom: 12 }} type="warning" showIcon message="This asset class currently uses local LEAN files or CSV import unless Binance crypto daily is selected." />
+      )}
       <Table
         rowKey="symbol"
         size="small"
@@ -253,7 +368,8 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
         columns={[
           { title: "Symbol", dataIndex: "symbol", width: 100 },
           { title: "Name", dataIndex: "name", ellipsis: true, render: (value) => value ?? "-" },
-          { title: "Market", render: () => selectedMarket },
+          { title: "Asset", render: () => selectedAssetClass },
+          { title: "Venue", render: () => selectedAssetClass === "equity" ? selectedMarket : selectedVenue },
           { title: "Local", dataIndex: "hasLocalData", width: 90, render: (value: boolean) => <Tag color={value ? "success" : "warning"}>{value ? "ready" : "missing"}</Tag> }
         ]}
       />
@@ -261,7 +377,7 @@ function MarketDataDownloader({ compact = false, forcedMarket }: { compact?: boo
         style={{ marginTop: 12 }}
         type="info"
         showIcon
-        message="Public data sources may throttle or change. A/HK support is daily-bar only in this version; TongHuaShun is A-share only."
+        message="Public data sources may throttle or change. Equity A/HK support is daily-bar only; crypto import is daily Binance spot in this version; futures should use local LEAN files or CSV import with verified contract metadata."
       />
     </Card>
   );
@@ -271,8 +387,11 @@ function ProjectsPage() {
   const navigate = useNavigate();
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const [form] = Form.useForm();
+  const selectedAssetClass = Form.useWatch("assetClass", form) || "equity";
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
 
   async function createProject(values: any) {
     const template = templates.data.find((item) => item.key === values.templateKey);
@@ -281,7 +400,11 @@ function ProjectsPage() {
       language: "Python",
       algorithmClass: values.algorithmClass,
       templateKey: values.templateKey,
+      assetClass: values.assetClass,
       market: values.market,
+      venue: values.assetClass === "equity" ? values.market : values.venue,
+      resolution: values.resolution,
+      dataType: values.dataType,
       parameters: templateDefaults(template)
     });
     message.success("Project created");
@@ -310,10 +433,22 @@ function ProjectsPage() {
         <Button icon={<ReloadOutlined />} onClick={projects.reload}>Refresh</Button>
       </div>
       <Card title="Create Project">
-        <Form form={form} layout="vertical" onFinish={createProject} initialValues={{ market: "usa", templateKey: "ema_cross" }}>
+        <Form form={form} layout="vertical" onFinish={createProject} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", templateKey: "ema_cross" }}>
           <div className="field-grid">
             <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
+            <Form.Item name="assetClass" label="Asset Class">
+              <Select
+                options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                onChange={(value) => {
+                  form.setFieldValue("templateKey", defaultTemplateFor(value));
+                  form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, form.getFieldValue("market") || "usa"));
+                }}
+              />
+            </Form.Item>
             <Form.Item name="market" label="Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select disabled={selectedAssetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="templateKey" label="Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="algorithmClass" label="Class"><Input placeholder="Auto-generated if empty" /></Form.Item>
           </div>
@@ -328,7 +463,8 @@ function ProjectsPage() {
           pagination={{ pageSize: 10 }}
           columns={[
             { title: "Name", dataIndex: "name" },
-            { title: "Market", render: (_, project) => String(project.config?.market ?? "usa") },
+            { title: "Asset", render: (_, project) => String(project.config?.assetClass ?? "equity") },
+            { title: "Venue", render: (_, project) => String(project.config?.venue ?? project.config?.market ?? "usa") },
             { title: "Strategy", render: (_, project) => String(project.config?.templateKey ?? "custom") },
             { title: "Updated", dataIndex: "updated_at" },
             {
@@ -364,7 +500,11 @@ function ProjectWorkspacePage() {
 
   const project = projects.data.find((item) => item.id === selectedId);
   const template = projectTemplate(project, templates.data);
+  const assetClass = projectAssetClass(project);
   const market = projectMarket(project);
+  const venue = projectVenue(project);
+  const resolution = projectResolution(project);
+  const dataType = projectDataType(project);
 
   useEffect(() => {
     if (projectId) setSelectedId(projectId);
@@ -385,8 +525,8 @@ function ProjectWorkspacePage() {
   }, [project?.id, loadProjectFile]);
 
   useEffect(() => {
-    api.symbols(market).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
-  }, [market]);
+    api.symbols(market, assetClass, venue, resolution, dataType).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
+  }, [assetClass, dataType, market, resolution, venue]);
 
   async function saveFile() {
     if (!project || !activeFile) return;
@@ -400,7 +540,11 @@ function ProjectWorkspacePage() {
     const run = await api.createBacktest({
       ...values,
       projectId: project.id,
+      assetClass,
       market,
+      venue,
+      resolution,
+      dataType,
       parameters: values.parameters ?? {}
     });
     message.success("Backtest queued");
@@ -415,6 +559,11 @@ function ProjectWorkspacePage() {
     end: "2024-12-31",
     cash: 100000,
     dockerImage: "quantconnect/lean:latest",
+    assetClass,
+    market,
+    venue,
+    resolution,
+    dataType,
     parameters: templateDefaults(template)
   };
 
@@ -423,7 +572,7 @@ function ProjectWorkspacePage() {
       <div className="toolbar">
         <div>
           <h1 className="page-title">Project Workspace</h1>
-          {project && <span className="muted">{project.name} / {market} / {template?.name}</span>}
+          {project && <span className="muted">{project.name} / {assetClass} / {venue} / {resolution} / {template?.name}</span>}
         </div>
         <Space wrap>
           <Select style={{ width: 280 }} value={selectedId} onChange={(value) => setSelectedId(value)} options={projects.data.map((item) => ({ value: item.id, label: item.name }))} />
@@ -432,9 +581,9 @@ function ProjectWorkspacePage() {
       </div>
       {!project ? <Alert type="info" message="Create or select a project first." /> : (
         <Tabs items={[
-          { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Market" value={market} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
+          { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
           { key: "code", label: "Code", children: <Card title={`${activeFile ?? project.main_file}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space><Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty} onClick={saveFile}>Save</Button></Card> },
-          { key: "data", label: "Data", children: <MarketDataDownloader compact forcedMarket={market} /> },
+          { key: "data", label: "Data", children: <MarketDataDownloader compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
           { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button></Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
           { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }
@@ -446,29 +595,40 @@ function ProjectWorkspacePage() {
 
 function DataPage() {
   const assets = useAsyncData(api.dataAssets, []);
+  const dataFiles = useAsyncData(() => api.dataFiles(), { items: [], count: 0 });
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const [csvForm] = Form.useForm();
+  const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
+  const csvAssetInfo = assetClasses.data.find((item) => item.key === csvAssetClass);
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
     if (!file) return message.error("Choose a CSV file");
     const formData = new FormData();
-    ["symbol", "market", "dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].forEach((key) => formData.append(key, values[key]));
+    ["symbol", "assetClass", "market", "venue", "dataType", "dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].forEach((key) => formData.append(key, values[key] ?? ""));
     formData.append("overwrite", String(Boolean(values.overwrite)));
     formData.append("file", file);
     await api.importCsv(formData);
     message.success("CSV imported");
     csvForm.resetFields();
     assets.reload();
+    dataFiles.reload();
   }
 
   return (
     <>
-      <div className="toolbar"><h1 className="page-title">Data</h1><Button icon={<ReloadOutlined />} onClick={assets.reload}>Refresh</Button></div>
+      <div className="toolbar"><h1 className="page-title">Data Library</h1><Button icon={<ReloadOutlined />} onClick={() => { assets.reload(); dataFiles.reload(); }}>Refresh</Button></div>
       <MarketDataDownloader />
       <div className="two-column" style={{ marginTop: 16 }}>
         <Card title="Import CSV">
-          <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ market: "usa", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
-            <div className="field-grid"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item></div>
+          <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
+            <div className="field-grid">
+              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+              <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+              <Form.Item name="venue" label="Venue"><Select disabled={csvAssetClass === "equity"} options={(csvAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+              <Form.Item name="dataType" label="Data Type"><Select options={(csvAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            </div>
             <div className="field-grid">{["dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].map((name) => <Form.Item key={name} name={name} label={name}><Input /></Form.Item>)}</div>
             <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
             <Form.Item name="overwrite" valuePropName="checked"><Checkbox>Overwrite existing</Checkbox></Form.Item>
@@ -478,7 +638,8 @@ function DataPage() {
         <Card title="Imported Assets">
           <Table<DataAsset> rowKey="id" size="small" dataSource={assets.data} columns={[
             { title: "Symbol", dataIndex: "symbol" },
-            { title: "Market", render: (_, asset) => String(asset.metadata?.market ?? "-") },
+            { title: "Asset", render: (_, asset) => asset.asset_class ?? String(asset.metadata?.asset_class ?? "equity") },
+            { title: "Venue", render: (_, asset) => asset.venue ?? String(asset.metadata?.venue ?? asset.metadata?.market ?? "-") },
             { title: "Source", dataIndex: "source" },
             { title: "Rows", dataIndex: "rows" },
             { title: "Range", render: (_, asset) => `${asset.first_date} -> ${asset.last_date}` },
@@ -486,6 +647,23 @@ function DataPage() {
           ]} />
         </Card>
       </div>
+      <Card title="Local LEAN Data Files" style={{ marginTop: 16 }}>
+        <Table<LocalDataFile>
+          rowKey={(row) => row.file}
+          size="small"
+          dataSource={dataFiles.data.items}
+          pagination={{ pageSize: 12 }}
+          columns={[
+            { title: "Asset", dataIndex: "assetClass" },
+            { title: "Symbol", dataIndex: "symbol" },
+            { title: "Venue", dataIndex: "venue" },
+            { title: "Resolution", dataIndex: "resolution" },
+            { title: "Type", dataIndex: "dataType" },
+            { title: "Rows", dataIndex: "rows", render: (value) => value ?? "-" },
+            { title: "File", dataIndex: "file", ellipsis: true }
+          ]}
+        />
+      </Card>
     </>
   );
 }
@@ -494,23 +672,49 @@ function BacktestsPage() {
   const navigate = useNavigate();
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const runs = useAsyncData(api.backtests, []);
+  const [form] = Form.useForm();
+  const [assetClass, setAssetClass] = useState("equity");
   const [market, setMarket] = useState("usa");
+  const [venue, setVenue] = useState("usa");
+  const [resolution, setResolution] = useState("daily");
+  const [dataType, setDataType] = useState("trade");
   const [symbols, setSymbols] = useState<string[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
 
   useEffect(() => {
-    api.symbols(market).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
-  }, [market]);
+    setAssetClass(settings.data.defaultAssetClass);
+    setMarket(settings.data.defaultMarket);
+    setVenue(settings.data.defaultVenue);
+    setResolution(settings.data.defaultResolution);
+    setDataType(settings.data.defaultDataType);
+    form.setFieldsValue({
+      assetClass: settings.data.defaultAssetClass,
+      market: settings.data.defaultMarket,
+      venue: settings.data.defaultVenue,
+      resolution: settings.data.defaultResolution,
+      dataType: settings.data.defaultDataType
+    });
+  }, [form, settings.data.defaultAssetClass, settings.data.defaultDataType, settings.data.defaultMarket, settings.data.defaultResolution, settings.data.defaultVenue]);
+
+  useEffect(() => {
+    api.symbols(market, assetClass, venue, resolution, dataType).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
+  }, [assetClass, dataType, market, resolution, venue]);
 
   async function submit(values: any) {
     const run = await api.createBacktest({
       ...values,
+      assetClass,
       market,
+      venue,
+      resolution,
+      dataType,
       projectId: values.projectId,
       parameters: values.parameters ?? {}
     });
@@ -523,14 +727,19 @@ function BacktestsPage() {
       <div className="toolbar"><h1 className="page-title">Backtests</h1><Button icon={<ReloadOutlined />} onClick={runs.reload}>Refresh</Button></div>
       <Card title="New Backtest">
         <Form
+          form={form}
           key={`${market}-${selectedProjectId ?? "none"}-${templates.data.length}`}
           layout="vertical"
           onFinish={submit}
-          initialValues={{ market: settings.data.defaultMarket, symbol: symbols[0] ?? "AAPL", start: settings.data.defaultStart, end: settings.data.defaultEnd, cash: settings.data.defaultCash, dockerImage: settings.data.dockerImage, parameters: templateDefaults(selectedTemplate) }}
+          initialValues={{ assetClass: settings.data.defaultAssetClass, market: settings.data.defaultMarket, venue: settings.data.defaultVenue, resolution: settings.data.defaultResolution, dataType: settings.data.defaultDataType, symbol: symbols[0] ?? "AAPL", start: settings.data.defaultStart, end: settings.data.defaultEnd, cash: settings.data.defaultCash, dockerImage: settings.data.dockerImage, parameters: templateDefaults(selectedTemplate) }}
         >
           <div className="field-grid six">
-            <Form.Item name="projectId" label="Project"><Select allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) setMarket(projectMarket(project)); }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select onChange={setMarket} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="projectId" label="Project"><Select allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const next = { assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+            <Form.Item name="assetClass" label="Asset"><Select onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
             <Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item>
             <Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item>
@@ -581,7 +790,11 @@ function RunDetailPage() {
 
 function OptimizationPage() {
   const projects = useAsyncData(api.projects, []);
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const optimizations = useAsyncData(api.optimizations, []);
+  const [form] = Form.useForm();
+  const assetClass = Form.useWatch("assetClass", form) || "equity";
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
   async function submit(values: any) {
     await api.createOptimization({
       ...values,
@@ -595,9 +808,14 @@ function OptimizationPage() {
     <>
       <div className="toolbar"><h1 className="page-title">Optimization</h1><Button icon={<ReloadOutlined />} onClick={optimizations.reload}>Refresh</Button></div>
       <Card title="Parameter Grid">
-        <Form layout="vertical" onFinish={submit} initialValues={{ symbol: "AAPL", start: "2018-01-01", end: "2024-12-31", cash: 100000, fastValues: "5,10,15", slowValues: "20,30,50", dockerImage: "quantconnect/lean:latest" }}>
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", symbol: "AAPL", start: "2018-01-01", end: "2024-12-31", cash: 100000, fastValues: "5,10,15", slowValues: "20,30,50", dockerImage: "quantconnect/lean:latest" }}>
           <div className="field-grid">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project) }); }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
+            <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="symbol" label="Symbol"><Input /></Form.Item>
             <Form.Item name="start" label="Start"><Input type="date" /></Form.Item>
             <Form.Item name="end" label="End"><Input type="date" /></Form.Item>
@@ -636,6 +854,82 @@ function ResearchPage() {
       </Card>
       <Card title="Sessions" style={{ marginTop: 16 }}>
         <Table<ResearchSession> rowKey="id" dataSource={sessions.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "URL", render: (_, session) => session.url ? <a href={session.url} target="_blank">{session.url}</a> : "-" }, { title: "Action", render: (_, session) => <Button size="small" onClick={() => api.stopResearch(session.id).then(sessions.reload)}>Stop</Button> }]} />
+      </Card>
+    </>
+  );
+}
+
+function PaperPage() {
+  const sessions = useAsyncData(api.paperSessions, []);
+  const projects = useAsyncData(api.projects, []);
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
+  const [form] = Form.useForm();
+  const assetClass = Form.useWatch("assetClass", form) || "equity";
+  const market = Form.useWatch("market", form) || "usa";
+  const venue = Form.useWatch("venue", form) || defaultVenueFor(assetClass, assetClasses.data, market);
+  const resolution = Form.useWatch("resolution", form) || "daily";
+  const dataType = Form.useWatch("dataType", form) || "trade";
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
+
+  useEffect(() => {
+    api.symbols(market, assetClass, venue, resolution, dataType)
+      .then((result) => setSymbols(result.symbols))
+      .catch((error) => message.error((error as Error).message));
+  }, [assetClass, dataType, market, resolution, venue]);
+
+  async function submit(values: any) {
+    await api.createPaperSession({
+      ...values,
+      venue: assetClass === "equity" ? values.market : values.venue,
+      parameters: {}
+    });
+    message.success("Paper session created");
+    form.resetFields();
+    sessions.reload();
+  }
+
+  async function status(session: PaperSession, nextStatus: string) {
+    await api.updatePaperSessionStatus(session.id, nextStatus);
+    await sessions.reload();
+  }
+
+  return (
+    <>
+      <div className="toolbar"><h1 className="page-title">Paper Replay</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
+      <Alert style={{ marginBottom: 16 }} type="info" showIcon message="Paper Replay is a local simulated session registry. It does not connect to brokers or place real orders." />
+      <Card title="Create Paper Session">
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", cash: 100000 }}>
+          <div className="field-grid six">
+            <Form.Item name="name" label="Name"><Input placeholder="BTCUSDT paper replay" /></Form.Item>
+            <Form.Item name="projectId" label="Project"><Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+            <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} onChange={(value) => form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, market))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} onChange={(value) => { if (assetClass === "equity") form.setFieldValue("venue", value); }} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
+            <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+          </div>
+          <Button type="primary" htmlType="submit">Create</Button>
+        </Form>
+      </Card>
+      <Card title="Sessions" style={{ marginTop: 16 }}>
+        <Table<PaperSession>
+          rowKey="id"
+          dataSource={sessions.data}
+          size="small"
+          columns={[
+            { title: "Name", dataIndex: "name" },
+            { title: "Symbol", dataIndex: "symbol" },
+            { title: "Asset", dataIndex: "asset_class" },
+            { title: "Venue", dataIndex: "venue" },
+            { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
+            { title: "Equity", dataIndex: "equity" },
+            { title: "Created", dataIndex: "created_at" },
+            { title: "Actions", render: (_, session) => <Space><Button size="small" onClick={() => status(session, "running")}>Run</Button><Button size="small" onClick={() => status(session, "paused")}>Pause</Button><Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button></Space> }
+          ]}
+        />
       </Card>
     </>
   );
@@ -717,9 +1011,12 @@ function TasksPage() {
 function SettingsPage() {
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
+  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const [form] = Form.useForm();
+  const selectedAssetClass = Form.useWatch("defaultAssetClass", form) || "equity";
+  const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
 
   useEffect(() => {
     form.setFieldsValue(settings.data);
@@ -737,7 +1034,11 @@ function SettingsPage() {
       <Card title="Defaults">
         <Form form={form} layout="vertical" onFinish={submit}>
           <div className="field-grid">
+            <Form.Item name="defaultAssetClass" label="Default Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="defaultMarket" label="Default Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="defaultVenue" label="Default Venue"><Select options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="defaultResolution" label="Default Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="defaultDataType" label="Default Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="defaultProvider" label="Default Provider"><Select options={providers.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="defaultAdjust" label="Default Adjust"><Select options={[{ value: "", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} /></Form.Item>
             <Form.Item name="defaultStrategyTemplate" label="Default Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
@@ -763,6 +1064,7 @@ function AppShell() {
     { key: "/data", icon: <DatabaseOutlined />, label: <Link to="/data">Data</Link> },
     { key: "/backtests", icon: <PlayCircleOutlined />, label: <Link to="/backtests">Backtests</Link> },
     { key: "/optimization", icon: <SlidersOutlined />, label: <Link to="/optimization">Optimization</Link> },
+    { key: "/paper", icon: <ExperimentOutlined />, label: <Link to="/paper">Paper</Link> },
     { key: "/research", icon: <ExperimentOutlined />, label: <Link to="/research">Research</Link> },
     { key: "/reports", icon: <FileTextOutlined />, label: <Link to="/reports">Reports</Link> },
     { key: "/object-store", icon: <DatabaseOutlined />, label: <Link to="/object-store">Object Store</Link> },
@@ -773,7 +1075,7 @@ function AppShell() {
     <Layout className="app-layout">
       <Sider breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
       <Layout>
-        <Header className="app-header"><Space><strong>LEAN Local Workbench</strong><Tag color="blue">docker</Tag><Tag color="green">US/A/HK</Tag></Space></Header>
+        <Header className="app-header"><Space><strong>LEAN Local Workbench</strong><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></Space></Header>
         <Content className="app-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -784,6 +1086,7 @@ function AppShell() {
             <Route path="/backtests" element={<BacktestsPage />} />
             <Route path="/runs/:id" element={<RunDetailPage />} />
             <Route path="/optimization" element={<OptimizationPage />} />
+            <Route path="/paper" element={<PaperPage />} />
             <Route path="/research" element={<ResearchPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/object-store" element={<ObjectStorePage />} />
