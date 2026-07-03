@@ -272,22 +272,7 @@ function ProjectsPage() {
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
-  const [selected, setSelected] = useState<Project>();
-  const [files, setFiles] = useState<ProjectFile[]>([]);
-  const [activeFile, setActiveFile] = useState<string>();
-  const [content, setContent] = useState("");
-  const [dirty, setDirty] = useState(false);
   const [form] = Form.useForm();
-
-  async function selectProject(project: Project) {
-    setSelected(project);
-    const tree = await api.projectFiles(project.id);
-    setFiles(tree);
-    const main = project.main_file;
-    setActiveFile(main);
-    setContent((await api.readProjectFile(project.id, main)).content);
-    setDirty(false);
-  }
 
   async function createProject(values: any) {
     const template = templates.data.find((item) => item.key === values.templateKey);
@@ -313,29 +298,9 @@ function ProjectsPage() {
       onOk: async () => {
         await api.deleteProject(project.id);
         message.success("Project deleted");
-        if (selected?.id === project.id) {
-          setSelected(undefined);
-          setFiles([]);
-          setContent("");
-        }
         await projects.reload();
       }
     });
-  }
-
-  async function openFile(path: string) {
-    if (!selected) return;
-    setActiveFile(path);
-    setContent((await api.readProjectFile(selected.id, path)).content);
-    setDirty(false);
-  }
-
-  async function saveFile() {
-    if (!selected || !activeFile) return;
-    await api.writeProjectFile(selected.id, activeFile, content);
-    setDirty(false);
-    message.success("Saved");
-    projects.reload();
   }
 
   return (
@@ -344,51 +309,41 @@ function ProjectsPage() {
         <h1 className="page-title">Projects</h1>
         <Button icon={<ReloadOutlined />} onClick={projects.reload}>Refresh</Button>
       </div>
-      <div className="two-column wide-left">
-        <Card title="Create Project">
-          <Form form={form} layout="vertical" onFinish={createProject} initialValues={{ market: "usa", templateKey: "ema_cross" }}>
-            <div className="field-grid">
-              <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
-              <Form.Item name="market" label="Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-              <Form.Item name="templateKey" label="Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-              <Form.Item name="algorithmClass" label="Class"><Input placeholder="Auto-generated if empty" /></Form.Item>
-            </div>
-            <Button type="primary" htmlType="submit">Create</Button>
-          </Form>
-          <Table
-            style={{ marginTop: 16 }}
-            rowKey="id"
-            size="small"
-            dataSource={projects.data}
-            pagination={{ pageSize: 8 }}
-            columns={[
-              { title: "Name", dataIndex: "name" },
-              { title: "Market", render: (_, project) => String(project.config?.market ?? "usa") },
-              { title: "Strategy", render: (_, project) => String(project.config?.templateKey ?? "custom") },
-              { title: "Actions", render: (_, project) => <Space><a onClick={() => selectProject(project)}>Edit</a><a onClick={() => navigate(`/workspace/${project.id}`)}>Workspace</a><Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} /></Space> }
-            ]}
-          />
-        </Card>
-        <Card title={selected ? `${selected.name} / ${activeFile ?? ""}${dirty ? " *" : ""}` : "Editor"}>
-          {!selected ? <Alert type="info" message="Create or select a project." /> : (
-            <>
-              <Space wrap style={{ marginBottom: 8 }}>
-                {files.filter((item) => item.type === "file").map((file) => (
-                  <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => openFile(file.path)}>{file.path}</Tag>
-                ))}
-              </Space>
-              <Editor
-                height="520px"
-                language={activeFile?.endsWith(".cs") ? "csharp" : "python"}
-                value={content}
-                onChange={(value) => { setContent(value ?? ""); setDirty(true); }}
-                theme="vs-dark"
-              />
-              <Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty} onClick={saveFile}>Save</Button>
-            </>
-          )}
-        </Card>
-      </div>
+      <Card title="Create Project">
+        <Form form={form} layout="vertical" onFinish={createProject} initialValues={{ market: "usa", templateKey: "ema_cross" }}>
+          <div className="field-grid">
+            <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
+            <Form.Item name="market" label="Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="templateKey" label="Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="algorithmClass" label="Class"><Input placeholder="Auto-generated if empty" /></Form.Item>
+          </div>
+          <Button type="primary" htmlType="submit">Create</Button>
+        </Form>
+      </Card>
+      <Card title="Projects" style={{ marginTop: 16 }}>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={projects.data}
+          pagination={{ pageSize: 10 }}
+          columns={[
+            { title: "Name", dataIndex: "name" },
+            { title: "Market", render: (_, project) => String(project.config?.market ?? "usa") },
+            { title: "Strategy", render: (_, project) => String(project.config?.templateKey ?? "custom") },
+            { title: "Updated", dataIndex: "updated_at" },
+            {
+              title: "Actions",
+              width: 190,
+              render: (_, project) => (
+                <Space>
+                  <Button size="small" type="primary" onClick={() => navigate(`/workspace/${project.id}`)}>Workspace</Button>
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} />
+                </Space>
+              )
+            }
+          ]}
+        />
+      </Card>
     </>
   );
 }
