@@ -343,6 +343,60 @@ export interface DataQueryResult {
   count: number;
 }
 
+export interface FactorEvaluationResult {
+  id?: string;
+  factor: string;
+  universe: string;
+  start_date: string;
+  end_date: string;
+  forward_days: number;
+  quantiles: number;
+  engine: string;
+  observations: number;
+  date_count: number;
+  mean_ic?: number | null;
+  mean_rank_ic?: number | null;
+  ic_series: Array<{ trade_date: string; ic: number; count: number }>;
+  rank_ic_series: Array<{ trade_date: string; rank_ic: number; count: number }>;
+  quantile_returns: Array<{ quantile: number; mean_return?: number | null; count: number }>;
+}
+
+export interface CBondPoolItem {
+  bond_code: string;
+  bond_name?: string | null;
+  stock_symbol?: string | null;
+  trade_date: string;
+  close: number;
+  conversion_value?: number | null;
+  premium_rate?: number | null;
+  double_low?: number | null;
+  current_remaining_size?: number | null;
+  rating?: string | null;
+}
+
+export interface CBondRiskItem {
+  id: string;
+  bond_code: string;
+  bond_name?: string | null;
+  announce_date: string;
+  trigger_date?: string | null;
+  status: string;
+  call_price?: number | null;
+  last_trade_date?: string | null;
+}
+
+export interface FuturesMainItem {
+  contract_code: string;
+  product: string;
+  exchange: string;
+  bar_date: string;
+  close?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+  last_trade_date?: string | null;
+  daysToExpiry?: number | null;
+}
+
 function encodePath(value: string): string {
   return value.split("/").map((part) => encodeURIComponent(part)).join("/");
 }
@@ -604,5 +658,41 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
-    })
+    }),
+  factorEngines: () => request<{ available: Record<string, boolean>; selected: string }>("/api/factors/engines"),
+  evaluateFactor: (payload: {
+    factorName: string;
+    universeCode: string;
+    startDate: string;
+    endDate: string;
+    forwardDays: number;
+    quantiles: number;
+    engine?: string;
+    persist?: boolean;
+  }) =>
+    request<FactorEvaluationResult>("/api/factors/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  factorEvaluations: (limit = 50) =>
+    request<{ items: Array<{ id: string; factor_name: string; universe_code: string; created_at: string; result?: FactorEvaluationResult }>; count: number }>(
+      `/api/factors/evaluations?limit=${encodeURIComponent(limit)}`
+    ),
+  cbondDoubleLow: (params: { date: string; maxDoubleLow: number; excludeCallRisk: boolean; limit?: number }) => {
+    const query = new URLSearchParams({
+      date: params.date,
+      maxDoubleLow: String(params.maxDoubleLow),
+      excludeCallRisk: String(params.excludeCallRisk),
+      limit: String(params.limit ?? 100)
+    });
+    return request<{ asOfDate: string; count: number; items: CBondPoolItem[] }>(`/api/cbond/double-low?${query.toString()}`);
+  },
+  cbondCallRisk: (date: string) =>
+    request<{ asOfDate: string; count: number; items: CBondRiskItem[] }>(`/api/cbond/call-risk?date=${encodeURIComponent(date)}`),
+  futuresAgriMain: (params: { date: string; products?: string }) => {
+    const query = new URLSearchParams({ date: params.date });
+    if (params.products) query.set("products", params.products);
+    return request<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>(`/api/futures/agri-main?${query.toString()}`);
+  }
 };

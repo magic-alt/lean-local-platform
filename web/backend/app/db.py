@@ -35,6 +35,7 @@ JSON_COLUMNS = {
     "concepts_json": "concepts",
     "qa_report_json": "qa_report",
     "fields_json": "fields",
+    "terms_json": "terms",
 }
 
 
@@ -218,6 +219,115 @@ def init_db() -> None:
                 batch_id text,
                 created_at text not null,
                 primary key (symbol, field_name, report_date, announce_date, source)
+            );
+
+            create table if not exists factor_values (
+                symbol text not null,
+                trade_date text not null,
+                factor_name text not null,
+                value real not null,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (symbol, trade_date, factor_name, source)
+            );
+
+            create table if not exists factor_evaluations (
+                id text primary key,
+                factor_name text not null,
+                universe_code text not null,
+                start_date text not null,
+                end_date text not null,
+                forward_days integer not null,
+                quantiles integer not null,
+                engine text not null,
+                result_json text not null,
+                created_at text not null
+            );
+
+            create table if not exists cbond_securities (
+                bond_code text primary key,
+                bond_name text not null,
+                stock_symbol text not null,
+                listed_date text,
+                delisted_date text,
+                maturity_date text,
+                rating text,
+                conversion_price real,
+                issue_size real,
+                remaining_size real,
+                terms_json text,
+                source text not null,
+                updated_at text not null
+            );
+
+            create table if not exists cbond_daily_bars (
+                bond_code text not null,
+                trade_date text not null,
+                close real not null,
+                stock_close real,
+                conversion_price real,
+                conversion_value real,
+                premium_rate real,
+                remaining_size real,
+                double_low real,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (bond_code, trade_date, source)
+            );
+
+            create table if not exists cbond_call_events (
+                id text primary key,
+                bond_code text not null,
+                announce_date text not null,
+                trigger_date text,
+                status text not null,
+                call_price real,
+                last_trade_date text,
+                source text not null,
+                created_at text not null
+            );
+
+            create table if not exists futures_contracts (
+                contract_code text primary key,
+                product text not null,
+                exchange text not null,
+                name text,
+                multiplier real,
+                margin_rate real,
+                tick_size real,
+                delivery_month text,
+                listed_date text,
+                last_trade_date text,
+                source text not null,
+                updated_at text not null
+            );
+
+            create table if not exists futures_daily_bars (
+                contract_code text not null,
+                trade_date text not null,
+                open real,
+                high real,
+                low real,
+                close real,
+                volume real,
+                open_interest real,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (contract_code, trade_date, source)
+            );
+
+            create table if not exists futures_main_rules (
+                product text not null,
+                exchange text not null,
+                rule_type text not null,
+                roll_days_before_expiry integer not null default 0,
+                min_open_interest_days integer not null default 1,
+                source text not null,
+                updated_at text not null,
+                primary key (product, exchange)
             );
 
             create table if not exists data_import_batches (
@@ -459,6 +569,22 @@ def init_db() -> None:
                 on financial_statements(symbol, statement_type, effective_date, announce_date, report_date);
             create index if not exists idx_financial_facts_pit
                 on financial_facts(symbol, field_name, effective_date, announce_date, report_date);
+            create index if not exists idx_factor_values_name_date
+                on factor_values(factor_name, trade_date, symbol);
+            create index if not exists idx_factor_values_symbol_date
+                on factor_values(symbol, trade_date);
+            create index if not exists idx_factor_evaluations_created_at
+                on factor_evaluations(created_at desc);
+            create index if not exists idx_cbond_daily_date
+                on cbond_daily_bars(trade_date, bond_code);
+            create index if not exists idx_cbond_stock_symbol
+                on cbond_securities(stock_symbol);
+            create index if not exists idx_cbond_call_events_date
+                on cbond_call_events(announce_date, last_trade_date, status);
+            create index if not exists idx_futures_contracts_product
+                on futures_contracts(product, exchange, last_trade_date);
+            create index if not exists idx_futures_daily_date
+                on futures_daily_bars(trade_date, contract_code);
             create index if not exists idx_import_batches_started_at
                 on data_import_batches(started_at desc);
             create index if not exists idx_paper_sessions_created_at

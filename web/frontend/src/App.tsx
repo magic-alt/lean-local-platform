@@ -44,11 +44,15 @@ import {
   AssetClassInfo,
   BacktestResult,
   BacktestRun,
+  CBondPoolItem,
+  CBondRiskItem,
   ChartData,
   DataAsset,
   DataQueryResult,
   DataProvider,
   DependencyHealth,
+  FactorEvaluationResult,
+  FuturesMainItem,
   LocalDataFile,
   MarketInfo,
   ObjectStoreItem,
@@ -985,6 +989,214 @@ function ResearchPage() {
   );
 }
 
+function formatDecimal(value?: number | null, digits = 4) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+}
+
+function formatPercent(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
+}
+
+function P2ResearchPage() {
+  const engines = useAsyncData(api.factorEngines, { available: { python: true }, selected: "python" });
+  const evaluations = useAsyncData(api.factorEvaluations, { items: [], count: 0 });
+  const [factorResult, setFactorResult] = useState<FactorEvaluationResult>();
+  const [cbondPool, setCbondPool] = useState<{ asOfDate: string; count: number; items: CBondPoolItem[] }>();
+  const [cbondRisk, setCbondRisk] = useState<{ asOfDate: string; count: number; items: CBondRiskItem[] }>();
+  const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
+
+  async function evaluate(values: {
+    factorName: string;
+    universeCode: string;
+    startDate: string;
+    endDate: string;
+    forwardDays: number;
+    quantiles: number;
+    engine?: string;
+  }) {
+    const result = await api.evaluateFactor({ ...values, persist: true });
+    setFactorResult(result);
+    evaluations.reload();
+    message.success("Factor evaluation saved");
+  }
+
+  async function queryCbond(values: { date: string; maxDoubleLow: number; excludeCallRisk: boolean }) {
+    const [pool, risk] = await Promise.all([
+      api.cbondDoubleLow({ ...values, limit: 100 }),
+      api.cbondCallRisk(values.date)
+    ]);
+    setCbondPool(pool);
+    setCbondRisk(risk);
+  }
+
+  async function queryFutures(values: { date: string; products?: string }) {
+    setFuturesMonitor(await api.futuresAgriMain(values));
+  }
+
+  return (
+    <>
+      <div className="toolbar">
+        <h1 className="page-title">A-Share Research</h1>
+        <Button icon={<ReloadOutlined />} onClick={() => { engines.reload(); evaluations.reload(); }}>Refresh</Button>
+      </div>
+      <Tabs
+        items={[
+          {
+            key: "factors",
+            label: "Factors",
+            children: (
+              <>
+                <Card title="Factor Evaluation">
+                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: "2024-01-02", endDate: "2024-12-31", forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
+                    <div className="field-grid six">
+                      <Form.Item name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
+                      <Form.Item name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
+                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                      <Form.Item name="forwardDays" label="Forward Days"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="quantiles" label="Quantiles"><InputNumber min={2} max={20} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="engine" label="Engine">
+                        <Select
+                          options={Object.entries(engines.data.available).map(([key, available]) => ({
+                            value: key,
+                            label: available ? key : `${key} unavailable`,
+                            disabled: !available
+                          }))}
+                        />
+                      </Form.Item>
+                    </div>
+                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit">Evaluate</Button>
+                  </Form>
+                </Card>
+                {factorResult && (
+                  <>
+                    <div className="grid" style={{ marginTop: 16 }}>
+                      <Card><Statistic title="Observations" value={factorResult.observations} /></Card>
+                      <Card><Statistic title="Mean IC" value={formatDecimal(factorResult.mean_ic)} /></Card>
+                      <Card><Statistic title="Mean Rank IC" value={formatDecimal(factorResult.mean_rank_ic)} /></Card>
+                      <Card><Statistic title="Engine" value={factorResult.engine} /></Card>
+                    </div>
+                    <Card title="Quantile Returns" style={{ marginBottom: 16 }}>
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey="quantile"
+                        dataSource={factorResult.quantile_returns}
+                        columns={[
+                          { title: "Quantile", dataIndex: "quantile" },
+                          { title: "Mean Return", dataIndex: "mean_return", render: (value: number | null) => formatPercent(value) },
+                          { title: "Count", dataIndex: "count" }
+                        ]}
+                      />
+                    </Card>
+                  </>
+                )}
+                <Card title="Saved Evaluations">
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    dataSource={evaluations.data.items}
+                    columns={[
+                      { title: "Factor", dataIndex: "factor_name" },
+                      { title: "Universe", dataIndex: "universe_code" },
+                      { title: "Observations", render: (_, row) => row.result?.observations ?? "-" },
+                      { title: "Mean IC", render: (_, row) => formatDecimal(row.result?.mean_ic) },
+                      { title: "Created", dataIndex: "created_at" }
+                    ]}
+                  />
+                </Card>
+              </>
+            )
+          },
+          {
+            key: "cbond",
+            label: "Convertible Bonds",
+            children: (
+              <>
+                <Card title="Double-Low Pool">
+                  <Form layout="inline" onFinish={queryCbond} initialValues={{ date: "2024-01-03", maxDoubleLow: 130, excludeCallRisk: true }}>
+                    <Form.Item name="date" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Form.Item name="maxDoubleLow"><InputNumber min={0} /></Form.Item>
+                    <Form.Item name="excludeCallRisk" valuePropName="checked"><Checkbox>Exclude Call Risk</Checkbox></Form.Item>
+                    <Button type="primary" htmlType="submit">Query</Button>
+                  </Form>
+                </Card>
+                <Card title="Pool" style={{ marginTop: 16 }}>
+                  <Table<CBondPoolItem>
+                    size="small"
+                    rowKey="bond_code"
+                    dataSource={cbondPool?.items ?? []}
+                    columns={[
+                      { title: "Bond", dataIndex: "bond_code" },
+                      { title: "Name", dataIndex: "bond_name" },
+                      { title: "Stock", dataIndex: "stock_symbol" },
+                      { title: "Date", dataIndex: "trade_date" },
+                      { title: "Close", dataIndex: "close" },
+                      { title: "Premium", dataIndex: "premium_rate", render: (value) => formatPercent(value) },
+                      { title: "Double Low", dataIndex: "double_low", render: (value) => formatDecimal(value, 2) },
+                      { title: "Remaining", dataIndex: "current_remaining_size" }
+                    ]}
+                  />
+                </Card>
+                <Card title="Call Risk" style={{ marginTop: 16 }}>
+                  <Table<CBondRiskItem>
+                    size="small"
+                    rowKey="id"
+                    dataSource={cbondRisk?.items ?? []}
+                    columns={[
+                      { title: "Bond", dataIndex: "bond_code" },
+                      { title: "Name", dataIndex: "bond_name" },
+                      { title: "Announce", dataIndex: "announce_date" },
+                      { title: "Status", dataIndex: "status" },
+                      { title: "Last Trade", dataIndex: "last_trade_date" }
+                    ]}
+                  />
+                </Card>
+              </>
+            )
+          },
+          {
+            key: "futures",
+            label: "Futures",
+            children: (
+              <>
+                <Card title="Agricultural Main Contracts">
+                  <Form layout="inline" onFinish={queryFutures} initialValues={{ date: "2024-01-03", products: "A,M,Y,P,C,CS,JD,LH,SR,CF,RM,OI,AP,CJ,PK" }}>
+                    <Form.Item name="date" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Form.Item name="products"><Input style={{ width: 360 }} /></Form.Item>
+                    <Button type="primary" htmlType="submit">Query</Button>
+                  </Form>
+                </Card>
+                <div className="grid" style={{ marginTop: 16 }}>
+                  <Card><Statistic title="Matched" value={futuresMonitor?.count ?? 0} /></Card>
+                  <Card><Statistic title="Missing" value={futuresMonitor?.missing.length ?? 0} /></Card>
+                </div>
+                <Card title="Main Contracts">
+                  <Table<FuturesMainItem>
+                    size="small"
+                    rowKey="contract_code"
+                    dataSource={futuresMonitor?.items ?? []}
+                    columns={[
+                      { title: "Product", dataIndex: "product" },
+                      { title: "Contract", dataIndex: "contract_code" },
+                      { title: "Exchange", dataIndex: "exchange" },
+                      { title: "Bar Date", dataIndex: "bar_date" },
+                      { title: "Close", dataIndex: "close" },
+                      { title: "Volume", dataIndex: "volume" },
+                      { title: "Open Interest", dataIndex: "open_interest" },
+                      { title: "Days To Expiry", dataIndex: "daysToExpiry" }
+                    ]}
+                  />
+                </Card>
+              </>
+            )
+          }
+        ]}
+      />
+    </>
+  );
+}
+
 function PaperPage() {
   const sessions = useAsyncData(api.paperSessions, []);
   const projects = useAsyncData(api.projects, []);
@@ -1254,6 +1466,7 @@ function AppShell() {
     { key: "/optimization", icon: <SlidersOutlined />, label: <Link to="/optimization">Optimization</Link> },
     { key: "/paper", icon: <ExperimentOutlined />, label: <Link to="/paper">Paper</Link> },
     { key: "/research", icon: <ExperimentOutlined />, label: <Link to="/research">Research</Link> },
+    { key: "/ashare-research", icon: <DatabaseOutlined />, label: <Link to="/ashare-research">A-Share Research</Link> },
     { key: "/reports", icon: <FileTextOutlined />, label: <Link to="/reports">Reports</Link> },
     { key: "/object-store", icon: <DatabaseOutlined />, label: <Link to="/object-store">Object Store</Link> },
     { key: "/tasks", icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
@@ -1277,6 +1490,7 @@ function AppShell() {
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/paper" element={<PaperPage />} />
             <Route path="/research" element={<ResearchPage />} />
+            <Route path="/ashare-research" element={<P2ResearchPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/object-store" element={<ObjectStorePage />} />
             <Route path="/tasks" element={<TasksPage />} />
