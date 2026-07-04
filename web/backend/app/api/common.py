@@ -14,5 +14,5 @@ def dispatch_task(signature, task_id: str) -> str:
     except (KombuError, OSError, ConnectionError) as exc:
         update_task(task_id, status="failed", error=f"Redis/Celery unavailable: {exc}")
         raise HTTPException(status_code=503, detail="Redis/Celery unavailable. Start redis-server and the Celery worker.") from exc
-    update_task(task_id, celery_task_id=async_result.id)
+    update_task(task_id, celery_task_id=async_result.id, status="queued")
     return async_result.id

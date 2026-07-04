@@ -1,4 +1,4 @@
-export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
+export type RunStatus = "created" | "queued" | "running" | "success" | "failed" | "cancelled" | "succeeded" | "interrupted";
 
 export interface DataAsset {
   id: number;
@@ -87,6 +87,9 @@ export interface AppSettings {
   dockerImage: string;
   researchImage: string;
   chartPointLimit: number;
+  maxConcurrentJobs: number;
+  jobTimeoutSeconds: number;
+  logLevel: string;
 }
 
 export interface DependencyStatus {
@@ -158,6 +161,8 @@ export interface Task {
 
 export interface BacktestRun {
   id: string;
+  job_id?: string;
+  name?: string | null;
   symbol: string;
   asset_class?: string;
   venue?: string;
@@ -181,6 +186,8 @@ export interface BacktestRun {
   task_id?: string | null;
   status: RunStatus;
   docker_image: string;
+  container_name?: string | null;
+  work_dir?: string | null;
   results_dir: string;
   result_json_path?: string | null;
   summary_json_path?: string | null;
@@ -189,10 +196,38 @@ export interface BacktestRun {
   statistics?: Record<string, string> | null;
   exit_code?: number | null;
   error?: string | null;
+  error_message?: string | null;
   created_at: string;
+  queued_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  duration_seconds?: number | null;
   artifacts?: string[];
+}
+
+export interface BacktestStatus {
+  job_id: string;
+  status: RunStatus;
+  created_at?: string | null;
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_seconds?: number | null;
+  error?: string | null;
+}
+
+export interface BacktestResult {
+  id: string;
+  job_id: string;
+  summary_metrics: Record<string, string>;
+  equity_curve: ChartPoint[];
+  drawdown_curve: ChartPoint[];
+  orders: Array<Record<string, unknown>>;
+  trades: Array<Record<string, unknown>>;
+  holdings: Array<Record<string, unknown>>;
+  statistics: Record<string, string>;
+  raw_result_path?: string | null;
+  created_at: string;
 }
 
 export interface OptimizationRun {
@@ -459,7 +494,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  backtests: () => request<BacktestRun[]>("/api/backtests"),
+  backtests: (filters?: { status?: string; projectId?: string; symbol?: string; fromDate?: string; toDate?: string }) => {
+    const query = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value) query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<BacktestRun[]>(`/api/backtests${suffix}`);
+  },
   createBacktest: (payload: {
     symbol: string;
     assetClass?: string;
@@ -482,6 +524,11 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   backtest: (id: string) => request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}`),
+  backtestStatus: (id: string) => request<BacktestStatus>(`/api/backtests/${encodeURIComponent(id)}/status`),
+  backtestResult: (id: string) =>
+    request<{ job: BacktestRun; result: BacktestResult }>(`/api/backtests/${encodeURIComponent(id)}/result`),
+  cancelBacktest: (id: string) =>
+    request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   logs: (id: string) =>
     request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
   chartData: (id: string) =>

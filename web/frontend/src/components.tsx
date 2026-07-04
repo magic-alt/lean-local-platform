@@ -4,8 +4,10 @@ import { BacktestRun, ChartData, RunStatus } from "./api";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
+    created: "default",
     queued: "default",
     running: "processing",
+    success: "success",
     succeeded: "success",
     failed: "error",
     interrupted: "warning",
@@ -88,6 +90,7 @@ export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: 
         { title: "Period", render: (_, run) => `${run.parameters.start} -> ${run.parameters.end}` },
         { title: "Net Profit", render: (_, run) => run.statistics?.["Net Profit"] ?? "-" },
         { title: "Sharpe", render: (_, run) => run.statistics?.["Sharpe Ratio"] ?? "-" },
+        { title: "Duration", render: (_, run) => run.duration_seconds == null ? "-" : `${run.duration_seconds}s` },
         { title: "Action", render: (_, run) => <a onClick={() => onOpen(run.id)}>Open</a> }
       ]}
     />

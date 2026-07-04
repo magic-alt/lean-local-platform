@@ -161,3 +161,20 @@ def write_file(project_id: str, relative_path: str, content: str) -> dict[str, A
     with db() as connection:
         connection.execute("update projects set updated_at = ? where id = ?", (now, project_id))
     return {"path": relative_path, "size": target.stat().st_size, "updated_at": now}
+
+
+def update_project(project_id: str, name: str | None = None, config_updates: dict[str, Any] | None = None) -> dict[str, Any]:
+    project = get_project(project_id)
+    config = dict(project.get("config") or {})
+    if config_updates:
+        config.update({key: value for key, value in config_updates.items() if value is not None})
+    next_name = name or project["name"]
+    now = utc_now()
+    project_path = Path(project["project_path"])
+    (project_path / "project.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    with db() as connection:
+        connection.execute(
+            "update projects set name = ?, config_json = ?, updated_at = ? where id = ?",
+            (next_name, json_dump(config), now, project_id),
+        )
+    return get_project(project_id)

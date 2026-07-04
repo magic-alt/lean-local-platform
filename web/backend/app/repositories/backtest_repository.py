@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from ..db import db, json_dump, row_to_dict, rows_to_dicts
+from ..domain.backtest_job import duration_seconds, normalize_status
+
+
+BACKTEST_UPDATE_COLUMNS = {
+    "task_id",
+    "project_id",
+    "name",
+    "symbol",
+    "asset_class",
+    "venue",
+    "resolution",
+    "data_type",
+    "parameters_json",
+    "status",
+    "docker_image",
+    "container_name",
+    "work_dir",
+    "results_dir",
+    "result_json_path",
+    "summary_json_path",
+    "report_html_path",
+    "log_path",
+    "statistics_json",
+    "exit_code",
+    "error",
+    "error_message",
+    "created_at",
+    "queued_at",
+    "started_at",
+    "finished_at",
+    "duration_seconds",
+}
+
+
+def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    filters = filters or {}
+    clauses: list[str] = []
+    values: list[Any] = []
+    if filters.get("status"):
+        clauses.append("status = ?")
+        values.append(normalize_status(str(filters["status"])))
+    if filters.get("project_id"):
+        clauses.append("project_id = ?")
+        values.append(filters["project_id"])
+    if filters.get("symbol"):
+        clauses.append("symbol = ?")
+        values.append(str(filters["symbol"]).upper())
+    if filters.get("from_date"):
+        clauses.append("created_at >= ?")
+        values.append(filters["from_date"])
+    if filters.get("to_date"):
+        clauses.append("created_at <= ?")
+        values.append(filters["to_date"])
+    sql = "select * from backtest_runs"
+    if clauses:
+        sql += " where " + " and ".join(clauses)
+    sql += " order by created_at desc"
+    with db() as connection:
+        rows = connection.execute(sql, values).fetchall()
+    return rows_to_dicts(rows)
+
+
+def get_backtest(job_id: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute("select * from backtest_runs where id = ?", (job_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def update_backtest(job_id: str, **fields: Any) -> None:
+    clean = {key: value for key, value in fields.items() if key in BACKTEST_UPDATE_COLUMNS}
+    if not clean:
+        return
+    if "status" in clean:
+        clean["status"] = normalize_status(str(clean["status"]))
+    if "finished_at" in clean and "duration_seconds" not in clean:
+        current = get_backtest(job_id)
+        if current:
+            clean["duration_seconds"] = duration_seconds(current.get("started_at"), clean.get("finished_at"))
+    assignments = ", ".join(f"{key} = ?" for key in clean)
+    values = [json_dump(value) if key.endswith("_json") else value for key, value in clean.items()]
+    values.append(job_id)
+    with db() as connection:
+        connection.execute(f"update backtest_runs set {assignments} where id = ?", values)
+
+
+def get_result(job_id: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute("select * from backtest_results where job_id = ?", (job_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def save_result(job_id: str, payload: dict[str, Any], created_at: str) -> dict[str, Any]:
+    result_id = payload.get("id") or str(uuid.uuid4())
+    values = {
+        "id": result_id,
+        "job_id": job_id,
+        "summary_metrics_json": payload.get("summary_metrics") or {},
+        "equity_curve_json": payload.get("equity_curve") or [],
+        "drawdown_curve_json": payload.get("drawdown_curve") or [],
+        "orders_json": payload.get("orders") or [],
+        "trades_json": payload.get("trades") or [],
+        "holdings_json": payload.get("holdings") or [],
+        "statistics_json": payload.get("statistics") or {},
+        "raw_result_path": payload.get("raw_result_path"),
+        "created_at": created_at,
+    }
+    with db() as connection:
+        connection.execute(
+            """
+            insert into backtest_results
+                (id, job_id, summary_metrics_json, equity_curve_json, drawdown_curve_json,
+                 orders_json, trades_json, holdings_json, statistics_json, raw_result_path, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(job_id) do update set
+                summary_metrics_json = excluded.summary_metrics_json,
+                equity_curve_json = excluded.equity_curve_json,
+                drawdown_curve_json = excluded.drawdown_curve_json,
+                orders_json = excluded.orders_json,
+                trades_json = excluded.trades_json,
+                holdings_json = excluded.holdings_json,
+                statistics_json = excluded.statistics_json,
+                raw_result_path = excluded.raw_result_path,
+                created_at = excluded.created_at
+            """,
+            (
+                values["id"],
+                values["job_id"],
+                json_dump(values["summary_metrics_json"]),
+                json_dump(values["equity_curve_json"]),
+                json_dump(values["drawdown_curve_json"]),
+                json_dump(values["orders_json"]),
+                json_dump(values["trades_json"]),
+                json_dump(values["holdings_json"]),
+                json_dump(values["statistics_json"]),
+                values["raw_result_path"],
+                values["created_at"],
+            ),
+        )
+    return get_result(job_id) or {}

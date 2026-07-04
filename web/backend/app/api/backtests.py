@@ -6,11 +6,19 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task
-from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-from ..lean import LeanPlatformError, extract_chart_data, new_run_id, validate_backtest_parameters
-from ..services.projects import get_project
-from ..services.tasks import create_task, get_task, task_logs
+from ..core.config import DEFAULT_DOCKER_IMAGE
+from ..lean import extract_chart_data
+from ..repositories.backtest_repository import get_backtest
+from ..services.backtest_service import (
+    backtest_status,
+    cancel_backtest,
+    create_backtest_job,
+    fail_backtest_queue,
+    mark_backtest_queued,
+    query_backtests,
+)
+from ..services.result_service import result_for_job
+from ..services.tasks import task_logs
 from ..tasks.worker import run_backtest_task
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -20,6 +28,7 @@ class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     symbol: str
+    name: str | None = None
     assetClass: str = "equity"
     market: str = "usa"
     venue: str | None = None
@@ -36,92 +45,80 @@ class BacktestRequest(BaseModel):
 
 
 def _with_artifacts(run: dict[str, Any]) -> dict[str, Any]:
+    run["job_id"] = run["id"]
     path = Path(run["results_dir"])
     run["artifacts"] = sorted(child.name for child in path.iterdir() if child.is_file()) if path.exists() else []
     return run
 
 
 @router.get("")
-def backtests():
-    with db() as connection:
-        rows = connection.execute("select * from backtest_runs order by created_at desc").fetchall()
-    return rows_to_dicts(rows)
+def backtests(
+    status: str | None = None,
+    projectId: str | None = None,
+    symbol: str | None = None,
+    fromDate: str | None = None,
+    toDate: str | None = None,
+):
+    return query_backtests(
+        {
+            "status": status,
+            "project_id": projectId,
+            "symbol": symbol,
+            "from_date": fromDate,
+            "to_date": toDate,
+        }
+    )
 
 
 @router.post("")
 def create_backtest(request: BacktestRequest):
     try:
-        template_parameters = dict(request.parameters or {})
-        if request.fast is not None:
-            template_parameters["fast"] = request.fast
-        if request.slow is not None:
-            template_parameters["slow"] = request.slow
-        for key, value in (request.model_extra or {}).items():
-            if key not in template_parameters:
-                template_parameters[key] = value
-        parameters = validate_backtest_parameters(
-            {
-                "ticker": request.symbol,
-                "assetClass": request.assetClass,
-                "market": request.market,
-                "venue": request.venue,
-                "resolution": request.resolution,
-                "dataType": request.dataType,
-                "start": request.start,
-                "end": request.end,
-                "cash": request.cash,
-                **template_parameters,
-            }
-        )
-        if request.projectId:
-            project = get_project(request.projectId)
-            if project["language"] != "Python":
-                raise LeanPlatformError("CSharp project execution is not enabled in this local web version yet.")
+        payload = request.model_dump()
+        payload["extra"] = request.model_extra or {}
+        run = create_backtest_job(payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    parameters["dockerImage"] = request.dockerImage
-    run_id = new_run_id(parameters["ticker"], parameters["start"], parameters["end"])
-    task = create_task("backtest", f"Backtest {parameters['ticker']}", parameters, request.projectId, run_id)
-    run_dir = RUNS_DIR / run_id
-    results_dir = run_dir / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    with db() as connection:
-        connection.execute(
-            """
-            insert into backtest_runs
-                (id, task_id, project_id, symbol, asset_class, venue, resolution, data_type, parameters_json, status, docker_image, results_dir, log_path, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                task["id"],
-                request.projectId,
-                parameters["ticker"],
-                parameters.get("assetClass", "equity"),
-                parameters.get("venue") or parameters.get("market"),
-                parameters.get("resolution", "daily"),
-                parameters.get("dataType", "trade"),
-                json_dump(parameters),
-                "queued",
-                request.dockerImage,
-                str(results_dir),
-                task["log_path"],
-                utc_now(),
-            ),
-        )
-    dispatch_task(run_backtest_task.s(task["id"], run_id), task["id"])
-    return detail(run_id)
+    try:
+        dispatch_task(run_backtest_task.s(run["task_id"], run["id"]), run["task_id"])
+        mark_backtest_queued(run["id"])
+    except HTTPException as exc:
+        fail_backtest_queue(run["id"], str(exc.detail))
+        raise
+    return detail(run["id"])
 
 
 @router.get("/{run_id}")
 def detail(run_id: str):
-    with db() as connection:
-        row = connection.execute("select * from backtest_runs where id = ?", (run_id,)).fetchone()
-    run = row_to_dict(row)
+    run = get_backtest(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Backtest run not found.")
     return _with_artifacts(run)
+
+
+@router.get("/{run_id}/status")
+def status(run_id: str):
+    try:
+        return backtest_status(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Backtest run not found.") from exc
+
+
+@router.get("/{run_id}/result")
+def result(run_id: str):
+    run = detail(run_id)
+    result_record = result_for_job(run_id)
+    if not result_record:
+        raise HTTPException(status_code=404, detail="Backtest result not found.")
+    return {"job": run, "result": result_record}
+
+
+@router.post("/{run_id}/cancel")
+def cancel(run_id: str):
+    try:
+        return _with_artifacts(cancel_backtest(run_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Backtest run not found.") from exc
 
 
 @router.get("/{run_id}/logs")

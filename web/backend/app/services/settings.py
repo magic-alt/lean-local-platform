@@ -1,6 +1,6 @@
 from typing import Any
 
-from ..core.config import DEFAULT_DOCKER_IMAGE, DEFAULT_RESEARCH_IMAGE
+from ..core.config import DEFAULT_DOCKER_IMAGE, DEFAULT_RESEARCH_IMAGE, JOB_TIMEOUT_SECONDS, MAX_CONCURRENT_JOBS, LOG_LEVEL
 from ..db import db, json_dump, utc_now
 
 
@@ -19,6 +19,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "dockerImage": DEFAULT_DOCKER_IMAGE,
     "researchImage": DEFAULT_RESEARCH_IMAGE,
     "chartPointLimit": 1000000,
+    "maxConcurrentJobs": MAX_CONCURRENT_JOBS,
+    "jobTimeoutSeconds": JOB_TIMEOUT_SECONDS,
+    "logLevel": LOG_LEVEL,
 }
 
 ALLOWED_KEYS = set(DEFAULT_SETTINGS)

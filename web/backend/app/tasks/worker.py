@@ -13,8 +13,13 @@ from ..lean import (
     run_docker_backtest,
 )
 from ..observability.metrics import BACKTEST_STATUS, TASK_STATUS
+from ..domain.backtest_job import CANCELLED
+from ..repositories.backtest_repository import get_backtest, update_backtest
+from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
 from ..services.projects import get_project
+from ..services.result_service import persist_result
+from ..services.settings import get_settings
 from ..services.tasks import append_log, get_task, update_task
 
 
@@ -88,7 +93,7 @@ def fetch_data_batch_task(task_id: str):
             except Exception as exc:
                 append_log(task_id, f"Failed {symbol}: {exc}")
                 failures.append({"symbol": symbol, "error": str(exc)})
-        status = "succeeded" if results and not failures else "failed" if not results else "succeeded"
+        status = "success" if results and not failures else "failed" if not results else "success"
         error = None if not failures else f"{len(failures)} symbol(s) failed."
         update_task(
             task_id,
@@ -111,38 +116,59 @@ def run_backtest_task(task_id: str, run_id: str):
     task = get_task(task_id)
     parameters = task["parameters"]
     project = _task_project(task)
+    existing_run = get_backtest(run_id)
+    if existing_run and existing_run.get("status") == CANCELLED:
+        append_log(task_id, "Backtest was cancelled before the worker started it.")
+        update_task(task_id, status=CANCELLED, error="Cancellation requested by user.", finished_at=utc_now())
+        _record_task_metric("backtest", CANCELLED)
+        _record_backtest_metric(CANCELLED)
+        return {"status": CANCELLED, "run_id": run_id}
+
     append_log(task_id, f"Task {task_id} started.")
     update_task(task_id, status="running", started_at=utc_now(), error=None)
-    _update_table("backtest_runs", run_id, status="running", started_at=utc_now(), error=None)
+    started_at = utc_now()
+    update_backtest(run_id, status="running", started_at=started_at, error=None, error_message=None)
 
     try:
         run_dir = RUNS_DIR / run_id
+        settings = get_settings()
+        runner = LeanRunner(timeout_seconds=int(settings.get("jobTimeoutSeconds") or 7200))
+        container_name = runner.container_name_for(run_id)
+        update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
         if project:
             project_path = Path(project["project_path"])
-            output = run_docker_backtest(
+            output = runner.run_backtest(
                 run_id,
                 parameters,
-                parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                run_dir,
-                lambda line: append_log(task_id, line),
+                run_dir=run_dir,
+                output_callback=lambda line: append_log(task_id, line),
+                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
                 algorithm_path=project_path / project["main_file"],
                 algorithm_class=project["algorithm_class"],
                 language=project["language"],
                 project_dir=project_path,
             )
         else:
-            output = run_docker_backtest(
+            output = runner.run_backtest(
                 run_id,
                 parameters,
-                parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                run_dir,
-                lambda line: append_log(task_id, line),
+                run_dir=run_dir,
+                output_callback=lambda line: append_log(task_id, line),
+                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
             )
 
-        status = "succeeded" if output["exit_code"] == 0 and output["result_json_path"] else "failed"
-        error = None if status == "succeeded" else "Docker run failed or did not produce result JSON."
-        _update_table(
-            "backtest_runs",
+        latest_run = get_backtest(run_id)
+        if latest_run and latest_run.get("status") == CANCELLED:
+            append_log(task_id, "Backtest execution ended after cancellation.")
+            update_task(task_id, status=CANCELLED, error="Cancellation requested by user.", finished_at=utc_now())
+            _record_task_metric("backtest", CANCELLED)
+            _record_backtest_metric(CANCELLED)
+            return {"status": CANCELLED, "run_id": run_id}
+
+        status = "success" if output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out") else "failed"
+        error = None if status == "success" else output.get("error") or "Docker run failed or did not produce result JSON."
+        finished_at = utc_now()
+        update_backtest(
             run_id,
             status=status,
             result_json_path=output["result_json_path"],
@@ -151,8 +177,20 @@ def run_backtest_task(task_id: str, run_id: str):
             statistics_json=output["statistics"],
             exit_code=output["exit_code"],
             error=error,
-            finished_at=utc_now(),
+            error_message=error,
+            container_name=output.get("container_name"),
+            work_dir=output.get("work_dir"),
+            results_dir=output.get("results_dir"),
+            finished_at=finished_at,
         )
+        if status == "success" and output["result_json_path"]:
+            run = get_backtest(run_id) or {}
+            persist_result(
+                run_id,
+                Path(output["result_json_path"]),
+                Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
+                run,
+            )
         update_task(
             task_id,
             status=status,
@@ -162,15 +200,22 @@ def run_backtest_task(task_id: str, run_id: str):
                 if path
             ],
             error=error,
-            finished_at=utc_now(),
+            finished_at=finished_at,
         )
         _record_task_metric("backtest", status)
         _record_backtest_metric(status)
         return {"status": status, "run_id": run_id}
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
-        _update_table("backtest_runs", run_id, status="failed", error=str(exc), exit_code=-1, finished_at=utc_now())
-        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        finished_at = utc_now()
+        latest_run = get_backtest(run_id)
+        if latest_run and latest_run.get("status") == CANCELLED:
+            update_task(task_id, status=CANCELLED, error="Cancellation requested by user.", finished_at=finished_at)
+            _record_task_metric("backtest", CANCELLED)
+            _record_backtest_metric(CANCELLED)
+            return {"status": CANCELLED, "run_id": run_id}
+        update_backtest(run_id, status="failed", error=str(exc), error_message=str(exc), exit_code=-1, finished_at=finished_at)
+        update_task(task_id, status="failed", error=str(exc), finished_at=finished_at)
         _record_task_metric("backtest", "failed")
         _record_backtest_metric("failed")
         raise
@@ -220,13 +265,13 @@ def optimize_task(task_id: str, optimization_id: str):
         _update_table(
             "optimization_runs",
             optimization_id,
-            status="succeeded",
+            status="success",
             result_json={"candidates": results},
             finished_at=utc_now(),
         )
-        update_task(task_id, status="succeeded", artifacts_json=[], finished_at=utc_now())
-        _record_task_metric("optimization", "succeeded")
-        return {"status": "succeeded", "optimization_id": optimization_id}
+        update_task(task_id, status="success", artifacts_json=[], finished_at=utc_now())
+        _record_task_metric("optimization", "success")
+        return {"status": "success", "optimization_id": optimization_id}
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         _update_table("optimization_runs", optimization_id, status="failed", error=str(exc), finished_at=utc_now())
@@ -254,13 +299,13 @@ def start_research_task(task_id: str, session_id: str):
         _update_table(
             "research_sessions",
             session_id,
-            status="succeeded",
+            status="success",
             container_id=output["container_id"],
             url=output["url"],
             finished_at=utc_now(),
         )
-        update_task(task_id, status="succeeded", artifacts_json=[output["url"]], finished_at=utc_now())
-        _record_task_metric("research", "succeeded")
+        update_task(task_id, status="success", artifacts_json=[output["url"]], finished_at=utc_now())
+        _record_task_metric("research", "success")
         return output
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
@@ -283,9 +328,9 @@ def generate_report_task(task_id: str, report_id: str):
     try:
         report_path = REPORTS_DIR / f"{report_id}.html"
         render_report(Path(run["result_json_path"]), report_path)
-        _update_table("reports", report_id, status="succeeded", report_path=str(report_path), finished_at=utc_now())
-        update_task(task_id, status="succeeded", artifacts_json=[str(report_path)], finished_at=utc_now())
-        _record_task_metric("report", "succeeded")
+        _update_table("reports", report_id, status="success", report_path=str(report_path), finished_at=utc_now())
+        update_task(task_id, status="success", artifacts_json=[str(report_path)], finished_at=utc_now())
+        _record_task_metric("report", "success")
         return {"reportPath": str(report_path), "statistics": extract_statistics(Path(run["result_json_path"]))}
     except Exception as exc:
         _update_table("reports", report_id, status="failed", error=str(exc), finished_at=utc_now())

@@ -6,7 +6,14 @@ from ..core.config import RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 
 
-def create_task(kind: str, title: str, parameters: dict[str, Any], project_id: str | None = None, related_id: str | None = None) -> dict[str, Any]:
+def create_task(
+    kind: str,
+    title: str,
+    parameters: dict[str, Any],
+    project_id: str | None = None,
+    related_id: str | None = None,
+    status: str = "queued",
+) -> dict[str, Any]:
     task_id = str(uuid.uuid4())
     log_path = RUNS_DIR / "task-logs" / f"{task_id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -18,7 +25,7 @@ def create_task(kind: str, title: str, parameters: dict[str, Any], project_id: s
                 (id, kind, status, title, project_id, related_id, parameters_json, log_path, artifacts_json, created_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (task_id, kind, "queued", title, project_id, related_id, json_dump(parameters), str(log_path), "[]", now),
+            (task_id, kind, status, title, project_id, related_id, json_dump(parameters), str(log_path), "[]", now),
         )
     return get_task(task_id)
 

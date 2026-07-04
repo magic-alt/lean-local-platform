@@ -42,6 +42,7 @@ import {
   api,
   AppSettings,
   AssetClassInfo,
+  BacktestResult,
   BacktestRun,
   ChartData,
   DataAsset,
@@ -80,7 +81,10 @@ const defaultSettings: AppSettings = {
   defaultEnd: "2024-12-31",
   dockerImage: "quantconnect/lean:latest",
   researchImage: "quantconnect/research:latest",
-  chartPointLimit: 1000000
+  chartPointLimit: 1000000,
+  maxConcurrentJobs: 1,
+  jobTimeoutSeconds: 7200,
+  logLevel: "INFO"
 };
 
 function templateDefaults(template?: StrategyTemplate) {
@@ -141,7 +145,12 @@ function Dashboard() {
   const runs = useAsyncData(api.backtests, []);
   const tasks = useAsyncData(api.tasks, []);
   const latest = runs.data[0];
-  const activeTasks = tasks.data.filter((task) => task.status === "queued" || task.status === "running").length;
+  const activeTasks = tasks.data.filter((task) => ["created", "queued", "running"].includes(task.status)).length;
+  const finishedRuns = runs.data.filter((run) => ["success", "succeeded", "failed", "cancelled"].includes(run.status));
+  const successfulRuns = runs.data.filter((run) => run.status === "success" || run.status === "succeeded").length;
+  const successRate = finishedRuns.length ? Math.round((successfulRuns / finishedRuns.length) * 100) : 0;
+  const durations = runs.data.map((run) => run.duration_seconds).filter((value): value is number => typeof value === "number");
+  const averageDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0;
   return (
     <>
       <div className="toolbar">
@@ -160,8 +169,14 @@ function Dashboard() {
       <div className="grid">
         <Card><Statistic title="Backtests" value={runs.data.length} /></Card>
         <Card><Statistic title="Active Tasks" value={activeTasks} /></Card>
+        <Card><Statistic title="Success Rate" value={successRate} suffix="%" /></Card>
+        <Card><Statistic title="Average Duration" value={averageDuration} suffix="s" /></Card>
+      </div>
+      <div className="grid">
         <Card><Statistic title="Latest Net Profit" value={latest?.statistics?.["Net Profit"] ?? "N/A"} /></Card>
         <Card><Statistic title="Latest Sharpe" value={latest?.statistics?.["Sharpe Ratio"] ?? "N/A"} /></Card>
+        <Card><Statistic title="Latest Status" value={latest?.status ?? "N/A"} /></Card>
+        <Card><Statistic title="Latest Symbol" value={latest?.symbol ?? "N/A"} /></Card>
       </div>
       <Card title="Recent Backtests"><RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
     </>
@@ -709,7 +724,8 @@ function BacktestsPage() {
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
-  const runs = useAsyncData(api.backtests, []);
+  const [filters, setFilters] = useState<{ status?: string; projectId?: string; symbol?: string }>({});
+  const runs = useAsyncData(() => api.backtests(filters), []);
   const [form] = Form.useForm();
   const [assetClass, setAssetClass] = useState("equity");
   const [market, setMarket] = useState("usa");
@@ -785,7 +801,16 @@ function BacktestsPage() {
           <Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>
         </Form>
       </Card>
-      <Card title="History" style={{ marginTop: 16 }}><RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
+      <Card title="History" style={{ marginTop: 16 }}>
+        <Form layout="inline" style={{ marginBottom: 12 }} onFinish={(values) => setFilters(values)}>
+          <Form.Item name="status"><Select allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
+          <Form.Item name="projectId"><Select allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+          <Form.Item name="symbol"><Input placeholder="Symbol" style={{ width: 130 }} /></Form.Item>
+          <Button htmlType="submit">Filter</Button>
+          <Button onClick={() => setFilters({})}>Clear</Button>
+        </Form>
+        <RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} />
+      </Card>
     </>
   );
 }
@@ -794,14 +819,22 @@ function RunDetailPage() {
   const { id } = useParams();
   const [run, setRun] = useState<BacktestRun>();
   const [chart, setChart] = useState<ChartData>();
+  const [result, setResult] = useState<BacktestResult>();
   const [logs, setLogs] = useState("");
-  const active = run?.status === "queued" || run?.status === "running";
+  const active = run ? ["created", "queued", "running"].includes(run.status) : false;
   const reload = useCallback(async () => {
     if (!id) return;
     const next = await api.backtest(id);
     setRun(next);
     setLogs((await api.logs(id)).logs);
     if (next.result_json_path) setChart(await api.chartData(id));
+    if (next.status === "success" || next.status === "succeeded") {
+      try {
+        setResult((await api.backtestResult(id)).result);
+      } catch {
+        setResult(undefined);
+      }
+    }
   }, [id]);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
@@ -809,16 +842,74 @@ function RunDetailPage() {
     const timer = window.setInterval(reload, 1000);
     return () => window.clearInterval(timer);
   }, [active, reload]);
+  async function cancelRun() {
+    if (!id) return;
+    const next = await api.cancelBacktest(id);
+    setRun(next);
+    message.success("Cancellation requested");
+    await reload();
+  }
   if (!run) return <Alert type="info" message="Loading run..." />;
   return (
     <>
-      <div className="toolbar"><h1 className="page-title">{run.id}</h1><Space><StatusTag status={run.status} /><Button onClick={reload} icon={<ReloadOutlined />}>Refresh</Button></Space></div>
-      {run.error && <Alert type="error" showIcon message={run.error} style={{ marginBottom: 16 }} />}
+      <div className="toolbar">
+        <h1 className="page-title">{run.name ?? run.id}</h1>
+        <Space>
+          <StatusTag status={run.status} />
+          {active && <Button danger onClick={cancelRun}>Cancel</Button>}
+          <Button onClick={reload} icon={<ReloadOutlined />}>Refresh</Button>
+        </Space>
+      </div>
+      {(run.error_message || run.error) && <Alert type="error" showIcon message={run.error_message ?? run.error} style={{ marginBottom: 16 }} />}
       <div className="grid">{["End Equity", "Net Profit", "Sharpe Ratio", "Drawdown"].map((key) => <Card key={key}><Statistic title={key} value={run.statistics?.[key] ?? "N/A"} /></Card>)}</div>
-      <Card title="Parameters"><Space wrap>{Object.entries(run.parameters).map(([key, value]) => <Tag key={key}>{key}: {String(value)}</Tag>)}</Space></Card>
-      {chart && <BacktestCharts chartData={chart} />}
-      <Card title="Artifacts" style={{ marginTop: 16 }}>{(run.artifacts ?? []).map((name) => <a className="artifact-link" key={name} target="_blank" href={`/api/backtests/${run.id}/artifacts/${name}`}>{name}</a>)}</Card>
-      <Card title="Logs" style={{ marginTop: 16 }}><pre className="log-view">{logs || "No logs yet."}</pre></Card>
+      <Tabs
+        items={[
+          {
+            key: "status",
+            label: "Status",
+            children: (
+              <Card>
+                <Space wrap>
+                  <Tag>job_id: {run.id}</Tag>
+                  <Tag>created: {run.created_at}</Tag>
+                  {run.queued_at && <Tag>queued: {run.queued_at}</Tag>}
+                  {run.started_at && <Tag>started: {run.started_at}</Tag>}
+                  {run.finished_at && <Tag>finished: {run.finished_at}</Tag>}
+                  {run.duration_seconds != null && <Tag>duration: {run.duration_seconds}s</Tag>}
+                  {run.container_name && <Tag>container: {run.container_name}</Tag>}
+                </Space>
+              </Card>
+            )
+          },
+          {
+            key: "config",
+            label: "Config",
+            children: <Card title="Parameters"><Space wrap>{Object.entries(run.parameters).map(([key, value]) => <Tag key={key}>{key}: {String(value)}</Tag>)}</Space></Card>
+          },
+          {
+            key: "metrics",
+            label: "Metrics",
+            children: (
+              <Card title="Summary">
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey="key"
+                  dataSource={Object.entries(result?.summary_metrics ?? run.statistics ?? {}).map(([key, value]) => ({ key, value }))}
+                  columns={[{ title: "Metric", dataIndex: "key" }, { title: "Value", dataIndex: "value" }]}
+                />
+              </Card>
+            )
+          },
+          { key: "charts", label: "Charts", children: chart ? <BacktestCharts chartData={chart} /> : <Alert type="info" message="Charts are available after a successful run." /> },
+          {
+            key: "raw",
+            label: "Raw Files",
+            children: <Card title="Artifacts">{(run.artifacts ?? []).map((name) => <a className="artifact-link" key={name} target="_blank" href={`/api/backtests/${run.id}/artifacts/${name}`}>{name}</a>)}</Card>
+          },
+          { key: "logs", label: "Logs", children: <Card><pre className="log-view">{logs || "No logs yet."}</pre></Card> }
+        ]}
+      />
     </>
   );
 }
@@ -1140,6 +1231,9 @@ function SettingsPage() {
             <Form.Item name="defaultEnd" label="Default End"><Input type="date" /></Form.Item>
             <Form.Item name="defaultCash" label="Default Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="chartPointLimit" label="Chart Point Limit"><InputNumber min={1000} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="maxConcurrentJobs" label="Max Concurrent Jobs"><InputNumber min={1} max={8} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="jobTimeoutSeconds" label="Job Timeout Seconds"><InputNumber min={60} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="logLevel" label="Log Level"><Select options={["DEBUG", "INFO", "WARNING", "ERROR"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dockerImage" label="Docker Image"><Input /></Form.Item>
             <Form.Item name="researchImage" label="Research Image"><Input /></Form.Item>
           </div>

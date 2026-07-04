@@ -24,6 +24,12 @@ JSON_COLUMNS = {
     "artifacts_json": "artifacts",
     "config_json": "config",
     "result_json": "result",
+    "summary_metrics_json": "summary_metrics",
+    "equity_curve_json": "equity_curve",
+    "drawdown_curve_json": "drawdown_curve",
+    "orders_json": "orders",
+    "trades_json": "trades",
+    "holdings_json": "holdings",
 }
 
 
@@ -135,6 +141,9 @@ def init_db() -> None:
                 parameters_json text not null,
                 status text not null,
                 docker_image text not null,
+                name text,
+                container_name text,
+                work_dir text,
                 results_dir text not null,
                 result_json_path text,
                 summary_json_path text,
@@ -143,9 +152,26 @@ def init_db() -> None:
                 statistics_json text,
                 exit_code integer,
                 error text,
+                error_message text,
                 created_at text not null,
+                queued_at text,
                 started_at text,
-                finished_at text
+                finished_at text,
+                duration_seconds real
+            );
+
+            create table if not exists backtest_results (
+                id text primary key,
+                job_id text not null unique,
+                summary_metrics_json text not null,
+                equity_curve_json text not null,
+                drawdown_curve_json text not null,
+                orders_json text not null,
+                trades_json text not null,
+                holdings_json text not null,
+                statistics_json text not null,
+                raw_result_path text,
+                created_at text not null
             );
 
             create table if not exists optimization_runs (
@@ -222,6 +248,10 @@ def init_db() -> None:
                 on backtest_runs(created_at desc);
             create index if not exists idx_backtest_runs_symbol
                 on backtest_runs(symbol);
+            create index if not exists idx_backtest_runs_status
+                on backtest_runs(status);
+            create index if not exists idx_backtest_results_job
+                on backtest_results(job_id);
             create index if not exists idx_tasks_created_at
                 on tasks(created_at desc);
             create index if not exists idx_projects_name
@@ -238,6 +268,12 @@ def init_db() -> None:
         _add_column(connection, "backtest_runs", "venue", "text")
         _add_column(connection, "backtest_runs", "resolution", "text not null default 'daily'")
         _add_column(connection, "backtest_runs", "data_type", "text not null default 'trade'")
+        _add_column(connection, "backtest_runs", "name", "text")
+        _add_column(connection, "backtest_runs", "container_name", "text")
+        _add_column(connection, "backtest_runs", "work_dir", "text")
+        _add_column(connection, "backtest_runs", "error_message", "text")
+        _add_column(connection, "backtest_runs", "queued_at", "text")
+        _add_column(connection, "backtest_runs", "duration_seconds", "real")
         _add_column(connection, "data_assets", "asset_class", "text not null default 'equity'")
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")
@@ -248,27 +284,29 @@ def init_db() -> None:
         connection.execute(
             "create index if not exists idx_data_assets_asset on data_assets(asset_class, venue, symbol)"
         )
+        connection.execute("update backtest_runs set status = 'success' where status = 'succeeded'")
+        connection.execute("update tasks set status = 'success' where status = 'succeeded'")
         connection.execute(
             """
             update backtest_runs
-            set status = 'interrupted',
+            set status = 'failed',
                 error = coalesce(error, 'Backend restarted while run was active.'),
+                error_message = coalesce(error_message, error, 'Backend restarted while run was active.'),
                 finished_at = coalesce(finished_at, ?)
-            where status in ('queued', 'running')
+            where status in ('queued', 'running', 'interrupted')
             """,
             (utc_now(),),
         )
         connection.execute(
             """
             update tasks
-            set status = 'interrupted',
+            set status = 'failed',
                 error = coalesce(error, 'Backend restarted while task was active.'),
                 finished_at = coalesce(finished_at, ?)
-            where status in ('queued', 'running')
+            where status in ('queued', 'running', 'interrupted')
             """,
             (utc_now(),),
         )
-
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
