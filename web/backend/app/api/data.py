@@ -18,6 +18,7 @@ from ..services.data import (
     asset_classes,
     data_providers,
     fetch_and_import_symbol,
+    import_ashare_research_data,
     local_data_index,
     markets,
     record_data_asset,
@@ -234,6 +235,23 @@ async def import_csv(
             metadata = write_lean_crypto_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, venue=venue or market, data_type=dataType)
         elif assetClass == "future":
             metadata = write_lean_future_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, venue=venue or market, data_type=dataType)
+        elif assetClass == "equity" and market_key(market) == "china":
+            return import_ashare_research_data(
+                symbol=normalize_symbol(symbol, "china"),
+                provider="csv",
+                market="china",
+                rows=rows,
+                source=f"csv:{file.filename}",
+                overwrite=overwrite,
+                adjust="raw",
+                outputsize="",
+                asset_class="equity",
+                venue="china",
+                resolution="daily",
+                data_type="trade",
+                start_date=None,
+                end_date=None,
+            )
         else:
             metadata = write_lean_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, market=market)
             metadata.update({"asset_class": "equity", "venue": market, "resolution": "daily", "data_type": "trade"})

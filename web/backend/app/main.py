@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import backtests, data, health, object_store, observability, optimization, paper, projects, reports, research, settings, strategies, tasks, universes
+from .api import ashare, backtests, data, health, object_store, observability, optimization, paper, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .db import init_db
 from .observability.metrics import metrics_middleware
@@ -42,6 +42,7 @@ app.include_router(settings.router)
 app.include_router(strategies.router)
 app.include_router(projects.router)
 app.include_router(data.router)
+app.include_router(ashare.router)
 app.include_router(tasks.router)
 app.include_router(backtests.router)
 app.include_router(optimization.router)

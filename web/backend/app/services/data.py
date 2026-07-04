@@ -27,6 +27,25 @@ from ..domain.assets import (
     venue_key,
 )
 from .market_data import mirror_rows
+from .ashare_repository import (
+    create_import_batch,
+    finish_import_batch,
+    infer_exchange,
+    trade_dates_between,
+    upsert_adjustment_factors,
+    upsert_daily_bars,
+    upsert_security,
+    upsert_trade_calendar,
+    upsert_trade_status,
+    upsert_universe_membership,
+)
+from .data_quality import (
+    DataQualityError,
+    assert_quality_passed,
+    build_ashare_trade_status,
+    normalize_ashare_daily_rows,
+    validate_ashare_daily_rows,
+)
 
 
 DJIA_AS_OF = "2026-06-29"
@@ -326,6 +345,128 @@ def fetch_provider_rows(
     raise ValueError(f"Unsupported data provider: {provider}")
 
 
+def _ashare_rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "date": str(row["trade_date"]),
+            "open": str(row["open"]),
+            "high": str(row["high"]),
+            "low": str(row["low"]),
+            "close": str(row["close"]),
+            "volume": str(row["volume"]),
+        }
+        for row in rows
+    ]
+
+
+def import_ashare_research_data(
+    *,
+    symbol: str,
+    provider: str,
+    market: str,
+    rows: list[dict[str, str]],
+    source: str,
+    overwrite: bool,
+    adjust: str,
+    outputsize: str,
+    asset_class: str,
+    venue: str,
+    resolution: str,
+    data_type: str,
+    start_date: str | None,
+    end_date: str | None,
+) -> dict[str, Any]:
+    batch = create_import_batch(
+        provider,
+        market,
+        asset_class,
+        {
+            "symbol": symbol,
+            "provider": provider,
+            "market": market,
+            "venue": venue,
+            "resolution": resolution,
+            "dataType": data_type,
+            "startDate": start_date,
+            "endDate": end_date,
+            "adjust": adjust or "raw",
+            "overwrite": overwrite,
+        },
+    )
+    batch_id = batch["id"]
+    qa_report: dict[str, Any] | None = None
+    try:
+        normalized_rows = normalize_ashare_daily_rows(
+            symbol,
+            rows,
+            source=source,
+            batch_id=batch_id,
+            adjust=adjust or "raw",
+        )
+        row_dates = [row["trade_date"] for row in normalized_rows]
+        calendar_dates = trade_dates_between(market, min(row_dates), max(row_dates)) if row_dates else []
+        if not calendar_dates and row_dates:
+            upsert_trade_calendar(market, row_dates, source=f"{source}:inferred", batch_id=batch_id)
+            calendar_dates = row_dates
+        qa_report = validate_ashare_daily_rows(
+            normalized_rows,
+            calendar_dates=calendar_dates,
+            source=source,
+            batch_id=batch_id,
+        )
+        assert_quality_passed(qa_report)
+        first_date = normalized_rows[0]["trade_date"]
+        last_date = normalized_rows[-1]["trade_date"]
+        upsert_security(
+            symbol=symbol,
+            name=symbol,
+            exchange=infer_exchange(symbol),
+            listed_date=first_date,
+            status="listed",
+            is_st=any(bool(row.get("is_st")) for row in normalized_rows),
+        )
+        trade_status = build_ashare_trade_status(normalized_rows)
+        upsert_daily_bars(normalized_rows, source=source, batch_id=batch_id, adjust=adjust or "raw")
+        upsert_trade_status(trade_status, source=source, batch_id=batch_id)
+        upsert_adjustment_factors(normalized_rows, source=source, batch_id=batch_id)
+        upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
+
+        lean_rows = _ashare_rows_for_lean(normalized_rows)
+        metadata = write_lean_daily_zip(symbol, lean_rows, source, overwrite=overwrite, market=market)
+        metadata["asset_class"] = "equity"
+        metadata["venue"] = market
+        metadata["resolution"] = "daily"
+        metadata["data_type"] = "trade"
+        metadata["provider"] = provider
+        metadata["market"] = market
+        metadata["adjust"] = adjust or "raw"
+        metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
+        metadata["batch_id"] = batch_id
+        metadata["qa_report"] = qa_report
+        metadata["research_tables"] = {
+            "security": True,
+            "daily_bars": len(normalized_rows),
+            "trade_status": len(trade_status),
+            "adjustment_factors": len(normalized_rows),
+            "universe": "ALL_A",
+            "first_date": first_date,
+            "last_date": last_date,
+        }
+        try:
+            metadata["clickhouse"] = mirror_rows(metadata, lean_rows)
+        except Exception as exc:
+            metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
+        asset = record_data_asset(metadata)
+        finish_import_batch(batch_id, "success", qa_report=qa_report)
+        return asset
+    except DataQualityError as exc:
+        finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
+        raise
+    except Exception as exc:
+        finish_import_batch(batch_id, "failed", qa_report=qa_report, error=str(exc))
+        raise
+
+
 def fetch_and_import_symbol(
     symbol: str,
     provider: str,
@@ -367,6 +508,23 @@ def fetch_and_import_symbol(
         adjust=adjust,
     )
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
+    if asset_class == "equity" and market == "china":
+        return import_ashare_research_data(
+            symbol=symbol,
+            provider=provider,
+            market=market,
+            rows=rows,
+            source=source,
+            overwrite=overwrite,
+            adjust=adjust or "raw",
+            outputsize=outputsize,
+            asset_class=asset_class,
+            venue=venue or market,
+            resolution=resolution,
+            data_type=data_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
     if asset_class == "crypto":
         metadata = write_lean_crypto_daily_zip(symbol, rows, source, overwrite=overwrite, venue=venue or market, data_type=data_type)
     else:

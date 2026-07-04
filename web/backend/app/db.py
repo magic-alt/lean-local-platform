@@ -30,6 +30,8 @@ JSON_COLUMNS = {
     "orders_json": "orders",
     "trades_json": "trades",
     "holdings_json": "holdings",
+    "concepts_json": "concepts",
+    "qa_report_json": "qa_report",
 }
 
 
@@ -98,6 +100,103 @@ def init_db() -> None:
                 lean_file text not null,
                 metadata_json text not null,
                 created_at text not null
+            );
+
+            create table if not exists securities (
+                symbol text primary key,
+                name text not null,
+                exchange text not null,
+                market text not null default 'china',
+                listed_date text not null,
+                delisted_date text,
+                status text not null default 'listed',
+                is_st integer not null default 0,
+                industry text,
+                concepts_json text,
+                created_at text not null,
+                updated_at text not null
+            );
+
+            create table if not exists trade_calendar (
+                market text not null,
+                trade_date text not null,
+                is_open integer not null,
+                prev_trade_date text,
+                next_trade_date text,
+                source text,
+                batch_id text,
+                primary key (market, trade_date)
+            );
+
+            create table if not exists ashare_daily_bars (
+                symbol text not null,
+                trade_date text not null,
+                open real not null,
+                high real not null,
+                low real not null,
+                close real not null,
+                volume real not null,
+                amount real,
+                turnover_rate real,
+                prev_close real,
+                pct_change real,
+                adj_factor real,
+                adjust text not null default 'raw',
+                source text not null,
+                batch_id text not null,
+                created_at text not null,
+                primary key (symbol, trade_date, adjust, source)
+            );
+
+            create table if not exists ashare_trade_status (
+                symbol text not null,
+                trade_date text not null,
+                is_suspended integer not null default 0,
+                limit_up real,
+                limit_down real,
+                is_limit_up integer not null default 0,
+                is_limit_down integer not null default 0,
+                is_one_word_limit_up integer not null default 0,
+                is_one_word_limit_down integer not null default 0,
+                can_buy integer not null default 1,
+                can_sell integer not null default 1,
+                is_st integer not null default 0,
+                source text not null,
+                batch_id text not null,
+                primary key (symbol, trade_date)
+            );
+
+            create table if not exists adjustment_factors (
+                symbol text not null,
+                trade_date text not null,
+                adj_factor real not null,
+                source text not null,
+                batch_id text not null,
+                primary key (symbol, trade_date, source)
+            );
+
+            create table if not exists universe_membership (
+                universe_code text not null,
+                symbol text not null,
+                start_date text not null,
+                end_date text,
+                weight real,
+                source text not null,
+                batch_id text,
+                primary key (universe_code, symbol, start_date)
+            );
+
+            create table if not exists data_import_batches (
+                id text primary key,
+                provider text not null,
+                market text not null,
+                asset_class text not null,
+                status text not null,
+                config_json text not null,
+                qa_report_json text,
+                error text,
+                started_at text not null,
+                finished_at text
             );
 
             create table if not exists projects (
@@ -258,6 +357,16 @@ def init_db() -> None:
                 on projects(name);
             create index if not exists idx_data_assets_symbol
                 on data_assets(symbol);
+            create index if not exists idx_securities_market_status
+                on securities(market, status);
+            create index if not exists idx_ashare_daily_symbol_date
+                on ashare_daily_bars(symbol, trade_date);
+            create index if not exists idx_ashare_status_symbol_date
+                on ashare_trade_status(symbol, trade_date);
+            create index if not exists idx_universe_asof
+                on universe_membership(universe_code, start_date, end_date);
+            create index if not exists idx_import_batches_started_at
+                on data_import_batches(started_at desc);
             create index if not exists idx_paper_sessions_created_at
                 on paper_sessions(created_at desc);
             """

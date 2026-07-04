@@ -1,4 +1,4 @@
-from app.lean import docker_command
+from app.lean import base_config, docker_command
 from app.runners.lean_runner import LeanRunner
 
 
@@ -20,11 +20,25 @@ def test_docker_command_uses_argument_list_and_expected_mounts(tmp_path, monkeyp
     results_dir.mkdir()
     algorithm_path.write_text("# test", encoding="utf-8")
 
-    command = docker_command(config_path, results_dir, image="quantconnect/lean:test", algorithm_path=algorithm_path)
+    support_dir = tmp_path / "run"
+    command = docker_command(
+        config_path,
+        results_dir,
+        image="quantconnect/lean:test",
+        algorithm_path=algorithm_path,
+        support_dir=support_dir,
+    )
 
     assert command[0] == "/usr/bin/docker"
     assert "run" in command
     assert "--rm" in command
     assert "quantconnect/lean:test" in command
     assert any(str(config_path) in item for item in command)
+    assert f"{support_dir}:/Lean/Run:ro" in command
     assert all(";" not in item for item in command)
+
+
+def test_base_config_adds_python_path_for_ashare_rules():
+    config = base_config("job-1", {"ticker": "600519", "assetClass": "equity", "ashareRules": True})
+
+    assert config["python-additional-paths"] == ["/Lean/Run"]

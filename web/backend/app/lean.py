@@ -238,6 +238,7 @@ def write_auxiliary_files(symbol: str, first_date: date, market: str | None = No
 
 def normalize_rows(rows: list[dict[str, str]]) -> list[tuple[date, float, float, float, float, int]]:
     normalized: list[tuple[date, float, float, float, float, int]] = []
+    seen_dates: set[date] = set()
     for row in rows:
         try:
             item_date = parse_date(row["date"][:10])
@@ -248,8 +249,15 @@ def normalize_rows(rows: list[dict[str, str]]) -> list[tuple[date, float, float,
             volume = int(float(row["volume"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise LeanPlatformError(f"Invalid OHLCV row: {row}") from exc
-        if min(open_price, high, low, close) <= 0 or volume < 0:
-            continue
+        if item_date in seen_dates:
+            raise LeanPlatformError(f"Duplicate OHLCV row for {item_date.isoformat()}.")
+        seen_dates.add(item_date)
+        if min(open_price, high, low, close) <= 0:
+            raise LeanPlatformError(f"OHLCV row has non-positive price: {row}")
+        if volume < 0:
+            raise LeanPlatformError(f"OHLCV row has negative volume: {row}")
+        if high < low or open_price > high or open_price < low or close > high or close < low:
+            raise LeanPlatformError(f"OHLCV row violates high/low bounds: {row}")
         normalized.append((item_date, open_price, high, low, close, volume))
 
     normalized.sort(key=lambda item: item[0])
@@ -420,18 +428,49 @@ def rows_from_csv(
 
 
 def download_text(url: str) -> str:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) lean-local-platform/1.0",
-            "Accept": "application/json,text/plain,*/*",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=40) as response:
-            return response.read().decode("utf-8-sig")
-    except (OSError, URLError) as exc:
-        raise LeanPlatformError(f"Data provider request failed: {exc}") from exc
+    last_error: Exception | None = None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) lean-local-platform/1.0",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+    }
+    for attempt in range(3):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=40) as response:
+                return response.read().decode("utf-8-sig")
+        except (OSError, URLError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+
+    curl = shutil.which("curl")
+    if curl:
+        try:
+            result = subprocess.run(
+                [
+                    curl,
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--max-time",
+                    "40",
+                    "-H",
+                    f"User-Agent: {headers['User-Agent']}",
+                    "-H",
+                    "Accept: application/json,text/plain,*/*",
+                    url,
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            if result.stdout.strip():
+                return result.stdout
+        except (OSError, subprocess.CalledProcessError) as exc:
+            last_error = exc
+    raise LeanPlatformError(f"Data provider request failed: {last_error}") from last_error
 
 
 def fetch_alpha_vantage_rows(symbol: str, api_key: str, outputsize: str) -> list[dict[str, str]]:
@@ -851,6 +890,7 @@ def base_config(
     algorithm_location: str = "/Lean/DockerDemoAlgorithm.py",
     language: str = "Python",
 ) -> dict[str, Any]:
+    python_paths = ["/Lean/Run"] if parameters.get("ashareRules") else []
     return {
         "environment": "backtesting",
         "algorithm-id": algorithm_id,
@@ -893,7 +933,7 @@ def base_config(
         "api-access-token": "",
         "job-organization-id": "",
         "parameters": lean_job_parameters(parameters),
-        "python-additional-paths": [],
+        "python-additional-paths": python_paths,
         "environments": {
             "backtesting": {
                 "live-mode": False,
@@ -986,6 +1026,7 @@ def docker_command(
     algorithm_path: Path = ALGORITHM_PATH,
     algorithm_container_path: str = "/Lean/DockerDemoAlgorithm.py",
     project_dir: Path | None = None,
+    support_dir: Path | None = None,
 ) -> list[str]:
     docker = shutil.which("docker")
     if not docker:
@@ -1010,6 +1051,8 @@ def docker_command(
         command[-1:-1] = ["-v", f"{project_dir}:/Lean/Project:ro"]
     else:
         command[-1:-1] = ["-v", f"{algorithm_path}:{algorithm_container_path}:ro"]
+    if support_dir is not None:
+        command[-1:-1] = ["-v", f"{support_dir}:/Lean/Run:ro"]
     return command
 
 
@@ -1210,6 +1253,10 @@ def run_docker_backtest(
 ) -> dict[str, Any]:
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
+    if parameters.get("ashareRules"):
+        from .services.ashare_execution import write_ashare_execution_artifacts
+
+        write_ashare_execution_artifacts(run_dir, parameters)
     config_path = run_dir / "config.json"
     algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
     config_path.write_text(
@@ -1233,6 +1280,7 @@ def run_docker_backtest(
         algorithm_path=algorithm_path,
         algorithm_container_path=algorithm_container_path,
         project_dir=project_dir,
+        support_dir=run_dir if parameters.get("ashareRules") else None,
     )
     exit_code = run_command_stream(command, output_callback)
 

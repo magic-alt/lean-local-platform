@@ -10,6 +10,7 @@ from ..lean import LeanPlatformError, new_run_id, validate_backtest_parameters
 from ..repositories.backtest_repository import get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project
+from .ashare_repository import assert_ashare_ready
 from .tasks import append_log, create_task, get_task, update_task
 
 
@@ -37,6 +38,23 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             **template_parameters,
         }
     )
+    if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
+        adjust = str(parameters.get("adjust") or "raw")
+        assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust)
+        parameters.update(
+            {
+                "ashareRules": True,
+                "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
+                "lotSize": int(parameters.get("lotSize") or 100),
+                "commissionRate": float(parameters.get("commissionRate") or 0.0003),
+                "minCommission": float(parameters.get("minCommission") or 5.0),
+                "stampTaxSell": float(parameters.get("stampTaxSell") or 0.001),
+                "transferFeeRate": float(parameters.get("transferFeeRate") or 0.00001),
+                "slippageBps": float(parameters.get("slippageBps") or 5.0),
+            }
+        )
+    parameters["initialCash"] = parameters["cash"]
+    parameters["initial_cash"] = parameters["cash"]
     project_id = request_data.get("projectId")
     if project_id:
         project = get_project(project_id)

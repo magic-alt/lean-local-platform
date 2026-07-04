@@ -11,6 +11,7 @@ from ..lean import (
     extract_statistics,
     render_report,
 )
+from ..services.ashare_execution import write_ashare_execution_artifacts
 from .docker_runner import DockerRunner
 
 
@@ -36,6 +37,7 @@ class LeanRunner:
     ) -> dict[str, Any]:
         results_dir = run_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
+        write_ashare_execution_artifacts(run_dir, parameters)
         config_path = run_dir / "config.json"
         algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
         config_path.write_text(
@@ -59,6 +61,7 @@ class LeanRunner:
             algorithm_path=algorithm_path,
             algorithm_container_path=algorithm_container_path,
             project_dir=project_dir,
+            support_dir=run_dir if parameters.get("ashareRules") else None,
         )
         container_name = self.container_name_for(run_id)
         output = DockerRunner(self.timeout_seconds).run(command, output_callback, container_name=container_name)

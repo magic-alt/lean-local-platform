@@ -4,6 +4,19 @@ from typing import Any
 COMMON_HEADER = '''from AlgorithmImports import *
 from datetime import datetime
 
+try:
+    from ashare_execution import AShareExecutionHelper, apply_ashare_models
+except Exception:
+    AShareExecutionHelper = None
+
+    def apply_ashare_models(algorithm, security):
+        return None
+
+
+def parameter_value(algorithm, key, default):
+    value = algorithm.get_parameter(key)
+    return default if value in (None, "") else value
+
 
 class {class_name}(QCAlgorithm):
     def initialize(self):
@@ -26,7 +39,13 @@ class {class_name}(QCAlgorithm):
 
         start = datetime.strptime(self.get_parameter("start", "2018-01-01"), "%Y-%m-%d")
         end = datetime.strptime(self.get_parameter("end", "2024-12-31"), "%Y-%m-%d")
-        cash = float(self.get_parameter("cash", 100000))
+        cash = float(
+            parameter_value(
+                self,
+                "initial_cash",
+                parameter_value(self, "initialCash", parameter_value(self, "cash", "100000")),
+            )
+        )
         account_currency = "CNY" if market == "china" else "HKD" if market == "hongkong" else "USD"
 
         self.set_start_date(start.year, start.month, start.day)
@@ -51,6 +70,15 @@ class {class_name}(QCAlgorithm):
         else:
             security = self.add_equity(ticker, self.resolution, market, data_normalization_mode=DataNormalizationMode.RAW)
             self.symbol = security.symbol
+        if market == "china":
+            self.set_benchmark(lambda time: 1)
+        else:
+            self.set_benchmark(self.symbol)
+        self.ashare_execution = None
+        ashare_rules = self.get_parameter("ashareRules", "False").lower() in {{"1", "true", "yes", "on"}}
+        if market == "china" and ashare_rules and AShareExecutionHelper is not None:
+            apply_ashare_models(self, security)
+            self.ashare_execution = AShareExecutionHelper(self, self.get_parameter("ashareStatusFile", "/Lean/Run/ashare_trade_status.json"))
 '''
 
 
@@ -74,9 +102,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
-            self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.fast.current.value < self.slow.current.value and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("EMA", "Fast", self.fast.current.value)
         self.plot("EMA", "Slow", self.slow.current.value)
 ''',
@@ -100,9 +128,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
-            self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.fast.current.value < self.slow.current.value and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("SMA", "Fast", self.fast.current.value)
         self.plot("SMA", "Slow", self.slow.current.value)
 ''',
@@ -127,9 +155,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.macd.current.value > self.macd.signal.current.value and not invested:
-            self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.macd.current.value < self.macd.signal.current.value and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("MACD", "MACD", self.macd.current.value)
         self.plot("MACD", "Signal", self.macd.signal.current.value)
 ''',
@@ -154,9 +182,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.rsi.current.value < self.buy_below and not invested:
-            self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.rsi.current.value > self.sell_above and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("RSI", "RSI", self.rsi.current.value)
 ''',
     },
@@ -178,9 +206,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.roc.current.value > self.threshold and not invested:
-            self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.roc.current.value <= self.threshold and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("Momentum", "ROC", self.roc.current.value)
 ''',
     },
@@ -206,9 +234,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
-            self.set_holdings(self.symbol, self.target)
+            self.ashare_execution.target_percent(self.symbol, self.target) if self.ashare_execution else self.set_holdings(self.symbol, self.target)
         elif self.fast.current.value < self.slow.current.value and invested:
-            self.liquidate(self.symbol)
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("EMA", "Fast", self.fast.current.value)
         self.plot("EMA", "Slow", self.slow.current.value)
 ''',
@@ -223,7 +251,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     def on_data(self, data):
         if self.has_bought or not data.contains_key(self.symbol):
             return
-        self.set_holdings(self.symbol, 1)
+        self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         self.has_bought = True
 ''',
     },
