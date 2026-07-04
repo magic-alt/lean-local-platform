@@ -43,6 +43,18 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
 def _limit_rate(symbol: str, is_st: bool) -> float:
     if is_st:
         return 0.05
@@ -98,6 +110,15 @@ def normalize_ashare_daily_rows(
                 "source": source,
                 "batch_id": batch_id,
                 "is_st": bool(row.get("is_st", is_st)),
+                "is_suspended": _optional_bool(row.get("is_suspended") if "is_suspended" in row else row.get("isSuspended")),
+                "limit_up": _optional_float(row.get("limit_up") if "limit_up" in row else row.get("limitUp")),
+                "limit_down": _optional_float(row.get("limit_down") if "limit_down" in row else row.get("limitDown")),
+                "is_limit_up": _optional_bool(row.get("is_limit_up") if "is_limit_up" in row else row.get("isLimitUp")),
+                "is_limit_down": _optional_bool(row.get("is_limit_down") if "is_limit_down" in row else row.get("isLimitDown")),
+                "is_one_word_limit_up": _optional_bool(row.get("is_one_word_limit_up") if "is_one_word_limit_up" in row else row.get("isOneWordLimitUp")),
+                "is_one_word_limit_down": _optional_bool(row.get("is_one_word_limit_down") if "is_one_word_limit_down" in row else row.get("isOneWordLimitDown")),
+                "can_buy": _optional_bool(row.get("can_buy") if "can_buy" in row else row.get("canBuy")),
+                "can_sell": _optional_bool(row.get("can_sell") if "can_sell" in row else row.get("canSell")),
             }
         )
         previous_close = close
@@ -111,13 +132,21 @@ def build_ashare_trade_status(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         is_st = bool(row.get("is_st"))
         prev_close = row.get("prev_close")
         rate = _limit_rate(row["symbol"], is_st)
-        limit_up = round(prev_close * (1.0 + rate), 2) if prev_close else None
-        limit_down = round(prev_close * (1.0 - rate), 2) if prev_close else None
-        is_suspended = row["volume"] == 0
-        is_limit_up = _near(row["close"], limit_up) or _near(row["high"], limit_up)
-        is_limit_down = _near(row["close"], limit_down) or _near(row["low"], limit_down)
-        is_one_word_limit_up = is_limit_up and _near(row["open"], limit_up) and _near(row["low"], limit_up)
-        is_one_word_limit_down = is_limit_down and _near(row["open"], limit_down) and _near(row["high"], limit_down)
+        inferred_limit_up = round(prev_close * (1.0 + rate), 2) if prev_close else None
+        inferred_limit_down = round(prev_close * (1.0 - rate), 2) if prev_close else None
+        limit_up = row.get("limit_up") if row.get("limit_up") is not None else inferred_limit_up
+        limit_down = row.get("limit_down") if row.get("limit_down") is not None else inferred_limit_down
+        is_suspended = row.get("is_suspended") if row.get("is_suspended") is not None else row["volume"] == 0
+        inferred_limit_up_flag = _near(row["close"], limit_up) or _near(row["high"], limit_up)
+        inferred_limit_down_flag = _near(row["close"], limit_down) or _near(row["low"], limit_down)
+        is_limit_up = row.get("is_limit_up") if row.get("is_limit_up") is not None else inferred_limit_up_flag
+        is_limit_down = row.get("is_limit_down") if row.get("is_limit_down") is not None else inferred_limit_down_flag
+        inferred_one_word_up = is_limit_up and _near(row["open"], limit_up) and _near(row["low"], limit_up)
+        inferred_one_word_down = is_limit_down and _near(row["open"], limit_down) and _near(row["high"], limit_down)
+        is_one_word_limit_up = row.get("is_one_word_limit_up") if row.get("is_one_word_limit_up") is not None else inferred_one_word_up
+        is_one_word_limit_down = row.get("is_one_word_limit_down") if row.get("is_one_word_limit_down") is not None else inferred_one_word_down
+        can_buy = row.get("can_buy") if row.get("can_buy") is not None else not is_suspended and not is_limit_up
+        can_sell = row.get("can_sell") if row.get("can_sell") is not None else not is_suspended and not is_limit_down
         statuses.append(
             {
                 "symbol": row["symbol"],
@@ -129,8 +158,8 @@ def build_ashare_trade_status(rows: list[dict[str, Any]]) -> list[dict[str, Any]
                 "is_limit_down": is_limit_down,
                 "is_one_word_limit_up": is_one_word_limit_up,
                 "is_one_word_limit_down": is_one_word_limit_down,
-                "can_buy": not is_suspended and not is_limit_up,
-                "can_sell": not is_suspended and not is_limit_down,
+                "can_buy": can_buy,
+                "can_sell": can_sell,
                 "is_st": is_st,
             }
         )

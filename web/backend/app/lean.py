@@ -236,6 +236,51 @@ def write_auxiliary_files(symbol: str, first_date: date, market: str | None = No
         factor_file.write_text(f"{start},1,1,0\n20501231,1,1,0\n", encoding="utf-8")
 
 
+def write_equity_factor_file(
+    symbol: str,
+    factor_rows: list[dict[str, Any]],
+    market: str | None = None,
+) -> dict[str, Any]:
+    market = market_key(market)
+    ticker = symbol_key(normalize_symbol(symbol, market))
+    ensure_equity_dirs(market)
+    clean_rows = []
+    for row in factor_rows:
+        raw_date = row.get("trade_date") or row.get("date")
+        raw_factor = row.get("adj_factor") or row.get("factor")
+        if raw_date in (None, "") or raw_factor in (None, ""):
+            continue
+        factor = float(raw_factor)
+        if factor <= 0 or not math.isfinite(factor):
+            raise LeanPlatformError(f"Invalid adjustment factor for {ticker}: {raw_factor!r}")
+        clean_rows.append((parse_date(str(raw_date)[:10]), factor))
+    clean_rows = sorted(set(clean_rows), key=lambda item: item[0])
+    if not clean_rows:
+        raise LeanPlatformError(f"No adjustment factors found for {ticker}.")
+
+    latest_factor = clean_rows[-1][1]
+    if latest_factor <= 0:
+        raise LeanPlatformError(f"Invalid latest adjustment factor for {ticker}.")
+    lines = []
+    for item_date, factor in clean_rows:
+        price_factor = factor / latest_factor
+        lines.append(f"{item_date:%Y%m%d},{price_factor:.10f},1,0")
+    if clean_rows[-1][0] != date(2050, 12, 31):
+        lines.append("20501231,1.0000000000,1,0")
+
+    factor_file = DATA_DIR / "equity" / market / "factor_files" / f"{ticker}.csv"
+    factor_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "symbol": ticker.upper(),
+        "market": market,
+        "factor_file": str(factor_file.relative_to(REPO_ROOT)),
+        "rows": len(lines),
+        "first_date": clean_rows[0][0].isoformat(),
+        "last_date": clean_rows[-1][0].isoformat(),
+        "latest_factor": latest_factor,
+    }
+
+
 def normalize_rows(rows: list[dict[str, str]]) -> list[tuple[date, float, float, float, float, int]]:
     normalized: list[tuple[date, float, float, float, float, int]] = []
     seen_dates: set[date] = set()

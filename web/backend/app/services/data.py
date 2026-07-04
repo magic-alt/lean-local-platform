@@ -14,6 +14,7 @@ from ..lean import (
     list_local_symbols,
     market_key,
     normalize_symbol,
+    write_equity_factor_file,
     write_lean_crypto_daily_zip,
     write_lean_daily_zip,
 )
@@ -27,6 +28,7 @@ from ..domain.assets import (
     venue_key,
 )
 from .market_data import mirror_rows
+from .tushare_adapter import fetch_tushare_rows
 from .ashare_repository import (
     create_import_batch,
     finish_import_batch,
@@ -97,8 +99,8 @@ def markets() -> list[dict[str, Any]]:
             "key": "china",
             "name": "A Share",
             "currency": "CNY",
-            "defaultProvider": "eastmoney",
-            "providers": ["eastmoney", "sina", "akshare", "tonghuashun"],
+            "defaultProvider": "tushare",
+            "providers": ["tushare", "eastmoney", "sina", "akshare", "tonghuashun"],
         },
         {
             "key": "hongkong",
@@ -191,6 +193,16 @@ def data_providers() -> list[dict[str, Any]]:
             "assetClasses": ["crypto"],
             "venues": ["binance"],
             "notes": "Public spot kline endpoint for crypto OHLCV. Availability depends on region, symbol, and Binance limits.",
+        },
+        {
+            "key": "tushare",
+            "name": "TuShare Pro",
+            "requiresApiKey": True,
+            "supportsBatch": True,
+            "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
+            "notes": "Uses TUSHARE_TOKEN from local .env or request apiKey. Current minimum permission is pro.daily; adj_factor, stk_limit, trade_cal, and stock_basic are opportunistic or later-stage permissions.",
         },
         {
             "key": "eastmoney",
@@ -319,6 +331,10 @@ def fetch_provider_rows(
         raise ValueError(f"Provider downloads are not enabled for asset class {asset_class}; use local LEAN data or CSV import.")
     market = market_key(market)
     symbol = normalize_symbol(symbol, market)
+    if provider == "tushare":
+        if market != "china":
+            raise ValueError("TuShare Pro only supports China A-share imports in this platform.")
+        return fetch_tushare_rows(symbol, start_date, end_date, token=api_key, adjust=adjust)
     if provider == "eastmoney":
         return fetch_eastmoney_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
     if provider == "sina":
@@ -357,6 +373,19 @@ def _ashare_rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
         }
         for row in rows
     ]
+
+
+def _has_official_trade_status(rows: list[dict[str, Any]]) -> bool:
+    status_fields = {
+        "is_suspended",
+        "limit_up",
+        "limit_down",
+        "is_limit_up",
+        "is_limit_down",
+        "can_buy",
+        "can_sell",
+    }
+    return any(any(row.get(field) is not None for field in status_fields) for row in rows)
 
 
 def import_ashare_research_data(
@@ -414,6 +443,11 @@ def import_ashare_research_data(
             source=source,
             batch_id=batch_id,
         )
+        warnings = qa_report.setdefault("warnings", [])
+        if _has_official_trade_status(normalized_rows):
+            warnings.append("trade_status_official_fields_used")
+        else:
+            warnings.append("trade_status_inferred_from_ohlcv")
         assert_quality_passed(qa_report)
         first_date = normalized_rows[0]["trade_date"]
         last_date = normalized_rows[-1]["trade_date"]
@@ -433,6 +467,7 @@ def import_ashare_research_data(
 
         lean_rows = _ashare_rows_for_lean(normalized_rows)
         metadata = write_lean_daily_zip(symbol, lean_rows, source, overwrite=overwrite, market=market)
+        factor_metadata = write_equity_factor_file(symbol, normalized_rows, market=market)
         metadata["asset_class"] = "equity"
         metadata["venue"] = market
         metadata["resolution"] = "daily"
@@ -443,6 +478,7 @@ def import_ashare_research_data(
         metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
         metadata["batch_id"] = batch_id
         metadata["qa_report"] = qa_report
+        metadata["factor_file"] = factor_metadata
         metadata["research_tables"] = {
             "security": True,
             "daily_bars": len(normalized_rows),

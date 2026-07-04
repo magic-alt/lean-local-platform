@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from ..core.errors import LeanWebError
@@ -12,6 +12,63 @@ def _bool(value: Any) -> int:
     return 1 if bool(value) else 0
 
 
+def _date(value: Any, field: str = "date") -> str:
+    if value in (None, ""):
+        raise LeanWebError(f"{field} is required.")
+    text = str(value).strip()[:10]
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text if fmt == "%Y-%m-%d" else str(value).strip()[:8], fmt).date().isoformat()
+        except ValueError:
+            pass
+    raise LeanWebError(f"Invalid {field}: {value!r}; expected YYYY-MM-DD or YYYYMMDD.")
+
+
+def _optional_date(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _date(value)
+
+
+def _float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _status(value: Any) -> str:
+    raw = str(value or "listed").strip().lower()
+    aliases = {
+        "l": "listed",
+        "list": "listed",
+        "上市": "listed",
+        "normal": "listed",
+        "d": "delisted",
+        "delist": "delisted",
+        "退市": "delisted",
+        "p": "pending",
+        "pending": "pending",
+        "暂停上市": "suspended",
+        "s": "suspended",
+    }
+    return aliases.get(raw, raw or "listed")
+
+
+def _symbol(record: dict[str, Any]) -> str:
+    raw = record.get("symbol") or record.get("ts_code") or record.get("code")
+    if raw in (None, ""):
+        raise LeanWebError("symbol is required.")
+    value = str(raw).strip().upper()
+    if "." in value:
+        value = value.split(".")[0]
+    if not value.isdigit() or len(value) != 6:
+        raise LeanWebError(f"A-share symbol must be 6 digits: {raw!r}.")
+    return value
+
+
 def infer_exchange(symbol: str) -> str:
     value = symbol.strip()
     if value.startswith(("6", "9")):
@@ -19,6 +76,46 @@ def infer_exchange(symbol: str) -> str:
     if value.startswith(("4", "8")):
         return "BSE"
     return "SZSE"
+
+
+def import_security_master(
+    records: list[dict[str, Any]],
+    *,
+    source: str = "manual",
+    universe_code: str = "ALL_A",
+) -> dict[str, Any]:
+    batch_id = str(uuid.uuid4())
+    imported = 0
+    for record in records:
+        symbol = _symbol(record)
+        listed_date = _date(record.get("listed_date") or record.get("list_date") or record.get("listDate"), "listed_date")
+        delisted_date = _optional_date(record.get("delisted_date") or record.get("delist_date") or record.get("delistDate"))
+        status = _status(record.get("status") or record.get("list_status"))
+        if delisted_date and status == "listed":
+            status = "delisted"
+        upsert_security(
+            symbol=symbol,
+            name=record.get("name") or record.get("symbol_name") or record.get("stock_name") or symbol,
+            exchange=record.get("exchange") or record.get("exchange_code") or infer_exchange(symbol),
+            listed_date=listed_date,
+            delisted_date=delisted_date,
+            status=status,
+            is_st=bool(record.get("is_st", False)),
+            industry=record.get("industry"),
+            concepts=record.get("concepts") if isinstance(record.get("concepts"), list) else None,
+        )
+        upsert_universe_membership(
+            universe_code.upper(),
+            symbol,
+            listed_date,
+            delisted_date,
+            source=record.get("source") or source,
+            batch_id=batch_id,
+            announce_date=_optional_date(record.get("announce_date") or record.get("announceDate")) or listed_date,
+            effective_date=_optional_date(record.get("effective_date") or record.get("effectiveDate")) or listed_date,
+        )
+        imported += 1
+    return {"batchId": batch_id, "universe": universe_code.upper(), "count": imported}
 
 
 def create_import_batch(provider: str, market: str, asset_class: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -235,6 +332,37 @@ def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) 
             )
 
 
+def import_trade_status(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
+    batch_id = str(uuid.uuid4())
+    rows = []
+    for record in records:
+        symbol = _symbol(record)
+        trade_date = _date(record.get("trade_date") or record.get("tradeDate"), "trade_date")
+        is_suspended = bool(record.get("is_suspended", record.get("isSuspended", False)))
+        is_limit_up = bool(record.get("is_limit_up", record.get("isLimitUp", False)))
+        is_limit_down = bool(record.get("is_limit_down", record.get("isLimitDown", False)))
+        can_buy = record.get("can_buy", record.get("canBuy"))
+        can_sell = record.get("can_sell", record.get("canSell"))
+        rows.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "is_suspended": is_suspended,
+                "limit_up": _float(record.get("limit_up") or record.get("limitUp")),
+                "limit_down": _float(record.get("limit_down") or record.get("limitDown")),
+                "is_limit_up": is_limit_up,
+                "is_limit_down": is_limit_down,
+                "is_one_word_limit_up": bool(record.get("is_one_word_limit_up", record.get("isOneWordLimitUp", False))),
+                "is_one_word_limit_down": bool(record.get("is_one_word_limit_down", record.get("isOneWordLimitDown", False))),
+                "can_buy": bool(can_buy) if can_buy is not None else not is_suspended and not is_limit_up,
+                "can_sell": bool(can_sell) if can_sell is not None else not is_suspended and not is_limit_down,
+                "is_st": bool(record.get("is_st", record.get("isSt", False))),
+            }
+        )
+    upsert_trade_status(rows, source=source, batch_id=batch_id)
+    return {"batchId": batch_id, "count": len(rows)}
+
+
 def upsert_adjustment_factors(rows: list[dict[str, Any]], source: str, batch_id: str) -> None:
     values = [row for row in rows if row.get("adj_factor") is not None]
     with db() as connection:
@@ -249,6 +377,127 @@ def upsert_adjustment_factors(rows: list[dict[str, Any]], source: str, batch_id:
                 """,
                 (row["symbol"], row["trade_date"], row["adj_factor"], source, batch_id),
             )
+
+
+def import_adjustment_factors(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
+    batch_id = str(uuid.uuid4())
+    rows = []
+    symbols: set[str] = set()
+    for record in records:
+        symbol = _symbol(record)
+        adj_factor = _float(record.get("adj_factor") or record.get("adjFactor"))
+        if adj_factor is None or adj_factor <= 0:
+            raise LeanWebError("adj_factor must be positive.")
+        rows.append(
+            {
+                "symbol": symbol,
+                "trade_date": _date(record.get("trade_date") or record.get("tradeDate"), "trade_date"),
+                "adj_factor": adj_factor,
+            }
+        )
+        symbols.add(symbol)
+    upsert_adjustment_factors(rows, source=source, batch_id=batch_id)
+    factor_files = {}
+    from ..lean import write_equity_factor_file
+
+    for symbol in sorted(symbols):
+        factors = adjustment_factors(symbol)
+        if factors:
+            factor_files[symbol] = write_equity_factor_file(symbol, factors, market="china")
+    return {"batchId": batch_id, "count": len(rows), "factorFiles": factor_files}
+
+
+def upsert_corporate_actions(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
+    batch_id = str(uuid.uuid4())
+    now = utc_now()
+    count = 0
+    with db() as connection:
+        for record in records:
+            symbol = _symbol(record)
+            action_type = str(record.get("action_type") or record.get("actionType") or "dividend").strip().lower()
+            if not action_type:
+                raise LeanWebError("action_type is required.")
+            connection.execute(
+                """
+                insert into corporate_actions
+                    (symbol, ex_date, action_type, cash_dividend, stock_dividend, split_ratio,
+                     allotment_ratio, allotment_price, source, batch_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(symbol, ex_date, action_type, source) do update set
+                    cash_dividend = excluded.cash_dividend,
+                    stock_dividend = excluded.stock_dividend,
+                    split_ratio = excluded.split_ratio,
+                    allotment_ratio = excluded.allotment_ratio,
+                    allotment_price = excluded.allotment_price,
+                    batch_id = excluded.batch_id,
+                    created_at = excluded.created_at
+                """,
+                (
+                    symbol,
+                    _date(record.get("ex_date") or record.get("exDate"), "ex_date"),
+                    action_type,
+                    _float(record.get("cash_dividend") or record.get("cashDividend")),
+                    _float(record.get("stock_dividend") or record.get("stockDividend")),
+                    _float(record.get("split_ratio") or record.get("splitRatio")),
+                    _float(record.get("allotment_ratio") or record.get("allotmentRatio")),
+                    _float(record.get("allotment_price") or record.get("allotmentPrice")),
+                    record.get("source") or source,
+                    batch_id,
+                    now,
+                ),
+            )
+            count += 1
+    return {"batchId": batch_id, "count": count}
+
+
+def adjustment_factors(symbol: str, start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    clauses = ["symbol = ?"]
+    values: list[Any] = [symbol]
+    if start:
+        clauses.append("trade_date >= ?")
+        values.append(start)
+    if end:
+        clauses.append("trade_date <= ?")
+        values.append(end)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select symbol, trade_date, adj_factor, source, batch_id
+            from adjustment_factors
+            where {" and ".join(clauses)}
+            order by trade_date asc, source desc
+            """,
+            values,
+        ).fetchall()
+    result = []
+    seen: set[str] = set()
+    for row in rows_to_dicts(rows):
+        if row["trade_date"] in seen:
+            continue
+        seen.add(row["trade_date"])
+        result.append(row)
+    return result
+
+
+def corporate_actions(symbol: str, start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    clauses = ["symbol = ?"]
+    values: list[Any] = [symbol]
+    if start:
+        clauses.append("ex_date >= ?")
+        values.append(start)
+    if end:
+        clauses.append("ex_date <= ?")
+        values.append(end)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select * from corporate_actions
+            where {" and ".join(clauses)}
+            order by ex_date asc, action_type asc
+            """,
+            values,
+        ).fetchall()
+    return rows_to_dicts(rows)
 
 
 def upsert_universe_membership(
@@ -295,20 +544,50 @@ def universe_as_of(universe_code: str, as_of_date: str) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
             select u.universe_code, u.symbol, u.start_date, u.end_date, u.weight,
-                   s.name, s.exchange, s.status, s.is_st, s.industry
+                   s.name, s.exchange, s.listed_date, s.delisted_date, s.status, s.is_st, s.industry
             from universe_membership u
-            left join securities s on s.symbol = u.symbol
+            join securities s on s.symbol = u.symbol
             where u.universe_code = ?
               and u.start_date <= ?
               and (u.end_date is null or u.end_date >= ?)
               and (u.announce_date is null or u.announce_date <= ?)
               and (u.effective_date is null or u.effective_date <= ?)
+              and s.listed_date <= ?
               and (s.delisted_date is null or s.delisted_date > ?)
             order by u.symbol
             """,
-            (universe_code, as_of_date, as_of_date, as_of_date, as_of_date, as_of_date),
+            (universe_code, as_of_date, as_of_date, as_of_date, as_of_date, as_of_date, as_of_date),
         ).fetchall()
     return rows_to_dicts(rows)
+
+
+def tradable_universe_as_of(
+    universe_code: str,
+    as_of_date: str,
+    *,
+    min_listed_days: int = 0,
+    exclude_st: bool = True,
+) -> list[dict[str, Any]]:
+    as_of = _date(as_of_date, "as_of_date")
+    items = universe_as_of(universe_code, as_of)
+    filtered = []
+    as_of_day = date.fromisoformat(as_of)
+    for item in items:
+        listed_date = item.get("listed_date")
+        if listed_date:
+            listed_days = (as_of_day - date.fromisoformat(listed_date)).days
+            if listed_days < max(0, int(min_listed_days)):
+                continue
+            item["listed_days"] = listed_days
+        if exclude_st and item.get("is_st"):
+            continue
+        status = str(item.get("status") or "").lower()
+        delisted_date = item.get("delisted_date")
+        is_pre_delist = status == "delisted" and delisted_date and delisted_date > as_of
+        if status not in {"listed", "normal"} and not is_pre_delist:
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[str, Any]]:
@@ -323,15 +602,36 @@ def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[st
             """,
             [as_of_date, *symbols],
         ).fetchall()
-    return {row["symbol"]: row_to_dict(row) or {} for row in rows}
+    result: dict[str, dict[str, Any]] = {}
+    bool_fields = {
+        "is_suspended",
+        "is_limit_up",
+        "is_limit_down",
+        "is_one_word_limit_up",
+        "is_one_word_limit_down",
+        "can_buy",
+        "can_sell",
+        "is_st",
+    }
+    for row in rows:
+        item = row_to_dict(row) or {}
+        for field in bool_fields:
+            if field in item:
+                item[field] = bool(item[field])
+        result[row["symbol"]] = item
+    return result
 
 
 def is_tradeable(symbol: str, trade_date: str, side: str) -> tuple[bool, str]:
     security = get_security(symbol)
     if not security:
         return False, "security_not_found"
+    if security.get("listed_date") and security["listed_date"] > trade_date:
+        return False, "not_listed"
     if security.get("delisted_date") and security["delisted_date"] <= trade_date:
         return False, "delisted"
+    if str(security.get("status") or "").lower() not in {"listed", "normal"} and not security.get("delisted_date"):
+        return False, "not_active"
     with db() as connection:
         row = connection.execute(
             "select * from ashare_trade_status where symbol = ? and trade_date = ?",

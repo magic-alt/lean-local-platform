@@ -126,6 +126,18 @@ class AShareExecutionHelper:
             return False, "t_plus_1"
         return True, "ok"
 
+    def on_order_event(self, order_event):
+        status = str(getattr(order_event, "status", getattr(order_event, "Status", ""))).lower()
+        if "filled" not in status:
+            return
+        quantity = float(getattr(order_event, "fill_quantity", getattr(order_event, "FillQuantity", 0)) or 0)
+        if quantity <= 0:
+            return
+        symbol = getattr(order_event, "symbol", getattr(order_event, "Symbol", None))
+        if symbol is None:
+            return
+        self.buy_dates[_symbol_key(symbol)] = _date_key(self.algorithm)
+
     def _round_to_lot(self, quantity):
         if quantity == 0:
             return 0

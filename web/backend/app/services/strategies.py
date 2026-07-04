@@ -71,7 +71,21 @@ class {class_name}(QCAlgorithm):
             security = self.add_equity(ticker, self.resolution, market, data_normalization_mode=DataNormalizationMode.RAW)
             self.symbol = security.symbol
         if market == "china":
-            self.set_benchmark(lambda time: 1)
+            benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
+            if benchmark_ticker:
+                try:
+                    benchmark = self.add_equity(
+                        benchmark_ticker,
+                        self.resolution,
+                        self.get_parameter("benchmarkMarket", market).lower(),
+                        data_normalization_mode=DataNormalizationMode.RAW,
+                    )
+                    self.set_benchmark(benchmark.symbol)
+                except Exception as exc:
+                    self.debug(f"A-share benchmark unavailable: {{benchmark_ticker}} {{exc}}")
+                    self.set_benchmark(lambda time: 1)
+            else:
+                self.set_benchmark(lambda time: 1)
         else:
             self.set_benchmark(self.symbol)
         self.ashare_execution = None
@@ -271,6 +285,13 @@ TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 
+COMMON_FOOTER = '''
+    def on_order_event(self, order_event):
+        if self.ashare_execution:
+            self.ashare_execution.on_order_event(order_event)
+'''
+
+
 def list_templates() -> list[dict[str, Any]]:
     return [
         {key: value for key, value in template.items() if key != "body"}
@@ -287,4 +308,4 @@ def get_template(template_key: str | None) -> dict[str, Any]:
 
 def render_python_template(class_name: str, template_key: str | None = None) -> str:
     template = get_template(template_key)
-    return COMMON_HEADER.format(class_name=class_name) + template["body"]
+    return COMMON_HEADER.format(class_name=class_name) + template["body"] + COMMON_FOOTER

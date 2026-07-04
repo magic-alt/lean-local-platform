@@ -1,16 +1,103 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..core.errors import LeanWebError
 from ..lean import normalize_symbol, parse_date
 from ..services.ashare_repository import (
+    adjustment_factors,
+    corporate_actions,
     get_import_batch,
+    import_adjustment_factors,
+    import_security_master,
+    import_trade_status,
     is_tradeable,
     list_import_batches,
+    tradable_universe_as_of,
     trade_status_as_of,
+    upsert_corporate_actions,
     universe_as_of,
 )
+from ..services.tushare_adapter import import_tushare_stock_basic, import_tushare_trade_calendar
 
 router = APIRouter(prefix="/api", tags=["ashare"])
+
+
+class SecurityMasterRecord(BaseModel):
+    symbol: str
+    name: str | None = None
+    exchange: str | None = None
+    listedDate: str
+    delistedDate: str | None = None
+    status: str = "listed"
+    isSt: bool = False
+    industry: str | None = None
+    concepts: list[str] = Field(default_factory=list)
+    source: str | None = None
+
+
+class SecurityMasterImport(BaseModel):
+    source: str = "manual"
+    universeCode: str = "ALL_A"
+    records: list[SecurityMasterRecord] = Field(min_length=1)
+
+
+class TradeStatusRecord(BaseModel):
+    symbol: str
+    tradeDate: str
+    isSuspended: bool = False
+    limitUp: float | None = None
+    limitDown: float | None = None
+    isLimitUp: bool = False
+    isLimitDown: bool = False
+    isOneWordLimitUp: bool = False
+    isOneWordLimitDown: bool = False
+    canBuy: bool | None = None
+    canSell: bool | None = None
+    isSt: bool = False
+
+
+class TradeStatusImport(BaseModel):
+    source: str = "manual"
+    records: list[TradeStatusRecord] = Field(min_length=1)
+
+
+class AdjustmentFactorRecord(BaseModel):
+    symbol: str
+    tradeDate: str
+    adjFactor: float
+
+
+class AdjustmentFactorImport(BaseModel):
+    source: str = "manual"
+    records: list[AdjustmentFactorRecord] = Field(min_length=1)
+
+
+class CorporateActionRecord(BaseModel):
+    symbol: str
+    exDate: str
+    actionType: str = "dividend"
+    cashDividend: float | None = None
+    stockDividend: float | None = None
+    splitRatio: float | None = None
+    allotmentRatio: float | None = None
+    allotmentPrice: float | None = None
+    source: str | None = None
+
+
+class CorporateActionImport(BaseModel):
+    source: str = "manual"
+    records: list[CorporateActionRecord] = Field(min_length=1)
+
+
+class TushareStockBasicImport(BaseModel):
+    listStatuses: list[str] = Field(default_factory=lambda: ["L", "D", "P"])
+    universeCode: str = "ALL_A"
+
+
+class TushareTradeCalendarImport(BaseModel):
+    startDate: str
+    endDate: str
+    exchange: str = "SSE"
 
 
 def _date(value: str) -> str:
@@ -46,10 +133,107 @@ def import_batch_qa(batch_id: str):
     }
 
 
+@router.post("/ashare/securities/import")
+def import_securities(request: SecurityMasterImport):
+    try:
+        records = [
+            {
+                "symbol": item.symbol,
+                "name": item.name,
+                "exchange": item.exchange,
+                "listed_date": item.listedDate,
+                "delisted_date": item.delistedDate,
+                "status": item.status,
+                "is_st": item.isSt,
+                "industry": item.industry,
+                "concepts": item.concepts,
+                "source": item.source or request.source,
+            }
+            for item in request.records
+        ]
+        return import_security_master(records, source=request.source, universe_code=request.universeCode)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ashare/tushare/securities/import")
+def import_tushare_securities(request: TushareStockBasicImport):
+    try:
+        return import_tushare_stock_basic(list_statuses=request.listStatuses, universe_code=request.universeCode)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ashare/tushare/trade-calendar/import")
+def import_tushare_calendar(request: TushareTradeCalendarImport):
+    try:
+        return import_tushare_trade_calendar(
+            start_date=request.startDate,
+            end_date=request.endDate,
+            exchange=request.exchange,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ashare/trade-status/import")
+def import_status(request: TradeStatusImport):
+    try:
+        return import_trade_status([item.model_dump() for item in request.records], source=request.source)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ashare/adjustment-factors/import")
+def import_adjustments(request: AdjustmentFactorImport):
+    try:
+        return import_adjustment_factors([item.model_dump() for item in request.records], source=request.source)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/ashare/adjustment-factors/{symbol}")
+def ashare_adjustments(symbol: str, start: str | None = None, end: str | None = None):
+    try:
+        ticker = normalize_symbol(symbol, "china")
+        return {"symbol": ticker, "items": adjustment_factors(ticker, start, end)}
+    except LeanWebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ashare/corporate-actions/import")
+def import_actions(request: CorporateActionImport):
+    try:
+        return upsert_corporate_actions([item.model_dump() for item in request.records], source=request.source)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/ashare/corporate-actions/{symbol}")
+def ashare_actions(symbol: str, start: str | None = None, end: str | None = None):
+    try:
+        ticker = normalize_symbol(symbol, "china")
+        return {"symbol": ticker, "items": corporate_actions(ticker, start, end)}
+    except LeanWebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/ashare/universe/{universe_code}")
 def ashare_universe(universe_code: str, date: str):
     as_of_date = _date(date)
     items = universe_as_of(universe_code.upper(), as_of_date)
+    return {"universe": universe_code.upper(), "date": as_of_date, "items": items, "count": len(items)}
+
+
+@router.get("/ashare/universe/{universe_code}/tradable")
+def ashare_tradable_universe(universe_code: str, date: str, minListedDays: int = 0, excludeSt: bool = True):
+    as_of_date = _date(date)
+    items = tradable_universe_as_of(
+        universe_code.upper(),
+        as_of_date,
+        min_listed_days=minListedDays,
+        exclude_st=excludeSt,
+    )
     return {"universe": universe_code.upper(), "date": as_of_date, "items": items, "count": len(items)}
 
 

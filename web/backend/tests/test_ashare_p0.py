@@ -1,4 +1,7 @@
 import json
+import sys
+import types
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -131,6 +134,8 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["ashareRules"] is True
     assert job["parameters"]["lotSize"] == 100
     assert job["parameters"]["ashareStatusFile"] == "/Lean/Run/ashare_trade_status.json"
+    assert job["parameters"]["benchmarkSymbol"] == "000300"
+    assert job["parameters"]["benchmarkMarket"] == "china"
 
 
 def test_ashare_execution_artifacts_include_status_payload(tmp_path, monkeypatch):
@@ -154,3 +159,224 @@ def test_ashare_execution_artifacts_include_status_payload(tmp_path, monkeypatch
     assert "AShareExecutionHelper" in helper_path.read_text(encoding="utf-8")
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     assert payload["600519"]["2024-01-03"]["can_buy"] is False
+
+
+def test_security_master_restores_history_and_filters_new_and_delisted(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.services.ashare_repository import import_security_master, is_tradeable, tradable_universe_as_of, universe_as_of
+
+    import_security_master(
+        [
+            {"symbol": "600001", "name": "Old Listed", "listed_date": "2020-01-01", "status": "listed"},
+            {"symbol": "000002", "name": "Delisted Later", "listed_date": "2024-01-03", "delisted_date": "2024-01-05"},
+            {"symbol": "300001", "name": "New Listed", "listed_date": "2024-01-04", "status": "listed"},
+            {"symbol": "600999", "name": "ST Name", "listed_date": "2020-01-01", "status": "listed", "is_st": True},
+        ],
+        source="unit",
+    )
+
+    assert [item["symbol"] for item in universe_as_of("ALL_A", "2024-01-02")] == ["600001", "600999"]
+    assert [item["symbol"] for item in universe_as_of("ALL_A", "2024-01-04")] == ["000002", "300001", "600001", "600999"]
+    assert [item["symbol"] for item in universe_as_of("ALL_A", "2024-01-05")] == ["300001", "600001", "600999"]
+
+    tradable = tradable_universe_as_of("ALL_A", "2024-01-04", min_listed_days=2, exclude_st=True)
+    assert [item["symbol"] for item in tradable] == ["600001"]
+    tradable = tradable_universe_as_of("ALL_A", "2024-01-04", min_listed_days=0, exclude_st=True)
+    assert [item["symbol"] for item in tradable] == ["000002", "300001", "600001"]
+
+    can_trade, reason = is_tradeable("000002", "2024-01-02", "buy")
+    assert can_trade is False
+    assert reason == "not_listed"
+    can_trade, reason = is_tradeable("000002", "2024-01-05", "sell")
+    assert can_trade is False
+    assert reason == "delisted"
+
+
+def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejects(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.services.ashare_repository import import_security_master, import_trade_status, is_tradeable, trade_status_as_of
+
+    import_security_master(
+        [{"symbol": "600001", "name": "Official Status", "listed_date": "2020-01-01", "status": "listed"}],
+        source="unit",
+    )
+    import_trade_status(
+        [
+            {
+                "symbol": "600001",
+                "tradeDate": "2024-01-02",
+                "limitUp": 11.0,
+                "limitDown": 9.0,
+                "isLimitUp": True,
+                "canBuy": False,
+                "canSell": True,
+            },
+            {
+                "symbol": "600001",
+                "tradeDate": "2024-01-03",
+                "isSuspended": True,
+                "canBuy": False,
+                "canSell": False,
+            },
+        ],
+        source="official-unit",
+    )
+
+    status = trade_status_as_of(["600001"], "2024-01-02")["600001"]
+    assert status["limit_up"] == 11.0
+    assert status["can_buy"] is False
+    can_buy, reason = is_tradeable("600001", "2024-01-02", "buy")
+    assert can_buy is False
+    assert reason == "blocked_buy"
+    can_sell, reason = is_tradeable("600001", "2024-01-03", "sell")
+    assert can_sell is False
+    assert reason == "suspended"
+    can_buy, reason = is_tradeable("600001", "2024-01-04", "buy")
+    assert can_buy is False
+    assert reason == "trade_status_missing"
+
+
+def test_adjustment_factors_write_factor_file_and_corporate_actions(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.services.ashare_repository import (
+        corporate_actions,
+        import_adjustment_factors,
+        import_security_master,
+        upsert_corporate_actions,
+    )
+
+    import_security_master(
+        [{"symbol": "600001", "name": "Adjusted", "listed_date": "2020-01-01", "status": "listed"}],
+        source="unit",
+    )
+    result = import_adjustment_factors(
+        [
+            {"symbol": "600001", "tradeDate": "2024-01-02", "adjFactor": 1.0},
+            {"symbol": "600001", "tradeDate": "2024-01-03", "adjFactor": 1.2},
+        ],
+        source="unit",
+    )
+
+    assert result["factorFiles"]["600001"]["rows"] == 3
+    factor_file = tmp_path / "Data" / "equity" / "china" / "factor_files" / "600001.csv"
+    text = factor_file.read_text(encoding="utf-8")
+    assert "20240102,0.8333333333,1,0" in text
+    assert "20501231,1.0000000000,1,0" in text
+
+    upsert_corporate_actions(
+        [
+            {
+                "symbol": "600001",
+                "exDate": "2024-01-03",
+                "actionType": "dividend",
+                "cashDividend": 1.0,
+                "stockDividend": 0.1,
+            }
+        ],
+        source="unit",
+    )
+    actions = corporate_actions("600001", "2024-01-01", "2024-01-31")
+    assert len(actions) == 1
+    assert actions[0]["cash_dividend"] == 1.0
+
+
+def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tmp_path, monkeypatch):
+    from app.services.ashare_execution import ASHARE_EXECUTION_HELPER_SOURCE
+
+    algorithm_imports = types.ModuleType("AlgorithmImports")
+
+    class FeeModel:
+        pass
+
+    class CashAmount:
+        def __init__(self, amount, currency):
+            self.amount = amount
+            self.currency = currency
+
+    class OrderFee:
+        def __init__(self, cash_amount):
+            self.cash_amount = cash_amount
+
+    class ConstantSlippageModel:
+        def __init__(self, value):
+            self.value = value
+
+    algorithm_imports.FeeModel = FeeModel
+    algorithm_imports.CashAmount = CashAmount
+    algorithm_imports.OrderFee = OrderFee
+    algorithm_imports.ConstantSlippageModel = ConstantSlippageModel
+    monkeypatch.setitem(sys.modules, "AlgorithmImports", algorithm_imports)
+
+    namespace: dict[str, object] = {}
+    exec(ASHARE_EXECUTION_HELPER_SOURCE, namespace)
+    helper_class = namespace["AShareExecutionHelper"]
+
+    status_path = tmp_path / "status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "600001": {
+                    "2024-01-02": {"is_suspended": False, "is_limit_up": True, "can_buy": False, "can_sell": True},
+                    "2024-01-03": {"is_suspended": False, "is_limit_up": False, "can_buy": True, "can_sell": True},
+                    "2024-01-04": {"is_suspended": False, "can_buy": True, "can_sell": True},
+                    "2024-01-05": {"is_suspended": False, "is_limit_down": True, "can_buy": True, "can_sell": False},
+                    "2024-01-06": {"is_suspended": True, "can_buy": False, "can_sell": False},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Security:
+        price = 10.0
+
+    class Holding:
+        quantity = 0
+
+    class Portfolio(dict):
+        cash = 50000.0
+        total_portfolio_value = 50000.0
+
+    class FakeAlgorithm:
+        def __init__(self):
+            self.time = datetime(2024, 1, 2)
+            self.securities = {"600001": Security()}
+            self.portfolio = Portfolio({"600001": Holding()})
+            self.orders = []
+            self.messages = []
+
+        def get_parameter(self, key, default=None):
+            return default
+
+        def market_order(self, symbol, quantity):
+            self.orders.append((symbol, quantity))
+            self.portfolio[symbol].quantity += quantity
+            return {"symbol": symbol, "quantity": quantity}
+
+        def debug(self, message):
+            self.messages.append(message)
+
+    algo = FakeAlgorithm()
+    helper = helper_class(algo, str(status_path))
+
+    assert helper.target_percent("600001", 1) is None
+    assert algo.orders == []
+
+    algo.time = datetime(2024, 1, 3)
+    helper.target_percent("600001", 1)
+    assert algo.orders
+    assert algo.orders[-1][1] % 100 == 0
+    assert algo.orders[-1][1] > 0
+
+    algo.time = datetime(2024, 1, 4)
+    fill_event = types.SimpleNamespace(status="filled", fill_quantity=algo.orders[-1][1], symbol="600001")
+    helper.on_order_event(fill_event)
+    assert helper.exit("600001") is None
+    algo.time = datetime(2024, 1, 5)
+    assert helper.exit("600001") is None
+    algo.time = datetime(2024, 1, 6)
+    algo.portfolio["600001"].quantity = 0
+    assert helper.target_percent("600001", 1) is None

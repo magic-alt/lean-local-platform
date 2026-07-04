@@ -48,7 +48,21 @@ class DockerDemoAlgorithm(QCAlgorithm):
         )
         self.symbol = equity.symbol
         if self.market == "china":
-            self.set_benchmark(lambda time: 1)
+            benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
+            if benchmark_ticker:
+                try:
+                    benchmark = self.add_equity(
+                        benchmark_ticker,
+                        Resolution.DAILY,
+                        self.get_parameter("benchmarkMarket", self.market).lower(),
+                        data_normalization_mode=DataNormalizationMode.RAW,
+                    )
+                    self.set_benchmark(benchmark.symbol)
+                except Exception as exc:
+                    self.debug(f"A-share benchmark unavailable: {benchmark_ticker} {exc}")
+                    self.set_benchmark(lambda time: 1)
+            else:
+                self.set_benchmark(lambda time: 1)
         else:
             self.set_benchmark(self.symbol)
         self.ashare_execution = None
@@ -87,6 +101,10 @@ class DockerDemoAlgorithm(QCAlgorithm):
 
         self.plot("EMA", "Fast", fast)
         self.plot("EMA", "Slow", slow)
+
+    def on_order_event(self, order_event):
+        if self.ashare_execution:
+            self.ashare_execution.on_order_event(order_event)
 
     def on_end_of_algorithm(self):
         self.debug(f"Final portfolio value: {self.portfolio.total_portfolio_value:.2f}")

@@ -83,6 +83,20 @@ export ALPHAVANTAGE_API_KEY="your-key"
 python3 local_platform.py fetch-alpha-vantage MSFT --outputsize compact
 ```
 
+Local provider secrets can be stored in the repository root `.env`; this file is ignored by git. Use `.env.example` as the template:
+
+```bash
+cp .env.example .env
+# edit .env
+TUSHARE_TOKEN=your_tushare_pro_token
+```
+
+TuShare Pro adapter status:
+
+- Minimum verified permission: `pro.daily()`.
+- Optional tables used when permission exists: `adj_factor`, `stk_limit`, `trade_cal`, `stock_basic`.
+- If optional permissions are unavailable, daily import continues with raw OHLCV, `adj_factor=1.0` fallback where needed, and OHLCV-inferred trade-status QA warnings.
+
 Import a CSV with `timestamp,open,high,low,close,volume` columns:
 
 ```bash

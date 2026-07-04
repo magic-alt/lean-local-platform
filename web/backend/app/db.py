@@ -179,6 +179,21 @@ def init_db() -> None:
                 primary key (symbol, trade_date, source)
             );
 
+            create table if not exists corporate_actions (
+                symbol text not null,
+                ex_date text not null,
+                action_type text not null,
+                cash_dividend real,
+                stock_dividend real,
+                split_ratio real,
+                allotment_ratio real,
+                allotment_price real,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (symbol, ex_date, action_type, source)
+            );
+
             create table if not exists universe_membership (
                 universe_code text not null,
                 symbol text not null,
@@ -563,6 +578,8 @@ def init_db() -> None:
                 on ashare_daily_bars(symbol, trade_date);
             create index if not exists idx_ashare_status_symbol_date
                 on ashare_trade_status(symbol, trade_date);
+            create index if not exists idx_corporate_actions_symbol_date
+                on corporate_actions(symbol, ex_date);
             create index if not exists idx_universe_asof
                 on universe_membership(universe_code, start_date, end_date);
             create index if not exists idx_financial_statements_pit

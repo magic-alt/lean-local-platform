@@ -8,6 +8,32 @@ PLATFORM_DIR = WEB_DIR.parent
 WORKSPACE_ROOT = PLATFORM_DIR.parent
 REPO_ROOT = WORKSPACE_ROOT
 
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+for _env_file in (PLATFORM_DIR / ".env", BACKEND_DIR / ".env"):
+    _load_env_file(_env_file)
+
+
 DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", WORKSPACE_ROOT / "Data")).expanduser()
 ALGORITHM_PATH = PLATFORM_DIR / "DockerDemoAlgorithm.py"
 PLOT_SCRIPT = PLATFORM_DIR / "plot_results.py"
@@ -38,3 +64,4 @@ CLICKHOUSE_DATABASE = os.environ.get("CLICKHOUSE_DATABASE", "lean_market")
 
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090")
 GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")

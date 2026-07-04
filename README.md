@@ -91,6 +91,23 @@ python3 local_platform.py fetch-alpha-vantage MSFT --outputsize compact
 python3 local_platform.py backtest --symbol MSFT --start 2026-01-01 --end 2026-07-01 --open
 ```
 
+本地数据源密钥可以放在仓库根目录 `.env`，该文件已加入 `.gitignore`，不会提交到 git。TuShare Pro token 使用：
+
+```bash
+cp .env.example .env
+# edit .env
+TUSHARE_TOKEN=your_tushare_pro_token
+```
+
+当前 TuShare Pro adapter 已接入 A 股日线下载，最小权限只要求 `pro.daily()`：
+
+```bash
+cd web/backend
+.venv/bin/python -c "import app.core.config; from app.services.tushare_adapter import TushareAdapter; print(len(TushareAdapter().daily_rows('600519','2024-01-02','2024-01-05')))"
+```
+
+`adj_factor`、`stk_limit`、`trade_cal`、`stock_basic` 会在 token 权限允许时使用；无权限时不会阻断 `pro.daily()` 日线导入。
+
 导入任意 CSV：
 
 ```bash
