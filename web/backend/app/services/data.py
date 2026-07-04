@@ -26,6 +26,7 @@ from ..domain.assets import (
     resolution_key,
     venue_key,
 )
+from .market_data import mirror_rows
 
 
 DJIA_AS_OF = "2026-06-29"
@@ -382,4 +383,8 @@ def fetch_and_import_symbol(
     metadata["data_type"] = data_type
     metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
+    try:
+        metadata["clickhouse"] = mirror_rows(metadata, rows)
+    except Exception as exc:
+        metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
     return record_data_asset(metadata)

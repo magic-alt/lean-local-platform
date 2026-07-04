@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import backtests, data, health, object_store, optimization, paper, projects, reports, research, settings, strategies, tasks, universes
+from .api import backtests, data, health, object_store, observability, optimization, paper, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .db import init_db
+from .observability.metrics import metrics_middleware
 
 
 class SPAStaticFiles(StaticFiles):
@@ -19,6 +20,7 @@ class SPAStaticFiles(StaticFiles):
 
 
 app = FastAPI(title="Local LEAN Web Platform")
+app.middleware("http")(metrics_middleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -34,6 +36,7 @@ def startup() -> None:
 
 
 app.include_router(health.router)
+app.include_router(observability.router)
 app.include_router(universes.router)
 app.include_router(settings.router)
 app.include_router(strategies.router)

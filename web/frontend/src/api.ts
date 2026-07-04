@@ -89,6 +89,22 @@ export interface AppSettings {
   chartPointLimit: number;
 }
 
+export interface DependencyStatus {
+  service: string;
+  ok: boolean;
+  detail: string;
+  latency_ms?: number;
+}
+
+export interface DependencyHealth {
+  status: "ok" | "degraded";
+  dependencies: DependencyStatus[];
+  urls: {
+    prometheus: string;
+    grafana: string;
+  };
+}
+
 export interface UniverseComponent {
   symbol: string;
   name: string;
@@ -276,6 +292,22 @@ export interface ChartData {
   }>;
 }
 
+export interface DataQueryRow {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  source: string;
+}
+
+export interface DataQueryResult {
+  enabled: boolean;
+  items: DataQueryRow[];
+  count: number;
+}
+
 function encodePath(value: string): string {
   return value.split("/").map((part) => encodeURIComponent(part)).join("/");
 }
@@ -297,6 +329,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string; redis: boolean }>("/api/health"),
+  dependencyHealth: () => request<DependencyHealth>("/api/health/dependencies"),
   settings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", {
@@ -352,6 +385,23 @@ export const api = {
     request<{ items: LocalDataFile[]; count: number }>(
       `/api/data/files?assetClass=${encodeURIComponent(assetClass ?? "")}&venue=${encodeURIComponent(venue ?? "")}`
     ),
+  queryData: (params: {
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return request<DataQueryResult>(`/api/data/query?${query.toString()}`);
+  },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   fetchData: (payload: {
     symbol: string;

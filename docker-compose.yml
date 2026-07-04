@@ -1,0 +1,100 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12-alpine
+    environment:
+      CLICKHOUSE_DB: lean_market
+      CLICKHOUSE_USER: lean
+      CLICKHOUSE_PASSWORD: lean
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - clickhouse
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USERNAME: lean
+      CLICKHOUSE_PASSWORD: lean
+      CLICKHOUSE_DATABASE: lean_market
+      PROMETHEUS_URL: http://127.0.0.1:9090
+      GRAFANA_URL: http://127.0.0.1:3000
+      LEAN_DATA_DIR: /workspace/Data
+    volumes:
+      - .:/workspace
+      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - clickhouse
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USERNAME: lean
+      CLICKHOUSE_PASSWORD: lean
+      CLICKHOUSE_DATABASE: lean_market
+      LEAN_DATA_DIR: /workspace/Data
+    volumes:
+      - .:/workspace
+      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - clickhouse
+
+volumes:
+  redis-data:
+  clickhouse-data:
+  prometheus-data:
+  grafana-data:

@@ -23,6 +23,7 @@ from ..services.data import (
     record_data_asset,
     symbols_for_asset,
 )
+from ..services.market_data import mirror_rows, query_bars
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -123,6 +124,33 @@ def data_files(assetClass: str | None = None, venue: str | None = None):
     return {"items": items, "count": len(items)}
 
 
+@router.get("/data/query")
+def query_data(
+    symbol: str,
+    assetClass: str = "equity",
+    venue: str | None = None,
+    market: str | None = None,
+    resolution: str = "daily",
+    dataType: str = "trade",
+    startDate: str | None = None,
+    endDate: str | None = None,
+    limit: int = 500,
+):
+    try:
+        return query_bars(
+            asset_class=assetClass,
+            symbol=symbol,
+            venue=venue or market,
+            resolution=resolution,
+            data_type=dataType,
+            start_date=startDate,
+            end_date=endDate,
+            limit=limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/markets")
 def available_markets():
     return markets()
@@ -209,6 +237,10 @@ async def import_csv(
         else:
             metadata = write_lean_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, market=market)
             metadata.update({"asset_class": "equity", "venue": market, "resolution": "daily", "data_type": "trade"})
+        try:
+            metadata["clickhouse"] = mirror_rows(metadata, rows)
+        except Exception as exc:
+            metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
         return record_data_asset(metadata)
     except LeanWebError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

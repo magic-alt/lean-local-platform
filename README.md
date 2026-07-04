@@ -116,6 +116,35 @@ docker info
 
 Web 平台现在是一个本地多资产工作台：FastAPI 提供 API，React 提供浏览器界面，Redis + Celery 负责后台回测/优化/报告任务，SQLite 记录项目、任务和结果索引。LEAN Docker 仍是唯一回测执行引擎，平台不依赖 Lean CLI 或 QuantConnect 付费账号。
 
+新增的中型研究平台基础设施使用 Docker Compose 管理：
+
+- Redis：Celery broker/result backend
+- ClickHouse：标准化 OHLCV 数据镜像和查询预览，LEAN zip 文件仍是回测输入真源
+- Prometheus：抓取 `/metrics`
+- Grafana：内部运维看板，默认 `admin/admin`
+
+启动基础设施：
+
+```bash
+cd /Users/kaermax/lean-platform
+docker compose up -d redis clickhouse prometheus grafana
+```
+
+打开：
+
+```text
+Prometheus: http://127.0.0.1:9090
+Grafana:    http://127.0.0.1:3000
+```
+
+如需把 API 和 worker 也放进 Compose：
+
+```bash
+docker compose --profile app up -d
+```
+
+本地开发仍可只用下面的手动 API/worker/frontend 启动方式。
+
 安装：
 
 ```bash

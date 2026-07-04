@@ -15,6 +15,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Upload,
   message
 } from "antd";
@@ -22,6 +23,7 @@ import {
   AppstoreOutlined,
   CloudDownloadOutlined,
   CodeOutlined,
+  DashboardOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   ExperimentOutlined,
@@ -43,7 +45,9 @@ import {
   BacktestRun,
   ChartData,
   DataAsset,
+  DataQueryResult,
   DataProvider,
+  DependencyHealth,
   LocalDataFile,
   MarketInfo,
   ObjectStoreItem,
@@ -58,27 +62,9 @@ import {
   Universe
 } from "./api";
 import { BacktestCharts, RunsTable, StatusTag } from "./components";
+import { useAsyncData } from "./hooks";
 
 const { Content, Header, Sider } = Layout;
-
-function useAsyncData<T>(loader: () => Promise<T>, initial: T) {
-  const [data, setData] = useState<T>(initial);
-  const [loading, setLoading] = useState(false);
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      setData(await loader());
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [loader]);
-  useEffect(() => {
-    reload();
-  }, [reload]);
-  return { data, loading, reload, setData };
-}
 
 const defaultSettings: AppSettings = {
   defaultAssetClass: "equity",
@@ -598,6 +584,8 @@ function DataPage() {
   const dataFiles = useAsyncData(() => api.dataFiles(), { items: [], count: 0 });
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const [csvForm] = Form.useForm();
+  const [queryForm] = Form.useForm();
+  const [queryResult, setQueryResult] = useState<DataQueryResult>();
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvAssetInfo = assetClasses.data.find((item) => item.key === csvAssetClass);
 
@@ -613,6 +601,17 @@ function DataPage() {
     csvForm.resetFields();
     assets.reload();
     dataFiles.reload();
+  }
+
+  async function queryMarketData(values: any) {
+    const result = await api.queryData({
+      ...values,
+      limit: values.limit ?? 200
+    });
+    setQueryResult(result);
+    if (!result.enabled) {
+      message.warning("ClickHouse is not enabled or not reachable.");
+    }
   }
 
   return (
@@ -663,6 +662,42 @@ function DataPage() {
             { title: "File", dataIndex: "file", ellipsis: true }
           ]}
         />
+      </Card>
+      <Card title="ClickHouse Bar Query" style={{ marginTop: 16 }}>
+        <Form
+          form={queryForm}
+          layout="inline"
+          onFinish={queryMarketData}
+          initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", limit: 200 }}
+        >
+          <Form.Item name="assetClass" rules={[{ required: true }]}><Select style={{ width: 140 }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+          <Form.Item name="symbol" rules={[{ required: true }]}><Input style={{ width: 140 }} placeholder="AAPL" /></Form.Item>
+          <Form.Item name="market"><Select style={{ width: 140 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+          <Form.Item name="venue"><Input style={{ width: 120 }} placeholder="venue" /></Form.Item>
+          <Form.Item name="resolution"><Select style={{ width: 120 }} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+          <Form.Item name="dataType"><Select style={{ width: 120 }} options={["trade", "quote", "open_interest"].map((value) => ({ value, label: value }))} /></Form.Item>
+          <Form.Item name="limit"><InputNumber min={1} max={5000} style={{ width: 110 }} /></Form.Item>
+          <Button type="primary" htmlType="submit">Query</Button>
+        </Form>
+        {queryResult && !queryResult.enabled && <Alert style={{ marginTop: 12 }} type="warning" showIcon message="ClickHouse mirror is unavailable. Start the Compose stack or install backend dependencies to enable this preview." />}
+        {queryResult?.enabled && (
+          <Table
+            style={{ marginTop: 12 }}
+            rowKey="timestamp"
+            size="small"
+            dataSource={queryResult.items}
+            pagination={{ pageSize: 10 }}
+            columns={[
+              { title: "Time", dataIndex: "timestamp" },
+              { title: "Open", dataIndex: "open" },
+              { title: "High", dataIndex: "high" },
+              { title: "Low", dataIndex: "low" },
+              { title: "Close", dataIndex: "close" },
+              { title: "Volume", dataIndex: "volume" },
+              { title: "Source", dataIndex: "source" }
+            ]}
+          />
+        )}
       </Card>
     </>
   );
@@ -1008,6 +1043,65 @@ function TasksPage() {
   );
 }
 
+function MonitoringPage() {
+  const health = useAsyncData<DependencyHealth>(api.dependencyHealth, {
+    status: "degraded",
+    dependencies: [],
+    urls: {
+      prometheus: "http://127.0.0.1:9090",
+      grafana: "http://127.0.0.1:3000"
+    }
+  });
+  const up = health.data.dependencies.filter((item) => item.ok).length;
+  const down = Math.max(0, health.data.dependencies.length - up);
+  return (
+    <>
+      <div className="toolbar">
+        <h1 className="page-title">Monitoring</h1>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={health.reload}>Refresh</Button>
+          <Button href={health.data.urls.prometheus} target="_blank">Prometheus</Button>
+          <Button type="primary" href={health.data.urls.grafana} target="_blank">Grafana</Button>
+        </Space>
+      </div>
+      <div className="grid">
+        <Card><Statistic title="Status" value={health.data.status} /></Card>
+        <Card><Statistic title="Dependencies Up" value={up} /></Card>
+        <Card><Statistic title="Dependencies Down" value={down} /></Card>
+        <Card><Statistic title="Metrics Endpoint" value="/metrics" /></Card>
+      </div>
+      <Card title="Dependency Health">
+        <Table
+          rowKey="service"
+          size="small"
+          dataSource={health.data.dependencies}
+          loading={health.loading}
+          columns={[
+            { title: "Service", dataIndex: "service" },
+            {
+              title: "Status",
+              dataIndex: "ok",
+              render: (ok: boolean, item) => (
+                <Tooltip title={item.detail}>
+                  <Tag color={ok ? "success" : "error"}>{ok ? "up" : "down"}</Tag>
+                </Tooltip>
+              )
+            },
+            { title: "Latency", dataIndex: "latency_ms", render: (value) => value === undefined ? "-" : `${value} ms` },
+            { title: "Detail", dataIndex: "detail", ellipsis: true }
+          ]}
+        />
+      </Card>
+      <Alert
+        style={{ marginTop: 16 }}
+        type="info"
+        showIcon
+        message="Grafana is intended for internal platform monitoring: API latency, task state, dependency health, data import status, and LEAN runtime behavior."
+      />
+    </>
+  );
+}
+
 function SettingsPage() {
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
@@ -1069,6 +1163,7 @@ function AppShell() {
     { key: "/reports", icon: <FileTextOutlined />, label: <Link to="/reports">Reports</Link> },
     { key: "/object-store", icon: <DatabaseOutlined />, label: <Link to="/object-store">Object Store</Link> },
     { key: "/tasks", icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
+    { key: "/monitoring", icon: <DashboardOutlined />, label: <Link to="/monitoring">Monitoring</Link> },
     { key: "/settings", icon: <SettingOutlined />, label: <Link to="/settings">Settings</Link> }
   ], []);
   return (
@@ -1091,6 +1186,7 @@ function AppShell() {
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/object-store" element={<ObjectStorePage />} />
             <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/monitoring" element={<MonitoringPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </Content>

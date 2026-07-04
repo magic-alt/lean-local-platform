@@ -5,12 +5,14 @@ This platform wraps the open-source `quantconnect/lean` Docker image with a loca
 ## Architecture
 
 - Backend: FastAPI, SQLite, Redis, Celery.
+- Optional infra: ClickHouse, Prometheus, Grafana through root `docker-compose.yml`.
 - Frontend: React, Vite, TypeScript, Ant Design, ECharts, Monaco Editor.
 - Runtime state: `web/runtime/`.
 - LEAN data: repository `Data/`.
 - Docker execution: local `quantconnect/lean` image with mounted project, data, config, results, and object store.
 
 SQLite stores searchable metadata for projects, tasks, data assets, backtests, optimizations, research sessions, reports, and object-store items. Original LEAN JSON, logs, and HTML reports stay on disk under `runtime/`.
+LEAN-format zip files remain the backtest input source of truth. When ClickHouse is available, imported OHLCV rows are also mirrored into `lean_market.market_bars` for data preview and future research queries.
 
 ## Run Locally
 
@@ -24,6 +26,12 @@ If you prefer Docker for Redis:
 
 ```bash
 docker run --rm -p 6379:6379 redis:7-alpine
+```
+
+Or start the full local infrastructure stack from the repository root:
+
+```bash
+docker compose up -d redis clickhouse prometheus grafana
 ```
 
 Start the backend API:
@@ -93,6 +101,10 @@ When `frontend/dist` exists, FastAPI serves it at `/`; API routes remain under `
 - Detached research container launcher.
 - Local Object Store file upload/download/delete.
 - Task queue and logs.
+- Dependency health at `/api/health/dependencies`.
+- Prometheus metrics at `/metrics`.
+- Monitoring page with Grafana and Prometheus links.
+- ClickHouse bar preview from the Data Library when the mirror is available.
 
 ## Data Providers
 

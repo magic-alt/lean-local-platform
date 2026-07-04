@@ -12,9 +12,20 @@ from ..lean import (
     run_detached_research,
     run_docker_backtest,
 )
+from ..observability.metrics import BACKTEST_STATUS, TASK_STATUS
 from ..services.data import fetch_and_import_symbol
 from ..services.projects import get_project
 from ..services.tasks import append_log, get_task, update_task
+
+
+def _record_task_metric(kind: str, status: str) -> None:
+    if TASK_STATUS is not None:
+        TASK_STATUS.labels(kind, status).inc()
+
+
+def _record_backtest_metric(status: str) -> None:
+    if BACKTEST_STATUS is not None:
+        BACKTEST_STATUS.labels(status).inc()
 
 
 def _update_table(table: str, row_id: str, **fields):
@@ -86,10 +97,12 @@ def fetch_data_batch_task(task_id: str):
             error=error,
             finished_at=utc_now(),
         )
+        _record_task_metric("data_fetch", status)
         return {"status": status, "results": results, "failures": failures}
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("data_fetch", "failed")
         raise
 
 
@@ -151,11 +164,15 @@ def run_backtest_task(task_id: str, run_id: str):
             error=error,
             finished_at=utc_now(),
         )
+        _record_task_metric("backtest", status)
+        _record_backtest_metric(status)
         return {"status": status, "run_id": run_id}
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         _update_table("backtest_runs", run_id, status="failed", error=str(exc), exit_code=-1, finished_at=utc_now())
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("backtest", "failed")
+        _record_backtest_metric("failed")
         raise
 
 
@@ -208,11 +225,13 @@ def optimize_task(task_id: str, optimization_id: str):
             finished_at=utc_now(),
         )
         update_task(task_id, status="succeeded", artifacts_json=[], finished_at=utc_now())
+        _record_task_metric("optimization", "succeeded")
         return {"status": "succeeded", "optimization_id": optimization_id}
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         _update_table("optimization_runs", optimization_id, status="failed", error=str(exc), finished_at=utc_now())
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("optimization", "failed")
         raise
 
 
@@ -241,11 +260,13 @@ def start_research_task(task_id: str, session_id: str):
             finished_at=utc_now(),
         )
         update_task(task_id, status="succeeded", artifacts_json=[output["url"]], finished_at=utc_now())
+        _record_task_metric("research", "succeeded")
         return output
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         _update_table("research_sessions", session_id, status="failed", error=str(exc), finished_at=utc_now())
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("research", "failed")
         raise
 
 
@@ -264,8 +285,10 @@ def generate_report_task(task_id: str, report_id: str):
         render_report(Path(run["result_json_path"]), report_path)
         _update_table("reports", report_id, status="succeeded", report_path=str(report_path), finished_at=utc_now())
         update_task(task_id, status="succeeded", artifacts_json=[str(report_path)], finished_at=utc_now())
+        _record_task_metric("report", "succeeded")
         return {"reportPath": str(report_path), "statistics": extract_statistics(Path(run["result_json_path"]))}
     except Exception as exc:
         _update_table("reports", report_id, status="failed", error=str(exc), finished_at=utc_now())
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("report", "failed")
         raise

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from redis import Redis
 
 from ..core.config import REDIS_URL
+from ..services.dependencies import dependency_health
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -14,3 +15,8 @@ def health():
     except Exception:
         redis_ok = False
     return {"status": "ok", "redis": redis_ok}
+
+
+@router.get("/health/dependencies")
+def dependencies():
+    return dependency_health()
