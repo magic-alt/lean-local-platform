@@ -24,7 +24,7 @@ from ..services.data import (
     record_data_asset,
     symbols_for_asset,
 )
-from ..services.market_data import mirror_rows, query_bars
+from ..services.market_data import mirror_rows, query_bars, query_sqlite_bars
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -133,12 +133,15 @@ def query_data(
     market: str | None = None,
     resolution: str = "daily",
     dataType: str = "trade",
+    source: str = "clickhouse",
     startDate: str | None = None,
     endDate: str | None = None,
     limit: int = 500,
 ):
     try:
-        return query_bars(
+        query_source = source.strip().lower()
+        query = query_sqlite_bars if query_source in {"sqlite", "local", "local_sqlite"} else query_bars
+        return query(
             asset_class=assetClass,
             symbol=symbol,
             venue=venue or market,

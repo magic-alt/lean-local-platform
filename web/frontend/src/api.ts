@@ -341,6 +341,9 @@ export interface DataQueryResult {
   enabled: boolean;
   items: DataQueryRow[];
   count: number;
+  source?: string;
+  message?: string;
+  error?: string;
 }
 
 export interface FactorEvaluationResult {
@@ -481,6 +484,7 @@ export const api = {
     venue?: string;
     resolution?: string;
     dataType?: string;
+    source?: string;
     startDate?: string;
     endDate?: string;
     limit?: number;

@@ -47,13 +47,12 @@ import {
   CBondPoolItem,
   CBondRiskItem,
   ChartData,
-  DataAsset,
+  DataQueryRow,
   DataQueryResult,
   DataProvider,
   DependencyHealth,
   FactorEvaluationResult,
   FuturesMainItem,
-  LocalDataFile,
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
@@ -68,6 +67,7 @@ import {
 } from "./api";
 import { BacktestCharts, RunsTable, StatusTag } from "./components";
 import { useAsyncData } from "./hooks";
+import ReactECharts from "echarts-for-react";
 
 const { Content, Header, Sider } = Layout;
 
@@ -90,6 +90,68 @@ const defaultSettings: AppSettings = {
   jobTimeoutSeconds: 7200,
   logLevel: "INFO"
 };
+
+const defaultBarPreviewValues = {
+  source: "sqlite",
+  assetClass: "equity",
+  symbol: "000001",
+  market: "china",
+  venue: "china",
+  resolution: "daily",
+  dataType: "trade",
+  limit: 200
+};
+
+function candlestickOption(rows: DataQueryRow[], symbol: string) {
+  const dates = rows.map((row) => row.timestamp.slice(0, 10));
+  const upColor = "#cf1322";
+  const downColor = "#389e0d";
+  return {
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+    legend: { top: 8, data: [symbol, "Volume"] },
+    grid: [
+      { left: 54, right: 24, top: 48, height: 320 },
+      { left: 54, right: 24, top: 400, height: 96 }
+    ],
+    xAxis: [
+      { type: "category", data: dates, boundaryGap: true, axisLine: { onZero: false }, min: "dataMin", max: "dataMax" },
+      { type: "category", gridIndex: 1, data: dates, boundaryGap: true, axisLabel: { show: false }, axisTick: { show: false }, min: "dataMin", max: "dataMax" }
+    ],
+    yAxis: [
+      { scale: true, splitArea: { show: true } },
+      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { formatter: "{value}" } }
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: 0, end: 100 },
+      { type: "slider", xAxisIndex: [0, 1], bottom: 8, start: 0, end: 100 }
+    ],
+    series: [
+      {
+        name: symbol,
+        type: "candlestick",
+        data: rows.map((row) => [row.open, row.close, row.low, row.high]),
+        itemStyle: {
+          color: upColor,
+          color0: downColor,
+          borderColor: upColor,
+          borderColor0: downColor
+        }
+      },
+      {
+        name: "Volume",
+        type: "bar",
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: rows.map((row) => ({
+          value: row.volume,
+          itemStyle: { color: row.close >= row.open ? upColor : downColor }
+        }))
+      }
+    ]
+  };
+}
 
 function templateDefaults(template?: StrategyTemplate) {
   return Object.fromEntries((template?.parameters ?? []).map((item) => [item.key, item.default ?? ""]));
@@ -599,14 +661,20 @@ function ProjectWorkspacePage() {
 }
 
 function DataPage() {
-  const assets = useAsyncData(api.dataAssets, []);
-  const dataFiles = useAsyncData(() => api.dataFiles(), { items: [], count: 0 });
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const [csvForm] = Form.useForm();
   const [queryForm] = Form.useForm();
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvAssetInfo = assetClasses.data.find((item) => item.key === csvAssetClass);
+  const querySymbol = Form.useWatch("symbol", queryForm) || defaultBarPreviewValues.symbol;
+  const chartOption = useMemo(() => candlestickOption(queryResult?.items ?? [], querySymbol), [queryResult?.items, querySymbol]);
+
+  useEffect(() => {
+    api.queryData(defaultBarPreviewValues)
+      .then(setQueryResult)
+      .catch((error) => message.error((error as Error).message));
+  }, []);
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
@@ -618,8 +686,6 @@ function DataPage() {
     await api.importCsv(formData);
     message.success("CSV imported");
     csvForm.resetFields();
-    assets.reload();
-    dataFiles.reload();
   }
 
   async function queryMarketData(values: any) {
@@ -629,66 +695,47 @@ function DataPage() {
     });
     setQueryResult(result);
     if (!result.enabled) {
-      message.warning("ClickHouse is not enabled or not reachable.");
+      message.warning(values.source === "sqlite" ? "Local SQLite query is unavailable." : "ClickHouse is not enabled or not reachable.");
     }
   }
 
   return (
     <>
-      <div className="toolbar"><h1 className="page-title">Data Library</h1><Button icon={<ReloadOutlined />} onClick={() => { assets.reload(); dataFiles.reload(); }}>Refresh</Button></div>
+      <div className="toolbar"><h1 className="page-title">Data Library</h1><Button icon={<ReloadOutlined />} onClick={() => queryMarketData(queryForm.getFieldsValue())}>Refresh Preview</Button></div>
       <MarketDataDownloader />
-      <div className="two-column" style={{ marginTop: 16 }}>
-        <Card title="Import CSV">
-          <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
-            <div className="field-grid">
-              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
-              <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-              <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-              <Form.Item name="venue" label="Venue"><Select disabled={csvAssetClass === "equity"} options={(csvAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-              <Form.Item name="dataType" label="Data Type"><Select options={(csvAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            </div>
-            <div className="field-grid">{["dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].map((name) => <Form.Item key={name} name={name} label={name}><Input /></Form.Item>)}</div>
+      <Card title="Import CSV" style={{ marginTop: 16 }}>
+        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
+          <div className="field-grid six">
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select disabled={csvAssetClass === "equity"} options={(csvAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select options={(csvAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+          </div>
+          <div className="field-grid six">{["dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].map((name) => <Form.Item key={name} name={name} label={name}><Input /></Form.Item>)}</div>
+          <Space wrap>
             <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
-            <Form.Item name="overwrite" valuePropName="checked"><Checkbox>Overwrite existing</Checkbox></Form.Item>
+            <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite existing</Checkbox></Form.Item>
             <Button type="primary" htmlType="submit">Import</Button>
-          </Form>
-        </Card>
-        <Card title="Imported Assets">
-          <Table<DataAsset> rowKey="id" size="small" dataSource={assets.data} columns={[
-            { title: "Symbol", dataIndex: "symbol" },
-            { title: "Asset", render: (_, asset) => asset.asset_class ?? String(asset.metadata?.asset_class ?? "equity") },
-            { title: "Venue", render: (_, asset) => asset.venue ?? String(asset.metadata?.venue ?? asset.metadata?.market ?? "-") },
-            { title: "Source", dataIndex: "source" },
-            { title: "Rows", dataIndex: "rows" },
-            { title: "Range", render: (_, asset) => `${asset.first_date} -> ${asset.last_date}` },
-            { title: "File", dataIndex: "lean_file", ellipsis: true }
-          ]} />
-        </Card>
-      </div>
-      <Card title="Local LEAN Data Files" style={{ marginTop: 16 }}>
-        <Table<LocalDataFile>
-          rowKey={(row) => row.file}
-          size="small"
-          dataSource={dataFiles.data.items}
-          pagination={{ pageSize: 12 }}
-          columns={[
-            { title: "Asset", dataIndex: "assetClass" },
-            { title: "Symbol", dataIndex: "symbol" },
-            { title: "Venue", dataIndex: "venue" },
-            { title: "Resolution", dataIndex: "resolution" },
-            { title: "Type", dataIndex: "dataType" },
-            { title: "Rows", dataIndex: "rows", render: (value) => value ?? "-" },
-            { title: "File", dataIndex: "file", ellipsis: true }
-          ]}
-        />
+          </Space>
+        </Form>
       </Card>
-      <Card title="ClickHouse Bar Query" style={{ marginTop: 16 }}>
+      <Card title="Bar Data Preview" style={{ marginTop: 16 }}>
         <Form
           form={queryForm}
           layout="inline"
           onFinish={queryMarketData}
-          initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", limit: 200 }}
+          initialValues={defaultBarPreviewValues}
         >
+          <Form.Item name="source">
+            <Select
+              style={{ width: 170 }}
+              options={[
+                { value: "sqlite", label: "Local SQLite" },
+                { value: "clickhouse", label: "ClickHouse" }
+              ]}
+            />
+          </Form.Item>
           <Form.Item name="assetClass" rules={[{ required: true }]}><Select style={{ width: 140 }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
           <Form.Item name="symbol" rules={[{ required: true }]}><Input style={{ width: 140 }} placeholder="AAPL" /></Form.Item>
           <Form.Item name="market"><Select style={{ width: 140 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
@@ -698,24 +745,19 @@ function DataPage() {
           <Form.Item name="limit"><InputNumber min={1} max={5000} style={{ width: 110 }} /></Form.Item>
           <Button type="primary" htmlType="submit">Query</Button>
         </Form>
-        {queryResult && !queryResult.enabled && <Alert style={{ marginTop: 12 }} type="warning" showIcon message="ClickHouse mirror is unavailable. Start the Compose stack or install backend dependencies to enable this preview." />}
-        {queryResult?.enabled && (
-          <Table
-            style={{ marginTop: 12 }}
-            rowKey="timestamp"
-            size="small"
-            dataSource={queryResult.items}
-            pagination={{ pageSize: 10 }}
-            columns={[
-              { title: "Time", dataIndex: "timestamp" },
-              { title: "Open", dataIndex: "open" },
-              { title: "High", dataIndex: "high" },
-              { title: "Low", dataIndex: "low" },
-              { title: "Close", dataIndex: "close" },
-              { title: "Volume", dataIndex: "volume" },
-              { title: "Source", dataIndex: "source" }
-            ]}
-          />
+        {queryResult && !queryResult.enabled && <Alert style={{ marginTop: 12 }} type="warning" showIcon message={queryResult.error ?? "Selected data source is unavailable."} />}
+        {queryResult?.enabled && queryResult.message && <Alert style={{ marginTop: 12 }} type="info" showIcon message={queryResult.message} />}
+        {queryResult?.enabled && queryResult.items.length === 0 && <Alert style={{ marginTop: 12 }} type="info" showIcon message="No bars matched the selected filters." />}
+        {queryResult?.enabled && queryResult.items.length > 0 && (
+          <>
+            <Space wrap style={{ marginTop: 12 }}>
+              <Tag color="blue">{queryResult.source ?? "data"}</Tag>
+              <Tag>{queryResult.count} bars</Tag>
+              <Tag>{`${queryResult.items[0].timestamp.slice(0, 10)} -> ${queryResult.items[queryResult.items.length - 1].timestamp.slice(0, 10)}`}</Tag>
+              <Tag>{queryResult.items[0].source}</Tag>
+            </Space>
+            <ReactECharts style={{ height: 540, marginTop: 8 }} option={chartOption} />
+          </>
         )}
       </Card>
     </>

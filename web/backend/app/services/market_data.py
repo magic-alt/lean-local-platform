@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.request import Request, urlopen
 
+from ..db import db
 from ..core.config import (
     CLICKHOUSE_DATABASE,
     CLICKHOUSE_ENABLED,
@@ -245,3 +246,81 @@ def query_bars(
         for row in result.result_rows
     ]
     return {"enabled": True, "items": items, "count": len(items)}
+
+
+def _bounded_limit(limit: int) -> int:
+    return max(1, min(int(limit), 5000))
+
+
+def _sqlite_symbol(symbol: str, venue: str | None = None) -> str:
+    value = symbol.strip().upper()
+    if venue and venue.lower() == "china":
+        if value.startswith(("SH", "SZ", "BJ")):
+            return value[2:]
+        if "." in value:
+            return value.split(".", 1)[0]
+    return value
+
+
+def query_sqlite_bars(
+    *,
+    asset_class: str = "equity",
+    symbol: str,
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    asset_class_key = asset_class.strip().lower()
+    venue_key = (venue or "").strip().lower()
+    resolution_key = resolution.strip().lower()
+    data_type_key = data_type.strip().lower()
+    if (
+        asset_class_key != "equity"
+        or venue_key not in {"", "china"}
+        or resolution_key != "daily"
+        or data_type_key != "trade"
+    ):
+        return {
+            "enabled": True,
+            "source": "sqlite",
+            "items": [],
+            "count": 0,
+            "message": "Local SQLite preview currently supports China equity daily trade bars.",
+        }
+
+    predicates = ["symbol = ?"]
+    params: list[Any] = [_sqlite_symbol(symbol, "china")]
+    if start_date:
+        predicates.append("trade_date >= ?")
+        params.append(start_date)
+    if end_date:
+        predicates.append("trade_date <= ?")
+        params.append(end_date)
+    params.append(_bounded_limit(limit))
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select trade_date, open, high, low, close, volume, source
+            from ashare_daily_bars
+            where {" and ".join(predicates)}
+            order by trade_date asc, source asc
+            limit ?
+            """,
+            params,
+        ).fetchall()
+    items = [
+        {
+            "timestamp": row["trade_date"],
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+            "source": row["source"],
+        }
+        for row in rows
+    ]
+    return {"enabled": True, "source": "sqlite", "items": items, "count": len(items)}
