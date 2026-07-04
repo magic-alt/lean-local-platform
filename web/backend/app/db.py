@@ -30,8 +30,11 @@ JSON_COLUMNS = {
     "orders_json": "orders",
     "trades_json": "trades",
     "holdings_json": "holdings",
+    "performance_json": "performance",
+    "positions_json": "positions",
     "concepts_json": "concepts",
     "qa_report_json": "qa_report",
+    "fields_json": "fields",
 }
 
 
@@ -180,10 +183,41 @@ def init_db() -> None:
                 symbol text not null,
                 start_date text not null,
                 end_date text,
+                announce_date text,
+                effective_date text,
                 weight real,
                 source text not null,
                 batch_id text,
                 primary key (universe_code, symbol, start_date)
+            );
+
+            create table if not exists financial_statements (
+                symbol text not null,
+                statement_type text not null,
+                report_date text not null,
+                announce_date text not null,
+                effective_date text not null,
+                fiscal_period text,
+                currency text,
+                fields_json text not null,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (symbol, statement_type, report_date, announce_date, source)
+            );
+
+            create table if not exists financial_facts (
+                symbol text not null,
+                field_name text not null,
+                report_date text not null,
+                announce_date text not null,
+                effective_date text not null,
+                value real,
+                unit text,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (symbol, field_name, report_date, announce_date, source)
             );
 
             create table if not exists data_import_batches (
@@ -269,6 +303,7 @@ def init_db() -> None:
                 trades_json text not null,
                 holdings_json text not null,
                 statistics_json text not null,
+                performance_json text,
                 raw_result_path text,
                 created_at text not null
             );
@@ -343,6 +378,61 @@ def init_db() -> None:
                 finished_at text
             );
 
+            create table if not exists paper_signals (
+                id text primary key,
+                session_id text not null,
+                trade_date text not null,
+                symbol text not null,
+                side text not null,
+                target_percent real,
+                strength real,
+                reason text,
+                status text not null,
+                source text not null,
+                created_at text not null
+            );
+
+            create table if not exists paper_orders (
+                id text primary key,
+                session_id text not null,
+                signal_id text,
+                trade_date text not null,
+                symbol text not null,
+                side text not null,
+                quantity real not null,
+                order_price real,
+                fill_price real,
+                fee real not null default 0,
+                status text not null,
+                reason text,
+                created_at text not null,
+                filled_at text
+            );
+
+            create table if not exists paper_positions (
+                session_id text not null,
+                symbol text not null,
+                quantity real not null,
+                average_price real not null,
+                market_price real,
+                market_value real,
+                last_buy_date text,
+                updated_at text not null,
+                primary key (session_id, symbol)
+            );
+
+            create table if not exists paper_portfolio_snapshots (
+                id text primary key,
+                session_id text not null,
+                trade_date text not null,
+                cash real not null,
+                market_value real not null,
+                equity real not null,
+                positions_json text not null,
+                created_at text not null,
+                unique(session_id, trade_date)
+            );
+
             create index if not exists idx_backtest_runs_created_at
                 on backtest_runs(created_at desc);
             create index if not exists idx_backtest_runs_symbol
@@ -365,10 +455,20 @@ def init_db() -> None:
                 on ashare_trade_status(symbol, trade_date);
             create index if not exists idx_universe_asof
                 on universe_membership(universe_code, start_date, end_date);
+            create index if not exists idx_financial_statements_pit
+                on financial_statements(symbol, statement_type, effective_date, announce_date, report_date);
+            create index if not exists idx_financial_facts_pit
+                on financial_facts(symbol, field_name, effective_date, announce_date, report_date);
             create index if not exists idx_import_batches_started_at
                 on data_import_batches(started_at desc);
             create index if not exists idx_paper_sessions_created_at
                 on paper_sessions(created_at desc);
+            create index if not exists idx_paper_signals_session_date
+                on paper_signals(session_id, trade_date);
+            create index if not exists idx_paper_orders_session_date
+                on paper_orders(session_id, trade_date);
+            create index if not exists idx_paper_snapshots_session_date
+                on paper_portfolio_snapshots(session_id, trade_date);
             """
         )
         _add_column(connection, "backtest_runs", "task_id", "text")
@@ -387,6 +487,9 @@ def init_db() -> None:
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")
         _add_column(connection, "data_assets", "data_type", "text not null default 'trade'")
+        _add_column(connection, "backtest_results", "performance_json", "text")
+        _add_column(connection, "universe_membership", "announce_date", "text")
+        _add_column(connection, "universe_membership", "effective_date", "text")
         connection.execute(
             "create index if not exists idx_backtest_runs_asset on backtest_runs(asset_class, venue, symbol)"
         )

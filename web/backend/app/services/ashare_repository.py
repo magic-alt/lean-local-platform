@@ -259,20 +259,34 @@ def upsert_universe_membership(
     source: str,
     batch_id: str | None = None,
     weight: float | None = None,
+    announce_date: str | None = None,
+    effective_date: str | None = None,
 ) -> None:
     with db() as connection:
         connection.execute(
             """
             insert into universe_membership
-                (universe_code, symbol, start_date, end_date, weight, source, batch_id)
-            values (?, ?, ?, ?, ?, ?, ?)
+                (universe_code, symbol, start_date, end_date, announce_date, effective_date, weight, source, batch_id)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(universe_code, symbol, start_date) do update set
                 end_date = excluded.end_date,
+                announce_date = excluded.announce_date,
+                effective_date = excluded.effective_date,
                 weight = excluded.weight,
                 source = excluded.source,
                 batch_id = excluded.batch_id
             """,
-            (universe_code, symbol, start_date, end_date, weight, source, batch_id),
+            (
+                universe_code,
+                symbol,
+                start_date,
+                end_date,
+                announce_date,
+                effective_date or start_date,
+                weight,
+                source,
+                batch_id,
+            ),
         )
 
 
@@ -287,10 +301,12 @@ def universe_as_of(universe_code: str, as_of_date: str) -> list[dict[str, Any]]:
             where u.universe_code = ?
               and u.start_date <= ?
               and (u.end_date is null or u.end_date >= ?)
+              and (u.announce_date is null or u.announce_date <= ?)
+              and (u.effective_date is null or u.effective_date <= ?)
               and (s.delisted_date is null or s.delisted_date > ?)
             order by u.symbol
             """,
-            (universe_code, as_of_date, as_of_date, as_of_date),
+            (universe_code, as_of_date, as_of_date, as_of_date, as_of_date, as_of_date),
         ).fetchall()
     return rows_to_dicts(rows)
 

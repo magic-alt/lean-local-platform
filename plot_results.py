@@ -176,14 +176,83 @@ def order_markers(data):
     return sorted(markers, key=lambda item: item["timestamp"])
 
 
+def period_returns(points, period):
+    grouped = {}
+    for timestamp, value in points:
+        date_key = unix_to_date(timestamp)
+        key = date_key[:7] if period == "month" else date_key[:4]
+        item = grouped.setdefault(key, {"period": key, "start": value, "end": value})
+        item["end"] = value
+    rows = []
+    for key in sorted(grouped):
+        item = grouped[key]
+        start = item["start"]
+        end = item["end"]
+        rows.append({"period": key, "return": (end / start - 1) if start else 0, "start": start, "end": end})
+    return rows
+
+
+def profit_loss_rows(data):
+    rows = []
+    for time_value, value in sorted((data.get("profitLoss") or {}).items()):
+        try:
+            date_value = iso_to_date(time_value)
+        except Exception:
+            date_value = str(time_value)[:10]
+        rows.append({"date": date_value, "pnl": float(value)})
+    return rows
+
+
+def pct(value):
+    return f"{value * 100:.2f}%"
+
+
+def returns_table(title, rows):
+    if not rows:
+        return f'<section class="orders"><h2>{html.escape(title)}</h2><p>No data.</p></section>'
+    body = "".join(
+        "<tr>"
+        f"<td>{html.escape(row['period'])}</td>"
+        f"<td>{pct(row['return'])}</td>"
+        f"<td>{row['start']:.2f}</td>"
+        f"<td>{row['end']:.2f}</td>"
+        "</tr>"
+        for row in rows
+    )
+    return (
+        f'<section class="orders"><h2>{html.escape(title)}</h2>'
+        "<table><thead><tr><th>Period</th><th>Return</th><th>Start Equity</th><th>End Equity</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></section>"
+    )
+
+
+def pnl_table(rows):
+    if not rows:
+        return '<section class="orders"><h2>Closed Trade P&L</h2><p>No closed trades.</p></section>'
+    body = "".join(
+        "<tr>"
+        f"<td>{html.escape(row['date'])}</td>"
+        f"<td>{row['pnl']:.2f}</td>"
+        "</tr>"
+        for row in rows
+    )
+    return (
+        '<section class="orders"><h2>Closed Trade P&L</h2>'
+        "<table><thead><tr><th>Date</th><th>P&L</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></section>"
+    )
+
+
 def stat_cards(statistics):
     keys = [
         "End Equity",
         "Net Profit",
         "Sharpe Ratio",
+        "Sortino Ratio",
         "Drawdown",
         "Total Orders",
         "Total Fees",
+        "Portfolio Turnover",
     ]
     cards = []
     for key in keys:
@@ -224,6 +293,8 @@ def build_report(data, source_path):
     drawdown_chart = get_chart(data, "Drawdown")
     ema_chart = get_chart(data, "EMA")
     benchmark_chart = get_chart(data, "Benchmark")
+    equity_points = series_points(equity_chart, "Equity")
+    pnl_rows = profit_loss_rows(data)
 
     body = [
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
@@ -255,7 +326,7 @@ th { color: #475569; font-weight: 700; }
         f'<section class="stats">{stat_cards(statistics)}</section>',
         make_svg(
             "Strategy Equity",
-            {"Equity": series_points(equity_chart, "Equity")},
+            {"Equity": equity_points},
             markers=markers,
         ),
         make_svg(
@@ -275,6 +346,9 @@ th { color: #475569; font-weight: 700; }
             {"Benchmark": series_points(benchmark_chart, "Benchmark")},
         ),
         f'<section class="orders"><h2>Orders</h2>{orders_table(markers)}</section>',
+        returns_table("Monthly Returns", period_returns(equity_points, "month")),
+        returns_table("Yearly Returns", period_returns(equity_points, "year")),
+        pnl_table(pnl_rows),
         "</main></body></html>",
     ]
     return "\n".join(body)
