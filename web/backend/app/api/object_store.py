@@ -12,6 +12,16 @@ def list_items():
     return object_store.list_items()
 
 
+@router.get("/_stored-objects")
+def list_stored_objects(
+    namespace: str | None = None,
+    objectKey: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    return object_store.list_stored_objects(namespace=namespace, object_key=objectKey, limit=limit, offset=offset)
+
+
 @router.post("/{key:path}")
 async def put_item(key: str, file: UploadFile = File(...)):
     try:

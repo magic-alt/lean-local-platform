@@ -1,3 +1,4 @@
+import importlib.util
 import os
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,21 @@ DJIA_COMPONENTS = [
     {"symbol": "V", "name": "Visa", "sector": "Financials", "exchange": "NYSE"},
     {"symbol": "WMT", "name": "Walmart", "sector": "Consumer Staples", "exchange": "NASDAQ"},
 ]
+
+
+PROVIDER_REQUIREMENTS: dict[str, dict[str, Any]] = {
+    "binance": {"modules": [], "env": []},
+    "tushare": {"modules": ["tushare"], "env": ["TUSHARE_TOKEN"]},
+    "eastmoney": {"modules": [], "env": []},
+    "sina": {"modules": ["akshare"], "env": []},
+    "akshare": {"modules": ["akshare"], "env": []},
+    "adata": {"modules": ["adata"], "env": []},
+    "baostock": {"modules": ["baostock"], "env": []},
+    "tonghuashun": {"modules": ["akshare"], "env": []},
+    "yahoo": {"modules": [], "env": []},
+    "stooq": {"modules": [], "env": []},
+    "alpha_vantage": {"modules": [], "env": ["ALPHAVANTAGE_API_KEY"]},
+}
 
 
 def markets() -> list[dict[str, Any]]:
@@ -302,23 +318,71 @@ def data_providers() -> list[dict[str, Any]]:
     ]
 
 
+def provider_availability(provider: str | None = None) -> dict[str, Any]:
+    providers = data_providers()
+    provider_filter = provider.strip().lower() if provider else None
+    items = []
+    for item in providers:
+        key = item["key"]
+        if provider_filter and key != provider_filter:
+            continue
+        requirements = PROVIDER_REQUIREMENTS.get(key, {"modules": [], "env": []})
+        modules = [
+            {"name": module, "available": importlib.util.find_spec(module) is not None}
+            for module in requirements.get("modules", [])
+        ]
+        env = [
+            {"name": name, "present": bool(os.environ.get(name))}
+            for name in requirements.get("env", [])
+        ]
+        missing_modules = [module["name"] for module in modules if not module["available"]]
+        missing_env = [entry["name"] for entry in env if not entry["present"]]
+        available = not missing_modules and not missing_env
+        reason = "ok" if available else ";".join(
+            [*(f"missing_module:{name}" for name in missing_modules), *(f"missing_env:{name}" for name in missing_env)]
+        )
+        items.append(
+            {
+                **item,
+                "available": available,
+                "reason": reason,
+                "diagnostics": {
+                    "modules": modules,
+                    "env": env,
+                    "networkChecked": False,
+                    "networkCheck": "not_run",
+                },
+            }
+        )
+    return {
+        "items": items,
+        "count": len(items),
+        "checkedAt": utc_now(),
+        "networkChecked": False,
+    }
+
+
 def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
     created_at = utc_now()
-    metadata = {**metadata, "created_at": created_at}
+    asset_class = metadata.get("asset_class") or metadata.get("assetClass") or "equity"
+    venue = metadata.get("venue") or metadata.get("market")
+    resolution = metadata.get("resolution") or "daily"
+    data_type = metadata.get("data_type") or metadata.get("dataType") or "trade"
+    metadata = {**metadata, "created_at": created_at, "status": "active"}
     with db() as connection:
         cursor = connection.execute(
             """
             insert into data_assets
                 (symbol, asset_class, venue, resolution, data_type, source, rows, first_date, last_date,
-                 lean_file, lean_object_id, factor_object_id, metadata_json, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 lean_file, lean_object_id, factor_object_id, status, metadata_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata["symbol"],
-                metadata.get("asset_class") or metadata.get("assetClass") or "equity",
-                metadata.get("venue") or metadata.get("market"),
-                metadata.get("resolution") or "daily",
-                metadata.get("data_type") or metadata.get("dataType") or "trade",
+                asset_class,
+                venue,
+                resolution,
+                data_type,
                 metadata["source"],
                 metadata["rows"],
                 metadata["first_date"],
@@ -326,11 +390,40 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
                 metadata["lean_file"],
                 metadata.get("lean_object_id"),
                 metadata.get("factor_object_id"),
+                "active",
                 json_dump(metadata),
                 created_at,
             ),
         )
         metadata["id"] = cursor.lastrowid
+        connection.execute(
+            """
+            update data_assets
+            set status = 'superseded',
+                superseded_by = ?,
+                superseded_at = ?,
+                superseded_reason = 'newer_asset_recorded'
+            where id <> ?
+              and symbol = ?
+              and asset_class = ?
+              and coalesce(venue, '') = coalesce(?, '')
+              and resolution = ?
+              and data_type = ?
+              and source = ?
+              and coalesce(status, 'active') = 'active'
+            """,
+            (
+                metadata["id"],
+                created_at,
+                metadata["id"],
+                metadata["symbol"],
+                asset_class,
+                venue,
+                resolution,
+                data_type,
+                metadata["source"],
+            ),
+        )
     return metadata
 
 

@@ -153,17 +153,31 @@ def delete_object(object_id_value: str) -> None:
         connection.execute("delete from stored_objects where id = ?", (object_id_value,))
 
 
-def list_objects(namespace: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+def list_objects(
+    namespace: str | None = None,
+    *,
+    object_key: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
     clauses = []
     values: list[Any] = []
     if namespace:
         clauses.append("namespace = ?")
         values.append(namespace)
+    if object_key:
+        clauses.append("object_key like ?")
+        values.append(f"%{object_key.strip()}%")
     sql = "select * from stored_objects"
+    count_sql = "select count(*) as count from stored_objects"
     if clauses:
-        sql += " where " + " and ".join(clauses)
-    sql += " order by updated_at desc limit ?"
-    values.append(limit)
+        where = " where " + " and ".join(clauses)
+        sql += where
+        count_sql += where
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
+    sql += " order by updated_at desc, id desc limit ? offset ?"
     with db() as connection:
-        rows = connection.execute(sql, values).fetchall()
-    return rows_to_dicts(rows)
+        count = connection.execute(count_sql, values).fetchone()["count"]
+        rows = connection.execute(sql, [*values, bounded_limit, bounded_offset]).fetchall()
+    return {"items": rows_to_dicts(rows), "count": count, "limit": bounded_limit, "offset": bounded_offset}

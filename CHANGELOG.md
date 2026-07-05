@@ -2,7 +2,16 @@
 
 本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
 
-## 2026-07-05 - 本次提交 - Fix Level 3 paper stabilization P1 gaps
+## 2026-07-05 - 本次提交 - Fix efficiency and scalability P2 gaps
+
+- 增加前端 Vite manual chunks，拆分 React、Ant Design、ECharts、zrender 和 Monaco 包。
+- 增加数据源 provider availability 诊断，检查本地依赖、必需环境变量，并明确不依赖网络探测。
+- 增加 stored_objects 查询分页、namespace/key 过滤和相关数据库索引。
+- 增加 Reports API 分页、状态/run/source 过滤和相关数据库索引，默认数组响应保持兼容。
+- 增加 data_assets lifecycle 字段，新资产写入后保留历史记录并标记旧记录为 superseded。
+- 增加对应后端测试覆盖。
+
+## 2026-07-05 - cd3a714 - Fix Level 3 paper stabilization P1 gaps
 
 - 删除 A股策略模板中的常数 benchmark fallback，benchmark 缺失时回测 hard fail。
 - 打通 Reports API 与 backtest report/result/stored_objects，并在前端 Reports 页显示 result 与 stored object 状态。

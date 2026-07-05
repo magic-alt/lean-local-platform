@@ -5,13 +5,22 @@ from ..core.config import OBJECT_STORE_DIR
 from ..core.errors import NotFoundError
 from ..core.files import ensure_child_path
 from ..db import db, rows_to_dicts, utc_now
-from .db_object_store import delete_object, latest_object, put_bytes, restore_to_path
+from .db_object_store import delete_object, latest_object, list_objects, put_bytes, restore_to_path
 
 
 def list_items() -> list[dict[str, Any]]:
     with db() as connection:
         rows = connection.execute("select * from object_store_items order by updated_at desc").fetchall()
     return rows_to_dicts(rows)
+
+
+def list_stored_objects(
+    namespace: str | None = None,
+    object_key: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    return list_objects(namespace=namespace, object_key=object_key, limit=limit, offset=offset)
 
 
 def put_item(key: str, data: bytes) -> dict[str, Any]:

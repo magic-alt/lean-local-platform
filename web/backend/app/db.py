@@ -412,6 +412,10 @@ def init_db() -> None:
                 lean_file text not null,
                 lean_object_id text,
                 factor_object_id text,
+                status text not null default 'active',
+                superseded_by integer,
+                superseded_at text,
+                superseded_reason text,
                 metadata_json text not null,
                 created_at text not null
             );
@@ -1217,6 +1221,16 @@ def init_db() -> None:
                 on projects(name);
             create index if not exists idx_data_assets_symbol
                 on data_assets(symbol);
+            create index if not exists idx_data_assets_status_created
+                on data_assets(status, created_at desc);
+            create index if not exists idx_reports_run_created
+                on reports(run_id, created_at desc);
+            create index if not exists idx_reports_status_created
+                on reports(status, created_at desc);
+            create index if not exists idx_stored_objects_namespace_updated
+                on stored_objects(namespace, updated_at desc);
+            create index if not exists idx_stored_objects_key_updated
+                on stored_objects(object_key, updated_at desc);
             create index if not exists idx_instruments_symbol
                 on instruments(asset_class, market, venue, symbol);
             create index if not exists idx_instruments_status
@@ -1312,6 +1326,10 @@ def init_db() -> None:
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")
         _add_column(connection, "data_assets", "data_type", "text not null default 'trade'")
+        _add_column(connection, "data_assets", "status", "text not null default 'active'")
+        _add_column(connection, "data_assets", "superseded_by", "integer")
+        _add_column(connection, "data_assets", "superseded_at", "text")
+        _add_column(connection, "data_assets", "superseded_reason", "text")
         _add_column(connection, "backtest_results", "performance_json", "text")
         _add_column(connection, "backtest_results", "raw_result_object_id", "text")
         _add_column(connection, "backtest_results", "summary_object_id", "text")

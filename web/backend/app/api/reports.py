@@ -87,11 +87,59 @@ def _backtest_report(report_id: str) -> dict[str, Any] | None:
 
 
 @router.get("")
-def list_reports():
+def list_reports(
+    limit: int = 500,
+    offset: int = 0,
+    paged: bool = False,
+    source: str | None = None,
+    status: str | None = None,
+    runId: str | None = None,
+):
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
+    scan_limit = bounded_limit + bounded_offset
+    source_filter = source.strip().lower() if source else None
+    report_clauses = []
+    report_values: list[Any] = []
+    backtest_clauses = [
+        "(r.report_html_path is not null or r.result_json_path is not null or r.summary_json_path is not null or br.job_id is not null)"
+    ]
+    backtest_values: list[Any] = []
+    if status:
+        report_clauses.append("status = ?")
+        report_values.append(status)
+        backtest_clauses.append("r.status = ?")
+        backtest_values.append(status)
+    if runId:
+        report_clauses.append("run_id = ?")
+        report_values.append(runId)
+        backtest_clauses.append("r.id = ?")
+        backtest_values.append(runId)
+    report_where = f"where {' and '.join(report_clauses)}" if report_clauses else ""
+    backtest_where = f"where {' and '.join(backtest_clauses)}"
     with db() as connection:
-        report_rows = connection.execute("select * from reports order by created_at desc").fetchall()
-        backtest_rows = connection.execute(
-            """
+        report_count = 0
+        report_rows = []
+        if source_filter in (None, "reports"):
+            report_count = connection.execute(f"select count(*) as count from reports {report_where}", report_values).fetchone()["count"]
+            report_rows = connection.execute(
+                f"select * from reports {report_where} order by created_at desc, id desc limit ?",
+                [*report_values, scan_limit],
+            ).fetchall()
+        backtest_count = 0
+        backtest_rows = []
+        if source_filter in (None, "backtest_run", "backtest"):
+            backtest_count = connection.execute(
+                f"""
+                select count(*) as count
+                from backtest_runs r
+                left join backtest_results br on br.job_id = r.id
+                {backtest_where}
+                """,
+                backtest_values,
+            ).fetchone()["count"]
+            backtest_rows = connection.execute(
+                f"""
             select r.*, br.id as result_id, br.summary_metrics_json, br.equity_curve_json,
                    br.drawdown_curve_json, br.orders_json, br.trades_json, br.holdings_json,
                    br.statistics_json as result_statistics_json, br.performance_json,
@@ -99,14 +147,12 @@ def list_reports():
                    br.created_at as result_created_at
             from backtest_runs r
             left join backtest_results br on br.job_id = r.id
-            where r.report_html_path is not null
-               or r.result_json_path is not null
-               or r.summary_json_path is not null
-               or br.job_id is not null
-            order by r.created_at desc
+            {backtest_where}
+            order by r.created_at desc, r.id desc
             limit 500
-            """
-        ).fetchall()
+            """.replace("limit 500", "limit ?"),
+                [*backtest_values, scan_limit],
+            ).fetchall()
     reports = [{**item, "source": "reports"} for item in rows_to_dicts(report_rows)]
     backtests = []
     for row in backtest_rows:
@@ -130,7 +176,11 @@ def list_reports():
                 "created_at": item.pop("result_created_at", None),
             }
         backtests.append(_backtest_report_from_rows(item, result))
-    return [*reports, *backtests]
+    items = sorted([*reports, *backtests], key=lambda item: item.get("created_at") or "", reverse=True)
+    sliced = items[bounded_offset : bounded_offset + bounded_limit]
+    if paged:
+        return {"items": sliced, "count": report_count + backtest_count, "limit": bounded_limit, "offset": bounded_offset}
+    return sliced
 
 
 @router.post("")

@@ -20,6 +20,7 @@ from ..services.data import (
     attach_database_objects,
     asset_classes,
     data_providers,
+    provider_availability,
     fetch_and_import_symbol,
     import_ashare_research_data,
     local_data_index,
@@ -191,15 +192,45 @@ def search_securities(market: str = "usa", keyword: str = ""):
 
 
 @router.get("/data-assets")
-def data_assets():
+def data_assets(
+    status: str | None = None,
+    includeSuperseded: bool = True,
+    limit: int = 500,
+    offset: int = 0,
+    paged: bool = False,
+):
+    clauses = []
+    values: list[Any] = []
+    if status:
+        clauses.append("status = ?")
+        values.append(status)
+    elif not includeSuperseded:
+        clauses.append("coalesce(status, 'active') = 'active'")
+    where = f"where {' and '.join(clauses)}" if clauses else ""
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
     with db() as connection:
-        rows = connection.execute("select * from data_assets order by created_at desc").fetchall()
-    return rows_to_dicts(rows)
+        count = connection.execute(f"select count(*) as count from data_assets {where}", values).fetchone()["count"]
+        rows = connection.execute(
+            f"select * from data_assets {where} order by created_at desc, id desc limit ? offset ?",
+            [*values, bounded_limit, bounded_offset],
+        ).fetchall()
+    items = rows_to_dicts(rows)
+    if paged:
+        return {"items": items, "count": count, "limit": bounded_limit, "offset": bounded_offset}
+    return items
 
 
 @router.get("/data/providers")
-def providers():
+def providers(includeAvailability: bool = False):
+    if includeAvailability:
+        return provider_availability()
     return data_providers()
+
+
+@router.get("/data/providers/availability")
+def data_provider_availability(provider: str | None = None):
+    return provider_availability(provider)
 
 
 @router.get("/asset-classes")
