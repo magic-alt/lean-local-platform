@@ -208,6 +208,18 @@ web/backend/.venv/bin/python scripts/run_paper_replay.py <session-id> \
   --end-date 2026-06-30
 ```
 
+A 股 Paper 默认使用显式成交口径 `executionPolicy=next_open`，信号日和成交日分离；也支持 `next_close`、`next_vwap`。`same_close` 属于高风险口径，必须显式设置 `allowSameDayClose=true` 才允许使用。Paper 快照会记录 `benchmarkSymbol`、benchmark close 和 benchmark return；A 股默认 benchmark 为 `000300`。
+
+导入沪深300 benchmark 行情并生成 LEAN cache：
+
+```bash
+web/backend/.venv/bin/python scripts/import_csi300_benchmark.py \
+  --start-date 2005-01-01 \
+  --end-date 2026-07-04
+```
+
+A 股增量导入只写 canonical DB，LEAN `Data/` zip/factor/map 会从数据库完整窗口重建并归档到 MySQL `stored_objects`。回测 worker 启动 LEAN 前会自动校验/恢复主标的和 benchmark 的 LEAN cache；`backtest_runs.fingerprint` 保存 git 状态、参数 hash、数据行数/batch、Parquet 文件 hash、LEAN cache object/hash 和 Docker image digest。
+
 期货前期验证使用可选 TqSdk adapter。未安装 `tqsdk` 时平台仍可启动，调用该入口会返回明确错误：
 
 ```bash

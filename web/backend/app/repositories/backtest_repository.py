@@ -35,6 +35,7 @@ BACKTEST_UPDATE_COLUMNS = {
     "started_at",
     "finished_at",
     "duration_seconds",
+    "fingerprint_json",
 }
 
 

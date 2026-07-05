@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -77,6 +78,51 @@ def test_ashare_import_writes_research_tables_and_restores_asof_universe(tmp_pat
     assert reason == "suspended"
 
 
+def test_incremental_ashare_import_rebuilds_lean_zip_from_full_database_history(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services.data import import_ashare_research_data
+
+    import_ashare_research_data(
+        symbol="600519",
+        provider="test",
+        market="china",
+        rows=[
+            {
+                "date": "2024-01-05",
+                "open": "11.20",
+                "high": "11.50",
+                "low": "11.00",
+                "close": "11.30",
+                "volume": "130000",
+            }
+        ],
+        source="test",
+        overwrite=True,
+        adjust="raw",
+        outputsize="",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date="2024-01-05",
+        end_date="2024-01-05",
+    )
+
+    zip_path = tmp_path / "Data" / "equity" / "china" / "daily" / "600519.zip"
+    with zipfile.ZipFile(zip_path) as archive:
+        lines = archive.read("600519.csv").decode("utf-8").splitlines()
+    assert len(lines) == 4
+    assert lines[0].startswith("20240102")
+    assert lines[-1].startswith("20240105")
+
+    from app.services.db_object_store import latest_object
+
+    stored = latest_object("lean-data-files", "equity/china/daily/600519.zip")
+    assert stored
+    assert stored["sha256"]
+
+
 def test_ashare_quality_report_blocks_duplicate_dates(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services.data import import_ashare_research_data
@@ -136,6 +182,76 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["ashareStatusFile"] == "/Lean/Run/ashare_trade_status.json"
     assert job["parameters"]["benchmarkSymbol"] == "000300"
     assert job["parameters"]["benchmarkMarket"] == "china"
+    assert job["parameters"]["executionPolicy"] == "next_open"
+
+
+def test_benchmark_rows_import_to_market_bars_and_lean_cache(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.services.benchmark import import_benchmark_rows
+    from app.services.market_data import query_database_bars
+
+    result = import_benchmark_rows(
+        symbol="000300",
+        source="akshare",
+        rows=[
+            {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
+            {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
+        ],
+    )
+
+    assert result["symbol"] == "000300"
+    assert result["rows"] == 2
+    bars = query_database_bars(symbol="000300", venue="china", start_date="2024-01-02", end_date="2024-01-03")
+    assert bars["count"] == 2
+    assert (tmp_path / "Data" / "equity" / "china" / "daily" / "000300.zip").exists()
+
+
+def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services.lean_cache import ensure_ashare_lean_cache
+    from app.services.run_fingerprint import build_run_fingerprint
+
+    parameters = {
+        "ticker": "600519",
+        "assetClass": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": "2024-01-02",
+        "end": "2024-01-04",
+        "adjust": "raw",
+        "source": "test",
+    }
+    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+    fingerprint = build_run_fingerprint(
+        run_id="run-1",
+        parameters=parameters,
+        docker_image="quantconnect/lean:latest",
+        lean_cache=cache,
+    )
+
+    assert fingerprint["parametersHash"]
+    assert fingerprint["data"]["marketDailyBars"]["row_count"] == 3
+    assert fingerprint["leanCache"]["files"]["daily"]["sha256"]
+
+
+def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services.lean_cache import ensure_ashare_lean_cache
+
+    zip_path = tmp_path / "Data" / "equity" / "china" / "daily" / "600519.zip"
+    original = zip_path.read_bytes()
+    zip_path.unlink()
+
+    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+
+    assert zip_path.exists()
+    assert zip_path.read_bytes() == original
+    assert cache["files"]["daily"]["object_id"]
 
 
 def test_ashare_execution_artifacts_include_status_payload(tmp_path, monkeypatch):

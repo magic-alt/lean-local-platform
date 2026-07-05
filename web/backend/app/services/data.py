@@ -16,7 +16,6 @@ from ..lean import (
     list_local_symbols,
     market_key,
     normalize_symbol,
-    write_equity_factor_file,
     write_lean_crypto_daily_zip,
     write_lean_daily_zip,
 )
@@ -31,6 +30,7 @@ from ..domain.assets import (
 )
 from .market_data import mirror_rows
 from .db_object_store import put_file
+from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
 from .tushare_adapter import fetch_tushare_rows
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
@@ -575,8 +575,13 @@ def import_ashare_research_data(
         upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
 
         lean_rows = _ashare_rows_for_lean(normalized_rows)
-        metadata = write_lean_daily_zip(symbol, lean_rows, source, overwrite=overwrite, market=market)
-        factor_metadata = write_equity_factor_file(symbol, normalized_rows, market=market)
+        metadata = rebuild_ashare_lean_cache_from_db(
+            symbol,
+            source=source,
+            adjust=adjust or "raw",
+            market=market,
+            batch_id=batch_id,
+        )
         metadata["asset_class"] = "equity"
         metadata["venue"] = market
         metadata["resolution"] = "daily"
@@ -587,7 +592,6 @@ def import_ashare_research_data(
         metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
         metadata["batch_id"] = batch_id
         metadata["qa_report"] = qa_report
-        metadata["factor_file"] = factor_metadata
         metadata["research_tables"] = {
             "security": True,
             "daily_bars": len(normalized_rows),
@@ -601,7 +605,6 @@ def import_ashare_research_data(
             metadata["clickhouse"] = mirror_rows(metadata, lean_rows)
         except Exception as exc:
             metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
-        attach_database_objects(metadata)
         asset = record_data_asset(metadata)
         finish_import_batch(batch_id, "success", qa_report=qa_report)
         return asset

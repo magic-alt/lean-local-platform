@@ -4,18 +4,18 @@
 仓库：`/Users/kaermax/lean-platform`  
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
-当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换，以及 Parquet/DuckDB 派生行情仓和 A 股多源校验。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
+当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
 ## 1. 总体结论
 
-本次 P0 修复后，平台在代码机制上已经补齐上一轮最影响回测可信度的 5 个缺口：历史股票池 as-of 查询、上市/退市过滤、复权因子 factor 文件生成、官方交易状态优先、A 股 benchmark 参数、真实 LEAN 订单事件集成断言。  
+本次 P0 修复后，平台在代码机制上已经补齐上一轮最影响回测可信度的 5 个缺口：历史股票池 as-of 查询、上市/退市过滤、复权因子 factor 文件生成、官方交易状态优先、A 股 benchmark 参数、真实 LEAN 订单事件集成断言。2026-07-05 追加修复 Level 3 复审发现的阻塞项：A 股增量导入改为从 MySQL 全量窗口重建 LEAN zip/factor/map，Paper 默认 `next_open` 并禁止隐式 same-day close，`000300` benchmark 已导入 `2005-01-04 -> 2026-07-03` 共 5220 行，回测 worker 写入 `backtest_runs.fingerprint`，并在启动 LEAN 前自动恢复/校验主标的和 benchmark 的 LEAN cache。  
 
 需要严格区分两件事：
 
 - 代码层能力：本次已实现并有单测/集成测试覆盖。
 - 生产数据层能力：仓库当前没有 TuShare Pro/JQData/RQData 凭据，也没有全 A 批量历史数据文件，因此实际运行库仍需要导入证券主数据、全 A 历史池、指数行情、官方停复牌/涨跌停/ST、复权因子和公司行动。
 
-当前平台已经更接近 Level 2 个人研究级中上沿，可以继续做受控数据下的 A 股日线研究。正式模拟盘仍不建议马上开始，除非只做小范围影子跟踪，并明确标记数据覆盖边界。下一阶段优先级不是大规模重构，而是接入 TuShare Pro 数据、补数据版本指纹、扩大 LEAN 端到端夹具。
+当前平台已经更接近 Level 2.5，可以继续做受控数据下的 A 股日线研究和小范围影子 Paper Replay。正式模拟盘仍不建议马上开始，除非明确标记数据覆盖边界。下一阶段优先级不是大规模重构，而是补全组合级约束、Paper 日报、QA 前置门禁、2005-2017 CSI300 PIT 和全 A/退市/ST 数据。
 
 ## 2. 本次实现摘要
 
@@ -43,7 +43,7 @@
 
 - 生产运行已不再依赖 SQLite，但测试仍用临时 SQLite 隔离。
 - ClickHouse 仍是可选镜像/加速层，当前不是事实源。
-- LEAN 回测执行仍读取本地 `Data/` 文件缓存；MySQL 已保存文件原文，后续可补“从 MySQL 恢复/生成 LEAN Data 缓存”的启动前导出步骤。
+- LEAN 回测执行仍读取本地 `Data/` 文件缓存；当前已在 worker 启动 LEAN 前按 `stored_objects` 自动恢复/校验主标的和 benchmark 的 zip/factor/map，缺失时从 MySQL canonical 行情全量窗口重建并重新归档。
 
 ### Parquet/DuckDB 派生行情仓和多源校验
 
@@ -88,7 +88,7 @@
 
 - `python3 -m py_compile ...` 通过。
 - `./web/backend/.venv/bin/pytest web/backend/tests/test_free_data_pipeline.py web/backend/tests/test_paper_replay_gate.py web/backend/tests/test_free_sources_futures_intraday.py web/backend/tests/test_paper_trading.py web/backend/tests/test_cbond_futures_p2.py` 通过：`8 passed`。
-- `./web/backend/.venv/bin/pytest web/backend/tests` 通过：`44 passed, 1 skipped, 3 warnings in 1.34s`。
+- `./web/backend/.venv/bin/pytest web/backend/tests` 通过：`48 passed, 1 skipped, 3 warnings in 1.74s`。
 - `npm run build` 通过；仍有既有 Vite chunk size warning。
 - 真实 MySQL `init_db()` 通过；`market_intraday_bars`、`market_ticks`、`futures_main_mapping`、`recording_jobs`、`recording_status`、`data_gaps` 表存在。
 
@@ -192,7 +192,7 @@
 | P0-001 | 全 A 历史股票池缺失 | 代码机制已修复；`CSI300` 已写入 2017-12-08 起真实官方缓存 PIT；全 A 和 2005-2017 沪深300仍待补 | `import_security_master`、`universe_as_of`、`tradable_universe_as_of`、`scripts/import_csindex_csi300_cached.py`、`data_sources/csi300_pit_sources.json`、`test_security_master_restores_history_and_filters_new_and_delisted`、`test_csi300_pit_materialization_respects_effective_date` | 不能恢复 2017-12-08 以前沪深300成分，也不能恢复全 A 历史池 | 接 TuShare Pro `stock_basic`、退市字段、指数成分；补 2005-2017 中证指数公告或 JQData/RQData |
 | P0-002 | 复权与公司行动未闭环 | 代码机制已修复，真实公司行动数据待导入 | `corporate_actions` 表、`write_equity_factor_file`、`test_adjustment_factors_write_factor_file_and_corporate_actions` | qfq/hfq/raw 生产口径仍需数据契约约束 | 接 `adj_factor`、分红送转配股表，补口径校验 |
 | P0-003 | 停牌/涨跌停/ST 依赖推断 | 已修复为官方字段优先，推断 fallback 保留 | `import_trade_status`、QA warning、`test_official_trade_status_overrides_inferred_rules_and_missing_status_rejects`、LEAN 集成测试 | 官方状态源未批量接入前仍有数据缺口 | 接 `stk_limit`、停复牌、ST 状态 |
-| P0-004 | A 股 benchmark 缺失 | 代码已支持，真实指数行情待导入 | `benchmarkSymbol=000300` 注入、算法/模板 add benchmark、单测覆盖 | 若本地无指数数据，会回退常数 benchmark | 导入沪深300/中证全指日线并加示例回测 |
+| P0-004 | A 股 benchmark 缺失 | 已修复；`000300` 日线已导入 MySQL 和 LEAN cache | `scripts/import_csi300_benchmark.py`、`market_daily_bars` 中 `000300=5220` 行、`Data/equity/china/daily/000300.zip=5220` 行、Paper snapshot benchmark 字段 | 仍需补中证500/1000/中证全指等扩展 benchmark | 示例回测继续验证 benchmark 曲线和 Alpha/Beta 非空 |
 | P0-005 | 缺少真实 LEAN 订单事件断言 | 已修复并通过真实 Docker/LEAN 集成测试 | `RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_lean_integration.py`，结果 `1 passed` | 集成夹具仍是单票极端样本，需扩展现金不足/100 股端到端断言 | 增加多场景 LEAN fixtures |
 
 ## 4. 已验证命令
@@ -202,7 +202,7 @@ cd web/backend
 .venv/bin/python -m pytest -q
 ```
 
-结果：`44 passed, 1 skipped, 3 warnings in 1.34s`。
+结果：`48 passed, 1 skipped, 3 warnings in 1.74s`。
 
 ```bash
 cd web/backend
@@ -350,9 +350,10 @@ iFinD/Choice/Wind 的购买触发条件：
 
 #### P0-007：真实指数行情和 benchmark 验收
 
-- 问题：benchmark 代码已接入，但本地仍可能没有 `000300` 等指数数据。
-- 影响：Alpha/Beta/超额收益仍可能回退为无效常数基准。
-- 推荐方案：导入沪深300、中证500、中证1000、中证全指日线；回测前校验 benchmark 数据覆盖。
+- 状态：基础版已完成；`000300` 已导入，其他指数待扩展。
+- 问题：benchmark 代码已接入且 `000300` 可用，但中证500、中证1000、中证全指等扩展 benchmark 尚未导入。
+- 影响：沪深300 benchmark 可用；其他 benchmark 仍可能缺数据。
+- 推荐方案：继续导入中证500、中证1000、中证全指日线；回测前校验 benchmark 数据覆盖。
 - 验收标准：
   - 600519 示例回测可输出非空 benchmark 曲线。
   - 报告展示超额收益、Alpha、Beta、Information Ratio。
@@ -380,9 +381,10 @@ iFinD/Choice/Wind 的购买触发条件：
 
 #### P1-001：数据和环境复现指纹
 
-- 问题：结果没有完整绑定 git commit、dirty flag、数据文件 hash、data batch、Docker image digest。
-- 推荐方案：创建 run fingerprint，保存到 `backtest_runs` 和报告。
-- 验收标准：任意历史 run 可以定位代码版本、参数 hash、数据 hash、Docker image digest。
+- 状态：基础版已完成。
+- 已实现：`backtest_runs.fingerprint` 保存 git commit/dirty、参数 hash、数据行数/batch、Parquet 文件 hash、LEAN cache object/hash 和 Docker image digest/错误。
+- 剩余：将 fingerprint 展示到前端报告，并增加 Docker digest 在无 Docker 权限环境下的降级说明。
+- 验收标准：任意历史 run 可以定位代码版本、参数 hash、数据 hash、LEAN cache hash 和 Docker image digest/错误原因。
 
 #### P1-002：Paper Replay 每日任务链
 
@@ -404,8 +406,9 @@ iFinD/Choice/Wind 的购买触发条件：
 
 #### P1-005：MySQL 到 LEAN Data 缓存导出闭环
 
-- 问题：MySQL 已保存行情和 LEAN zip/factor/map 文件原文，但 LEAN 引擎实际运行仍直接读取本地 `Data/` 文件缓存。
-- 推荐方案：回测前按 `data_assets.lean_object_id/factor_object_id` 或 `stored_objects` 从 MySQL 恢复所需 LEAN 文件；缓存缺失或 hash 不一致时自动重建。
+- 状态：基础版已完成。
+- 已实现：A 股增量导入从 MySQL canonical 行情全量窗口重建 zip/factor/map；回测前按 `stored_objects` 恢复/校验主标的和 benchmark 的 LEAN 文件，缺失时自动重建并归档。
+- 剩余：扩展到非 A 股资产、分钟线和期货连续合约。
 - 验收标准：
   - 删除单个本地 LEAN zip 后，回测前可从 MySQL 自动恢复。
   - 恢复文件 hash 与 `stored_objects.sha256` 一致。

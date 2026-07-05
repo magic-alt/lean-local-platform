@@ -47,6 +47,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
                 "benchmarkSymbol": str(parameters.get("benchmarkSymbol") or request_data.get("benchmarkSymbol") or "000300").upper(),
                 "benchmarkMarket": "china",
+                "executionPolicy": str(parameters.get("executionPolicy") or request_data.get("executionPolicy") or "next_open"),
                 "lotSize": int(parameters.get("lotSize") or 100),
                 "commissionRate": float(parameters.get("commissionRate") or 0.0003),
                 "minCommission": float(parameters.get("minCommission") or 5.0),

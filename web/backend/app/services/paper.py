@@ -73,7 +73,9 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
     session_id = str(uuid.uuid4())
     now = utc_now()
     name = parameters.get("name") or f"{request.symbol} Paper Replay"
+    nested_parameters = parameters.get("parameters") if isinstance(parameters.get("parameters"), dict) else {}
     clean = {
+        **nested_parameters,
         **parameters,
         "symbol": request.symbol,
         "assetClass": request.asset_class,
@@ -82,6 +84,9 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         "dataType": request.data_type,
         "cash": cash,
     }
+    if request.asset_class == "equity" and request.venue == "china":
+        clean.setdefault("executionPolicy", "next_open")
+        clean.setdefault("benchmarkSymbol", "000300")
     with db() as connection:
         connection.execute(
             """
@@ -131,6 +136,21 @@ def _ashare_bar(symbol: str, trade_date: str) -> dict[str, Any] | None:
             limit 1
             """,
             (symbol, trade_date),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def _market_bar(symbol: str, trade_date: str, *, asset_class: str = "equity", market: str = "china") -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select * from market_daily_bars
+            where symbol = ? and trade_date = ? and asset_class = ? and market = ?
+              and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
+            order by source desc
+            limit 1
+            """,
+            (symbol, trade_date, asset_class, market),
         ).fetchone()
     return row_to_dict(row)
 
@@ -262,6 +282,101 @@ def _signals_for_date(session_id: str, trade_date: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def _session_parameters(session: dict[str, Any]) -> dict[str, Any]:
+    return session.get("parameters") or {}
+
+
+def _execution_policy(session: dict[str, Any]) -> str:
+    parameters = _session_parameters(session)
+    policy = str(parameters.get("executionPolicy") or parameters.get("execution_policy") or "next_open").strip().lower()
+    aliases = {
+        "nextopen": "next_open",
+        "next-close": "next_close",
+        "nextclose": "next_close",
+        "next-vwap": "next_vwap",
+        "nextvwap": "next_vwap",
+        "sameclose": "same_close",
+        "same-day-close": "same_close",
+    }
+    policy = aliases.get(policy, policy)
+    if policy not in {"next_open", "next_close", "next_vwap", "same_close"}:
+        raise ValueError("executionPolicy must be next_open, next_close, next_vwap, or same_close.")
+    if policy == "same_close" and not bool(parameters.get("allowSameDayClose")):
+        raise ValueError("same_close executionPolicy is disabled unless allowSameDayClose is true.")
+    return policy
+
+
+def _next_trade_date(symbol: str, trade_date: str) -> str | None:
+    date_value = parse_date(trade_date).isoformat()
+    with db() as connection:
+        row = connection.execute(
+            """
+            select trade_date
+            from trade_calendar
+            where market = 'china' and is_open = 1 and trade_date > ?
+            order by trade_date asc
+            limit 1
+            """,
+            (date_value,),
+        ).fetchone()
+        if row:
+            return row["trade_date"]
+        row = connection.execute(
+            """
+            select distinct trade_date
+            from ashare_daily_bars
+            where symbol = ? and trade_date > ?
+            order by trade_date asc
+            limit 1
+            """,
+            (symbol, date_value),
+        ).fetchone()
+    return row["trade_date"] if row else None
+
+
+def _signal_execution_date(session: dict[str, Any], signal: dict[str, Any], policy: str) -> str | None:
+    signal_date = parse_date(signal["trade_date"]).isoformat()
+    if policy == "same_close":
+        return signal_date
+    return _next_trade_date(signal["symbol"], signal_date)
+
+
+def _open_signals_due(session: dict[str, Any], execution_date: str, policy: str) -> list[dict[str, Any]]:
+    date_value = parse_date(execution_date).isoformat()
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select * from paper_signals
+            where session_id = ? and trade_date <= ? and status = 'created'
+            order by trade_date asc, created_at asc
+            """,
+            (session["id"], date_value),
+        ).fetchall()
+    due = []
+    for signal in rows_to_dicts(rows):
+        if _signal_execution_date(session, signal, policy) == date_value:
+            due.append(signal)
+    return due
+
+
+def _execution_bar(symbol: str, execution_date: str) -> dict[str, Any] | None:
+    return _ashare_bar(symbol, execution_date)
+
+
+def _execution_price(bar: dict[str, Any], policy: str) -> float:
+    if policy == "next_open":
+        return float(bar["open"])
+    if policy == "next_vwap":
+        amount = bar.get("amount")
+        volume = float(bar.get("volume") or 0)
+        if amount not in (None, "") and volume > 0:
+            value = float(amount)
+            if value > 0:
+                return value / volume
+        return float(bar["close"])
+    return float(bar["close"])
+
+
 def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
@@ -374,7 +489,8 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
     date_value = parse_date(trade_date).isoformat()
     if auto_signal and not _signals_for_date(session_id, date_value):
         generate_daily_signal(session_id, date_value)
-    signals = _open_signals(session_id, date_value)
+    policy = _execution_policy(session)
+    signals = _open_signals_due(session, date_value, policy)
     orders = []
     for signal in signals:
         side = signal["side"]
@@ -388,7 +504,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
             orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", reason))
             _update_signal(signal["id"], "rejected")
             continue
-        bar = _ashare_bar(signal["symbol"], date_value)
+        bar = _execution_bar(signal["symbol"], date_value)
         if not bar:
             orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", "bar_missing"))
             _update_signal(signal["id"], "rejected")
@@ -401,7 +517,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         session = get_session(session_id) or session
         position = _position(session_id, signal["symbol"])
         current_quantity = float((position or {}).get("quantity") or 0)
-        price = float(bar["close"])
+        price = _execution_price(bar, policy)
         lot_size = int((session.get("parameters") or {}).get("lotSize") or 100)
         if side == "buy":
             target = float(signal.get("target_percent") or 1.0)
@@ -432,7 +548,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         orders.append(_record_order(session_id, signal, side, quantity, date_value, price, price, fee, "filled"))
         _update_signal(signal["id"], "filled")
     snapshot = create_snapshot(session_id, date_value)
-    return {"date": date_value, "signals": signals, "orders": orders, "snapshot": snapshot}
+    return {"date": date_value, "executionPolicy": policy, "signals": signals, "orders": orders, "snapshot": snapshot}
 
 
 def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> list[str]:
@@ -510,22 +626,57 @@ def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:
             )
     cash = float(session["cash"])
     equity = cash + market_value
+    benchmark_symbol = str(_session_parameters(session).get("benchmarkSymbol") or "").upper() or None
+    benchmark_close = None
+    benchmark_return = None
+    if benchmark_symbol:
+        benchmark_bar = _market_bar(benchmark_symbol, date_value, asset_class="equity", market="china") or _ashare_bar(benchmark_symbol, date_value)
+        if benchmark_bar:
+            benchmark_close = float(benchmark_bar["close"])
+            with db() as connection:
+                first_snapshot = connection.execute(
+                    """
+                    select benchmark_close from paper_portfolio_snapshots
+                    where session_id = ? and benchmark_symbol = ? and benchmark_close is not null
+                    order by trade_date asc
+                    limit 1
+                    """,
+                    (session_id, benchmark_symbol),
+                ).fetchone()
+            base = float(first_snapshot["benchmark_close"]) if first_snapshot and first_snapshot.get("benchmark_close") else benchmark_close
+            benchmark_return = benchmark_close / base - 1.0 if base else None
     snapshot_id = str(uuid.uuid4())
     now = utc_now()
     with db() as connection:
         connection.execute(
             """
             insert into paper_portfolio_snapshots
-                (id, session_id, trade_date, cash, market_value, equity, positions_json, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, trade_date, cash, market_value, equity, positions_json,
+                 benchmark_symbol, benchmark_close, benchmark_return, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(session_id, trade_date) do update set
                 cash = excluded.cash,
                 market_value = excluded.market_value,
                 equity = excluded.equity,
                 positions_json = excluded.positions_json,
+                benchmark_symbol = excluded.benchmark_symbol,
+                benchmark_close = excluded.benchmark_close,
+                benchmark_return = excluded.benchmark_return,
                 created_at = excluded.created_at
             """,
-            (snapshot_id, session_id, date_value, cash, market_value, equity, json_dump(list_positions(session_id)), now),
+            (
+                snapshot_id,
+                session_id,
+                date_value,
+                cash,
+                market_value,
+                equity,
+                json_dump(list_positions(session_id)),
+                benchmark_symbol,
+                benchmark_close,
+                benchmark_return,
+                now,
+            ),
         )
         connection.execute("update paper_sessions set equity = ?, updated_at = ? where id = ?", (equity, now, session_id))
         row = connection.execute(

@@ -41,6 +41,7 @@ JSON_COLUMNS = {
     "trades_json": "trades",
     "holdings_json": "holdings",
     "performance_json": "performance",
+    "fingerprint_json": "fingerprint",
     "positions_json": "positions",
     "concepts_json": "concepts",
     "qa_report_json": "qa_report",
@@ -998,7 +999,8 @@ def init_db() -> None:
                 queued_at text,
                 started_at text,
                 finished_at text,
-                duration_seconds real
+                duration_seconds real,
+                fingerprint_json text
             );
 
             create table if not exists backtest_results (
@@ -1165,6 +1167,9 @@ def init_db() -> None:
                 market_value real not null,
                 equity real not null,
                 positions_json text not null,
+                benchmark_symbol text,
+                benchmark_close real,
+                benchmark_return real,
                 created_at text not null,
                 unique(session_id, trade_date)
             );
@@ -1271,6 +1276,7 @@ def init_db() -> None:
         _add_column(connection, "backtest_runs", "error_message", "text")
         _add_column(connection, "backtest_runs", "queued_at", "text")
         _add_column(connection, "backtest_runs", "duration_seconds", "real")
+        _add_column(connection, "backtest_runs", "fingerprint_json", "text")
         _add_column(connection, "data_assets", "asset_class", "text not null default 'equity'")
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")
@@ -1281,6 +1287,9 @@ def init_db() -> None:
         _add_column(connection, "data_assets", "lean_object_id", "text")
         _add_column(connection, "data_assets", "factor_object_id", "text")
         _add_column(connection, "object_store_items", "stored_object_id", "text")
+        _add_column(connection, "paper_portfolio_snapshots", "benchmark_symbol", "text")
+        _add_column(connection, "paper_portfolio_snapshots", "benchmark_close", "real")
+        _add_column(connection, "paper_portfolio_snapshots", "benchmark_return", "real")
         _add_column(connection, "universe_membership", "announce_date", "text")
         _add_column(connection, "universe_membership", "effective_date", "text")
         _add_column(connection, "index_membership_events", "adjustment_type", "text")

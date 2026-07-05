@@ -1356,7 +1356,7 @@ function PaperPage() {
       <div className="toolbar"><h1 className="page-title">Paper Replay</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
       <Alert style={{ marginBottom: 16 }} type="info" showIcon message="Paper Replay is a local simulated session registry. It does not connect to brokers or place real orders." />
       <Card title="Create Paper Session">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", cash: 100000 }}>
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", cash: 100000, executionPolicy: "next_open", benchmarkSymbol: "000300" }}>
           <div className="field-grid six">
             <Form.Item name="name" label="Name"><Input placeholder="BTCUSDT paper replay" /></Form.Item>
             <Form.Item name="projectId" label="Project"><Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
@@ -1367,6 +1367,8 @@ function PaperPage() {
             <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
             <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="executionPolicy" label="Execution"><Select options={[{ value: "next_open", label: "Next Open" }, { value: "next_close", label: "Next Close" }, { value: "next_vwap", label: "Next VWAP" }]} /></Form.Item>
+            <Form.Item name="benchmarkSymbol" label="Benchmark"><Input /></Form.Item>
           </div>
           <Button type="primary" htmlType="submit">Create</Button>
         </Form>

@@ -18,6 +18,9 @@ class PaperSessionCreate(BaseModel):
     resolution: str = "daily"
     dataType: str = "trade"
     cash: float = Field(default=100000, gt=0)
+    executionPolicy: str | None = None
+    allowSameDayClose: bool = False
+    benchmarkSymbol: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -695,6 +695,9 @@ export const api = {
     resolution?: string;
     dataType?: string;
     cash?: number;
+    executionPolicy?: string;
+    allowSameDayClose?: boolean;
+    benchmarkSymbol?: string;
     parameters?: Record<string, unknown>;
   }) =>
     request<PaperSession>("/api/paper", {

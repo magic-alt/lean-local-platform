@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from .celery_app import celery_app
-from ..core.config import DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
+from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, utc_now
 from ..lean import (
     LeanPlatformError,
@@ -19,6 +20,8 @@ from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
 from ..services.projects import get_project
 from ..services.result_service import persist_result
+from ..services.lean_cache import ensure_ashare_lean_cache
+from ..services.run_fingerprint import build_run_fingerprint
 from ..services.settings import get_settings
 from ..services.tasks import append_log, get_task, update_task
 
@@ -135,6 +138,26 @@ def run_backtest_task(task_id: str, run_id: str):
         runner = LeanRunner(timeout_seconds=int(settings.get("jobTimeoutSeconds") or 7200))
         container_name = runner.container_name_for(run_id)
         update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
+        lean_cache: dict[str, Any] = {}
+        if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
+            source = str(parameters.get("source") or parameters.get("provider") or "akshare")
+            adjust = str(parameters.get("adjust") or "raw")
+            lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
+            benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
+            if benchmark_symbol:
+                lean_cache["benchmark"] = ensure_ashare_lean_cache(benchmark_symbol, source=source, adjust=adjust)
+        strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
+        update_backtest(
+            run_id,
+            fingerprint_json=build_run_fingerprint(
+                run_id=run_id,
+                parameters=parameters,
+                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                lean_cache=lean_cache,
+                strategy_path=strategy_path,
+                config_path=run_dir / "config.json",
+            ),
+        )
         if project:
             project_path = Path(project["project_path"])
             output = runner.run_backtest(
@@ -182,6 +205,14 @@ def run_backtest_task(task_id: str, run_id: str):
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
             finished_at=finished_at,
+            fingerprint_json=build_run_fingerprint(
+                run_id=run_id,
+                parameters=parameters,
+                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                lean_cache=lean_cache,
+                strategy_path=strategy_path,
+                config_path=run_dir / "config.json",
+            ),
         )
         if status == "success" and output["result_json_path"]:
             run = get_backtest(run_id) or {}

@@ -60,6 +60,10 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
         reason="unit_buy",
     )
     result = match_daily_orders(session["id"], "2024-01-03", auto_signal=False)
+    assert result["executionPolicy"] == "next_open"
+    assert result["orders"] == []
+
+    result = match_daily_orders(session["id"], "2024-01-04", auto_signal=False)
 
     orders = list_orders(session["id"])
     positions = list_positions(session["id"])
@@ -67,7 +71,9 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
 
     assert signal["status"] == "created"
     assert result["orders"][0]["status"] == "filled"
+    assert result["orders"][0]["trade_date"] == "2024-01-04"
+    assert result["orders"][0]["fill_price"] == 10.2
     assert orders[0]["quantity"] % 100 == 0
     assert positions[0]["quantity"] == orders[0]["quantity"]
     assert snapshots[0]["equity"] > 0
-    assert snapshots[0]["positions"][0]["symbol"] == "600519"
+    assert snapshots[-1]["positions"][0]["symbol"] == "600519"

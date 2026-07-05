@@ -92,7 +92,7 @@ def test_paper_match_rejects_when_quality_gate_is_critical(tmp_path, monkeypatch
     from app.services.paper import create_session, create_signal, match_daily_orders
 
     session = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
-    create_signal(session["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    create_signal(session["id"], trade_date="2024-01-02", side="buy", target_percent=1)
     result = match_daily_orders(session["id"], "2024-01-03", auto_signal=False)
 
     assert result["orders"][0]["status"] == "rejected"
