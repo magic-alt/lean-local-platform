@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from redis import Redis
 
 from ..core.config import REDIS_URL
-from ..services.dependencies import dependency_health
+from ..services.dependencies import check_database, dependency_health
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -20,3 +20,8 @@ def health():
 @router.get("/health/dependencies")
 def dependencies():
     return dependency_health()
+
+
+@router.get("/health/database")
+def database():
+    return check_database()

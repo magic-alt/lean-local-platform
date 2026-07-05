@@ -1,0 +1,48 @@
+{
+  "index_code": "CSI300_DEMO",
+  "source": "csi300_pit_public",
+  "initial_announce_date": "2024-01-01",
+  "initial_effective_date": "2024-01-01",
+  "expected_count": 3,
+  "initial_members": [
+    {
+      "symbol": "000001",
+      "name": "Ping An Bank",
+      "listed_date": "1991-04-03"
+    },
+    {
+      "symbol": "000002",
+      "name": "Vanke A",
+      "listed_date": "1991-01-29"
+    },
+    {
+      "symbol": "600519",
+      "name": "Kweichow Moutai",
+      "listed_date": "2001-08-27"
+    }
+  ],
+  "sources": [
+    {
+      "id": "demo-2024-06-01",
+      "announce_date": "2024-05-15",
+      "effective_date": "2024-06-01",
+      "adjustment_type": "regular",
+      "manual_records": [
+        {
+          "symbol": "600000",
+          "name": "Shanghai Pudong Development Bank",
+          "action_type": "add"
+        },
+        {
+          "symbol": "000002",
+          "name": "Vanke A",
+          "action_type": "delete"
+        }
+      ]
+    }
+  ],
+  "validate_as_of_dates": [
+    "2024-05-20",
+    "2024-06-01"
+  ]
+}

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from redis import Redis
 
 from ..core.config import DATA_DIR, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL
+from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
 
@@ -46,14 +47,75 @@ def check_data_dir() -> dict[str, Any]:
     return {"service": "lean_data_dir", "ok": ok, "detail": str(DATA_DIR)}
 
 
+def _database_objects(connection) -> set[str]:
+    if database_backend() == "mysql":
+        rows = connection.execute(
+            """
+            select table_name as name
+            from information_schema.tables
+            where table_schema = database()
+            """
+        ).fetchall()
+        return {row["name"] for row in rows}
+    rows = connection.execute(
+        """
+        select name
+        from sqlite_master
+        where type in ('table', 'view')
+        """
+    ).fetchall()
+    return {row["name"] for row in rows}
+
+
+def check_database() -> dict[str, Any]:
+    expected_tables = ["instruments", "market_daily_bars", "ashare_daily_bars", "universe_membership", "index_membership_pit", "stored_objects"]
+    with db() as connection:
+        tables = _database_objects(connection)
+        missing = [table for table in expected_tables if table not in tables]
+        counts: dict[str, int] = {}
+        for table in expected_tables:
+            if table in tables:
+                counts[table] = int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"])
+        csi300_count = 0
+        if "universe_membership" in tables:
+            csi300_count = int(
+                connection.execute(
+                    """
+                    select count(*) as count
+                    from universe_membership
+                    where universe_code = 'CSI300'
+                    """
+                ).fetchone()["count"]
+            )
+    descriptor = database_descriptor()
+    core_ok = not missing
+    if database_backend() == "mysql":
+        core_ok = core_ok and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
+    else:
+        core_ok = core_ok and counts.get("ashare_daily_bars", 0) > 0 and csi300_count > 0
+    ok = bool(core_ok)
+    detail = {
+        **descriptor,
+        "missingTables": missing,
+        "counts": counts,
+        "csi300MembershipRows": csi300_count,
+    }
+    return {"service": "database", "ok": ok, "detail": detail}
+
+
+def check_sqlite_database() -> dict[str, Any]:
+    return check_database()
+
+
 def dependency_health() -> dict[str, Any]:
     checks = [
+        _timed("database", check_database),
         _timed("redis", check_redis),
         _timed("clickhouse", market_data.ping),
         _timed("docker", check_docker),
         _timed("lean_data_dir", check_data_dir),
     ]
-    critical = [item for item in checks if item["service"] in {"redis", "docker", "lean_data_dir"}]
+    critical = [item for item in checks if item["service"] in {"database", "redis", "docker", "lean_data_dir"}]
     status = "ok" if all(item["ok"] for item in critical) else "degraded"
     return {
         "status": status,

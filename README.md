@@ -108,6 +108,43 @@ cd web/backend
 
 `adj_factor`、`stk_limit`、`trade_cal`、`stock_basic` 会在 token 权限允许时使用；无权限时不会阻断 `pro.daily()` 日线导入。
 
+沪深300 PIT 历史成分需要公告级调样记录，不等同于“当前 300 只股票历史行情”。当前本地库 `web/runtime/HS300.sqlite3` 已写入基于中证指数官网缓存附件重建的真实 `CSI300` PIT 成分：
+
+```bash
+web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --dry-run
+web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --acknowledge-partial-coverage
+```
+
+导入结果保存到 `index_source_artifacts`、`index_membership_events`、`index_membership_pit` 和 `universe_membership`，并生成 `data_sources/csi300_pit_sources.json`。当前覆盖从 `2017-12-08` 起，包含 20 个官方缓存 source artifact、686 条调入/调出事件、643 条 PIT 成分区间；`CSI300_DEMO` 示例数据不会写入生产库。注意这仍不是 2005 年指数发布以来的完整全历史，`2017-12-08` 以前仍需继续补官方公告或专业数据源。
+
+示例 manifest 只用于验证管线：
+
+```bash
+web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --manifest data_sources/csi300_pit_sources.example.json --dry-run --validate
+```
+
+运行主库已切换为 MySQL。`web/runtime/HS300.sqlite3` 只作为一次性迁移源和备份，不再作为默认运行库。
+
+默认连接：
+
+```text
+LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
+LEAN_SQLITE_MIGRATION_SOURCE=web/runtime/HS300.sqlite3
+```
+
+从旧 SQLite 全量导入 MySQL：
+
+```bash
+cd /Users/kaermax/lean-platform
+docker compose up -d mysql
+web/backend/.venv/bin/python scripts/migrate_hs300_sqlite_to_mysql.py \
+  --source web/runtime/HS300.sqlite3 \
+  --database-url mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market \
+  --recreate-database
+```
+
+本次已验证迁移结果：`ashare_daily_bars=1,215,591`、`market_daily_bars=1,215,591`、`ashare_trade_status=1,215,554`、`universe_membership=1,240`、`stored_objects=2,206`、`stored_object_chunks=2,311`；本地 LEAN Data 2,041 个文件、runtime runs 161 个文件、object-store 2 个文件已归档为 MySQL 二进制对象。
+
 导入任意 CSV：
 
 ```bash
@@ -131,12 +168,13 @@ docker info
 
 ## Web 平台
 
-Web 平台现在是一个本地多资产工作台：FastAPI 提供 API，React 提供浏览器界面，Redis + Celery 负责后台回测/优化/报告任务，SQLite 记录项目、任务和结果索引。LEAN Docker 仍是唯一回测执行引擎，平台不依赖 Lean CLI 或 QuantConnect 付费账号。
+Web 平台现在是一个本地多资产工作台：FastAPI 提供 API，React 提供浏览器界面，Redis + Celery 负责后台回测/优化/报告任务，MySQL 作为唯一运行主库保存项目、任务、结果索引、行情、PIT 成分和二进制对象。LEAN Docker 仍是唯一回测执行引擎，平台不依赖 Lean CLI 或 QuantConnect 付费账号。
 
 新增的中型研究平台基础设施使用 Docker Compose 管理：
 
 - Redis：Celery broker/result backend
-- ClickHouse：标准化 OHLCV 数据镜像和查询预览，LEAN zip 文件仍是回测输入真源
+- MySQL：运行事实源，保存 A 股专表、通用 `instruments/market_daily_bars/market_trade_status`、回测结果、对象分块和文件归档
+- ClickHouse：可选标准化 OHLCV 镜像和查询加速，不再作为事实源
 - Prometheus：抓取 `/metrics`
 - Grafana：内部运维看板，默认 `admin/admin`
 
@@ -144,7 +182,13 @@ Web 平台现在是一个本地多资产工作台：FastAPI 提供 API，React �
 
 ```bash
 cd /Users/kaermax/lean-platform
-docker compose up -d redis clickhouse prometheus grafana
+docker compose up -d mysql redis clickhouse prometheus grafana
+```
+
+MySQL 是必需运行库，单独启动：
+
+```bash
+docker compose up -d mysql
 ```
 
 打开：
@@ -184,9 +228,14 @@ redis-server --port 6379
 启动 API：
 
 ```bash
-cd /Users/kaermax/lean-platform/web/backend
-source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+cd /Users/kaermax/lean-platform
+scripts/start_hs300_web.sh
+```
+
+该脚本默认设置 `LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`，并保留 `LEAN_SQLITE_MIGRATION_SOURCE` 指向旧 `HS300.sqlite3`。需要换端口时：
+
+```bash
+LEAN_WEB_PORT=8002 scripts/start_hs300_web.sh
 ```
 
 启动 Celery worker：
@@ -235,6 +284,11 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 
 也可以换端口启动 API，开发模式下通过 `VITE_API_PROXY_TARGET=http://127.0.0.1:8001 npm run dev` 指向新端口。
 
+数据库连接可以在 Web 页面中检查：
+
+- Monitoring 页会显示 MySQL engine、host、database、关键表计数和 `CSI300` membership 行数。
+- A-Share Research 页的 `CSI300 PIT` 标签可以按日期查询 PIT 成分；当前覆盖从 `2017-12-08` 起，早于该日期应返回 0。
+
 数据源注意：
 
 - Yahoo Finance 和 Stooq 是免费公开端点，适合本地实验，但可能因网络、限流、验证码或服务条款变化而失败。
@@ -243,15 +297,21 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 - Crypto 第一版可通过 Binance spot 公共接口下载日线，也可以直接使用 `/Users/kaermax/Data/crypto` 中已有的 LEAN 样例。
 - Futures 第一版优先使用本地 LEAN 格式数据或 CSV 导入；严肃期货研究需要校验合约乘数、mapping/factor 文件、保证金和连续合约规则。
 - A 股和港股第一版只支持日线回测；平台会自动补 LEAN 本地 market-hours 和 symbol-properties 配置，不修改 LEAN 引擎源码。
-- Web 平台会把下载后的日线数据转换成 LEAN zip 格式并登记到 SQLite；回测时仍由 Docker 版 LEAN 读取本地 `Data/`。
+- Web 平台会把下载后的日线数据写入 MySQL 通用行情表，同时生成 LEAN zip 作为回测缓存；回测时仍由 Docker 版 LEAN 读取本地 `Data/`。
 
-状态和索引存入 SQLite：
+运行主库：
 
 ```text
-web/runtime/lean_web.sqlite3
+mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 ```
 
-原始 LEAN JSON、日志和报告仍按 run 保存在：
+SQLite 迁移源/备份：
+
+```text
+web/runtime/HS300.sqlite3
+```
+
+原始 LEAN JSON、日志和报告仍按 run 保存在文件系统缓存，同时归档到 MySQL `stored_objects/stored_object_chunks`：
 
 ```text
 web/runtime/runs/

@@ -39,7 +39,7 @@ def test_query_sqlite_bars_reads_local_ashare_table(tmp_path, monkeypatch):
     )
 
     assert result["enabled"] is True
-    assert result["source"] == "sqlite"
+    assert result["source"] == "database"
     assert result["count"] == 1
     assert result["items"][0] == {
         "timestamp": "2026-07-03",
@@ -82,7 +82,7 @@ def test_data_query_api_selects_sqlite_source(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source"] == "sqlite"
+    assert payload["source"] == "database"
     assert payload["count"] == 1
     assert payload["items"][0]["timestamp"] == "2026-07-03"
     assert payload["items"][0]["close"] == 1460.0

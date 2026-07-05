@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from .market_repository import upsert_instrument, upsert_market_daily_bars, upsert_market_trade_status
 
 
 def _bool(value: Any) -> int:
@@ -202,6 +203,22 @@ def upsert_security(
                 now,
             ),
         )
+    upsert_instrument(
+        symbol=symbol,
+        name=name or symbol,
+        asset_class="equity",
+        market="china",
+        venue="china",
+        exchange=exchange or infer_exchange(symbol),
+        currency="CNY",
+        listed_date=listed_date,
+        delisted_date=delisted_date,
+        status="delisted" if status == "delisted" else "active",
+        lot_size=100,
+        tick_size=0.01,
+        metadata={"source_status": status, "is_st": bool(is_st), "industry": industry, "concepts": concepts or []},
+        source="securities",
+    )
 
 
 def get_security(symbol: str) -> dict[str, Any] | None:
@@ -288,6 +305,22 @@ def upsert_daily_bars(rows: list[dict[str, Any]], source: str, batch_id: str, ad
                     now,
                 ),
             )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["symbol"], []).append(row)
+    for symbol, symbol_rows in grouped.items():
+        upsert_market_daily_bars(
+            symbol_rows,
+            symbol=symbol,
+            asset_class="equity",
+            market="china",
+            venue="china",
+            source=source,
+            batch_id=batch_id,
+            resolution="daily",
+            data_type="trade",
+            adjust=adjust,
+        )
 
 
 def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) -> None:
@@ -330,6 +363,19 @@ def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) 
                     batch_id,
                 ),
             )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["symbol"], []).append(row)
+    for symbol, symbol_rows in grouped.items():
+        upsert_market_trade_status(
+            symbol_rows,
+            symbol=symbol,
+            asset_class="equity",
+            market="china",
+            venue="china",
+            source=source,
+            batch_id=batch_id,
+        )
 
 
 def import_trade_status(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:

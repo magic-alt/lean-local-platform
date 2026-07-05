@@ -46,7 +46,19 @@ PROJECTS_DIR = RUNTIME_DIR / "projects"
 RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
 REPORTS_DIR = RUNTIME_DIR / "reports"
-DB_PATH = RUNTIME_DIR / "lean_web.sqlite3"
+DB_PATH = Path(os.environ.get("LEAN_WEB_DB_PATH", RUNTIME_DIR / "HS300.sqlite3")).expanduser()
+SQLITE_MIGRATION_SOURCE = Path(os.environ.get("LEAN_SQLITE_MIGRATION_SOURCE", DB_PATH)).expanduser()
+MYSQL_HOST = os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.environ.get("LEAN_MYSQL_PORT", "3306"))
+MYSQL_DATABASE = os.environ.get("LEAN_MYSQL_DATABASE", "lean_market")
+MYSQL_USER = os.environ.get("LEAN_MYSQL_USER", "lean")
+MYSQL_PASSWORD = os.environ.get("LEAN_MYSQL_PASSWORD", "lean")
+DEFAULT_MYSQL_DATABASE_URL = (
+    f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
+)
+DATABASE_URL = os.environ.get("LEAN_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_MYSQL_DATABASE_URL
+DB_OBJECT_CHUNK_BYTES = int(os.environ.get("LEAN_DB_OBJECT_CHUNK_BYTES", str(1024 * 1024)))
+DB_OBJECT_STORE_ENABLED = os.environ.get("LEAN_DB_OBJECT_STORE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
 
 DEFAULT_DOCKER_IMAGE = os.environ.get("LEAN_DOCKER_IMAGE", "quantconnect/lean:latest")
 DEFAULT_RESEARCH_IMAGE = os.environ.get("LEAN_RESEARCH_IMAGE", "quantconnect/research:latest")

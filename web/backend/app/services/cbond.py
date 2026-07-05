@@ -7,6 +7,7 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, rows_to_dicts, utc_now
 from ..lean import normalize_symbol, parse_date
+from .market_repository import upsert_instrument, upsert_market_daily_bars
 
 
 INACTIVE_CALL_STATUSES = {"cancelled", "expired", "withdrawn", "completed"}
@@ -54,10 +55,15 @@ def _premium_decimal(value: Any) -> float | None:
 def import_cbond_terms(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
     now = utc_now()
     count = 0
+    instruments: list[dict[str, Any]] = []
     with db() as connection:
         for record in records:
             bond_code = _bond_code(record.get("bond_code") or record.get("bondCode"))
             stock_symbol = _stock_symbol(record.get("stock_symbol") or record.get("stockSymbol"))
+            bond_name = str(record.get("bond_name") or record.get("bondName") or bond_code)
+            listed_date = _optional_date(record.get("listed_date") or record.get("listedDate"))
+            delisted_date = _optional_date(record.get("delisted_date") or record.get("delistedDate"))
+            maturity_date = _optional_date(record.get("maturity_date") or record.get("maturityDate"))
             connection.execute(
                 """
                 insert into cbond_securities
@@ -80,11 +86,11 @@ def import_cbond_terms(records: list[dict[str, Any]], source: str = "manual") ->
                 """,
                 (
                     bond_code,
-                    str(record.get("bond_name") or record.get("bondName") or bond_code),
+                    bond_name,
                     stock_symbol,
-                    _optional_date(record.get("listed_date") or record.get("listedDate")),
-                    _optional_date(record.get("delisted_date") or record.get("delistedDate")),
-                    _optional_date(record.get("maturity_date") or record.get("maturityDate")),
+                    listed_date,
+                    delisted_date,
+                    maturity_date,
                     record.get("rating"),
                     _number(record.get("conversion_price") or record.get("conversionPrice")),
                     _number(record.get("issue_size") or record.get("issueSize")),
@@ -95,6 +101,26 @@ def import_cbond_terms(records: list[dict[str, Any]], source: str = "manual") ->
                 ),
             )
             count += 1
+            instruments.append(
+                {
+                    "symbol": bond_code,
+                    "name": bond_name,
+                    "asset_class": "cbond",
+                    "market": "china",
+                    "venue": "china",
+                    "exchange": None,
+                    "currency": "CNY",
+                    "underlying_symbol": stock_symbol,
+                    "listed_date": listed_date,
+                    "delisted_date": delisted_date,
+                    "expiry_date": maturity_date,
+                    "status": "active",
+                    "metadata": {"rating": record.get("rating"), "terms": record.get("terms") or {}},
+                    "source": record.get("source") or source,
+                }
+            )
+    for instrument in instruments:
+        upsert_instrument(**instrument)
     return {"count": count}
 
 
@@ -165,6 +191,31 @@ def import_cbond_daily(records: list[dict[str, Any]], source: str = "manual") ->
                 ),
             )
             count += 1
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        bond_code = _bond_code(record.get("bond_code") or record.get("bondCode"))
+        grouped.setdefault(bond_code, []).append(
+            {
+                "symbol": bond_code,
+                "trade_date": _date(record.get("trade_date") or record.get("tradeDate"), "trade_date"),
+                "open": record.get("open") or record.get("close"),
+                "high": record.get("high") or record.get("close"),
+                "low": record.get("low") or record.get("close"),
+                "close": record.get("close"),
+                "volume": record.get("volume"),
+                "amount": record.get("amount"),
+            }
+        )
+    for bond_code, symbol_rows in grouped.items():
+        upsert_market_daily_bars(
+            symbol_rows,
+            symbol=bond_code,
+            asset_class="cbond",
+            market="china",
+            venue="china",
+            source=source,
+            batch_id=batch_id,
+        )
     return {"batchId": batch_id, "count": count}
 
 

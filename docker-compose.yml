@@ -6,6 +6,28 @@ services:
     volumes:
       - redis-data:/data
 
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: lean-root
+      MYSQL_DATABASE: lean_market
+      MYSQL_USER: lean
+      MYSQL_PASSWORD: lean
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=1G
+      - --max-allowed-packet=256M
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ulean", "-plean"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.12-alpine
     environment:
@@ -55,6 +77,8 @@ services:
       - "8000:8000"
     environment:
       REDIS_URL: redis://redis:6379/0
+      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_SQLITE_MIGRATION_SOURCE: /workspace/web/runtime/HS300.sqlite3
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -68,8 +92,12 @@ services:
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - redis
-      - clickhouse
+      redis:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
 
   worker:
     profiles: ["app"]
@@ -79,6 +107,8 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
     environment:
       REDIS_URL: redis://redis:6379/0
+      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_SQLITE_MIGRATION_SOURCE: /workspace/web/runtime/HS300.sqlite3
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -90,11 +120,16 @@ services:
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - redis
-      - clickhouse
+      redis:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
 
 volumes:
   redis-data:
+  mysql-data:
   clickhouse-data:
   prometheus-data:
   grafana-data:

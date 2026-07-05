@@ -40,16 +40,16 @@ DEPENDENCY_UP = _metric(
 TASK_STATUS = _metric(
     Gauge,
     "lean_tasks_status_total",
-    "Task count grouped by task kind and status from SQLite.",
+    "Task count grouped by task kind and status from the runtime database.",
     ["kind", "status"],
 )
 BACKTEST_STATUS = _metric(
     Gauge,
     "lean_backtests_status_total",
-    "Backtest run count grouped by status from SQLite.",
+    "Backtest run count grouped by status from the runtime database.",
     ["status"],
 )
-DATA_ASSETS_TOTAL = _metric(Gauge, "lean_data_assets_total", "Number of imported data assets indexed in SQLite.")
+DATA_ASSETS_TOTAL = _metric(Gauge, "lean_data_assets_total", "Number of imported data assets indexed in the runtime database.")
 
 
 async def metrics_middleware(request: Request, call_next: Callable) -> Response:

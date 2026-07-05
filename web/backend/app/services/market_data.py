@@ -262,7 +262,7 @@ def _sqlite_symbol(symbol: str, venue: str | None = None) -> str:
     return value
 
 
-def query_sqlite_bars(
+def query_database_bars(
     *,
     asset_class: str = "equity",
     symbol: str,
@@ -277,22 +277,11 @@ def query_sqlite_bars(
     venue_key = (venue or "").strip().lower()
     resolution_key = resolution.strip().lower()
     data_type_key = data_type.strip().lower()
-    if (
-        asset_class_key != "equity"
-        or venue_key not in {"", "china"}
-        or resolution_key != "daily"
-        or data_type_key != "trade"
-    ):
-        return {
-            "enabled": True,
-            "source": "sqlite",
-            "items": [],
-            "count": 0,
-            "message": "Local SQLite preview currently supports China equity daily trade bars.",
-        }
-
-    predicates = ["symbol = ?"]
-    params: list[Any] = [_sqlite_symbol(symbol, "china")]
+    predicates = ["asset_class = ?", "symbol = ?", "resolution = ?", "data_type = ?"]
+    params: list[Any] = [asset_class_key, _sqlite_symbol(symbol, "china") if asset_class_key == "equity" and venue_key == "china" else symbol.upper(), resolution_key, data_type_key]
+    if venue_key:
+        predicates.append("venue = ?")
+        params.append(venue_key)
     if start_date:
         predicates.append("trade_date >= ?")
         params.append(start_date)
@@ -304,7 +293,7 @@ def query_sqlite_bars(
         rows = connection.execute(
             f"""
             select trade_date, open, high, low, close, volume, source
-            from ashare_daily_bars
+            from market_daily_bars
             where {" and ".join(predicates)}
             order by trade_date asc, source asc
             limit ?
@@ -323,4 +312,41 @@ def query_sqlite_bars(
         }
         for row in rows
     ]
-    return {"enabled": True, "source": "sqlite", "items": items, "count": len(items)}
+    if not items and asset_class_key == "equity" and venue_key == "china" and resolution_key == "daily" and data_type_key == "trade":
+        fallback_predicates = ["symbol = ?"]
+        fallback_params: list[Any] = [_sqlite_symbol(symbol, "china")]
+        if start_date:
+            fallback_predicates.append("trade_date >= ?")
+            fallback_params.append(start_date)
+        if end_date:
+            fallback_predicates.append("trade_date <= ?")
+            fallback_params.append(end_date)
+        fallback_params.append(_bounded_limit(limit))
+        with db() as connection:
+            rows = connection.execute(
+                f"""
+                select trade_date, open, high, low, close, volume, source
+                from ashare_daily_bars
+                where {" and ".join(fallback_predicates)}
+                order by trade_date asc, source asc
+                limit ?
+                """,
+                fallback_params,
+            ).fetchall()
+        items = [
+            {
+                "timestamp": row["trade_date"],
+                "open": row["open"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close"],
+                "volume": row["volume"],
+                "source": row["source"],
+            }
+            for row in rows
+        ]
+    return {"enabled": True, "source": "database", "items": items, "count": len(items)}
+
+
+def query_sqlite_bars(**kwargs: Any) -> dict[str, Any]:
+    return query_database_bars(**kwargs)

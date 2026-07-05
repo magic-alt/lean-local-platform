@@ -49,10 +49,13 @@ import {
   ChartData,
   DataQueryRow,
   DataQueryResult,
+  DatabaseHealth,
   DataProvider,
   DependencyHealth,
   FactorEvaluationResult,
   FuturesMainItem,
+  IndexMember,
+  IndexMembersResult,
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
@@ -92,7 +95,7 @@ const defaultSettings: AppSettings = {
 };
 
 const defaultBarPreviewValues = {
-  source: "sqlite",
+  source: "database",
   assetClass: "equity",
   symbol: "000001",
   market: "china",
@@ -695,7 +698,7 @@ function DataPage() {
     });
     setQueryResult(result);
     if (!result.enabled) {
-      message.warning(values.source === "sqlite" ? "Local SQLite query is unavailable." : "ClickHouse is not enabled or not reachable.");
+      message.warning(values.source === "clickhouse" ? "ClickHouse is not enabled or not reachable." : "Database query is unavailable.");
     }
   }
 
@@ -731,7 +734,7 @@ function DataPage() {
             <Select
               style={{ width: 170 }}
               options={[
-                { value: "sqlite", label: "Local SQLite" },
+                { value: "database", label: "MySQL Database" },
                 { value: "clickhouse", label: "ClickHouse" }
               ]}
             />
@@ -1039,13 +1042,23 @@ function formatPercent(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
 }
 
+function detailText(detail: string | Record<string, unknown>) {
+  return typeof detail === "string" ? detail : JSON.stringify(detail);
+}
+
 function P2ResearchPage() {
   const engines = useAsyncData(api.factorEngines, { available: { python: true }, selected: "python" });
   const evaluations = useAsyncData(api.factorEvaluations, { items: [], count: 0 });
+  const databaseHealth = useAsyncData<DatabaseHealth>(api.databaseHealth, {
+    service: "database",
+    ok: false,
+    detail: { engine: "", missingTables: [], counts: {}, csi300MembershipRows: 0 }
+  });
   const [factorResult, setFactorResult] = useState<FactorEvaluationResult>();
   const [cbondPool, setCbondPool] = useState<{ asOfDate: string; count: number; items: CBondPoolItem[] }>();
   const [cbondRisk, setCbondRisk] = useState<{ asOfDate: string; count: number; items: CBondRiskItem[] }>();
   const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
+  const [pitMembers, setPitMembers] = useState<IndexMembersResult>();
 
   async function evaluate(values: {
     factorName: string;
@@ -1075,14 +1088,78 @@ function P2ResearchPage() {
     setFuturesMonitor(await api.futuresAgriMain(values));
   }
 
+  async function queryPit(values: { universeCode: string; asOfDate: string }) {
+    setPitMembers(await api.indexMembersAsOf(values.universeCode, values.asOfDate));
+  }
+
   return (
     <>
       <div className="toolbar">
         <h1 className="page-title">A-Share Research</h1>
-        <Button icon={<ReloadOutlined />} onClick={() => { engines.reload(); evaluations.reload(); }}>Refresh</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => { engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
       </div>
       <Tabs
         items={[
+          {
+            key: "pit",
+            label: "CSI300 PIT",
+            children: (
+              <>
+                <div className="grid">
+                  <Card><Statistic title="Database" value={databaseHealth.data.ok ? "ready" : "check"} /></Card>
+                  <Card><Statistic title="CSI300 Rows" value={databaseHealth.data.detail.csi300MembershipRows} /></Card>
+                  <Card><Statistic title="Daily Bars" value={databaseHealth.data.detail.counts.ashare_daily_bars ?? 0} /></Card>
+                  <Card><Statistic title="PIT Rows" value={databaseHealth.data.detail.counts.index_membership_pit ?? 0} /></Card>
+                </div>
+                <Card title="Database" style={{ marginTop: 16 }}>
+                  <Space wrap>
+                    <Tag color={databaseHealth.data.ok ? "success" : "error"}>{databaseHealth.data.ok ? "ready" : "not ready"}</Tag>
+                    <Tag>{databaseHealth.data.detail.engine || "unknown engine"}</Tag>
+                    <Tag>{databaseHealth.data.detail.database || databaseHealth.data.detail.path || "unknown database"}</Tag>
+                    {databaseHealth.data.detail.host && <Tag>{databaseHealth.data.detail.host}:{databaseHealth.data.detail.port}</Tag>}
+                    {databaseHealth.data.detail.missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
+                  </Space>
+                </Card>
+                <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
+                  <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>
+                    <Form.Item name="universeCode" rules={[{ required: true }]}><Input style={{ width: 140 }} /></Form.Item>
+                    <Form.Item name="asOfDate" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Button type="primary" htmlType="submit">Query</Button>
+                  </Form>
+                  <Alert
+                    style={{ marginTop: 12 }}
+                    type="info"
+                    showIcon
+                    message="Current CSI300 PIT coverage starts at 2017-12-08. Dates before that should return 0 until 2005-2017 official history is imported."
+                  />
+                </Card>
+                <div className="grid" style={{ marginTop: 16 }}>
+                  <Card><Statistic title="Universe" value={pitMembers?.universe ?? "CSI300"} /></Card>
+                  <Card><Statistic title="As Of" value={pitMembers?.asOfDate ?? "-"} /></Card>
+                  <Card><Statistic title="Members" value={pitMembers?.count ?? 0} /></Card>
+                  <Card><Statistic title="Coverage" value={pitMembers && pitMembers.count === 0 ? "none" : "partial"} /></Card>
+                </div>
+                <Card title="Members" style={{ marginTop: 16 }}>
+                  <Table<IndexMember>
+                    size="small"
+                    rowKey={(row) => `${row.universe_code}-${row.symbol}-${row.start_date}`}
+                    dataSource={pitMembers?.items ?? []}
+                    pagination={{ pageSize: 20 }}
+                    columns={[
+                      { title: "Symbol", dataIndex: "symbol", width: 100 },
+                      { title: "Name", dataIndex: "name", ellipsis: true },
+                      { title: "Start", dataIndex: "start_date" },
+                      { title: "End", dataIndex: "end_date", render: (value) => value ?? "-" },
+                      { title: "Exchange", dataIndex: "exchange" },
+                      { title: "Listed", dataIndex: "listed_date", render: (value) => value ?? "-" },
+                      { title: "Status", dataIndex: "status" },
+                      { title: "ST", dataIndex: "is_st", render: (value) => <Tag color={value ? "warning" : "success"}>{value ? "yes" : "no"}</Tag> }
+                    ]}
+                  />
+                </Card>
+              </>
+            )
+          },
           {
             key: "factors",
             label: "Factors",
@@ -1427,13 +1504,13 @@ function MonitoringPage() {
               title: "Status",
               dataIndex: "ok",
               render: (ok: boolean, item) => (
-                <Tooltip title={item.detail}>
+                <Tooltip title={detailText(item.detail)}>
                   <Tag color={ok ? "success" : "error"}>{ok ? "up" : "down"}</Tag>
                 </Tooltip>
               )
             },
             { title: "Latency", dataIndex: "latency_ms", render: (value) => value === undefined ? "-" : `${value} ms` },
-            { title: "Detail", dataIndex: "detail", ellipsis: true }
+            { title: "Detail", dataIndex: "detail", ellipsis: true, render: detailText }
           ]}
         />
       </Card>

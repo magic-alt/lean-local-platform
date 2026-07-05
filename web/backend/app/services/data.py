@@ -1,6 +1,8 @@
 import os
+from pathlib import Path
 from typing import Any
 
+from ..core.config import REPO_ROOT
 from ..db import db, json_dump, utc_now
 from ..lean import (
     fetch_akshare_rows,
@@ -28,6 +30,8 @@ from ..domain.assets import (
     venue_key,
 )
 from .market_data import mirror_rows
+from .db_object_store import put_file
+from .market_repository import upsert_market_daily_bars
 from .tushare_adapter import fetch_tushare_rows
 from .ashare_repository import (
     create_import_batch,
@@ -284,8 +288,9 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
         cursor = connection.execute(
             """
             insert into data_assets
-                (symbol, asset_class, venue, resolution, data_type, source, rows, first_date, last_date, lean_file, metadata_json, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (symbol, asset_class, venue, resolution, data_type, source, rows, first_date, last_date,
+                 lean_file, lean_object_id, factor_object_id, metadata_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata["symbol"],
@@ -298,11 +303,53 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
                 metadata["first_date"],
                 metadata["last_date"],
                 metadata["lean_file"],
+                metadata.get("lean_object_id"),
+                metadata.get("factor_object_id"),
                 json_dump(metadata),
                 created_at,
             ),
         )
         metadata["id"] = cursor.lastrowid
+    return metadata
+
+
+def _repo_path(relative_or_absolute: str | None) -> Path | None:
+    if not relative_or_absolute:
+        return None
+    path = Path(relative_or_absolute)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def attach_database_objects(metadata: dict[str, Any]) -> dict[str, Any]:
+    lean_path = _repo_path(metadata.get("lean_file"))
+    if lean_path and lean_path.exists():
+        stored = put_file(
+            "lean-data",
+            metadata["lean_file"],
+            lean_path,
+            metadata={
+                "symbol": metadata.get("symbol"),
+                "asset_class": metadata.get("asset_class") or metadata.get("assetClass"),
+                "venue": metadata.get("venue") or metadata.get("market"),
+                "resolution": metadata.get("resolution"),
+                "data_type": metadata.get("data_type") or metadata.get("dataType"),
+                "source": metadata.get("source"),
+                "batch_id": metadata.get("batch_id"),
+            },
+        )
+        metadata["lean_object_id"] = stored.get("id")
+    factor_file = metadata.get("factor_file")
+    if isinstance(factor_file, dict):
+        factor_path = _repo_path(factor_file.get("factor_file"))
+        if factor_path and factor_path.exists():
+            stored = put_file(
+                "lean-factor-files",
+                factor_file["factor_file"],
+                factor_path,
+                content_type="text/csv",
+                metadata={"symbol": metadata.get("symbol"), "source": metadata.get("source"), "batch_id": metadata.get("batch_id")},
+            )
+            metadata["factor_object_id"] = stored.get("id")
     return metadata
 
 
@@ -388,6 +435,28 @@ def _has_official_trade_status(rows: list[dict[str, Any]]) -> bool:
     return any(any(row.get(field) is not None for field in status_fields) for row in rows)
 
 
+def _repair_ohlc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repaired = []
+    for row in rows:
+        prices = [row["open"], row["high"], row["low"], row["close"]]
+        high = max(prices)
+        low = min(prices)
+        if high != row["high"] or low != row["low"]:
+            repaired.append(
+                {
+                    "symbol": row["symbol"],
+                    "trade_date": row["trade_date"],
+                    "old_high": row["high"],
+                    "old_low": row["low"],
+                    "new_high": high,
+                    "new_low": low,
+                }
+            )
+            row["high"] = high
+            row["low"] = low
+    return repaired
+
+
 def import_ashare_research_data(
     *,
     symbol: str,
@@ -404,6 +473,8 @@ def import_ashare_research_data(
     data_type: str,
     start_date: str | None,
     end_date: str | None,
+    allow_missing_trade_dates: bool = False,
+    repair_ohlc_errors: bool = False,
 ) -> dict[str, Any]:
     batch = create_import_batch(
         provider,
@@ -432,6 +503,7 @@ def import_ashare_research_data(
             batch_id=batch_id,
             adjust=adjust or "raw",
         )
+        repaired_ohlc_rows = _repair_ohlc_rows(normalized_rows) if repair_ohlc_errors else []
         row_dates = [row["trade_date"] for row in normalized_rows]
         calendar_dates = trade_dates_between(market, min(row_dates), max(row_dates)) if row_dates else []
         if not calendar_dates and row_dates:
@@ -448,6 +520,14 @@ def import_ashare_research_data(
             warnings.append("trade_status_official_fields_used")
         else:
             warnings.append("trade_status_inferred_from_ohlcv")
+        if repaired_ohlc_rows:
+            warnings.append(f"ohlc_rows_repaired={repaired_ohlc_rows[:10]}")
+        if allow_missing_trade_dates and qa_report.get("missing_trade_dates"):
+            remaining_errors = [error for error in qa_report.get("errors", []) if not str(error).startswith("missing_trade_dates=")]
+            if len(remaining_errors) != len(qa_report.get("errors", [])):
+                qa_report["errors"] = remaining_errors
+                qa_report["passed"] = not remaining_errors
+                warnings.append(f"missing_trade_dates_allowed={qa_report['missing_trade_dates'][:10]}")
         assert_quality_passed(qa_report)
         first_date = normalized_rows[0]["trade_date"]
         last_date = normalized_rows[-1]["trade_date"]
@@ -492,6 +572,7 @@ def import_ashare_research_data(
             metadata["clickhouse"] = mirror_rows(metadata, lean_rows)
         except Exception as exc:
             metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
+        attach_database_objects(metadata)
         asset = record_data_asset(metadata)
         finish_import_batch(batch_id, "success", qa_report=qa_report)
         return asset
@@ -517,6 +598,8 @@ def fetch_and_import_symbol(
     start_date: str | None = None,
     end_date: str | None = None,
     adjust: str = "",
+    allow_missing_trade_dates: bool = False,
+    repair_ohlc_errors: bool = False,
 ) -> dict[str, Any]:
     asset_class = asset_class_key(asset_class)
     resolution = resolution_key(resolution)
@@ -560,6 +643,8 @@ def fetch_and_import_symbol(
             data_type=data_type,
             start_date=start_date,
             end_date=end_date,
+            allow_missing_trade_dates=allow_missing_trade_dates,
+            repair_ohlc_errors=repair_ohlc_errors,
         )
     if asset_class == "crypto":
         metadata = write_lean_crypto_daily_zip(symbol, rows, source, overwrite=overwrite, venue=venue or market, data_type=data_type)
@@ -577,8 +662,20 @@ def fetch_and_import_symbol(
     metadata["data_type"] = data_type
     metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
+    upsert_market_daily_bars(
+        rows,
+        symbol=symbol,
+        asset_class=asset_class,
+        market=market,
+        venue=venue or market,
+        source=source,
+        resolution=resolution,
+        data_type=data_type,
+        adjust=adjust or "raw",
+    )
     try:
         metadata["clickhouse"] = mirror_rows(metadata, rows)
     except Exception as exc:
         metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
+    attach_database_objects(metadata)
     return record_data_asset(metadata)

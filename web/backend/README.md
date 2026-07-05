@@ -1,11 +1,11 @@
 # Backend
 
-The backend is a FastAPI API plus Celery worker. Redis is used as the broker/result backend, and SQLite stores local metadata under `docker-demo/web/runtime/`.
+The backend is a FastAPI API plus Celery worker. Redis is used as the broker/result backend, and MySQL is the runtime database for metadata, market data, PIT memberships, results, and stored objects. SQLite is only used as a migration source or isolated test backend.
 
 Install:
 
 ```bash
-cd /Users/kaermax/Lean/docker-demo/web/backend
+cd /Users/kaermax/lean-platform/web/backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -35,6 +35,7 @@ Useful environment variables:
 
 ```bash
 export REDIS_URL=redis://127.0.0.1:6379/0
+export LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 export LEAN_DOCKER_IMAGE=quantconnect/lean:latest
 export LEAN_RESEARCH_IMAGE=quantconnect/research:latest
 ```

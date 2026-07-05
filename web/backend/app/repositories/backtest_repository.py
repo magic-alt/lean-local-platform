@@ -109,6 +109,8 @@ def save_result(job_id: str, payload: dict[str, Any], created_at: str) -> dict[s
         "statistics_json": payload.get("statistics") or {},
         "performance_json": payload.get("performance") or {},
         "raw_result_path": payload.get("raw_result_path"),
+        "raw_result_object_id": payload.get("raw_result_object_id"),
+        "summary_object_id": payload.get("summary_object_id"),
         "created_at": created_at,
     }
     with db() as connection:
@@ -116,8 +118,9 @@ def save_result(job_id: str, payload: dict[str, Any], created_at: str) -> dict[s
             """
             insert into backtest_results
                 (id, job_id, summary_metrics_json, equity_curve_json, drawdown_curve_json,
-                 orders_json, trades_json, holdings_json, statistics_json, performance_json, raw_result_path, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 orders_json, trades_json, holdings_json, statistics_json, performance_json, raw_result_path,
+                 raw_result_object_id, summary_object_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(job_id) do update set
                 summary_metrics_json = excluded.summary_metrics_json,
                 equity_curve_json = excluded.equity_curve_json,
@@ -128,6 +131,8 @@ def save_result(job_id: str, payload: dict[str, Any], created_at: str) -> dict[s
                 statistics_json = excluded.statistics_json,
                 performance_json = excluded.performance_json,
                 raw_result_path = excluded.raw_result_path,
+                raw_result_object_id = excluded.raw_result_object_id,
+                summary_object_id = excluded.summary_object_id,
                 created_at = excluded.created_at
             """,
             (
@@ -142,6 +147,8 @@ def save_result(job_id: str, payload: dict[str, Any], created_at: str) -> dict[s
                 json_dump(values["statistics_json"]),
                 json_dump(values["performance_json"]),
                 values["raw_result_path"],
+                values["raw_result_object_id"],
+                values["summary_object_id"],
                 values["created_at"],
             ),
         )

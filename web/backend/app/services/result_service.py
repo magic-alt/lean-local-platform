@@ -8,6 +8,7 @@ from typing import Any
 from ..db import utc_now
 from ..lean import extract_chart_data, extract_statistics, load_json
 from ..repositories.backtest_repository import get_result, save_result
+from .db_object_store import put_file
 from .ashare_repository import get_security
 
 
@@ -284,6 +285,23 @@ def parse_result_payload(
 
 def persist_result(job_id: str, result_json: Path, summary_json: Path | None, run: dict[str, Any]) -> dict[str, Any]:
     payload = parse_result_payload(result_json, summary_json, run)
+    raw_object = put_file(
+        "backtest-results",
+        f"{job_id}/result.json",
+        result_json,
+        content_type="application/json",
+        metadata={"job_id": job_id, "kind": "lean-result"},
+    )
+    payload["raw_result_object_id"] = raw_object.get("id")
+    if summary_json and summary_json.exists():
+        summary_object = put_file(
+            "backtest-results",
+            f"{job_id}/summary.json",
+            summary_json,
+            content_type="application/json",
+            metadata={"job_id": job_id, "kind": "lean-summary"},
+        )
+        payload["summary_object_id"] = summary_object.get("id")
     return save_result(job_id, payload, utc_now())
 
 

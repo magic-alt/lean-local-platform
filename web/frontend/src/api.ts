@@ -95,7 +95,7 @@ export interface AppSettings {
 export interface DependencyStatus {
   service: string;
   ok: boolean;
-  detail: string;
+  detail: string | Record<string, unknown>;
   latency_ms?: number;
 }
 
@@ -122,6 +122,46 @@ export interface Universe {
   asOf: string;
   source: string;
   components: UniverseComponent[];
+}
+
+export interface DatabaseHealth {
+  service: string;
+  ok: boolean;
+  detail: {
+    engine?: string;
+    host?: string;
+    port?: number;
+    database?: string;
+    user?: string;
+    path?: string;
+    exists?: boolean;
+    missingTables: string[];
+    counts: Record<string, number>;
+    csi300MembershipRows: number;
+  };
+  latency_ms?: number;
+}
+
+export interface IndexMember {
+  universe_code: string;
+  symbol: string;
+  start_date: string;
+  end_date?: string | null;
+  weight?: number | null;
+  name?: string | null;
+  exchange?: string | null;
+  listed_date?: string | null;
+  delisted_date?: string | null;
+  status?: string | null;
+  is_st?: boolean | number | null;
+  industry?: string | null;
+}
+
+export interface IndexMembersResult {
+  universe: string;
+  asOfDate: string;
+  items: IndexMember[];
+  count: number;
 }
 
 export interface Project {
@@ -422,6 +462,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string; redis: boolean }>("/api/health"),
   dependencyHealth: () => request<DependencyHealth>("/api/health/dependencies"),
+  databaseHealth: () => request<DatabaseHealth>("/api/health/database"),
   settings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", {
@@ -433,6 +474,10 @@ export const api = {
   assetClasses: () => request<AssetClassInfo[]>("/api/asset-classes"),
   markets: () => request<MarketInfo[]>("/api/markets"),
   djiaUniverse: () => request<Universe>("/api/universes/djia"),
+  indexMembersAsOf: (universeCode: string, asOfDate: string) =>
+    request<IndexMembersResult>(
+      `/api/pit/index-members/${encodeURIComponent(universeCode)}/as-of/${encodeURIComponent(asOfDate)}`
+    ),
   projects: () => request<Project[]>("/api/projects"),
   createProject: (payload: {
     name: string;

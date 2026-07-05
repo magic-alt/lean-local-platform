@@ -15,6 +15,7 @@ from ..lean import (
     write_lean_future_daily_zip,
 )
 from ..services.data import (
+    attach_database_objects,
     asset_classes,
     data_providers,
     fetch_and_import_symbol,
@@ -24,7 +25,9 @@ from ..services.data import (
     record_data_asset,
     symbols_for_asset,
 )
-from ..services.market_data import mirror_rows, query_bars, query_sqlite_bars
+from ..services.market_data import mirror_rows, query_bars, query_database_bars
+from ..services.market_repository import upsert_market_daily_bars
+from ..services.db_object_store import put_file
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -140,7 +143,7 @@ def query_data(
 ):
     try:
         query_source = source.strip().lower()
-        query = query_sqlite_bars if query_source in {"sqlite", "local", "local_sqlite"} else query_bars
+        query = query_database_bars if query_source in {"mysql", "database", "local", "sqlite", "local_sqlite"} else query_bars
         return query(
             asset_class=assetClass,
             symbol=symbol,
@@ -233,6 +236,7 @@ async def import_csv(
         upload_path = UPLOADS_DIR / f"{utc_now().replace(':', '').replace('.', '')}-{file.filename}"
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         upload_path.write_bytes(await file.read())
+        put_file("uploads", upload_path.name, upload_path, metadata={"filename": file.filename, "asset_class": assetClass, "symbol": symbol})
         rows = rows_from_csv(upload_path, dateCol, openCol, highCol, lowCol, closeCol, volumeCol)
         if assetClass == "crypto":
             metadata = write_lean_crypto_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, venue=venue or market, data_type=dataType)
@@ -258,10 +262,22 @@ async def import_csv(
         else:
             metadata = write_lean_daily_zip(symbol, rows, f"csv:{file.filename}", overwrite=overwrite, market=market)
             metadata.update({"asset_class": "equity", "venue": market, "resolution": "daily", "data_type": "trade"})
+        upsert_market_daily_bars(
+            rows,
+            symbol=metadata.get("symbol") or symbol,
+            asset_class=metadata.get("asset_class") or assetClass,
+            market=market if assetClass == "equity" else (venue or market),
+            venue=metadata.get("venue") or venue or market,
+            source=f"csv:{file.filename}",
+            resolution=metadata.get("resolution") or "daily",
+            data_type=metadata.get("data_type") or dataType,
+            adjust="raw",
+        )
         try:
             metadata["clickhouse"] = mirror_rows(metadata, rows)
         except Exception as exc:
             metadata["clickhouse"] = {"enabled": True, "inserted": 0, "error": str(exc)}
+        attach_database_objects(metadata)
         return record_data_asset(metadata)
     except LeanWebError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

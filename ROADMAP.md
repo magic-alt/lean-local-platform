@@ -4,7 +4,7 @@
 仓库：`/Users/kaermax/lean-platform`  
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
-当前状态：工作区包含本次 P0 修复和本地 TuShare Pro token 配置支持，尚未提交。
+当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线，以及 MySQL 运行主库切换。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`，但 `CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
 ## 1. 总体结论
 
@@ -18,6 +18,32 @@
 当前平台已经更接近 Level 2 个人研究级中上沿，可以继续做受控数据下的 A 股日线研究。正式模拟盘仍不建议马上开始，除非只做小范围影子跟踪，并明确标记数据覆盖边界。下一阶段优先级不是大规模重构，而是接入 TuShare Pro 数据、补数据版本指纹、扩大 LEAN 端到端夹具。
 
 ## 2. 本次实现摘要
+
+### MySQL 运行主库与本地数据数据库化
+
+实现内容：
+
+- 新增 MySQL 8.4 Docker Compose 服务，API/worker 默认使用 `LEAN_DATABASE_URL=mysql+pymysql://lean:lean@mysql:3306/lean_market`。
+- `app.db` 增加 MySQL 连接、DDL/占位符/upsert 兼容层；SQLite 仅保留为迁移源和测试隔离后端。
+- 新增通用市场数据表：`instruments`、`instrument_identifiers`、`market_daily_bars`、`market_trade_status`，覆盖股票、可转债、加密币、期货的扩展模型。
+- 新增数据库对象表：`stored_objects`、`stored_object_chunks`，Object Store、LEAN zip/factor 文件、回测 result/summary、上传 CSV、runtime 文件均可入库保存。
+- 新增迁移脚本 `scripts/migrate_hs300_sqlite_to_mysql.py`，支持重建目标库、复制 SQLite 全部表、回填通用行情表、归档本地文件。
+- A 股、可转债、期货和 CSV/Provider 导入会同步写通用行情表；数据查询预览默认读 MySQL `market_daily_bars`。
+
+2026-07-05 验证结果：
+
+- `docker compose config` 通过。
+- MySQL `lean_market` 已用 `--recreate-database` 重建并导入。
+- SQLite -> MySQL 表计数一致：`ashare_daily_bars=1,215,591`、`adjustment_factors=1,215,591`、`ashare_trade_status=1,215,554`、`securities=584`、`universe_membership=1,240`、`index_membership_events=686`、`data_assets=608`。
+- 通用表回填：`instruments=584`、`market_daily_bars=1,215,591`、`market_trade_status=1,215,554`。
+- 文件归档：`stored_objects=2,206`、`stored_object_chunks=2,311`；其中 LEAN Data 2,041 文件、runtime runs 161 文件、object-store 2 文件已入 MySQL，object-store 文件同时归档到 API 使用的 `object-store` 命名空间。
+- MySQL 健康检查 `ok=True`，`/api/health/database` 关键表不缺失；`query_database_bars(600519)` 可从 MySQL 返回上市日起行情。
+
+剩余边界：
+
+- 生产运行已不再依赖 SQLite，但测试仍用临时 SQLite 隔离。
+- ClickHouse 仍是可选镜像/加速层，当前不是事实源。
+- LEAN 回测执行仍读取本地 `Data/` 文件缓存；MySQL 已保存文件原文，后续可补“从 MySQL 恢复/生成 LEAN Data 缓存”的启动前导出步骤。
 
 ### P0-001：全 A 历史股票池缺失，幸存者偏差未闭环
 
@@ -34,6 +60,11 @@
 
 - 没有凭据时无法把真实全 A 历史证券池导入本地库。
 - 需要后续用 TuShare Pro `stock_basic`、历史指数成分/权重、退市字段批量填充。
+- 2026-07-05 已新增沪深300 PIT 成分公开数据管线：`index_source_artifacts`、`index_membership_events`、`index_membership_pit`、`scripts/import_csi300_pit_public.py`、`scripts/import_csindex_csi300_pit.py`、`scripts/import_csindex_csi300_cached.py`、`data_sources/csi300_pit_sources.example.json`。
+- 该管线已支持公告日、生效日、调入/调出事件、原始文件 hash、批次号和 `universe_as_of()` 查询。
+- 2026-07-05 已将原 `web/runtime/lean_web.sqlite3` 复制为 `web/runtime/HS300.sqlite3`，新库继承当前 300 个 securities、1,215,591 行 A 股日线和既有 CSI300/ALL_A membership。
+- 2026-07-05 已基于中证指数官网缓存附件写入真实 `CSI300` PIT：20 个 source artifact、686 条调入/调出事件、643 条 PIT 区间，active 成分在 `2017-12-08` 和 `2026-07-03` 均为 300；`CSI300_DEMO` 在 `universe_membership`、`index_membership_events`、`index_membership_pit`、`index_source_artifacts` 中均为 0 行。
+- 覆盖边界：当前真实 PIT 从 `2017-12-08` 起，`2017-12-08` 以前不返回伪造 membership；仍需补 2005-2017 官方公告或专业数据源，才能称为完整全历史。
 
 ### P0-002：复权与公司行动未闭环
 
@@ -104,7 +135,7 @@
 
 | 编号 | 问题 | 当前状态 | 证据 | 剩余风险 | 后续动作 |
 | --- | --- | --- | --- | --- | --- |
-| P0-001 | 全 A 历史股票池缺失 | 代码机制已修复，真实全量数据待导入 | `import_security_master`、`universe_as_of`、`tradable_universe_as_of`、`test_security_master_restores_history_and_filters_new_and_delisted` | 无供应商数据时无法恢复真实全 A 历史池 | 接 TuShare Pro `stock_basic`、退市字段、指数成分 |
+| P0-001 | 全 A 历史股票池缺失 | 代码机制已修复；`CSI300` 已写入 2017-12-08 起真实官方缓存 PIT；全 A 和 2005-2017 沪深300仍待补 | `import_security_master`、`universe_as_of`、`tradable_universe_as_of`、`scripts/import_csindex_csi300_cached.py`、`data_sources/csi300_pit_sources.json`、`test_security_master_restores_history_and_filters_new_and_delisted`、`test_csi300_pit_materialization_respects_effective_date` | 不能恢复 2017-12-08 以前沪深300成分，也不能恢复全 A 历史池 | 接 TuShare Pro `stock_basic`、退市字段、指数成分；补 2005-2017 中证指数公告或 JQData/RQData |
 | P0-002 | 复权与公司行动未闭环 | 代码机制已修复，真实公司行动数据待导入 | `corporate_actions` 表、`write_equity_factor_file`、`test_adjustment_factors_write_factor_file_and_corporate_actions` | qfq/hfq/raw 生产口径仍需数据契约约束 | 接 `adj_factor`、分红送转配股表，补口径校验 |
 | P0-003 | 停牌/涨跌停/ST 依赖推断 | 已修复为官方字段优先，推断 fallback 保留 | `import_trade_status`、QA warning、`test_official_trade_status_overrides_inferred_rules_and_missing_status_rejects`、LEAN 集成测试 | 官方状态源未批量接入前仍有数据缺口 | 接 `stk_limit`、停复牌、ST 状态 |
 | P0-004 | A 股 benchmark 缺失 | 代码已支持，真实指数行情待导入 | `benchmarkSymbol=000300` 注入、算法/模板 add benchmark、单测覆盖 | 若本地无指数数据，会回退常数 benchmark | 导入沪深300/中证全指日线并加示例回测 |
@@ -117,7 +148,32 @@ cd web/backend
 .venv/bin/python -m pytest -q
 ```
 
-结果：`24 passed, 1 skipped, 3 warnings in 0.54s`。
+结果：`33 passed, 1 skipped, 3 warnings in 0.81s`。
+
+```bash
+web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --dry-run
+web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --acknowledge-partial-coverage
+```
+
+结果：成功；写入 `web/runtime/HS300.sqlite3`，覆盖从 `2017-12-08` 起，source artifact 20 个、调入/调出事件 686 条、PIT 区间 643 条，active 成分在 `2017-12-08` 和 `2026-07-03` 均为 300。
+
+```bash
+sqlite3 web/runtime/HS300.sqlite3 "select universe_code,count(*) from universe_membership where universe_code like 'CSI300%' group by universe_code; select index_code,count(*) from index_membership_events where index_code like 'CSI300%' group by index_code; select index_code,count(*) from index_membership_pit where index_code like 'CSI300%' group by index_code;"
+```
+
+结果：`CSI300` membership/events/PIT 分别为 `643/686/643`；`CSI300_DEMO` 在 `universe_membership`、`index_membership_events`、`index_membership_pit`、`index_source_artifacts` 中均为 0 行。
+
+```bash
+web/backend/.venv/bin/python -m pytest web/backend/tests/test_csi300_pit.py
+```
+
+结果：`4 passed in 0.18s`。
+
+```bash
+web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --manifest data_sources/csi300_pit_sources.example.json --dry-run --validate
+```
+
+结果：成功；示例 manifest 解析 2 条调入/调出事件，构造 4 条 PIT 区间，`2024-05-20` 和 `2024-06-01` 均验证为 3 个成员。该命令只验证管线，不代表生产 `CSI300` 历史成分已经导入。
 
 ```bash
 cd web/backend
@@ -143,6 +199,7 @@ docker compose config
 
 - `web/backend/app/db.py`：新增 `corporate_actions` 表。
 - `web/backend/app/services/ashare_repository.py`：证券主数据、历史股票池、交易状态、复权因子、公司行动、可交易性判断。
+- `web/backend/app/services/csi300_pit.py`：沪深300公告级 PIT 成分解析、事件落库、区间生成和审计 artifact 记录。
 - `web/backend/app/services/data_quality.py`：A 股日线标准化、官方交易状态保留、fallback 推断。
 - `web/backend/app/services/data.py`：A 股研究数据导入、QA warning、LEAN zip/factor file 写入。
 - `web/backend/app/lean.py`：LEAN 数据目录、日线 zip、factor/map 文件生成。
@@ -152,6 +209,12 @@ docker compose config
 - `web/backend/app/api/ashare.py`：A 股主数据、交易状态、复权因子、公司行动、股票池 API。
 - `web/backend/tests/test_ashare_p0.py`：P0 单元测试。
 - `web/backend/tests/test_ashare_lean_integration.py`：真实 Docker/LEAN 集成测试。
+- `web/backend/tests/test_csi300_pit.py`：公告调入/调出解析、PIT 区间和 `universe_as_of()` 生效日测试。
+- `scripts/import_csi300_pit_public.py`：按 manifest 下载/读取公开公告、记录 hash、解析事件并生成本地 PIT 成分表。
+- `scripts/import_csindex_csi300_pit.py`：中证指数官网公告抓取、附件缓存、调样事件解析和 PIT 重建脚本；当前官网详情接口存在 WAF 阻断，保留为后续补源入口。
+- `scripts/import_csindex_csi300_cached.py`：从本地中证指数官方缓存附件重建真实 `CSI300` PIT，并写入 `HS300.sqlite3`。
+- `data_sources/csi300_pit_sources.json`：本地生产 manifest，记录 2017-12-08 起的真实官方缓存 source、hash、覆盖边界和初始重建成员。
+- `data_sources/csi300_pit_sources.example.json`：公开公告 manifest 示例，仅用于验证导入管线，不写入生产库。
 
 ## 6. 当前平台等级
 
@@ -224,6 +287,16 @@ iFinD/Choice/Wind 的购买触发条件：
   - raw/qfq/hfq 混用时回测创建失败。
   - 示例数据在除权日前后收益连续性测试通过。
 
+#### P0-009：CSI300 2005-2017 PIT 成分缺口
+
+- 问题：`HS300.sqlite3` 已写入真实中证指数官网缓存重建的 `CSI300` PIT，但覆盖从 `2017-12-08` 起；官网列表可发现 2005 年起公告 ID，详情接口当前返回 403，列表又不包含附件 URL。
+- 影响：2017 年以前的沪深300增强、历史基准复制和 PIT 选股仍不能闭环，不能把当前库标记为“2005 至今全历史”。
+- 推荐方案：继续补 2005-2017 中证指数官方公告附件；若官网详情持续 WAF 阻断，改用 JQData/RQData 的历史指数成分接口核验并生成同一 schema。
+- 验收标准：
+  - `index_membership_pit` 对 `2005-07-01` 到 `2017-12-07` 任意调样区间可返回 300 个真实成员。
+  - 每个调样批次都有 `announce_date`、`effective_date`、source、hash、batch_id。
+  - 早期区间不得用当前成分或反推结果冒充官方全历史。
+
 ### P1：进入模拟盘前必须完成
 
 #### P1-001：数据和环境复现指纹
@@ -249,6 +322,15 @@ iFinD/Choice/Wind 的购买触发条件：
 - 问题：已有基础 QA，但没有跨源、复权跳变、状态覆盖率、成交额异常门禁。
 - 推荐方案：增加 QA severity；critical 失败时禁止回测。
 - 验收标准：缺 benchmark、缺交易状态、缺复权因子、价格异常时创建回测失败。
+
+#### P1-005：MySQL 到 LEAN Data 缓存导出闭环
+
+- 问题：MySQL 已保存行情和 LEAN zip/factor/map 文件原文，但 LEAN 引擎实际运行仍直接读取本地 `Data/` 文件缓存。
+- 推荐方案：回测前按 `data_assets.lean_object_id/factor_object_id` 或 `stored_objects` 从 MySQL 恢复所需 LEAN 文件；缓存缺失或 hash 不一致时自动重建。
+- 验收标准：
+  - 删除单个本地 LEAN zip 后，回测前可从 MySQL 自动恢复。
+  - 恢复文件 hash 与 `stored_objects.sha256` 一致。
+  - 回测结果 fingerprint 记录 MySQL object id、sha256、数据批次和导出时间。
 
 ### P2：提高效率和扩展性
 

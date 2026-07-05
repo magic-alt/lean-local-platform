@@ -8,6 +8,7 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..lean import parse_date
+from .market_repository import upsert_instrument, upsert_market_daily_bars
 
 
 DEFAULT_AGRI_PRODUCTS = [
@@ -77,11 +78,17 @@ def _infer_product(contract_code: str) -> str:
 def import_contracts(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
     now = utc_now()
     count = 0
+    instruments: list[dict[str, Any]] = []
     with db() as connection:
         for record in records:
             contract_code = _contract_code(record.get("contract_code") or record.get("contractCode"))
             product = _product(record.get("product") or _infer_product(contract_code))
             exchange = str(record.get("exchange") or "DCE").strip().upper()
+            listed_date = _optional_date(record.get("listed_date") or record.get("listedDate"))
+            last_trade_date = _optional_date(record.get("last_trade_date") or record.get("lastTradeDate"))
+            multiplier = _number(record.get("multiplier"))
+            margin_rate = _number(record.get("margin_rate") or record.get("marginRate"))
+            tick_size = _number(record.get("tick_size") or record.get("tickSize"))
             connection.execute(
                 """
                 insert into futures_contracts
@@ -106,17 +113,38 @@ def import_contracts(records: list[dict[str, Any]], source: str = "manual") -> d
                     product,
                     exchange,
                     record.get("name") or contract_code,
-                    _number(record.get("multiplier")),
-                    _number(record.get("margin_rate") or record.get("marginRate")),
-                    _number(record.get("tick_size") or record.get("tickSize")),
+                    multiplier,
+                    margin_rate,
+                    tick_size,
                     record.get("delivery_month") or record.get("deliveryMonth"),
-                    _optional_date(record.get("listed_date") or record.get("listedDate")),
-                    _optional_date(record.get("last_trade_date") or record.get("lastTradeDate")),
+                    listed_date,
+                    last_trade_date,
                     record.get("source") or source,
                     now,
                 ),
             )
             count += 1
+            instruments.append(
+                {
+                    "symbol": contract_code,
+                    "name": record.get("name") or contract_code,
+                    "asset_class": "future",
+                    "market": "future",
+                    "venue": exchange,
+                    "exchange": exchange,
+                    "underlying_symbol": product,
+                    "listed_date": listed_date,
+                    "expiry_date": last_trade_date,
+                    "status": "active",
+                    "contract_multiplier": multiplier,
+                    "margin_rate": margin_rate,
+                    "tick_size": tick_size,
+                    "metadata": {"product": product, "delivery_month": record.get("delivery_month") or record.get("deliveryMonth")},
+                    "source": record.get("source") or source,
+                }
+            )
+    for instrument in instruments:
+        upsert_instrument(**instrument)
     return {"count": count}
 
 
@@ -162,6 +190,36 @@ def import_daily_bars(records: list[dict[str, Any]], source: str = "manual") -> 
                 ),
             )
             count += 1
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    contract_exchanges: dict[str, str] = {}
+    with db() as connection:
+        contract_rows = connection.execute("select contract_code, exchange from futures_contracts").fetchall()
+    for item in rows_to_dicts(contract_rows):
+        contract_exchanges[item["contract_code"]] = item.get("exchange") or "future"
+    for record in records:
+        contract_code = _contract_code(record.get("contract_code") or record.get("contractCode"))
+        grouped.setdefault(contract_code, []).append(
+            {
+                "symbol": contract_code,
+                "trade_date": _date(record.get("trade_date") or record.get("tradeDate"), "trade_date"),
+                "open": _number(record.get("open")),
+                "high": _number(record.get("high")),
+                "low": _number(record.get("low")),
+                "close": _number(record.get("close")),
+                "volume": _number(record.get("volume")),
+                "open_interest": _number(record.get("open_interest") or record.get("openInterest")),
+            }
+        )
+    for contract_code, symbol_rows in grouped.items():
+        upsert_market_daily_bars(
+            symbol_rows,
+            symbol=contract_code,
+            asset_class="future",
+            market="future",
+            venue=contract_exchanges.get(contract_code) or "future",
+            source=source,
+            batch_id=batch_id,
+        )
     return {"batchId": batch_id, "count": count}
 
 
