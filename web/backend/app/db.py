@@ -207,6 +207,17 @@ def init_db() -> None:
                 primary key (universe_code, symbol, start_date)
             );
 
+            create table if not exists index_weights (
+                universe_code text not null,
+                symbol text not null,
+                trade_date text not null,
+                weight real not null,
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (universe_code, symbol, trade_date, source)
+            );
+
             create table if not exists financial_statements (
                 symbol text not null,
                 statement_type text not null,
@@ -582,6 +593,8 @@ def init_db() -> None:
                 on corporate_actions(symbol, ex_date);
             create index if not exists idx_universe_asof
                 on universe_membership(universe_code, start_date, end_date);
+            create index if not exists idx_index_weights_date
+                on index_weights(universe_code, trade_date, symbol);
             create index if not exists idx_financial_statements_pit
                 on financial_statements(symbol, statement_type, effective_date, announce_date, report_date);
             create index if not exists idx_financial_facts_pit

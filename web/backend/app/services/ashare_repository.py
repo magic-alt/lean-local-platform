@@ -407,8 +407,8 @@ def import_adjustment_factors(records: list[dict[str, Any]], source: str = "manu
     return {"batchId": batch_id, "count": len(rows), "factorFiles": factor_files}
 
 
-def upsert_corporate_actions(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
-    batch_id = str(uuid.uuid4())
+def upsert_corporate_actions(records: list[dict[str, Any]], source: str = "manual", batch_id: str | None = None) -> dict[str, Any]:
+    batch_id = batch_id or str(uuid.uuid4())
     now = utc_now()
     count = 0
     with db() as connection:
@@ -494,6 +494,56 @@ def corporate_actions(symbol: str, start: str | None = None, end: str | None = N
             select * from corporate_actions
             where {" and ".join(clauses)}
             order by ex_date asc, action_type asc
+            """,
+            values,
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def upsert_index_weights(records: list[dict[str, Any]], source: str, batch_id: str | None = None) -> dict[str, Any]:
+    now = utc_now()
+    count = 0
+    with db() as connection:
+        for record in records:
+            symbol = _symbol(record)
+            universe_code = str(record.get("universe_code") or record.get("universeCode") or "CSI300").upper()
+            trade_date = _date(record.get("trade_date") or record.get("tradeDate"), "trade_date")
+            weight = _float(record.get("weight"))
+            if weight is None:
+                raise LeanWebError("index weight is required.")
+            connection.execute(
+                """
+                insert into index_weights
+                    (universe_code, symbol, trade_date, weight, source, batch_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(universe_code, symbol, trade_date, source) do update set
+                    weight = excluded.weight,
+                    batch_id = excluded.batch_id,
+                    created_at = excluded.created_at
+                """,
+                (universe_code, symbol, trade_date, weight, record.get("source") or source, batch_id, now),
+            )
+            count += 1
+    return {"batchId": batch_id, "count": count}
+
+
+def index_weights(
+    universe_code: str,
+    trade_date: str,
+    *,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses = ["universe_code = ?", "trade_date = ?"]
+    values: list[Any] = [universe_code.upper(), _date(trade_date, "trade_date")]
+    if source:
+        clauses.append("source = ?")
+        values.append(source)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select * from index_weights
+            where {" and ".join(clauses)}
+            order by weight desc, symbol asc
             """,
             values,
         ).fetchall()

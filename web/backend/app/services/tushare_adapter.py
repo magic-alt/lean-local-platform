@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from datetime import datetime
 from typing import Any
 
@@ -19,8 +20,12 @@ def _records(frame: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _blank(value: Any) -> bool:
+    return value in (None, "") or (isinstance(value, float) and math.isnan(value))
+
+
 def _compact_date(value: str | None, field: str) -> str:
-    if not value:
+    if _blank(value):
         raise LeanWebError(f"{field} is required.")
     text = str(value).strip()
     if len(text) == 8 and text.isdigit():
@@ -31,8 +36,12 @@ def _compact_date(value: str | None, field: str) -> str:
         raise LeanWebError(f"Invalid {field}: {value!r}; expected YYYY-MM-DD or YYYYMMDD.") from exc
 
 
+def _optional_compact_date(value: str | None) -> str | None:
+    return _compact_date(value, "date") if value else None
+
+
 def _iso_date(value: Any) -> str | None:
-    if value in (None, ""):
+    if _blank(value):
         return None
     text = str(value).strip()
     if len(text) == 8 and text.isdigit():
@@ -41,12 +50,20 @@ def _iso_date(value: Any) -> str | None:
 
 
 def _float(value: Any) -> float | None:
-    if value in (None, ""):
+    if _blank(value):
         return None
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _finite_float(value: Any, *, multiplier: float = 1.0) -> float | None:
+    number = _float(value)
+    if number is None:
+        return None
+    number *= multiplier
+    return number if math.isfinite(number) else None
 
 
 def _near(value: float | None, target: float | None, tolerance: float = 0.001) -> bool:
@@ -81,6 +98,37 @@ def from_tushare_code(ts_code: str) -> str:
 
 def _status(value: Any) -> str:
     return {"L": "listed", "D": "delisted", "P": "pending"}.get(str(value or "L").upper(), "listed")
+
+
+DAILY_BASIC_FACTORS: dict[str, tuple[str, float]] = {
+    "turnover_rate": ("turnover_rate", 1.0),
+    "turnover_rate_f": ("turnover_rate_float", 1.0),
+    "volume_ratio": ("volume_ratio", 1.0),
+    "pe": ("pe", 1.0),
+    "pe_ttm": ("pe_ttm", 1.0),
+    "pb": ("pb", 1.0),
+    "ps": ("ps", 1.0),
+    "ps_ttm": ("ps_ttm", 1.0),
+    "dv_ratio": ("dividend_yield", 1.0),
+    "dv_ttm": ("dividend_yield_ttm", 1.0),
+    "total_share": ("total_share_shares", 10000.0),
+    "float_share": ("float_share_shares", 10000.0),
+    "free_share": ("free_share_shares", 10000.0),
+    "total_mv": ("total_mv_cny", 10000.0),
+    "circ_mv": ("circ_mv_cny", 10000.0),
+}
+
+
+FINANCIAL_ID_FIELDS = {
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "update_flag",
+}
 
 
 class TushareAdapter:
@@ -137,6 +185,37 @@ class TushareAdapter:
                 )
         return records
 
+    def daily_basic_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        frame = self.pro.daily_basic(
+            ts_code=to_tushare_stock_code(symbol),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields=(
+                "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,"
+                "ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
+            ),
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            trade_date = _iso_date(item.get("trade_date"))
+            if not trade_date:
+                continue
+            factors: dict[str, float] = {}
+            for raw_name, (factor_name, multiplier) in DAILY_BASIC_FACTORS.items():
+                value = _finite_float(item.get(raw_name), multiplier=multiplier)
+                if value is not None:
+                    factors[factor_name] = value
+            if factors:
+                rows.append(
+                    {
+                        "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                        "trade_date": trade_date,
+                        "factors": factors,
+                        "source": "tushare:daily_basic",
+                    }
+                )
+        return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
+
     def adjustment_factors(self, symbol: str, start_date: str, end_date: str) -> dict[str, float]:
         frame = self.pro.adj_factor(
             ts_code=to_tushare_stock_code(symbol),
@@ -151,6 +230,31 @@ class TushareAdapter:
             if trade_date and factor and factor > 0:
                 result[trade_date] = factor
         return result
+
+    def suspend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        frame = self.pro.suspend_d(
+            ts_code=to_tushare_stock_code(symbol),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields="ts_code,suspend_date,resume_date,ann_date,suspend_reason,reason_type",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            suspend_date = _iso_date(item.get("suspend_date"))
+            if not suspend_date:
+                continue
+            rows.append(
+                {
+                    "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                    "suspend_date": suspend_date,
+                    "resume_date": _iso_date(item.get("resume_date")),
+                    "announce_date": _iso_date(item.get("ann_date")),
+                    "reason": item.get("suspend_reason"),
+                    "reason_type": item.get("reason_type"),
+                    "source": "tushare:suspend_d",
+                }
+            )
+        return sorted(rows, key=lambda row: (row["suspend_date"], row["symbol"]))
 
     def limit_prices(self, symbol: str, start_date: str, end_date: str) -> dict[str, dict[str, float | None]]:
         try:
@@ -171,6 +275,126 @@ class TushareAdapter:
                     "limitDown": _float(item.get("down_limit")),
                 }
         return result
+
+    def dividend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        frame = self.pro.dividend(
+            ts_code=to_tushare_stock_code(symbol),
+            ann_date="",
+            record_date="",
+            ex_date="",
+            fields=(
+                "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,"
+                "cash_div_tax,record_date,ex_date,pay_date,div_listdate,imp_ann_date,base_date,base_share"
+            ),
+        )
+        start = _compact_date(start_date, "start_date")
+        end = _compact_date(end_date, "end_date")
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            ex_date_raw = item.get("ex_date") or item.get("div_listdate") or item.get("record_date") or item.get("ann_date")
+            if not ex_date_raw:
+                continue
+            compact_ex_date = _compact_date(str(ex_date_raw), "ex_date")
+            if compact_ex_date < start or compact_ex_date > end:
+                continue
+            stock_dividend = _finite_float(item.get("stk_div"), multiplier=0.1)
+            if stock_dividend is None:
+                bonus = _finite_float(item.get("stk_bo_rate"), multiplier=0.1) or 0.0
+                conversion = _finite_float(item.get("stk_co_rate"), multiplier=0.1) or 0.0
+                stock_dividend = bonus + conversion if bonus or conversion else None
+            rows.append(
+                {
+                    "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                    "ex_date": _iso_date(compact_ex_date),
+                    "action_type": "dividend",
+                    "cash_dividend": _finite_float(item.get("cash_div_tax") or item.get("cash_div"), multiplier=0.1),
+                    "stock_dividend": stock_dividend,
+                    "split_ratio": None,
+                    "allotment_ratio": None,
+                    "allotment_price": None,
+                    "source": "tushare:dividend",
+                    "metadata": {
+                        "announce_date": _iso_date(item.get("ann_date")),
+                        "record_date": _iso_date(item.get("record_date")),
+                        "pay_date": _iso_date(item.get("pay_date")),
+                        "process": item.get("div_proc"),
+                    },
+                }
+            )
+        return sorted(rows, key=lambda row: (row["ex_date"], row["symbol"]))
+
+    def index_weight_rows(self, index_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        frame = self.pro.index_weight(
+            index_code=to_tushare_index_code(index_code),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields="index_code,con_code,trade_date,weight",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            trade_date = _iso_date(item.get("trade_date"))
+            symbol = item.get("con_code")
+            weight = _finite_float(item.get("weight"))
+            if not trade_date or not symbol or weight is None:
+                continue
+            rows.append(
+                {
+                    "universe_code": "CSI300" if from_tushare_code(str(item.get("index_code") or index_code)) == "000300" else from_tushare_code(str(item.get("index_code") or index_code)),
+                    "symbol": from_tushare_code(str(symbol)),
+                    "trade_date": trade_date,
+                    "weight": weight,
+                    "source": "tushare:index_weight",
+                }
+            )
+        return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
+
+    def _financial_rows(self, endpoint: str, symbol: str, start_date: str | None, end_date: str | None) -> list[dict[str, Any]]:
+        method = getattr(self.pro, endpoint)
+        kwargs = {"ts_code": to_tushare_stock_code(symbol)}
+        start = _optional_compact_date(start_date)
+        end = _optional_compact_date(end_date)
+        if start:
+            kwargs["start_date"] = start
+        if end:
+            kwargs["end_date"] = end
+        frame = method(**kwargs)
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            report_date = _iso_date(item.get("end_date"))
+            announce_date = _iso_date(item.get("ann_date") or item.get("f_ann_date"))
+            if not report_date or not announce_date:
+                continue
+            if start and _compact_date(report_date, "report_date") < start:
+                continue
+            if end and _compact_date(report_date, "report_date") > end:
+                continue
+            fields = {key: value for key, value in item.items() if key not in FINANCIAL_ID_FIELDS}
+            rows.append(
+                {
+                    "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                    "statement_type": endpoint,
+                    "report_date": report_date,
+                    "announce_date": announce_date,
+                    "effective_date": _iso_date(item.get("f_ann_date")) or announce_date,
+                    "fiscal_period": report_date,
+                    "currency": "CNY",
+                    "fields": fields,
+                    "source": f"tushare:{endpoint}",
+                }
+            )
+        return sorted(rows, key=lambda row: (row["report_date"], row["announce_date"], row["symbol"]))
+
+    def income_rows(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+        return self._financial_rows("income", symbol, start_date, end_date)
+
+    def balancesheet_rows(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+        return self._financial_rows("balancesheet", symbol, start_date, end_date)
+
+    def cashflow_rows(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+        return self._financial_rows("cashflow", symbol, start_date, end_date)
+
+    def fina_indicator_rows(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+        return self._financial_rows("fina_indicator", symbol, start_date, end_date)
 
     def daily_rows(
         self,

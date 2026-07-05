@@ -40,6 +40,11 @@ def _symbol(value: str) -> str:
 
 def import_factor_values(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
     batch_id = str(uuid.uuid4())
+    count = upsert_factor_values(records, source=source, batch_id=batch_id)
+    return {"batchId": batch_id, "count": count}
+
+
+def upsert_factor_values(records: list[dict[str, Any]], source: str = "manual", batch_id: str | None = None) -> int:
     now = utc_now()
     count = 0
     with db() as connection:
@@ -66,7 +71,7 @@ def import_factor_values(records: list[dict[str, Any]], source: str = "manual") 
                 (symbol, trade_date, factor_name, value, item_source, batch_id, now),
             )
             count += 1
-    return {"batchId": batch_id, "count": count}
+    return count
 
 
 def _factor_values(symbols: list[str], trade_date: str, factor_names: list[str]) -> dict[str, dict[str, float]]:
