@@ -59,6 +59,7 @@ import {
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
+  PaperDailyReport,
   PaperSession,
   Project,
   ProjectFile,
@@ -1328,6 +1329,9 @@ function PaperPage() {
   const dataType = Form.useWatch("dataType", form) || "trade";
   const [symbols, setSymbols] = useState<string[]>([]);
   const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
+  const [reportSession, setReportSession] = useState<PaperSession | null>(null);
+  const [paperReports, setPaperReports] = useState<PaperDailyReport[]>([]);
+  const [paperReportsLoading, setPaperReportsLoading] = useState(false);
 
   useEffect(() => {
     api.symbols(market, assetClass, venue, resolution, dataType)
@@ -1349,6 +1353,18 @@ function PaperPage() {
   async function status(session: PaperSession, nextStatus: string) {
     await api.updatePaperSessionStatus(session.id, nextStatus);
     await sessions.reload();
+  }
+
+  async function loadReports(session: PaperSession) {
+    setReportSession(session);
+    setPaperReportsLoading(true);
+    try {
+      setPaperReports(await api.paperReports(session.id));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setPaperReportsLoading(false);
+    }
   }
 
   return (
@@ -1393,10 +1409,32 @@ function PaperPage() {
             { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
             { title: "Equity", dataIndex: "equity" },
             { title: "Created", dataIndex: "created_at" },
-            { title: "Actions", render: (_, session) => <Space><Button size="small" onClick={() => status(session, "running")}>Run</Button><Button size="small" onClick={() => status(session, "paused")}>Pause</Button><Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button></Space> }
+            { title: "Actions", render: (_, session) => <Space><Button size="small" onClick={() => status(session, "running")}>Run</Button><Button size="small" onClick={() => status(session, "paused")}>Pause</Button><Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button><Button size="small" onClick={() => loadReports(session)}>Reports</Button></Space> }
           ]}
         />
       </Card>
+      {reportSession && (
+        <Card title={`Daily Reports - ${reportSession.name}`} style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => loadReports(reportSession)}>Refresh</Button>}>
+          <Table<PaperDailyReport>
+            rowKey="id"
+            dataSource={paperReports}
+            loading={paperReportsLoading}
+            size="small"
+            columns={[
+              { title: "Date", render: (_, report) => report.tradeDate || report.trade_date },
+              { title: "Execution", dataIndex: "executionPolicy" },
+              { title: "NAV", dataIndex: "NAV" },
+              { title: "Cash", dataIndex: "cash" },
+              { title: "Benchmark", render: (_, report) => report.benchmark?.symbol ? `${report.benchmark.symbol} ${report.benchmark.close ?? "-"}` : "-" },
+              { title: "Excess", dataIndex: "excessReturn" },
+              { title: "QA", render: (_, report) => <Tag color={report.qa?.passed === false ? "red" : "green"}>{report.qa?.severity || "ok"}</Tag> },
+              { title: "Rejects", render: (_, report) => (report.rejectionReasons || []).join(", ") || "-" },
+              { title: "Warnings", render: (_, report) => (report.warnings || []).join(", ") || "-" },
+              { title: "Fingerprint", render: (_, report) => report.fingerprint ? report.fingerprint.slice(0, 12) : "-" }
+            ]}
+          />
+        </Card>
+      )}
     </>
   );
 }

@@ -92,11 +92,14 @@ services:
       PROMETHEUS_URL: http://127.0.0.1:9090
       GRAFANA_URL: http://127.0.0.1:3000
       LEAN_DATA_DIR: /workspace/Data
+      LEAN_PARQUET_DIR: /workspace/parquet
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
     volumes:
       - .:/workspace
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
@@ -122,11 +125,14 @@ services:
       CLICKHOUSE_PASSWORD: lean
       CLICKHOUSE_DATABASE: lean_market
       LEAN_DATA_DIR: /workspace/Data
+      LEAN_PARQUET_DIR: /workspace/parquet
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
     volumes:
       - .:/workspace
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:

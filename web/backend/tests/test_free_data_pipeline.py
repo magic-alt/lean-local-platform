@@ -31,3 +31,17 @@ def test_import_ashare_daily_sample_orchestrates_import_compare_and_parquet(monk
     assert result["qualityReports"][0]["sources"] == ["akshare", "baostock"]
     assert result["parquet"]["source"] == "akshare"
     assert calls[0] == ("600519", "akshare", "2026-01-01", "2026-01-05", "raw")
+
+
+def test_free_sample_cli_exit_code_allows_non_primary_provider_gap():
+    from scripts.import_ashare_free_sample import exit_code_for_result
+
+    result = {
+        "importCount": 2,
+        "errorCount": 1,
+        "errors": [{"symbol": "600519", "provider": "adata", "error": "empty_dataset"}],
+    }
+
+    assert exit_code_for_result(result, "akshare") == 0
+    result["errors"].append({"symbol": "600519", "provider": "akshare", "error": "provider_failed"})
+    assert exit_code_for_result(result, "akshare") == 2

@@ -155,6 +155,11 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     assert len(report["fingerprint"]) == 64
     assert report["dataSourceStatus"]["benchmark"]["source"] == "unit"
     assert report["positionWeights"][0]["symbol"] == "600519"
+    assert report["schemaVersion"] == 1
+    assert reports[-1]["schemaVersion"] == 1
+    assert reports[-1]["tradeDate"] == "2024-01-04"
+    assert reports[-1]["executionPolicy"] == "next_open"
+    assert reports[-1]["positionWeights"][0]["symbol"] == "600519"
 
 
 def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_status(tmp_path, monkeypatch):
@@ -251,3 +256,66 @@ def test_paper_multi_symbol_session_fills_then_rejects_max_positions(tmp_path, m
     assert orders[1]["status"] == "rejected"
     assert orders[1]["reason"] == "max_positions"
     assert [position["symbol"] for position in list_positions(session["id"])] == ["600519"]
+
+
+def test_paper_replay_acceptance_has_fill_rejections_and_canonical_report_fields(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    for symbol in ("600519", "000001", "000002", "000003", "000004"):
+        import_rows_for_symbol(symbol)
+    import_benchmark_rows()
+
+    from app.services.ashare_repository import import_trade_status
+    from app.services.paper import create_session, create_signal, run_replay
+
+    import_trade_status(
+        [
+            {
+                "symbol": "000003",
+                "tradeDate": "2024-01-04",
+                "isSt": True,
+                "canBuy": True,
+                "canSell": True,
+            }
+        ],
+        source="official-unit",
+    )
+    session = create_session(
+        {
+            "symbol": "600519",
+            "symbols": ["600519", "000001", "000002", "000003", "000004"],
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "benchmarkSymbol": "000300",
+            "executionPolicy": "next_open",
+            "maxPositions": 1,
+            "maxPositionWeight": 0.4,
+            "blacklist": "000001",
+            "observeOnlySymbols": "000002",
+            "watchlist": "600519,000001,000002,000003,000004",
+            "allowStBuy": False,
+        }
+    )
+    for symbol in ("600519", "000001", "000002", "000003", "000004"):
+        create_signal(session["id"], trade_date="2024-01-03", side="buy", symbol=symbol, target_percent=0.4)
+
+    result = run_replay(session["id"], "2024-01-03", "2024-01-04", auto_signal=False)
+    orders = result["days"][-1]["orders"]
+
+    assert result["tradingDays"] == 2
+    assert any(order["status"] == "filled" and order["symbol"] == "600519" for order in orders)
+    reasons = {order["symbol"]: order["reason"] for order in orders if order["status"] == "rejected"}
+    assert reasons == {
+        "000001": "blacklisted",
+        "000002": "observe_only",
+        "000003": "st_blocked",
+        "000004": "max_positions",
+    }
+    report = result["reports"][-1]
+    assert report["schemaVersion"] == 1
+    assert report["tradeDate"] == "2024-01-04"
+    assert report["executionPolicy"] == "next_open"
+    assert report["NAV"] == report["snapshot"]["equity"]
+    assert report["benchmark"]["symbol"] == "000300"
+    assert set(report["rejectionReasons"]) == set(reasons.values())
+    assert len(report["fingerprint"]) == 64

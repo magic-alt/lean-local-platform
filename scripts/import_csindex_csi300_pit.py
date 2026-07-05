@@ -155,7 +155,7 @@ def _next_trade_date(after_date: str) -> str:
         row = connection.execute(
             """
             select min(trade_date) as trade_date
-            from (select distinct trade_date from ashare_daily_bars where trade_date > ?)
+            from (select distinct trade_date from ashare_daily_bars where trade_date > ?) as trade_dates
             """,
             (after_date,),
         ).fetchone()
@@ -167,7 +167,7 @@ def _previous_trade_date(before_date: str) -> str:
         row = connection.execute(
             """
             select max(trade_date) as trade_date
-            from (select distinct trade_date from ashare_daily_bars where trade_date < ?)
+            from (select distinct trade_date from ashare_daily_bars where trade_date < ?) as trade_dates
             """,
             (before_date,),
         ).fetchone()

@@ -57,8 +57,15 @@ def _read_source(source: dict[str, Any], *, cache_dir: Path, source_url: str) ->
             path = ROOT / path
         return path.read_bytes(), str(path)
     if source.get("url"):
+        url = str(source["url"])
+        if url.startswith("csindex-cache:"):
+            local_path = source.get("local_path")
+            path = Path(str(local_path)) if local_path else cache_dir / url.split(":", 1)[1]
+            if not path.is_absolute():
+                path = ROOT / path
+            return path.read_bytes(), str(path)
         request = urllib.request.Request(
-            str(source["url"]),
+            url,
             headers={
                 "User-Agent": "Mozilla/5.0 lean-platform CSI300 PIT importer",
                 "Accept": "text/html,application/xhtml+xml,application/xml,application/pdf,application/vnd.ms-excel,*/*",
@@ -67,7 +74,7 @@ def _read_source(source: dict[str, Any], *, cache_dir: Path, source_url: str) ->
         with urllib.request.urlopen(request, timeout=int(source.get("timeout_seconds") or 30)) as response:
             content = response.read()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(str(source["url"]).split("?", 1)[0]).suffix or ".bin"
+        suffix = Path(url.split("?", 1)[0]).suffix or ".bin"
         digest = content_hash(content)
         cached = cache_dir / f"{digest[:16]}{suffix}"
         cached.write_bytes(content)
@@ -89,6 +96,23 @@ def _manifest_events(
     for index, source in enumerate(manifest.get("sources") or [], start=1):
         source_url = _source_url(source, index)
         content_type = _content_type(source, source_url)
+        if source_url.startswith("csindex-notice:") and not source.get("manual_records"):
+            warnings.append(f"{source_url}:manual_events_loaded_from_manifest")
+            if not dry_run:
+                payload = json.dumps(source, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                upsert_source_artifact(
+                    index_code=index_code,
+                    source_url=source_url,
+                    raw_file_hash=content_hash(payload),
+                    content_type="manual",
+                    parse_status=str(source.get("parse_status") or "manual_manifest_reference"),
+                    metadata={"batch_id": batch_id, "event_count": source.get("event_count")},
+                )
+            print(
+                f"source[{index}] status=manual_reference events={source.get('event_count') or 0} "
+                f"announce={source.get('announce_date')} effective={source.get('effective_date')} url={source_url}"
+            )
+            continue
         try:
             content, local_path = _read_source(source, cache_dir=cache_dir, source_url=source_url)
             parsed = parse_adjustment_notice(
@@ -143,6 +167,65 @@ def _manifest_events(
     return all_events, warnings
 
 
+def _manual_manifest_events(
+    manifest: dict[str, Any],
+    *,
+    index_code: str,
+    batch_id: str,
+    dry_run: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    all_events: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, item in enumerate(manifest.get("manual_events") or [], start=1):
+        source_url = str(item.get("source_url") or f"manual:{index}")
+        payload = json.dumps(item, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        parsed = parse_adjustment_notice(
+            payload,
+            index_code=index_code,
+            source_url=source_url,
+            announce_date=item["announce_date"],
+            effective_date=item["effective_date"],
+            content_type="manual",
+            adjustment_type=str(item.get("adjustment_type") or "manual"),
+            manual_records=item.get("events") or [],
+        )
+        if not dry_run:
+            upsert_source_artifact(
+                index_code=index_code,
+                source_url=source_url,
+                raw_file_hash=parsed["raw_file_hash"],
+                content_type="manual",
+                parse_status=parsed["parse_status"],
+                metadata={
+                    "batch_id": batch_id,
+                    "title": item.get("title"),
+                    "note": item.get("note"),
+                    "announce_date": item["announce_date"],
+                    "effective_date": item["effective_date"],
+                    "event_count": len(parsed["events"]),
+                    "warnings": parsed["warnings"],
+                },
+            )
+        all_events.extend(parsed["events"])
+        warnings.extend(f"{source_url}:{warning}" for warning in parsed["warnings"])
+        print(
+            f"manual[{index}] status={parsed['parse_status']} events={len(parsed['events'])} "
+            f"announce={item['announce_date']} effective={item['effective_date']} url={source_url}"
+        )
+    return all_events, warnings
+
+
+def _initial_date(manifest: dict[str, Any], key: str, fallback_key: str) -> str:
+    value = manifest.get(key)
+    if value:
+        return str(value)
+    reconstruction = manifest.get("initial_reconstruction") or {}
+    value = reconstruction.get(fallback_key) or manifest.get("coverage_start")
+    if value:
+        return str(value)
+    raise KeyError(key)
+
+
 def _interval_counts(intervals: list[dict[str, Any]], as_of_dates: list[str]) -> list[dict[str, Any]]:
     counts = []
     for as_of in as_of_dates:
@@ -182,13 +265,16 @@ def main() -> int:
     batch_id = str(uuid.uuid4())
 
     events, parse_warnings = _manifest_events(manifest, cache_dir=Path(args.cache_dir), batch_id=batch_id, dry_run=args.dry_run)
+    manual_events, manual_warnings = _manual_manifest_events(manifest, index_code=index_code, batch_id=batch_id, dry_run=args.dry_run)
+    events.extend(manual_events)
+    parse_warnings.extend(manual_warnings)
     if not args.dry_run:
         upsert_membership_events(events, batch_id=batch_id)
     built = build_membership_intervals(
         index_code=index_code,
         initial_members=manifest.get("initial_members") or [],
-        initial_effective_date=manifest["initial_effective_date"],
-        initial_announce_date=manifest.get("initial_announce_date") or manifest["initial_effective_date"],
+        initial_effective_date=_initial_date(manifest, "initial_effective_date", "as_of_date"),
+        initial_announce_date=manifest.get("initial_announce_date") or _initial_date(manifest, "initial_effective_date", "as_of_date"),
         events=events,
         source=source,
         batch_id=batch_id,

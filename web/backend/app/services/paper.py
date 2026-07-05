@@ -69,7 +69,7 @@ def list_daily_reports(session_id: str) -> list[dict[str, Any]]:
             "select * from paper_daily_reports where session_id = ? order by trade_date asc",
             (session_id,),
         ).fetchall()
-    return rows_to_dicts(rows)
+    return [_daily_report_api_item(item) for item in rows_to_dicts(rows)]
 
 
 def get_daily_report(session_id: str, trade_date: str) -> dict[str, Any] | None:
@@ -79,7 +79,35 @@ def get_daily_report(session_id: str, trade_date: str) -> dict[str, Any] | None:
             "select * from paper_daily_reports where session_id = ? and trade_date = ?",
             (session_id, date_value),
         ).fetchone()
-    return row_to_dict(row)
+    item = row_to_dict(row)
+    return _daily_report_api_item(item) if item else None
+
+
+def _daily_report_api_item(item: dict[str, Any]) -> dict[str, Any]:
+    report = item.get("report") or {}
+    report.setdefault("schemaVersion", 1)
+    for key in (
+        "schemaVersion",
+        "sessionId",
+        "tradeDate",
+        "strategy",
+        "executionPolicy",
+        "initialCash",
+        "cash",
+        "NAV",
+        "nav",
+        "dailyReturn",
+        "cumulativeReturn",
+        "excessReturn",
+        "rejectionReasons",
+        "positionWeights",
+        "dataSourceStatus",
+        "warnings",
+        "fingerprint",
+    ):
+        if key in report and key not in item:
+            item[key] = report[key]
+    return item
 
 
 def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
@@ -958,6 +986,7 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         }
     )
     report = {
+        "schemaVersion": 1,
         "sessionId": session_id,
         "tradeDate": date_value,
         "strategy": _session_parameters(session).get("strategy") or _session_parameters(session).get("strategyKey") or "ema_cross",

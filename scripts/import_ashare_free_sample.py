@@ -16,6 +16,18 @@ from app.db import init_db
 from app.services.free_data_pipeline import import_ashare_daily_sample
 
 
+def exit_code_for_result(result: dict, primary_provider: str) -> int:
+    if result.get("errorCount", 0) == 0:
+        return 0
+    primary = primary_provider.strip().lower()
+    errors = result.get("errors") or []
+    if result.get("importCount", 0) <= 0:
+        return 2
+    if any(str(item.get("provider") or "").strip().lower() == primary for item in errors):
+        return 2
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import an A-share daily sample from free public providers.")
     parser.add_argument("--symbols", required=True, help="Comma-separated symbols, e.g. 600519,000001.")
@@ -42,7 +54,7 @@ def main() -> int:
         continue_on_error=not args.fail_fast,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["errorCount"] == 0 else 2
+    return exit_code_for_result(result, args.primary_provider)
 
 
 if __name__ == "__main__":

@@ -179,3 +179,61 @@ def test_reference_data_coverage_api_exposes_level3_data_gaps(tmp_path, monkeypa
     assert payload["tradeStatus"]["suspendedDays"] == 1
     assert payload["corporateActions"]["rows"] == 1
     assert payload["pit"]["rows"] == 1
+
+
+def test_csi300_public_pit_manifest_reads_csindex_cache_local_path(tmp_path):
+    from scripts.import_csi300_pit_public import _read_source
+
+    source_file = tmp_path / "notice.xlsx"
+    source_file.write_bytes(b"official-cache-bytes")
+
+    content, local_path = _read_source(
+        {"url": "csindex-cache:notice.xlsx", "local_path": str(source_file)},
+        cache_dir=tmp_path / "cache",
+        source_url="csindex-cache:notice.xlsx",
+    )
+
+    assert content == b"official-cache-bytes"
+    assert local_path == str(source_file)
+
+
+def test_csi300_public_pit_manifest_loads_top_level_manual_events():
+    from scripts.import_csi300_pit_public import _manual_manifest_events
+
+    events, warnings = _manual_manifest_events(
+        {
+            "manual_events": [
+                {
+                    "source_url": "csindex-notice:unit",
+                    "announce_date": "2025-01-02",
+                    "effective_date": "2025-01-03",
+                    "adjustment_type": "temp",
+                    "events": [
+                        {"symbol": "600001", "name": "Delete Me", "action_type": "delete"},
+                        {"symbol": "600002", "name": "Add Me", "action_type": "add"},
+                    ],
+                }
+            ]
+        },
+        index_code="CSI300",
+        batch_id="unit-batch",
+        dry_run=True,
+    )
+
+    assert warnings == []
+    assert {event["action_type"] for event in events} == {"add", "delete"}
+    assert {event["symbol"] for event in events} == {"600001", "600002"}
+
+
+def test_csi300_public_pit_manifest_initial_date_accepts_cached_shape():
+    from scripts.import_csi300_pit_public import _initial_date
+
+    assert _initial_date({"initial_effective_date": "2020-01-01"}, "initial_effective_date", "as_of_date") == "2020-01-01"
+    assert (
+        _initial_date(
+            {"coverage_start": "2017-12-08", "initial_reconstruction": {"as_of_date": "2017-12-08"}},
+            "initial_effective_date",
+            "as_of_date",
+        )
+        == "2017-12-08"
+    )

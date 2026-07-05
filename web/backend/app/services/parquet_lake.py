@@ -56,7 +56,7 @@ def _dataset_id(dataset_key: str) -> str:
     return str(uuid.uuid5(DATASET_NAMESPACE, dataset_key))
 
 
-def _file_id(path: Path) -> str:
+def _file_id(path: str | Path) -> str:
     return str(uuid.uuid5(FILE_NAMESPACE, str(path)))
 
 
@@ -73,6 +73,13 @@ def _relative_path(path: Path) -> str:
         return str(path.relative_to(PARQUET_DIR))
     except ValueError:
         return str(path)
+
+
+def _logical_parquet_path(path: Path) -> str:
+    relative = _relative_path(path).replace("\\", "/")
+    if relative.startswith("parquet/") or Path(relative).is_absolute():
+        return relative
+    return f"parquet/{relative}"
 
 
 def _visible_parquet_path(path: str | Path) -> Path:
@@ -316,6 +323,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
     dataset_id = _dataset_id(key)
     first_date = min((str(row["trade_date"]) for row in rows), default=None)
     last_date = max((str(row["trade_date"]) for row in rows), default=None)
+    root_path = _logical_parquet_path(root)
     with db() as connection:
         connection.execute(
             """
@@ -351,7 +359,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 scope["data_type"],
                 scope["adjust"],
                 scope["source"],
-                str(root),
+                root_path,
                 SCHEMA_VERSION,
                 first_date,
                 last_date,
@@ -365,6 +373,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
         connection.execute("delete from parquet_files where dataset_id = ?", (dataset_id,))
         for item in files:
             path = item["path"]
+            file_path = _logical_parquet_path(path)
             connection.execute(
                 """
                 insert into parquet_files
@@ -373,9 +382,9 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    _file_id(path),
+                    _file_id(file_path),
                     dataset_id,
-                    str(path),
+                    file_path,
                     json_dump(item["partition"]),
                     item["row_count"],
                     item["first_timestamp"],
@@ -388,7 +397,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
     return {
         "id": dataset_id,
         "datasetKey": key,
-        "rootPath": str(root),
+        "rootPath": root_path,
         "schemaVersion": SCHEMA_VERSION,
         "rowCount": len(rows),
         "fileCount": len(files),
@@ -396,8 +405,9 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
         "endDate": last_date,
         "files": [
             {
-                "path": str(item["path"]),
+                "path": _logical_parquet_path(item["path"]),
                 "relativePath": _relative_path(item["path"]),
+                "visiblePath": str(item["path"]),
                 "partition": item["partition"],
                 "rowCount": item["row_count"],
                 "firstTimestamp": item["first_timestamp"],

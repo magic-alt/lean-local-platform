@@ -622,7 +622,7 @@ def parse_adjustment_notice(
     )
     warnings: list[str] = []
     kind = _content_type(source_url, content_type)
-    if content and kind not in {"pdf", "application/pdf"}:
+    if content and kind not in {"pdf", "application/pdf", "manual"}:
         try:
             for table_index, frame in enumerate(tables_from_content(content, source_url=source_url, content_type=content_type)):
                 official_events = events_from_csindex_adjustment_frame(

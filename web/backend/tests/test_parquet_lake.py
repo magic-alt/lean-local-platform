@@ -64,6 +64,11 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     datasets = parquet_lake.list_datasets()
     assert datasets[0]["row_count"] == 2
     assert datasets[0]["metadata"]["exported_from"] == "market_daily_bars"
+    assert datasets[0]["root_path"].startswith("parquet/")
+    with db_module.db() as connection:
+        stored_files = connection.execute("select file_path from parquet_files order by file_path").fetchall()
+    assert stored_files
+    assert all(row["file_path"].startswith("parquet/") for row in stored_files)
 
     result = parquet_lake.query_duckdb_bars(
         asset_class="equity",
@@ -247,7 +252,7 @@ def test_duckdb_query_remaps_host_parquet_path_to_visible_parquet_dir(tmp_path, 
     with db_module.db() as connection:
         rows = connection.execute("select id, file_path from parquet_files").fetchall()
         for row in rows:
-            relative = row["file_path"].split("/parquet/", 1)[1]
+            relative = row["file_path"].removeprefix("parquet/")
             connection.execute("update parquet_files set file_path = ? where id = ?", (f"/host/parquet/{relative}", row["id"]))
 
     result = parquet_lake.query_duckdb_bars(symbol="600519", provider_source="akshare", market="china")

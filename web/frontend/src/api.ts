@@ -335,6 +335,27 @@ export interface PaperSession {
   finished_at?: string | null;
 }
 
+export interface PaperDailyReport {
+  id: string;
+  session_id: string;
+  trade_date: string;
+  schemaVersion?: number;
+  sessionId?: string;
+  tradeDate?: string;
+  executionPolicy?: string;
+  cash?: number;
+  NAV?: number;
+  dailyReturn?: number;
+  cumulativeReturn?: number;
+  excessReturn?: number;
+  benchmark?: { symbol?: string | null; close?: number | null; dailyReturn?: number | null; return?: number | null };
+  qa?: { passed?: boolean; severity?: string };
+  rejectionReasons?: string[];
+  warnings?: string[];
+  fingerprint?: string;
+  report?: Record<string, unknown>;
+}
+
 export interface ChartPoint {
   time: string;
   value: number;
@@ -717,7 +738,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  paperReports: (id: string) => request<unknown[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
+  paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
   updatePaperSessionStatus: (id: string, status: string) =>
     request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
       method: "POST",
