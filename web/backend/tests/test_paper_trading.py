@@ -45,6 +45,32 @@ def import_rows():
     )
 
 
+def import_rows_for_symbol(symbol: str):
+    from app.services.data import import_ashare_research_data
+
+    rows = [
+        {"date": "2024-01-02", "open": "10", "high": "10.5", "low": "9.8", "close": "10", "volume": "100000"},
+        {"date": "2024-01-03", "open": "10.1", "high": "10.6", "low": "10.0", "close": "10.2", "volume": "100000"},
+        {"date": "2024-01-04", "open": "10.2", "high": "10.8", "low": "10.1", "close": "10.4", "volume": "100000"},
+    ]
+    return import_ashare_research_data(
+        symbol=symbol,
+        provider="unit",
+        market="china",
+        rows=rows,
+        source="unit",
+        overwrite=True,
+        adjust="raw",
+        outputsize="",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date=None,
+        end_date=None,
+    )
+
+
 def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows()
@@ -99,6 +125,10 @@ def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_sta
     create_signal(watchlist["id"], trade_date="2024-01-03", side="buy", target_percent=1)
     assert match_daily_orders(watchlist["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "not_in_watchlist"
 
+    observe_only = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "observeOnlySymbols": "600519"})
+    create_signal(observe_only["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(observe_only["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "observe_only"
+
     cash_floor = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "minCash": 100000})
     create_signal(cash_floor["id"], trade_date="2024-01-03", side="buy", target_percent=1)
     assert match_daily_orders(cash_floor["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "cash_floor"
@@ -126,8 +156,8 @@ def test_paper_constraints_cap_weight_and_block_st_buy(tmp_path, monkeypatch):
     capped = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "maxPositionWeight": 0.1})
     create_signal(capped["id"], trade_date="2024-01-03", side="buy", target_percent=1)
     capped_order = match_daily_orders(capped["id"], "2024-01-04", auto_signal=False)["orders"][0]
-    assert capped_order["status"] == "filled"
-    assert capped_order["quantity"] <= 1000
+    assert capped_order["status"] == "rejected"
+    assert capped_order["reason"] == "max_position_weight"
 
     import_trade_status(
         [
@@ -144,3 +174,34 @@ def test_paper_constraints_cap_weight_and_block_st_buy(tmp_path, monkeypatch):
     st_blocked = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
     create_signal(st_blocked["id"], trade_date="2024-01-03", side="buy", target_percent=1)
     assert match_daily_orders(st_blocked["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "st_blocked"
+
+
+def test_paper_multi_symbol_session_fills_then_rejects_max_positions(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows_for_symbol("600519")
+    import_rows_for_symbol("000001")
+
+    from app.services.paper import create_session, create_signal, list_positions, match_daily_orders
+
+    session = create_session(
+        {
+            "symbol": "600519",
+            "symbols": ["600519", "000001"],
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "maxPositions": 1,
+            "maxPositionWeight": 0.4,
+        }
+    )
+    create_signal(session["id"], trade_date="2024-01-03", side="buy", symbol="600519", target_percent=0.4)
+    create_signal(session["id"], trade_date="2024-01-03", side="buy", symbol="000001", target_percent=0.4)
+
+    orders = match_daily_orders(session["id"], "2024-01-04", auto_signal=False)["orders"]
+
+    assert orders[0]["symbol"] == "600519"
+    assert orders[0]["status"] == "filled"
+    assert orders[1]["symbol"] == "000001"
+    assert orders[1]["status"] == "rejected"
+    assert orders[1]["reason"] == "max_positions"
+    assert [position["symbol"] for position in list_positions(session["id"])] == ["600519"]

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
-from ..core.config import REPO_ROOT
+from ..core.config import BACKEND_DIR, GIT_ROOT
 from ..db import db, rows_to_dicts, utc_now
 
 
@@ -33,7 +36,7 @@ def _run_git(args: list[str]) -> str | None:
     try:
         completed = subprocess.run(
             ["git", *args],
-            cwd=REPO_ROOT,
+            cwd=GIT_ROOT,
             check=False,
             capture_output=True,
             text=True,
@@ -65,7 +68,7 @@ def docker_image_digest(image: str | None) -> dict[str, Any]:
     try:
         completed = subprocess.run(
             [docker, "image", "inspect", image, "--format", "{{json .RepoDigests}}"],
-            cwd=REPO_ROOT,
+            cwd=GIT_ROOT,
             check=False,
             capture_output=True,
             text=True,
@@ -101,6 +104,8 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
     scope = market_data_scope(parameters)
     symbol = scope["symbol"]
     rows: list[dict[str, Any]] = []
+    trade_status: dict[str, Any] = {}
+    benchmark: dict[str, Any] = {}
     parquet_files: list[dict[str, Any]] = []
     if symbol:
         with db() as connection:
@@ -128,6 +133,41 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     scope["end"],
                 ),
             ).fetchone()
+            trade_status_row = connection.execute(
+                """
+                select count(distinct trade_date) as row_count,
+                       min(trade_date) as first_date,
+                       max(trade_date) as last_date
+                from market_trade_status
+                where symbol = ? and trade_date between ? and ?
+                """,
+                (symbol, scope["start"], scope["end"]),
+            ).fetchone()
+            benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
+            if benchmark_symbol:
+                benchmark_row = connection.execute(
+                    """
+                    select count(*) as row_count,
+                           min(trade_date) as first_date,
+                           max(trade_date) as last_date
+                    from market_daily_bars
+                    where symbol = ? and asset_class = ? and market = ? and venue = ?
+                      and resolution = ? and data_type = ? and adjust = ?
+                      and trade_date between ? and ?
+                    """,
+                    (
+                        benchmark_symbol,
+                        str(scope["assetClass"]).lower(),
+                        str(scope["market"]).lower(),
+                        str(scope["venue"]).lower(),
+                        str(scope["resolution"]).lower(),
+                        str(scope["dataType"]).lower(),
+                        scope["adjust"],
+                        scope["start"],
+                        scope["end"],
+                    ),
+                ).fetchone()
+                benchmark = {"symbol": benchmark_symbol, **(dict(benchmark_row) if benchmark_row else {})}
             parquet_files = rows_to_dicts(
                 connection.execute(
                     """
@@ -149,7 +189,29 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 ).fetchall()
             )
         rows = [dict(data_row)] if data_row else []
-    return {"scope": scope, "marketDailyBars": rows[0] if rows else {}, "parquetFiles": parquet_files}
+        trade_status = dict(trade_status_row) if trade_status_row else {}
+    return {
+        "scope": scope,
+        "marketDailyBars": rows[0] if rows else {},
+        "tradeStatus": trade_status,
+        "benchmark": benchmark,
+        "parquetFiles": parquet_files,
+    }
+
+
+def _first_cache_file(lean_cache: dict[str, Any] | None, name: str) -> dict[str, Any]:
+    if not lean_cache:
+        return {}
+    if "files" in lean_cache:
+        return dict((lean_cache.get("files") or {}).get(name) or {})
+    symbol_cache = lean_cache.get("symbol") if isinstance(lean_cache, dict) else None
+    if isinstance(symbol_cache, dict):
+        return dict((symbol_cache.get("files") or {}).get(name) or {})
+    return {}
+
+
+def _requirements_hash() -> str | None:
+    return _file_hash(BACKEND_DIR / "requirements.txt")
 
 
 def build_run_fingerprint(
@@ -161,16 +223,49 @@ def build_run_fingerprint(
     strategy_path: str | Path | None = None,
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    created_at = utc_now()
+    git = git_state()
+    data = data_fingerprint(parameters)
+    docker = docker_image_digest(docker_image)
+    daily_cache = _first_cache_file(lean_cache, "daily")
+    factor_cache = _first_cache_file(lean_cache, "factor")
+    parquet_files = data.get("parquetFiles") or []
+    first_parquet = parquet_files[0] if parquet_files else {}
+    market_daily = data.get("marketDailyBars") or {}
+    trade_status = data.get("tradeStatus") or {}
+    benchmark = data.get("benchmark") or {}
     return {
         "schemaVersion": 1,
         "runId": run_id,
-        "createdAt": utc_now(),
-        "git": git_state(),
+        "createdAt": created_at,
+        "run_start_time": created_at,
+        "timezone": os.environ.get("TZ") or time.tzname[0],
+        "python_version": sys.version,
+        "requirements_hash": _requirements_hash(),
+        "git": git,
+        "git_commit": git.get("commit"),
+        "git_branch": git.get("branch"),
+        "git_dirty": git.get("dirty"),
+        "git_status_hash": git.get("statusHash"),
         "parametersHash": _json_hash(parameters),
+        "parameters_sha256": _json_hash(parameters),
         "parameters": parameters,
         "strategyFileHash": _file_hash(strategy_path),
+        "strategy_file_sha256": _file_hash(strategy_path),
         "configFileHash": _file_hash(config_path),
-        "data": data_fingerprint(parameters),
+        "config_file_sha256": _file_hash(config_path),
+        "data": data,
+        "data_batch_id": market_daily.get("last_batch_id"),
+        "market_daily_bars_count": market_daily.get("row_count"),
+        "trade_status_count": trade_status.get("row_count"),
+        "benchmark_symbol": benchmark.get("symbol") or parameters.get("benchmarkSymbol"),
+        "benchmark_rows": benchmark.get("row_count"),
+        "parquet_dataset_id": first_parquet.get("dataset_id"),
+        "parquet_file_sha256": first_parquet.get("sha256"),
+        "lean_zip_sha256": daily_cache.get("sha256"),
+        "factor_file_sha256": factor_cache.get("sha256"),
         "leanCache": lean_cache or {},
-        "docker": docker_image_digest(docker_image),
+        "docker": docker,
+        "docker_image": docker.get("image"),
+        "docker_image_digest": docker.get("digest"),
     }

@@ -3,14 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
+from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, utc_now
 from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
 from ..lean import LeanPlatformError, new_run_id, validate_backtest_parameters
 from ..repositories.backtest_repository import get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project
+from .ashare_multisource import quality_gate_range
 from .ashare_repository import assert_ashare_ready
+from .run_fingerprint import build_run_fingerprint
 from .tasks import append_log, create_task, get_task, update_task
 from .trading_config import merge_ashare_trading_config
 
@@ -39,10 +41,21 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             **template_parameters,
         }
     )
-    if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
+    is_china_equity = parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china"
+    if is_china_equity:
         adjust = str(parameters.get("adjust") or "raw")
         assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust)
         parameters = merge_ashare_trading_config(parameters, request_data)
+        symbols_to_gate = [parameters["ticker"]]
+        benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
+        if benchmark_symbol:
+            symbols_to_gate.append(benchmark_symbol)
+        for symbol in symbols_to_gate:
+            gate = quality_gate_range(symbol, parameters["start"], parameters["end"])
+            if not gate["passed"]:
+                report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
+                detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
+                raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
     project_id = request_data.get("projectId")
@@ -60,13 +73,22 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     results_dir.mkdir(parents=True, exist_ok=True)
     now = utc_now()
     name = request_data.get("name") or f"{parameters['ticker']} {parameters['start']} -> {parameters['end']}"
+    strategy_path = Path(project["project_path"]) / project["main_file"] if project_id else ALGORITHM_PATH
+    fingerprint = build_run_fingerprint(
+        run_id=run_id,
+        parameters=parameters,
+        docker_image=docker_image,
+        strategy_path=strategy_path,
+        config_path=run_dir / "config.json",
+    )
     with db() as connection:
         connection.execute(
             """
             insert into backtest_runs
                 (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
-                 parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, created_at,
+                 fingerprint_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -86,6 +108,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 str(results_dir),
                 task["log_path"],
                 now,
+                json_dump(fingerprint),
             ),
         )
     return get_backtest(run_id) or {}

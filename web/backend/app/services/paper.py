@@ -81,8 +81,15 @@ def get_daily_report(session_id: str, trade_date: str) -> dict[str, Any] | None:
 
 
 def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
+    raw_symbols = parameters.get("symbols") or parameters.get("paperSymbols") or []
+    if isinstance(raw_symbols, str):
+        raw_symbols = [item.strip() for item in raw_symbols.split(",") if item.strip()]
+    if raw_symbols:
+        primary_symbol = raw_symbols[0]
+    else:
+        primary_symbol = parameters["symbol"]
     request = asset_request(
-        parameters["symbol"],
+        primary_symbol,
         parameters.get("assetClass", "equity"),
         venue=parameters.get("venue"),
         market=parameters.get("market"),
@@ -98,6 +105,17 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         **nested_parameters,
         **parameters,
         "symbol": request.symbol,
+        "symbols": [
+            asset_request(
+                symbol,
+                parameters.get("assetClass", "equity"),
+                venue=parameters.get("venue"),
+                market=parameters.get("market"),
+                resolution=parameters.get("resolution", "daily"),
+                data_type=parameters.get("dataType", "trade"),
+            ).symbol
+            for symbol in (raw_symbols or [request.symbol])
+        ],
         "assetClass": request.asset_class,
         "venue": request.venue,
         "resolution": request.resolution,
@@ -193,6 +211,7 @@ def create_signal(
     *,
     trade_date: str,
     side: str,
+    symbol: str | None = None,
     target_percent: float | None = None,
     strength: float | None = None,
     reason: str | None = None,
@@ -201,6 +220,7 @@ def create_signal(
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
+    signal_symbol = _normalize_session_symbol(session, symbol or session["symbol"])
     signal_id = str(uuid.uuid4())
     now = utc_now()
     with db() as connection:
@@ -214,7 +234,7 @@ def create_signal(
                 signal_id,
                 session_id,
                 parse_date(trade_date).isoformat(),
-                session["symbol"],
+                signal_symbol,
                 _side(side),
                 target_percent,
                 strength,
@@ -239,6 +259,15 @@ def generate_daily_signal(session_id: str, trade_date: str) -> dict[str, Any]:
         raise KeyError("Paper session not found.")
     parameters = session.get("parameters") or {}
     symbol = session["symbol"]
+    return generate_daily_signal_for_symbol(session_id, symbol, trade_date)
+
+
+def generate_daily_signal_for_symbol(session_id: str, symbol: str, trade_date: str) -> dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise KeyError("Paper session not found.")
+    parameters = session.get("parameters") or {}
+    symbol = _normalize_session_symbol(session, symbol)
     date_value = parse_date(trade_date).isoformat()
     fast = int(parameters.get("fast") or parameters.get("parameters", {}).get("fast") or 5)
     slow = int(parameters.get("slow") or parameters.get("parameters", {}).get("slow") or 20)
@@ -250,6 +279,7 @@ def generate_daily_signal(session_id: str, trade_date: str) -> dict[str, Any]:
             session_id,
             trade_date=date_value,
             side="hold",
+            symbol=symbol,
             target_percent=None,
             strength=0,
             reason=f"insufficient_history:{len(bars)}/{slow}",
@@ -259,11 +289,12 @@ def generate_daily_signal(session_id: str, trade_date: str) -> dict[str, Any]:
     slow_average = sum(float(row["close"]) for row in bars[-slow:]) / slow
     position = _position(session_id, symbol)
     holding = bool(position and float(position.get("quantity") or 0) > 0)
+    target_percent = _parameter_float(parameters, "signalTargetPercent", "targetPercent", "autoTargetPercent") or 1.0
     if fast_average > slow_average and not holding:
-        return create_signal(session_id, trade_date=date_value, side="buy", target_percent=1.0, strength=fast_average - slow_average, reason="fast_ma_above_slow_ma", source="ema_cross")
+        return create_signal(session_id, trade_date=date_value, side="buy", symbol=symbol, target_percent=target_percent, strength=fast_average - slow_average, reason="fast_ma_above_slow_ma", source="ema_cross")
     if fast_average < slow_average and holding:
-        return create_signal(session_id, trade_date=date_value, side="sell", target_percent=0.0, strength=slow_average - fast_average, reason="fast_ma_below_slow_ma", source="ema_cross")
-    return create_signal(session_id, trade_date=date_value, side="hold", target_percent=None, strength=abs(fast_average - slow_average), reason="no_rebalance", source="ema_cross")
+        return create_signal(session_id, trade_date=date_value, side="sell", symbol=symbol, target_percent=0.0, strength=slow_average - fast_average, reason="fast_ma_below_slow_ma", source="ema_cross")
+    return create_signal(session_id, trade_date=date_value, side="hold", symbol=symbol, target_percent=None, strength=abs(fast_average - slow_average), reason="no_rebalance", source="ema_cross")
 
 
 def _position(session_id: str, symbol: str) -> dict[str, Any] | None:
@@ -301,8 +332,42 @@ def _signals_for_date(session_id: str, trade_date: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def _signals_for_date_symbol(session_id: str, trade_date: str, symbol: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select * from paper_signals
+            where session_id = ? and trade_date = ? and symbol = ?
+            order by created_at asc
+            """,
+            (session_id, trade_date, symbol),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
 def _session_parameters(session: dict[str, Any]) -> dict[str, Any]:
     return session.get("parameters") or {}
+
+
+def _session_symbols(session: dict[str, Any]) -> list[str]:
+    parameters = _session_parameters(session)
+    symbols = parameters.get("symbols") or parameters.get("paperSymbols") or []
+    if isinstance(symbols, str):
+        symbols = [item.strip() for item in symbols.split(",") if item.strip()]
+    if not symbols:
+        symbols = [session["symbol"]]
+    result = []
+    for symbol in symbols:
+        normalized = _normalize_session_symbol(session, str(symbol))
+        if normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _normalize_session_symbol(session: dict[str, Any], symbol: str) -> str:
+    if session.get("asset_class") == "equity" and session.get("venue") == "china":
+        return normalize_symbol(symbol, "china")
+    return str(symbol).upper().strip()
 
 
 def _parameter_list(parameters: dict[str, Any], *keys: str) -> set[str]:
@@ -492,6 +557,14 @@ def _portfolio_constraint_rejection(
     return None
 
 
+def _target_percent_rejection(session: dict[str, Any], signal: dict[str, Any]) -> str | None:
+    cap = _parameter_float(_session_parameters(session), "maxPositionWeight", "max_position_weight", "singleStockMaxWeight")
+    requested = float(signal.get("target_percent") or 1.0)
+    if cap is not None and requested > cap:
+        return "max_position_weight"
+    return None
+
+
 def _target_percent(session: dict[str, Any], signal: dict[str, Any]) -> float:
     target = float(signal.get("target_percent") or 1.0)
     cap = _parameter_float(_session_parameters(session), "maxPositionWeight", "max_position_weight", "singleStockMaxWeight")
@@ -594,8 +667,10 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
     if not session:
         raise KeyError("Paper session not found.")
     date_value = parse_date(trade_date).isoformat()
-    if auto_signal and not _signals_for_date(session_id, date_value):
-        generate_daily_signal(session_id, date_value)
+    if auto_signal:
+        for symbol in _session_symbols(session):
+            if not _signals_for_date_symbol(session_id, date_value, symbol):
+                generate_daily_signal_for_symbol(session_id, symbol, date_value)
     policy = _execution_policy(session)
     signals = _open_signals_due(session, date_value, policy)
     orders = []
@@ -629,6 +704,11 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         constraint_reason = _portfolio_constraint_rejection(session, signal, side, date_value, current_quantity)
         if constraint_reason:
             orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", constraint_reason))
+            _update_signal(signal["id"], "rejected")
+            continue
+        target_rejection = _target_percent_rejection(session, signal) if side == "buy" else None
+        if target_rejection:
+            orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", target_rejection))
             _update_signal(signal["id"], "rejected")
             continue
         if side == "buy":
@@ -670,7 +750,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
 def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> list[str]:
     start = parse_date(start_date).isoformat()
     end = parse_date(end_date).isoformat()
-    symbol = session["symbol"]
+    symbols = _session_symbols(session)
     if session.get("asset_class") == "equity" and session.get("venue") == "china":
         with db() as connection:
             calendar_rows = connection.execute(
@@ -690,10 +770,10 @@ def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> li
                 """
                 select distinct trade_date
                 from ashare_daily_bars
-                where symbol = ? and trade_date between ? and ?
+                where symbol in ({",".join("?" for _ in symbols)}) and trade_date between ? and ?
                 order by trade_date asc
                 """,
-                (symbol, start, end),
+                (*symbols, start, end),
             ).fetchall()
         return [row["trade_date"] for row in rows]
     return []
@@ -764,7 +844,12 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         "close": snapshot.get("benchmark_close"),
         "return": snapshot.get("benchmark_return"),
     }
-    qa = quality_gate(session["symbol"], date_value)
+    qa_items = [quality_gate(symbol, date_value) for symbol in _session_symbols(session)]
+    qa = {
+        "passed": all(item["passed"] for item in qa_items),
+        "severity": "critical" if any(item["severity"] == "critical" for item in qa_items) else "ok",
+        "items": qa_items,
+    }
     report = {
         "sessionId": session_id,
         "tradeDate": date_value,

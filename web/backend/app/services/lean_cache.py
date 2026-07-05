@@ -181,6 +181,7 @@ def ensure_ashare_lean_cache(
     adjust: str = "raw",
     market: str = "china",
 ) -> dict[str, Any]:
+    lean_module.ensure_equity_dirs(market)
     zip_path = _lean_daily_path(symbol, market)
     factor_path = _lean_factor_path(symbol, market)
     map_path = _lean_map_path(symbol, market)

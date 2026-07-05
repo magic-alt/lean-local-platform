@@ -326,7 +326,13 @@ def list_quality_reports(limit: int = 100) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
-def blocking_quality_reports(symbol: str, trade_date: str | None = None) -> list[dict[str, Any]]:
+def blocking_quality_reports(
+    symbol: str,
+    trade_date: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
     symbol_key = _ashare_symbol(symbol)
     predicates = ["report_type = ?", "asset_class = ?", "market = ?", "symbol = ?", "severity = ?"]
     params: list[Any] = ["ashare_daily_multisource", "equity", "china", symbol_key, "critical"]
@@ -334,6 +340,10 @@ def blocking_quality_reports(symbol: str, trade_date: str | None = None) -> list
         predicates.append("(start_date is null or start_date <= ?)")
         predicates.append("(end_date is null or end_date >= ?)")
         params.extend([trade_date, trade_date])
+    if start_date and end_date:
+        predicates.append("(start_date is null or start_date <= ?)")
+        predicates.append("(end_date is null or end_date >= ?)")
+        params.extend([end_date, start_date])
     with db() as connection:
         rows = connection.execute(
             f"""
@@ -353,6 +363,18 @@ def quality_gate(symbol: str, trade_date: str | None = None) -> dict[str, Any]:
     return {
         "symbol": _ashare_symbol(symbol),
         "tradeDate": trade_date,
+        "passed": not blockers,
+        "severity": "critical" if blockers else "ok",
+        "blockingReports": blockers,
+    }
+
+
+def quality_gate_range(symbol: str, start_date: str, end_date: str) -> dict[str, Any]:
+    blockers = blocking_quality_reports(symbol, start_date=start_date, end_date=end_date)
+    return {
+        "symbol": _ashare_symbol(symbol),
+        "startDate": start_date,
+        "endDate": end_date,
         "passed": not blockers,
         "severity": "critical" if blockers else "ok",
         "blockingReports": blockers,

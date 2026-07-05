@@ -193,6 +193,146 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["cashBuffer"] == 1000.0
     assert job["parameters"]["blacklist"] == ["000001", "600000"]
     assert job["parameters"]["constraintVersion"] == 1
+    assert job["fingerprint"]["parameters_sha256"]
+    assert "git_commit" in job["fingerprint"]
+
+
+def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services.data import import_ashare_research_data
+
+    import_ashare_research_data(
+        symbol="600519",
+        provider="sina",
+        market="china",
+        rows=sample_ashare_rows(),
+        source="sina",
+        overwrite=True,
+        adjust="raw",
+        outputsize="",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date=None,
+        end_date=None,
+    )
+
+    import app.services.backtest_service as backtest_service
+    import app.services.tasks as task_service
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+
+    job = backtest_service.create_backtest_job(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "start": "2024-01-02",
+            "end": "2024-01-04",
+            "cash": 100000,
+        }
+    )
+
+    assert job["status"] == "created"
+
+
+def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exist(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    import app.db as db_module
+    import app.services.backtest_service as backtest_service
+    import app.services.tasks as task_service
+
+    with db_module.db() as connection:
+        connection.execute("delete from trade_calendar where market = 'china'")
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+
+    job = backtest_service.create_backtest_job(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "start": "2024-01-02",
+            "end": "2024-01-04",
+            "cash": 100000,
+        }
+    )
+
+    assert job["status"] == "created"
+
+
+def test_backtest_creation_allows_missing_local_ashare_cache_for_worker_restore(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    zip_path = tmp_path / "Data" / "equity" / "china" / "daily" / "600519.zip"
+    zip_path.unlink()
+
+    import app.services.backtest_service as backtest_service
+    import app.services.tasks as task_service
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+
+    job = backtest_service.create_backtest_job(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "start": "2024-01-02",
+            "end": "2024-01-04",
+            "cash": 100000,
+        }
+    )
+
+    assert job["status"] == "created"
+
+
+def test_backtest_creation_blocks_critical_quality_report(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    import app.db as db_module
+    import app.services.backtest_service as backtest_service
+    from app.lean import LeanPlatformError
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into data_quality_reports
+                (id, report_type, asset_class, market, symbol, start_date, end_date,
+                 sources_json, severity, result_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "qa-critical-1",
+                "ashare_daily_multisource",
+                "equity",
+                "china",
+                "600519",
+                "2024-01-03",
+                "2024-01-03",
+                json.dumps(["unit"]),
+                "critical",
+                json.dumps({"issue": "price_mismatch"}),
+                "now",
+            ),
+        )
+
+    with pytest.raises(LeanPlatformError, match="qa_failed:qa-critical-1"):
+        backtest_service.create_backtest_job(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+                "cash": 100000,
+            }
+        )
 
 
 def test_benchmark_rows_import_to_market_bars_and_lean_cache(tmp_path, monkeypatch):
@@ -244,8 +384,20 @@ def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkey
     )
 
     assert fingerprint["parametersHash"]
+    assert fingerprint["parameters_sha256"] == fingerprint["parametersHash"]
+    assert "git_commit" in fingerprint
+    assert "git_dirty" in fingerprint
+    assert fingerprint["strategy_file_sha256"] is None
     assert fingerprint["data"]["marketDailyBars"]["row_count"] == 3
+    assert fingerprint["market_daily_bars_count"] == 3
+    assert fingerprint["trade_status_count"] == 3
     assert fingerprint["leanCache"]["files"]["daily"]["sha256"]
+    assert fingerprint["lean_zip_sha256"]
+    assert fingerprint["factor_file_sha256"]
+    assert fingerprint["docker_image"] == "quantconnect/lean:latest"
+    assert "docker_image_digest" in fingerprint
+    assert fingerprint["python_version"]
+    assert fingerprint["requirements_hash"]
 
 
 def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatch):

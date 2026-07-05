@@ -12,6 +12,7 @@ class PaperSessionCreate(BaseModel):
     name: str | None = None
     projectId: str | None = None
     symbol: str
+    symbols: list[str] | str | None = None
     assetClass: str = "equity"
     market: str = "usa"
     venue: str | None = None
@@ -38,6 +39,7 @@ class PaperStatusUpdate(BaseModel):
 class PaperSignalCreate(BaseModel):
     tradeDate: str
     side: str
+    symbol: str | None = None
     targetPercent: float | None = None
     strength: float | None = None
     reason: str | None = None
@@ -105,6 +107,7 @@ def create_signal(session_id: str, request: PaperSignalCreate):
             session_id,
             trade_date=request.tradeDate,
             side=request.side,
+            symbol=request.symbol,
             target_percent=request.targetPercent,
             strength=request.strength,
             reason=request.reason,

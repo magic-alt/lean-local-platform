@@ -786,7 +786,10 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw") -> dic
     with db() as connection:
         row = connection.execute(
             """
-            select count(*) as count, min(trade_date) as first_date, max(trade_date) as last_date
+            select count(*) as raw_count,
+                   count(distinct trade_date) as count,
+                   min(trade_date) as first_date,
+                   max(trade_date) as last_date
             from ashare_daily_bars
             where symbol = ? and adjust = ? and trade_date >= ? and trade_date <= ?
             """,
@@ -794,16 +797,30 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw") -> dic
         ).fetchone()
         status_row = connection.execute(
             """
-            select count(*) as count from ashare_trade_status
+            select count(distinct trade_date) as count from ashare_trade_status
             where symbol = ? and trade_date >= ? and trade_date <= ?
             """,
             (symbol, start, end),
         ).fetchone()
+        market_row = connection.execute(
+            """
+            select count(distinct trade_date) as count, min(trade_date) as first_date, max(trade_date) as last_date
+            from market_daily_bars
+            where symbol = ? and asset_class = 'equity' and market = 'china'
+              and resolution = 'daily' and data_type = 'trade' and adjust = ?
+              and trade_date >= ? and trade_date <= ?
+            """,
+            (symbol, adjust, start, end),
+        ).fetchone()
     return {
         "bar_count": row["count"] if row else 0,
+        "bar_raw_count": row["raw_count"] if row else 0,
         "first_date": row["first_date"] if row else None,
         "last_date": row["last_date"] if row else None,
         "status_count": status_row["count"] if status_row else 0,
+        "market_bar_count": market_row["count"] if market_row else 0,
+        "market_first_date": market_row["first_date"] if market_row else None,
+        "market_last_date": market_row["last_date"] if market_row else None,
     }
 
 
@@ -838,17 +855,17 @@ def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw") 
     if not get_security(symbol):
         raise LeanWebError(f"A-share security master is missing for {symbol}. Import or register the security first.")
     trade_dates = trade_dates_between("china", start, end)
-    if not trade_dates:
-        raise LeanWebError(f"A-share trade calendar is missing for {start} -> {end}.")
     coverage = data_coverage(symbol, start, end, adjust)
-    if coverage["bar_count"] <= 0:
+    bar_count = max(int(coverage["bar_count"] or 0), int(coverage["market_bar_count"] or 0))
+    if bar_count <= 0:
         raise LeanWebError(f"A-share daily bars are missing for {symbol} in {start} -> {end}.")
-    if coverage["bar_count"] < len(trade_dates):
+    expected_dates = len(trade_dates) if trade_dates else bar_count
+    if bar_count < expected_dates:
         raise LeanWebError(
             f"A-share daily bars are incomplete for {symbol} in {start} -> {end}: "
-            f"{coverage['bar_count']} bars for {len(trade_dates)} trade dates."
+            f"{bar_count} bars for {expected_dates} trade dates."
         )
-    if coverage["status_count"] < coverage["bar_count"]:
+    if coverage["status_count"] < bar_count:
         raise LeanWebError(f"A-share trade status is incomplete for {symbol} in {start} -> {end}.")
     batch = latest_batch_for_symbol(symbol)
     if not batch:

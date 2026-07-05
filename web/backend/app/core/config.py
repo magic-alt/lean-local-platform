@@ -7,6 +7,8 @@ WEB_DIR = BACKEND_DIR.parent
 PLATFORM_DIR = WEB_DIR.parent
 WORKSPACE_ROOT = PLATFORM_DIR.parent
 REPO_ROOT = WORKSPACE_ROOT
+GIT_ROOT = Path(os.environ.get("LEAN_GIT_ROOT", PLATFORM_DIR)).expanduser().resolve()
+HOST_PLATFORM_DIR = Path(os.environ.get("LEAN_HOST_PLATFORM_DIR", PLATFORM_DIR)).expanduser().resolve()
 
 
 def _load_env_file(path: Path) -> None:
@@ -35,6 +37,7 @@ for _env_file in (PLATFORM_DIR / ".env", BACKEND_DIR / ".env"):
 
 
 DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", WORKSPACE_ROOT / "Data")).expanduser()
+HOST_DATA_DIR = Path(os.environ.get("LEAN_HOST_DATA_DIR", DATA_DIR)).expanduser().resolve()
 ALGORITHM_PATH = PLATFORM_DIR / "DockerDemoAlgorithm.py"
 PLOT_SCRIPT = PLATFORM_DIR / "plot_results.py"
 FRONTEND_DIST = WEB_DIR / "frontend" / "dist"

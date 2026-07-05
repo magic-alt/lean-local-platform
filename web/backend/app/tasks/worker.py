@@ -18,6 +18,7 @@ from ..domain.backtest_job import CANCELLED
 from ..repositories.backtest_repository import get_backtest, update_backtest
 from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
+from ..services.ashare_multisource import quality_gate_range
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache
@@ -132,21 +133,11 @@ def run_backtest_task(task_id: str, run_id: str):
     started_at = utc_now()
     update_backtest(run_id, status="running", started_at=started_at, error=None, error_message=None)
 
-    try:
-        run_dir = RUNS_DIR / run_id
-        settings = get_settings()
-        runner = LeanRunner(timeout_seconds=int(settings.get("jobTimeoutSeconds") or 7200))
-        container_name = runner.container_name_for(run_id)
-        update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
-        lean_cache: dict[str, Any] = {}
-        if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
-            source = str(parameters.get("source") or parameters.get("provider") or "akshare")
-            adjust = str(parameters.get("adjust") or "raw")
-            lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
-            benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
-            if benchmark_symbol:
-                lean_cache["benchmark"] = ensure_ashare_lean_cache(benchmark_symbol, source=source, adjust=adjust)
-        strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
+    run_dir = RUNS_DIR / run_id
+    lean_cache: dict[str, Any] = {}
+    strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
+
+    def update_fingerprint() -> None:
         update_backtest(
             run_id,
             fingerprint_json=build_run_fingerprint(
@@ -158,6 +149,30 @@ def run_backtest_task(task_id: str, run_id: str):
                 config_path=run_dir / "config.json",
             ),
         )
+
+    try:
+        settings = get_settings()
+        runner = LeanRunner(timeout_seconds=int(settings.get("jobTimeoutSeconds") or 7200))
+        container_name = runner.container_name_for(run_id)
+        update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
+        if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
+            gate_symbols = [str(parameters["ticker"]).upper()]
+            benchmark_for_gate = str(parameters.get("benchmarkSymbol") or "").upper()
+            if benchmark_for_gate:
+                gate_symbols.append(benchmark_for_gate)
+            for symbol in gate_symbols:
+                gate = quality_gate_range(symbol, parameters["start"], parameters["end"])
+                if not gate["passed"]:
+                    report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
+                    detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
+                    raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
+            source = str(parameters.get("source") or parameters.get("provider") or "akshare")
+            adjust = str(parameters.get("adjust") or "raw")
+            lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
+            benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
+            if benchmark_symbol:
+                lean_cache["benchmark"] = ensure_ashare_lean_cache(benchmark_symbol, source=source, adjust=adjust)
+        update_fingerprint()
         if project:
             project_path = Path(project["project_path"])
             output = runner.run_backtest(
@@ -205,15 +220,8 @@ def run_backtest_task(task_id: str, run_id: str):
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
             finished_at=finished_at,
-            fingerprint_json=build_run_fingerprint(
-                run_id=run_id,
-                parameters=parameters,
-                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                lean_cache=lean_cache,
-                strategy_path=strategy_path,
-                config_path=run_dir / "config.json",
-            ),
         )
+        update_fingerprint()
         if status == "success" and output["result_json_path"]:
             run = get_backtest(run_id) or {}
             persist_result(
@@ -246,6 +254,7 @@ def run_backtest_task(task_id: str, run_id: str):
             _record_backtest_metric(CANCELLED)
             return {"status": CANCELLED, "run_id": run_id}
         update_backtest(run_id, status="failed", error=str(exc), error_message=str(exc), exit_code=-1, finished_at=finished_at)
+        update_fingerprint()
         update_task(task_id, status="failed", error=str(exc), finished_at=finished_at)
         _record_task_metric("backtest", "failed")
         _record_backtest_metric("failed")

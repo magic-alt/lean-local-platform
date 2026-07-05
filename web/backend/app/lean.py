@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,10 @@ from .core.config import (
     DATA_DIR,
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_RESEARCH_IMAGE,
+    HOST_DATA_DIR,
+    HOST_PLATFORM_DIR,
     OBJECT_STORE_DIR,
+    PLATFORM_DIR,
     PLOT_SCRIPT,
     REPO_ROOT,
 )
@@ -1021,7 +1025,7 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
         requested_resolution,
         requested_data_type,
     )
-    if not has_lean_data(data_request):
+    if not (requested_asset_class == "equity" and market == "china") and not has_lean_data(data_request):
         raise LeanPlatformError(
             f"Missing LEAN {requested_resolution} {requested_data_type} data for "
             f"{ticker} ({requested_asset_class}/{venue})."
@@ -1076,6 +1080,21 @@ def docker_command(
     docker = shutil.which("docker")
     if not docker:
         raise LeanPlatformError("docker command not found.")
+    def mount_source(path: Path) -> str:
+        resolved = Path(path)
+        data_mount_root = HOST_DATA_DIR if os.environ.get("LEAN_HOST_DATA_DIR") else DATA_DIR
+        platform_mount_root = HOST_PLATFORM_DIR if os.environ.get("LEAN_HOST_PLATFORM_DIR") else PLATFORM_DIR
+        try:
+            relative = resolved.relative_to(DATA_DIR)
+            return str(data_mount_root / relative)
+        except ValueError:
+            pass
+        try:
+            relative = resolved.relative_to(PLATFORM_DIR)
+            return str(platform_mount_root / relative)
+        except ValueError:
+            return str(resolved)
+
     command = [
         docker,
         "run",
@@ -1083,21 +1102,21 @@ def docker_command(
         "--name",
         f"lean-{config_path.parent.name}"[:60],
         "-v",
-        f"{config_path}:/Lean/Launcher/bin/Debug/config.json:ro",
+        f"{mount_source(config_path)}:/Lean/Launcher/bin/Debug/config.json:ro",
         "-v",
-        f"{DATA_DIR}:/Lean/Data:ro",
+        f"{mount_source(DATA_DIR)}:/Lean/Data:ro",
         "-v",
-        f"{results_dir}:/Lean/Results",
+        f"{mount_source(results_dir)}:/Lean/Results",
         "-v",
-        f"{OBJECT_STORE_DIR}:/Lean/Launcher/bin/Debug/storage",
+        f"{mount_source(OBJECT_STORE_DIR)}:/Lean/Launcher/bin/Debug/storage",
         image,
     ]
     if project_dir is not None:
-        command[-1:-1] = ["-v", f"{project_dir}:/Lean/Project:ro"]
+        command[-1:-1] = ["-v", f"{mount_source(project_dir)}:/Lean/Project:ro"]
     else:
-        command[-1:-1] = ["-v", f"{algorithm_path}:{algorithm_container_path}:ro"]
+        command[-1:-1] = ["-v", f"{mount_source(algorithm_path)}:{algorithm_container_path}:ro"]
     if support_dir is not None:
-        command[-1:-1] = ["-v", f"{support_dir}:/Lean/Run:ro"]
+        command[-1:-1] = ["-v", f"{mount_source(support_dir)}:/Lean/Run:ro"]
     return command
 
 
