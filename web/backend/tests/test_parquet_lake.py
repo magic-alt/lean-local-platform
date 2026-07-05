@@ -1,0 +1,148 @@
+import pytest
+
+
+def configure_temp_db(tmp_path, monkeypatch):
+    import app.db as db_module
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(db_module, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(db_module, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(db_module, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(db_module, "RESEARCH_DIR", tmp_path / "research")
+    monkeypatch.setattr(db_module, "OBJECT_STORE_DIR", tmp_path / "object-store")
+    monkeypatch.setattr(db_module, "REPORTS_DIR", tmp_path / "reports")
+    db_module.init_db()
+    return db_module
+
+
+def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    pytest.importorskip("duckdb")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+
+    with db_module.db() as connection:
+        for trade_date, close in (("2025-12-31", 100.0), ("2026-01-02", 101.0)):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                     data_type, open, high, low, close, volume, adjust, source, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "inst-600519",
+                    "600519",
+                    "equity",
+                    "china",
+                    "china",
+                    trade_date,
+                    "daily",
+                    "trade",
+                    close - 1,
+                    close + 1,
+                    close - 2,
+                    close,
+                    1000,
+                    "raw",
+                    "akshare",
+                    "now",
+                ),
+            )
+
+    exported = parquet_lake.export_market_daily_bars(source="akshare")
+
+    assert exported["rowCount"] == 2
+    assert exported["fileCount"] == 2
+    assert all(item["size"] > 0 for item in exported["files"])
+
+    datasets = parquet_lake.list_datasets()
+    assert datasets[0]["row_count"] == 2
+    assert datasets[0]["metadata"]["exported_from"] == "market_daily_bars"
+
+    result = parquet_lake.query_duckdb_bars(
+        asset_class="equity",
+        symbol="SH600519",
+        market="china",
+        venue="china",
+        provider_source="akshare",
+        start_date="2026-01-01",
+    )
+
+    assert result["enabled"] is True
+    assert result["source"] == "duckdb"
+    assert result["count"] == 1
+    assert result["items"][0]["timestamp"] == "2026-01-02"
+    assert result["items"][0]["close"] == 101.0
+
+
+def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    pytest.importorskip("duckdb")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                 data_type, open, high, low, close, volume, adjust, source, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-000001",
+                "000001",
+                "equity",
+                "china",
+                "china",
+                "2026-07-03",
+                "daily",
+                "trade",
+                10.0,
+                11.0,
+                9.0,
+                10.5,
+                10000,
+                "raw",
+                "akshare",
+                "now",
+            ),
+        )
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    exported = client.post(
+        "/api/data/parquet/export",
+        json={"assetClass": "equity", "market": "china", "venue": "china", "providerSource": "akshare"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["rowCount"] == 1
+
+    queried = client.get(
+        "/api/data/query",
+        params={
+            "source": "duckdb",
+            "assetClass": "equity",
+            "symbol": "000001",
+            "market": "china",
+            "venue": "china",
+            "providerSource": "akshare",
+        },
+    )
+    assert queried.status_code == 200
+    payload = queried.json()
+    assert payload["source"] == "duckdb"
+    assert payload["count"] == 1
+    assert payload["items"][0]["close"] == 10.5

@@ -145,6 +145,45 @@ web/backend/.venv/bin/python scripts/migrate_hs300_sqlite_to_mysql.py \
 
 本次已验证迁移结果：`ashare_daily_bars=1,215,591`、`market_daily_bars=1,215,591`、`ashare_trade_status=1,215,554`、`universe_membership=1,240`、`stored_objects=2,206`、`stored_object_chunks=2,311`；本地 LEAN Data 2,041 个文件、runtime runs 161 个文件、object-store 2 个文件已归档为 MySQL 二进制对象。
 
+历史行情数据保存机制采用分层模型：
+
+- MySQL：运行事实源，保存证券主数据、交易日历、日线行情、交易状态、PIT 成分、回测任务、结果和对象归档。
+- Parquet：派生的历史行情分析仓库，适合全市场扫描、分钟线/Tick 扩展和本地研究。
+- DuckDB：嵌入式查询引擎，直接查询 Parquet，不替代 MySQL。
+- LEAN `Data/`：回测执行缓存，由数据库行情或归档对象生成/恢复。
+
+Parquet 默认目录是 `$LEAN_DATA_DIR/parquet`，可用 `LEAN_PARQUET_DIR` 覆盖；压缩默认 `zstd`，可用 `LEAN_PARQUET_COMPRESSION` 覆盖。导出已经入库的 A 股日线：
+
+```bash
+web/backend/.venv/bin/python scripts/export_market_parquet.py \
+  --asset-class equity \
+  --market china \
+  --venue china \
+  --source akshare \
+  --adjust raw
+```
+
+通过 API 导出和查询：
+
+```text
+POST /api/data/parquet/export
+GET  /api/data/query?source=duckdb&assetClass=equity&market=china&venue=china&symbol=600519&providerSource=akshare
+GET  /api/data/parquet/datasets
+```
+
+新增的 `parquet_datasets` 和 `parquet_files` 表会记录 dataset key、分区文件、行数、日期范围、sha256、大小和导出元数据；Parquet 文件是 MySQL 标准行情表的可重建派生物，不是新的事实源。
+
+A 股多源日线校验支持比较已入库的 `akshare`、`adata`、`baostock` 等来源：
+
+```bash
+web/backend/.venv/bin/python scripts/compare_ashare_sources.py 600519 \
+  --sources akshare,baostock \
+  --start-date 2026-01-01 \
+  --end-date 2026-07-03
+```
+
+校验结果写入 `data_quality_reports`，记录覆盖率、缺失日期、OHLC 价差、成交量差异和 severity。AData/Baostock 是可选依赖 provider；未安装时不会影响平台启动。
+
 导入任意 CSV：
 
 ```bash

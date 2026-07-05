@@ -46,6 +46,8 @@ JSON_COLUMNS = {
     "qa_report_json": "qa_report",
     "fields_json": "fields",
     "terms_json": "terms",
+    "partition_json": "partition",
+    "sources_json": "sources",
 }
 
 
@@ -86,6 +88,7 @@ PATH_TEXT_COLUMNS = {
     "report_path",
     "raw_result_path",
     "source_path",
+    "root_path",
 }
 MYSQL_RESERVED_COLUMNS = {"rows", "key"}
 ID_TEXT_COLUMNS = {
@@ -492,6 +495,54 @@ def init_db() -> None:
                 batch_id text,
                 updated_at text not null,
                 primary key (instrument_id, trade_date, source)
+            );
+
+            create table if not exists parquet_datasets (
+                id text primary key,
+                dataset_key text not null unique,
+                asset_class text not null,
+                market text not null,
+                venue text,
+                resolution text not null,
+                data_type text not null default 'trade',
+                adjust text not null default 'raw',
+                source text not null,
+                root_path text not null,
+                schema_version integer not null default 1,
+                start_date text,
+                end_date text,
+                row_count integer not null default 0,
+                file_count integer not null default 0,
+                metadata_json text not null,
+                created_at text not null,
+                updated_at text not null
+            );
+
+            create table if not exists parquet_files (
+                id text primary key,
+                dataset_id text not null,
+                file_path text not null,
+                partition_json text not null,
+                row_count integer not null,
+                first_timestamp text,
+                last_timestamp text,
+                sha256 text not null,
+                size integer not null,
+                created_at text not null
+            );
+
+            create table if not exists data_quality_reports (
+                id text primary key,
+                report_type text not null,
+                asset_class text not null,
+                market text not null,
+                symbol text,
+                start_date text,
+                end_date text,
+                sources_json text not null,
+                severity text not null,
+                result_json text not null,
+                created_at text not null
             );
 
             create table if not exists trade_calendar (
@@ -1039,6 +1090,12 @@ def init_db() -> None:
                 on market_daily_bars(instrument_id, trade_date);
             create index if not exists idx_market_status_symbol_date
                 on market_trade_status(asset_class, market, symbol, trade_date);
+            create index if not exists idx_parquet_datasets_lookup
+                on parquet_datasets(asset_class, market, venue, resolution, data_type, adjust, source);
+            create index if not exists idx_parquet_files_dataset
+                on parquet_files(dataset_id, first_timestamp, last_timestamp);
+            create index if not exists idx_data_quality_reports_lookup
+                on data_quality_reports(report_type, asset_class, market, symbol, created_at desc);
             create index if not exists idx_securities_market_status
                 on securities(market, status);
             create index if not exists idx_ashare_daily_symbol_date

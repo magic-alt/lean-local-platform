@@ -4,7 +4,7 @@
 仓库：`/Users/kaermax/lean-platform`  
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
-当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线，以及 MySQL 运行主库切换。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`，但 `CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
+当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换，以及 Parquet/DuckDB 派生行情仓和 A 股多源校验。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
 ## 1. 总体结论
 
@@ -44,6 +44,32 @@
 - 生产运行已不再依赖 SQLite，但测试仍用临时 SQLite 隔离。
 - ClickHouse 仍是可选镜像/加速层，当前不是事实源。
 - LEAN 回测执行仍读取本地 `Data/` 文件缓存；MySQL 已保存文件原文，后续可补“从 MySQL 恢复/生成 LEAN Data 缓存”的启动前导出步骤。
+
+### Parquet/DuckDB 派生行情仓和多源校验
+
+实现内容：
+
+- 新增配置 `LEAN_PARQUET_DIR`、`LEAN_PARQUET_COMPRESSION`；默认 Parquet 目录为 `$LEAN_DATA_DIR/parquet`，导出时懒创建。
+- 新增元数据表 `parquet_datasets`、`parquet_files`，记录 dataset key、分区文件、行数、日期范围、sha256、大小、schema version 和导出元数据。
+- 新增数据质量表 `data_quality_reports`，保存 A 股多源日线覆盖率、价差、成交量差异和 severity。
+- 新增 `web/backend/app/services/parquet_lake.py`：从 MySQL/SQLite `market_daily_bars` 导出分区 Parquet，并用 DuckDB 查询 Parquet。
+- 新增 `/api/data/parquet/export`、`/api/data/parquet/datasets`，并支持 `/api/data/query?source=duckdb&providerSource=akshare`。
+- 新增 `web/backend/app/services/ashare_multisource.py`：基于已入库 `ashare_daily_bars` 对比 `akshare/adata/baostock` 等来源。
+- 新增 `/api/data/quality/ashare/daily/compare`、`/api/data/quality/reports`。
+- 新增可选 AData/Baostock provider adapter；动态导入，未安装不影响平台启动。
+- 新增脚本 `scripts/export_market_parquet.py` 和 `scripts/compare_ashare_sources.py`。
+
+验证结果：
+
+- `web/backend/.venv/bin/python -m py_compile ...` 通过。
+- 已安装 requirements 中声明但当前 venv 缺失的 `duckdb`、`polars`。
+- `./web/backend/.venv/bin/pytest web/backend/tests/test_parquet_lake.py web/backend/tests/test_ashare_multisource.py web/backend/tests/test_market_data.py` 通过：`5 passed`。
+
+剩余边界：
+
+- Parquet 是从 `market_daily_bars` 派生的研究仓；若上游 MySQL 数据不完整，Parquet 不会自动补数据。
+- 当前只实现日线导出/query 的第一版，分钟线、Tick、期货连续合约和 crypto/futures 大表分区规范仍需后续扩展。
+- 多源校验只比较已入库数据，不会自动下载缺失源；需要先通过 provider import 把 AData/Baostock 等来源写入数据库。
 
 ### P0-001：全 A 历史股票池缺失，幸存者偏差未闭环
 
@@ -148,7 +174,14 @@ cd web/backend
 .venv/bin/python -m pytest -q
 ```
 
-结果：`33 passed, 1 skipped, 3 warnings in 0.81s`。
+结果：`39 passed, 1 skipped, 3 warnings in 1.34s`。
+
+```bash
+cd web/backend
+.venv/bin/python -c "from app.db import init_db; init_db(); print('init_db ok')"
+```
+
+结果：真实 MySQL 初始化成功；新增 `parquet_datasets`、`parquet_files`、`data_quality_reports` 表存在。
 
 ```bash
 web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --dry-run
@@ -200,6 +233,9 @@ docker compose config
 - `web/backend/app/db.py`：新增 `corporate_actions` 表。
 - `web/backend/app/services/ashare_repository.py`：证券主数据、历史股票池、交易状态、复权因子、公司行动、可交易性判断。
 - `web/backend/app/services/csi300_pit.py`：沪深300公告级 PIT 成分解析、事件落库、区间生成和审计 artifact 记录。
+- `web/backend/app/services/parquet_lake.py`：从 `market_daily_bars` 导出 Parquet、记录文件元数据、用 DuckDB 查询派生行情仓。
+- `web/backend/app/services/ashare_multisource.py`：A 股日线多源覆盖率和价量差异报告，结果写入 `data_quality_reports`。
+- `web/backend/app/services/ashare_source_adapters.py`：可选 AData/Baostock provider adapter。
 - `web/backend/app/services/data_quality.py`：A 股日线标准化、官方交易状态保留、fallback 推断。
 - `web/backend/app/services/data.py`：A 股研究数据导入、QA warning、LEAN zip/factor file 写入。
 - `web/backend/app/lean.py`：LEAN 数据目录、日线 zip、factor/map 文件生成。
@@ -210,11 +246,15 @@ docker compose config
 - `web/backend/tests/test_ashare_p0.py`：P0 单元测试。
 - `web/backend/tests/test_ashare_lean_integration.py`：真实 Docker/LEAN 集成测试。
 - `web/backend/tests/test_csi300_pit.py`：公告调入/调出解析、PIT 区间和 `universe_as_of()` 生效日测试。
+- `web/backend/tests/test_parquet_lake.py`：Parquet 导出、DuckDB 查询和 API 接入测试。
+- `web/backend/tests/test_ashare_multisource.py`：A 股多源校验报告和落库测试。
 - `scripts/import_csi300_pit_public.py`：按 manifest 下载/读取公开公告、记录 hash、解析事件并生成本地 PIT 成分表。
 - `scripts/import_csindex_csi300_pit.py`：中证指数官网公告抓取、附件缓存、调样事件解析和 PIT 重建脚本；当前官网详情接口存在 WAF 阻断，保留为后续补源入口。
 - `scripts/import_csindex_csi300_cached.py`：从本地中证指数官方缓存附件重建真实 `CSI300` PIT，并写入 `HS300.sqlite3`。
 - `data_sources/csi300_pit_sources.json`：本地生产 manifest，记录 2017-12-08 起的真实官方缓存 source、hash、覆盖边界和初始重建成员。
 - `data_sources/csi300_pit_sources.example.json`：公开公告 manifest 示例，仅用于验证导入管线，不写入生产库。
+- `scripts/export_market_parquet.py`：从标准行情表导出 Parquet 分区文件。
+- `scripts/compare_ashare_sources.py`：对已入库 A 股多源日线做覆盖率和价量差异校验。
 
 ## 6. 当前平台等级
 
@@ -331,6 +371,15 @@ iFinD/Choice/Wind 的购买触发条件：
   - 删除单个本地 LEAN zip 后，回测前可从 MySQL 自动恢复。
   - 恢复文件 hash 与 `stored_objects.sha256` 一致。
   - 回测结果 fingerprint 记录 MySQL object id、sha256、数据批次和导出时间。
+
+#### P1-006：Parquet/DuckDB 行情仓生产化
+
+- 问题：当前 Parquet/DuckDB 已可从 `market_daily_bars` 导出并查询日线，但还不是每日增量更新链路。
+- 推荐方案：把 Parquet 导出纳入数据导入任务；每个 batch 结束后按受影响 dataset 增量刷新，并记录 dataset/file hash 到报告。
+- 验收标准：
+  - `market_daily_bars` 新增或更新后，对应 Parquet dataset 可一键刷新。
+  - `/api/data/query?source=duckdb` 与 MySQL 查询在同一 symbol/date/source 下行数和 OHLCV 一致。
+  - 数据 QA 报告能引用 `parquet_datasets.id`、`parquet_files.sha256` 和上游 batch id。
 
 ### P2：提高效率和扩展性
 

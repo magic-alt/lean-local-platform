@@ -33,6 +33,7 @@ from .market_data import mirror_rows
 from .db_object_store import put_file
 from .market_repository import upsert_market_daily_bars
 from .tushare_adapter import fetch_tushare_rows
+from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
     finish_import_batch,
@@ -104,7 +105,7 @@ def markets() -> list[dict[str, Any]]:
             "name": "A Share",
             "currency": "CNY",
             "defaultProvider": "tushare",
-            "providers": ["tushare", "eastmoney", "sina", "akshare", "tonghuashun"],
+            "providers": ["tushare", "akshare", "adata", "baostock", "eastmoney", "sina", "tonghuashun"],
         },
         {
             "key": "hongkong",
@@ -237,6 +238,26 @@ def data_providers() -> list[dict[str, Any]]:
             "assetClasses": ["equity"],
             "venues": ["usa", "china", "hongkong"],
             "notes": "Requires the Python akshare package. Uses AKShare adapters for public US/CN/HK daily data.",
+        },
+        {
+            "key": "adata",
+            "name": "AData",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
+            "notes": "Optional A-share public-data adapter. Imported dynamically; currently writes raw daily bars for source comparison.",
+        },
+        {
+            "key": "baostock",
+            "name": "Baostock",
+            "requiresApiKey": False,
+            "supportsBatch": True,
+            "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
+            "notes": "Optional free A-share daily K-line adapter. Imported dynamically and useful as a historical OHLCV fallback/check source.",
         },
         {
             "key": "tonghuashun",
@@ -388,6 +409,14 @@ def fetch_provider_rows(
         return fetch_sina_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
     if provider == "akshare":
         return fetch_akshare_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
+    if provider == "adata":
+        if market != "china":
+            raise ValueError("AData only supports China A-share imports in this platform.")
+        return fetch_adata_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
+    if provider == "baostock":
+        if market != "china":
+            raise ValueError("Baostock only supports China A-share imports in this platform.")
+        return fetch_baostock_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
     if provider == "tonghuashun":
         return fetch_tonghuashun_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
     if provider == "stooq":

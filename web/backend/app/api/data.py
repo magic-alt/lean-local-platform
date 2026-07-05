@@ -26,6 +26,8 @@ from ..services.data import (
     symbols_for_asset,
 )
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
+from ..services.parquet_lake import export_market_daily_bars, list_datasets, query_duckdb_bars
+from ..services.ashare_multisource import compare_ashare_daily_sources, list_quality_reports
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
 from ..services.tasks import create_task
@@ -71,6 +73,30 @@ class BatchDataFetchRequest(BaseModel):
     endDate: str | None = None
     adjust: str = ""
     overwrite: bool = False
+
+
+class ParquetExportRequest(BaseModel):
+    assetClass: str = "equity"
+    market: str = "china"
+    venue: str | None = "china"
+    resolution: str = "daily"
+    dataType: str = "trade"
+    adjust: str = "raw"
+    providerSource: str = "akshare"
+    startDate: str | None = None
+    endDate: str | None = None
+
+
+class AshareDailyCompareRequest(BaseModel):
+    symbol: str
+    sources: list[str] = Field(default_factory=lambda: ["akshare", "adata", "baostock"])
+    startDate: str | None = None
+    endDate: str | None = None
+    adjust: str = "raw"
+    priceAbsTolerance: float = 0.02
+    priceRelToleranceBps: float = 5.0
+    volumeRelTolerancePct: float = 5.0
+    persist: bool = True
 
 
 @router.get("/symbols")
@@ -137,12 +163,28 @@ def query_data(
     resolution: str = "daily",
     dataType: str = "trade",
     source: str = "clickhouse",
+    providerSource: str | None = None,
+    adjust: str = "raw",
     startDate: str | None = None,
     endDate: str | None = None,
     limit: int = 500,
 ):
     try:
         query_source = source.strip().lower()
+        if query_source in {"duckdb", "parquet"}:
+            return query_duckdb_bars(
+                asset_class=assetClass,
+                symbol=symbol,
+                market=market,
+                venue=venue,
+                resolution=resolution,
+                data_type=dataType,
+                provider_source=providerSource or "akshare",
+                adjust=adjust or "raw",
+                start_date=startDate,
+                end_date=endDate,
+                limit=limit,
+            )
         query = query_database_bars if query_source in {"mysql", "database", "local", "sqlite", "local_sqlite"} else query_bars
         return query(
             asset_class=assetClass,
@@ -156,6 +198,52 @@ def query_data(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data/parquet/export")
+def export_parquet_data(request: ParquetExportRequest):
+    try:
+        return export_market_daily_bars(
+            asset_class=request.assetClass,
+            market=request.market,
+            venue=request.venue,
+            resolution=request.resolution,
+            data_type=request.dataType,
+            adjust=request.adjust,
+            source=request.providerSource,
+            start_date=request.startDate,
+            end_date=request.endDate,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/data/parquet/datasets")
+def parquet_datasets():
+    return {"items": list_datasets()}
+
+
+@router.post("/data/quality/ashare/daily/compare")
+def compare_ashare_daily_data(request: AshareDailyCompareRequest):
+    try:
+        return compare_ashare_daily_sources(
+            symbol=request.symbol,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            sources=request.sources,
+            adjust=request.adjust,
+            price_abs_tolerance=request.priceAbsTolerance,
+            price_rel_tolerance_bps=request.priceRelToleranceBps,
+            volume_rel_tolerance_pct=request.volumeRelTolerancePct,
+            persist=request.persist,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/data/quality/reports")
+def data_quality_reports(limit: int = 100):
+    return {"items": list_quality_reports(limit=limit)}
 
 
 @router.get("/markets")
