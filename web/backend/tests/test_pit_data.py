@@ -74,3 +74,34 @@ def test_index_members_as_of_respects_effective_date(tmp_path, monkeypatch):
 
     assert [item["symbol"] for item in universe_as_of("CSI300", "2024-05-20")] == ["600519"]
     assert [item["symbol"] for item in universe_as_of("CSI300", "2024-06-01")] == ["000001", "600519"]
+
+
+def test_pit_api_maps_000300_to_csi300(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.pit_data import import_index_members
+
+    import_index_members(
+        [
+            {
+                "universe_code": "CSI300",
+                "symbol": "600519",
+                "start_date": "2024-01-01",
+                "announce_date": "2023-12-15",
+                "effective_date": "2024-01-01",
+            }
+        ],
+        source="unit",
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/pit/index-members/000300/as-of/2024-02-01")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["universe"] == "CSI300"
+    assert payload["requestedUniverse"] == "000300"
+    assert [item["symbol"] for item in payload["items"]] == ["600519"]

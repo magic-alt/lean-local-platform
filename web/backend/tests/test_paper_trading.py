@@ -71,9 +71,43 @@ def import_rows_for_symbol(symbol: str):
     )
 
 
+def import_benchmark_rows():
+    import app.db as db_module
+
+    with db_module.db() as connection:
+        for trade_date, close in (("2024-01-03", 100.0), ("2024-01-04", 101.0)):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                     data_type, open, high, low, close, volume, adjust, source, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "idx-000300",
+                    "000300",
+                    "equity",
+                    "china",
+                    "china",
+                    trade_date,
+                    "daily",
+                    "trade",
+                    close,
+                    close,
+                    close,
+                    close,
+                    1000000,
+                    "raw",
+                    "unit",
+                    "now",
+                ),
+            )
+
+
 def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows()
+    import_benchmark_rows()
 
     from app.services.paper import create_session, create_signal, list_daily_reports, list_orders, list_positions, list_snapshots, match_daily_orders
 
@@ -109,6 +143,18 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     assert reports[-1]["positions"][0]["symbol"] == "600519"
     assert reports[-1]["snapshot"]["equity"] > 0
     assert reports[-1]["qa"]["passed"] is True
+    report = reports[-1]["report"]
+    assert report["initialCash"] == 100000
+    assert report["cash"] == reports[-1]["snapshot"]["cash"]
+    assert report["NAV"] == reports[-1]["snapshot"]["equity"]
+    assert report["benchmark"]["symbol"] == "000300"
+    assert report["benchmark"]["close"] == 101.0
+    assert round(report["benchmark"]["dailyReturn"], 6) == 0.01
+    assert report["cumulativeReturn"] is not None
+    assert report["excessReturn"] is not None
+    assert len(report["fingerprint"]) == 64
+    assert report["dataSourceStatus"]["benchmark"]["source"] == "unit"
+    assert report["positionWeights"][0]["symbol"] == "600519"
 
 
 def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_status(tmp_path, monkeypatch):

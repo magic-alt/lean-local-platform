@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -826,6 +828,57 @@ def _latest_snapshot(session_id: str, trade_date: str) -> dict[str, Any] | None:
     return row_to_dict(row)
 
 
+def _previous_snapshot(session_id: str, trade_date: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select * from paper_portfolio_snapshots
+            where session_id = ? and trade_date < ?
+            order by trade_date desc
+            limit 1
+            """,
+            (session_id, trade_date),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def _position_weights(positions: list[dict[str, Any]], equity: float) -> list[dict[str, Any]]:
+    result = []
+    for position in positions:
+        market_value = float(position.get("market_value") or 0)
+        result.append(
+            {
+                "symbol": position.get("symbol"),
+                "marketValue": market_value,
+                "weight": market_value / equity if equity else 0.0,
+            }
+        )
+    return result
+
+
+def _data_source_status(session: dict[str, Any], trade_date: str, benchmark_symbol: str | None) -> dict[str, Any]:
+    symbols = []
+    for symbol in _session_symbols(session):
+        bar = _market_bar(symbol, trade_date, asset_class=session.get("asset_class") or "equity", market=session.get("venue") or "china") or _ashare_bar(symbol, trade_date)
+        symbols.append({"symbol": symbol, "available": bar is not None, "source": (bar or {}).get("source")})
+    benchmark_bar = None
+    if benchmark_symbol:
+        benchmark_bar = _market_bar(benchmark_symbol, trade_date, asset_class="equity", market="china") or _ashare_bar(benchmark_symbol, trade_date)
+    return {
+        "symbols": symbols,
+        "benchmark": {
+            "symbol": benchmark_symbol,
+            "available": benchmark_bar is not None if benchmark_symbol else False,
+            "source": (benchmark_bar or {}).get("source"),
+        },
+    }
+
+
+def _paper_report_fingerprint(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
@@ -837,33 +890,100 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
     orders = _orders_for_date(session_id, date_value)
     trades = [order for order in orders if order.get("status") == "filled"]
     rejects = [order for order in orders if order.get("status") == "rejected"]
-    positions = list_positions(session_id)
+    previous_snapshot = _previous_snapshot(session_id, date_value)
     snapshot = _latest_snapshot(session_id, date_value) or create_snapshot(session_id, date_value)
+    positions = list_positions(session_id)
+    initial_cash = float((_session_parameters(session).get("cash") or 0) or 0)
+    if initial_cash <= 0:
+        initial_cash = float(snapshot.get("equity") or session.get("equity") or session.get("cash") or 0)
+    equity = float(snapshot.get("equity") or 0)
+    cash = float(snapshot.get("cash") or session.get("cash") or 0)
+    previous_equity = float((previous_snapshot or {}).get("equity") or 0)
+    daily_return = equity / previous_equity - 1.0 if previous_equity else 0.0
+    cumulative_return = equity / initial_cash - 1.0 if initial_cash else None
     benchmark = {
         "symbol": snapshot.get("benchmark_symbol"),
         "close": snapshot.get("benchmark_close"),
         "return": snapshot.get("benchmark_return"),
     }
+    previous_benchmark_close = float((previous_snapshot or {}).get("benchmark_close") or 0)
+    benchmark_close = float(snapshot.get("benchmark_close") or 0)
+    benchmark_daily_return = benchmark_close / previous_benchmark_close - 1.0 if previous_benchmark_close and benchmark_close else 0.0
+    benchmark["dailyReturn"] = benchmark_daily_return
+    excess_return = (
+        cumulative_return - float(snapshot.get("benchmark_return"))
+        if cumulative_return is not None and snapshot.get("benchmark_return") is not None
+        else None
+    )
+    position_weights = _position_weights(positions, equity)
     qa_items = [quality_gate(symbol, date_value) for symbol in _session_symbols(session)]
     qa = {
         "passed": all(item["passed"] for item in qa_items),
         "severity": "critical" if any(item["severity"] == "critical" for item in qa_items) else "ok",
         "items": qa_items,
     }
+    data_source_status = _data_source_status(session, date_value, snapshot.get("benchmark_symbol"))
+    warnings = []
+    if benchmark.get("symbol") and not benchmark.get("close"):
+        warnings.append("benchmark_missing")
+    warnings.extend(f"data_missing:{item['symbol']}" for item in data_source_status["symbols"] if not item["available"])
+    if not data_source_status["benchmark"]["available"] and benchmark.get("symbol"):
+        warnings.append(f"benchmark_source_missing:{benchmark['symbol']}")
+    if qa["severity"] != "ok":
+        warnings.append(f"qa_{qa['severity']}")
+    fingerprint = _paper_report_fingerprint(
+        {
+            "session_id": session_id,
+            "trade_date": date_value,
+            "parameters": session.get("parameters") or {},
+            "orders": [
+                {
+                    "id": order.get("id"),
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "status": order.get("status"),
+                    "reason": order.get("reason"),
+                    "fill_price": order.get("fill_price"),
+                }
+                for order in orders
+            ],
+            "snapshot": {
+                "cash": cash,
+                "equity": equity,
+                "benchmark_symbol": benchmark.get("symbol"),
+                "benchmark_close": benchmark.get("close"),
+            },
+            "qa": qa,
+        }
+    )
     report = {
         "sessionId": session_id,
         "tradeDate": date_value,
+        "strategy": _session_parameters(session).get("strategy") or _session_parameters(session).get("strategyKey") or "ema_cross",
         "executionPolicy": policy,
+        "initialCash": initial_cash,
+        "cash": cash,
+        "NAV": equity,
+        "nav": equity,
+        "dailyReturn": daily_return,
+        "cumulativeReturn": cumulative_return,
+        "excessReturn": excess_return,
         "signals": signals,
+        "pendingSignals": execution_signals,
         "executionSignals": execution_signals,
         "orders": orders,
         "trades": trades,
         "rejects": rejects,
+        "rejectionReasons": [order.get("reason") for order in rejects if order.get("reason")],
         "positions": positions,
+        "positionWeights": position_weights,
         "snapshot": snapshot,
-        "nav": snapshot.get("equity"),
         "benchmark": benchmark,
         "qa": qa,
+        "dataSourceStatus": data_source_status,
+        "warnings": warnings,
+        "fingerprint": fingerprint,
         "generatedAt": utc_now(),
     }
     report_id = str(uuid.uuid4())
@@ -944,9 +1064,14 @@ def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:
                     order by trade_date asc
                     limit 1
                     """,
-                    (session_id, benchmark_symbol),
-                ).fetchone()
-            base = float(first_snapshot["benchmark_close"]) if first_snapshot and first_snapshot.get("benchmark_close") else benchmark_close
+                        (session_id, benchmark_symbol),
+                    ).fetchone()
+            first_snapshot_item = row_to_dict(first_snapshot)
+            base = (
+                float(first_snapshot_item["benchmark_close"])
+                if first_snapshot_item and first_snapshot_item.get("benchmark_close")
+                else benchmark_close
+            )
             benchmark_return = benchmark_close / base - 1.0 if base else None
     snapshot_id = str(uuid.uuid4())
     now = utc_now()

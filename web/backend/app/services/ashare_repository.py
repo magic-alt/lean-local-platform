@@ -851,6 +851,99 @@ def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
     }
 
 
+def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
+    code = index_code.strip().upper()
+    with db() as connection:
+        securities = connection.execute(
+            """
+            select count(*) as total,
+                   sum(case when status = 'delisted' or delisted_date is not null then 1 else 0 end) as delisted,
+                   sum(case when is_st = 1 then 1 else 0 end) as st
+            from securities
+            """
+        ).fetchone()
+        trade_status = connection.execute(
+            """
+            select count(*) as total,
+                   count(distinct symbol) as symbols,
+                   sum(case when is_suspended = 1 then 1 else 0 end) as suspended_days,
+                   sum(case when is_st = 1 then 1 else 0 end) as st_days,
+                   min(trade_date) as start_date,
+                   max(trade_date) as end_date
+            from ashare_trade_status
+            """
+        ).fetchone()
+        actions = connection.execute(
+            """
+            select count(*) as total,
+                   count(distinct symbol) as symbols,
+                   min(ex_date) as start_date,
+                   max(ex_date) as end_date
+            from corporate_actions
+            """
+        ).fetchone()
+        pit = connection.execute(
+            """
+            select count(*) as total,
+                   count(distinct symbol) as symbols,
+                   min(start_date) as start_date,
+                   max(coalesce(end_date, start_date)) as end_date
+            from index_membership_pit
+            where index_code = ?
+            """,
+            (code,),
+        ).fetchone()
+    securities = row_to_dict(securities) or {}
+    trade_status = row_to_dict(trade_status) or {}
+    actions = row_to_dict(actions) or {}
+    pit = row_to_dict(pit) or {}
+    issues = []
+    if int(securities["total"] or 0) == 0:
+        issues.append("security_master_missing")
+    if int(securities["delisted"] or 0) == 0:
+        issues.append("delisted_security_missing")
+    if int(securities["st"] or 0) == 0:
+        issues.append("security_master_st_missing")
+    if int(trade_status["suspended_days"] or 0) == 0:
+        issues.append("suspended_trade_status_missing")
+    if int(actions["total"] or 0) == 0:
+        issues.append("corporate_actions_missing")
+    if int(pit["total"] or 0) == 0:
+        issues.append(f"{code.lower()}_pit_missing")
+    severity = "critical" if any(issue.endswith("_missing") for issue in issues) else "ok"
+    return {
+        "indexCode": code,
+        "severity": severity,
+        "passed": severity == "ok",
+        "issues": issues,
+        "securities": {
+            "total": int(securities.get("total") or 0),
+            "delisted": int(securities.get("delisted") or 0),
+            "st": int(securities.get("st") or 0),
+        },
+        "tradeStatus": {
+            "rows": int(trade_status.get("total") or 0),
+            "symbols": int(trade_status.get("symbols") or 0),
+            "suspendedDays": int(trade_status.get("suspended_days") or 0),
+            "stDays": int(trade_status.get("st_days") or 0),
+            "startDate": trade_status.get("start_date"),
+            "endDate": trade_status.get("end_date"),
+        },
+        "corporateActions": {
+            "rows": int(actions.get("total") or 0),
+            "symbols": int(actions.get("symbols") or 0),
+            "startDate": actions.get("start_date"),
+            "endDate": actions.get("end_date"),
+        },
+        "pit": {
+            "rows": int(pit.get("total") or 0),
+            "symbols": int(pit.get("symbols") or 0),
+            "startDate": pit.get("start_date"),
+            "endDate": pit.get("end_date"),
+        },
+    }
+
+
 def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw") -> None:
     if not get_security(symbol):
         raise LeanWebError(f"A-share security master is missing for {symbol}. Import or register the security first.")

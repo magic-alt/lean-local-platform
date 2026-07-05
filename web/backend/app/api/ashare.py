@@ -12,6 +12,7 @@ from ..services.ashare_repository import (
     import_trade_status,
     is_tradeable,
     list_import_batches,
+    reference_data_coverage,
     tradable_universe_as_of,
     trade_status_as_of,
     upsert_corporate_actions,
@@ -216,6 +217,11 @@ def ashare_actions(symbol: str, start: str | None = None, end: str | None = None
         return {"symbol": ticker, "items": corporate_actions(ticker, start, end)}
     except LeanWebError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/ashare/reference-data/coverage")
+def ashare_reference_data_coverage(indexCode: str = "CSI300"):
+    return reference_data_coverage(indexCode)
 
 
 @router.get("/ashare/universe/{universe_code}")

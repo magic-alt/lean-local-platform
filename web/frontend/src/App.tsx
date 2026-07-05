@@ -1419,7 +1419,7 @@ function ReportsPage() {
         </Form>
       </Card>
       <Card title="Reports" style={{ marginTop: 16 }}>
-        <Table<ReportRecord> rowKey="id" dataSource={reports.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Run", dataIndex: "run_id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "Open", render: (_, report) => report.report_path ? <a href={`/api/reports/${report.id}/file`} target="_blank">HTML</a> : "-" }]} />
+        <Table<ReportRecord> rowKey="id" dataSource={reports.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Source", dataIndex: "source", render: (value) => value || "reports" }, { title: "Run", dataIndex: "run_id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "Result", render: (_, report) => report.result_json_path || report.raw_result_object_id ? "available" : "-" }, { title: "Objects", render: (_, report) => report.storedObjects?.length || 0 }, { title: "Open", render: (_, report) => report.report_path ? <a href={`/api/reports/${encodeURIComponent(report.id)}/file`} target="_blank">HTML</a> : "-" }]} />
       </Card>
     </>
   );

@@ -8,6 +8,20 @@ from ..services.ashare_repository import universe_as_of
 
 router = APIRouter(prefix="/api/pit", tags=["pit-data"])
 
+INDEX_CODE_ALIASES = {
+    "000300": "CSI300",
+    "399300": "CSI300",
+    "CSI300": "CSI300",
+    "CSI_300": "CSI300",
+    "CSI-300": "CSI300",
+    "沪深300": "CSI300",
+}
+
+
+def _index_code(value: str) -> str:
+    code = value.strip().upper()
+    return INDEX_CODE_ALIASES.get(code, code)
+
 
 class FinancialStatementRecord(BaseModel):
     symbol: str
@@ -101,7 +115,7 @@ def import_index_members(request: IndexMemberImport):
     try:
         records = [
             {
-                "universe_code": item.universeCode,
+                "universe_code": _index_code(item.universeCode),
                 "symbol": item.symbol,
                 "name": item.name,
                 "start_date": item.startDate,
@@ -123,7 +137,8 @@ def import_index_members(request: IndexMemberImport):
 @router.get("/index-members/{universe_code}/as-of/{as_of_date}")
 def index_members_as_of(universe_code: str, as_of_date: str):
     try:
-        items = universe_as_of(universe_code.upper(), as_of_date)
-        return {"universe": universe_code.upper(), "asOfDate": as_of_date, "items": items, "count": len(items)}
+        normalized = _index_code(universe_code)
+        items = universe_as_of(normalized, as_of_date)
+        return {"universe": normalized, "requestedUniverse": universe_code.upper(), "asOfDate": as_of_date, "items": items, "count": len(items)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

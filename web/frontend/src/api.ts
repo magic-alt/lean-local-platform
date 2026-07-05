@@ -298,10 +298,15 @@ export interface ResearchSession {
 
 export interface ReportRecord {
   id: string;
+  source?: string;
   task_id?: string | null;
   run_id: string;
   status: string;
   report_path?: string | null;
+  result_json_path?: string | null;
+  raw_result_object_id?: string | null;
+  summary_object_id?: string | null;
+  storedObjects?: Array<{ id: string; object_key: string; sha256: string; size: number }>;
   error?: string | null;
   created_at: string;
 }

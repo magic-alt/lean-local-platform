@@ -75,6 +75,24 @@ def _relative_path(path: Path) -> str:
         return str(path)
 
 
+def _visible_parquet_path(path: str | Path) -> Path:
+    raw = Path(path)
+    if raw.exists():
+        return raw
+    text = str(path).replace("\\", "/")
+    candidates: list[Path] = []
+    if "/parquet/" in text:
+        candidates.append(PARQUET_DIR / text.split("/parquet/", 1)[1])
+    if text.startswith("parquet/"):
+        candidates.append(PARQUET_DIR / text.removeprefix("parquet/"))
+    if not raw.is_absolute():
+        candidates.append(PARQUET_DIR / raw)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else raw
+
+
 def _normalize_scope(
     asset_class: str = "equity",
     market: str = "china",
@@ -520,16 +538,22 @@ def parquet_consistency_report(
             dataset["source"],
         )
         files = _parquet_files_for_dataset(dataset["id"])
-        missing_files = [item["file_path"] for item in files if not Path(item["file_path"]).exists()]
+        resolved_files = [{**item, "visible_path": _visible_parquet_path(item["file_path"])} for item in files]
+        missing_files = [item["file_path"] for item in resolved_files if not item["visible_path"].exists()]
         hash_mismatches = [
-            {"filePath": item["file_path"], "expected": item["sha256"], "actual": _sha256(Path(item["file_path"]))}
-            for item in files
-            if Path(item["file_path"]).exists() and _sha256(Path(item["file_path"])) != item["sha256"]
+            {
+                "filePath": item["file_path"],
+                "visiblePath": str(item["visible_path"]),
+                "expected": item["sha256"],
+                "actual": _sha256(item["visible_path"]),
+            }
+            for item in resolved_files
+            if item["visible_path"].exists() and _sha256(item["visible_path"]) != item["sha256"]
         ]
         mysql_counts = _market_row_count(scope, dataset.get("start_date"), dataset.get("end_date"))
         duckdb_counts = {"enabled": duckdb is not None, "rowCount": None, "firstDate": None, "lastDate": None, "error": None}
         if duckdb is not None and files and not missing_files:
-            paths = ", ".join(_sql_string(item["file_path"]) for item in files)
+            paths = ", ".join(_sql_string(str(item["visible_path"])) for item in resolved_files)
             try:
                 row = duckdb.connect(database=":memory:").execute(
                     f"""
@@ -565,6 +589,10 @@ def parquet_consistency_report(
                 "duckdb": duckdb_counts,
                 "missingFiles": missing_files,
                 "hashMismatches": hash_mismatches,
+                "resolvedFiles": [
+                    {"filePath": item["file_path"], "visiblePath": str(item["visible_path"])}
+                    for item in resolved_files
+                ],
             }
         )
     severity = "critical" if any(item["severity"] == "critical" for item in items) else ("warning" if any(item["severity"] == "warning" for item in items) else "ok")
@@ -674,7 +702,7 @@ def _dataset_files(scope: dict[str, str]) -> tuple[dict[str, Any] | None, list[s
             """,
             (dataset["id"],),
         ).fetchall()
-    return dict(dataset), [row["file_path"] for row in files]
+    return dict(dataset), [str(_visible_parquet_path(row["file_path"])) for row in files]
 
 
 def query_duckdb_bars(
