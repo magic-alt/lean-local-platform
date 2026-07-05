@@ -39,6 +39,12 @@ class PaperRunDayRequest(BaseModel):
     autoSignal: bool = True
 
 
+class PaperReplayRequest(BaseModel):
+    startDate: str
+    endDate: str
+    autoSignal: bool = True
+
+
 @router.get("")
 def list_sessions():
     return paper_service.list_sessions()
@@ -119,6 +125,16 @@ def snapshots(session_id: str):
 def run_day(session_id: str, request: PaperRunDayRequest):
     try:
         return paper_service.match_daily_orders(session_id, request.tradeDate, auto_signal=request.autoSignal)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Paper session not found.") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{session_id}/replay")
+def replay(session_id: str, request: PaperReplayRequest):
+    try:
+        return paper_service.run_replay(session_id, request.startDate, request.endDate, auto_signal=request.autoSignal)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Paper session not found.") from exc
     except Exception as exc:

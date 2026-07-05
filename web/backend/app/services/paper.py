@@ -5,6 +5,7 @@ from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.assets import asset_request
 from ..lean import LeanPlatformError, market_key, normalize_symbol, parse_date
 from .ashare_repository import is_tradeable
+from .ashare_multisource import quality_gate
 
 
 def _side(value: str) -> str:
@@ -248,6 +249,19 @@ def _open_signals(session_id: str, trade_date: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def _signals_for_date(session_id: str, trade_date: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select * from paper_signals
+            where session_id = ? and trade_date = ?
+            order by created_at asc
+            """,
+            (session_id, trade_date),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
 def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
@@ -358,7 +372,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
     if not session:
         raise KeyError("Paper session not found.")
     date_value = parse_date(trade_date).isoformat()
-    if auto_signal and not _open_signals(session_id, date_value):
+    if auto_signal and not _signals_for_date(session_id, date_value):
         generate_daily_signal(session_id, date_value)
     signals = _open_signals(session_id, date_value)
     orders = []
@@ -366,6 +380,13 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         side = signal["side"]
         if side == "hold":
             _update_signal(signal["id"], "processed")
+            continue
+        gate = quality_gate(signal["symbol"], date_value)
+        if not gate["passed"]:
+            report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
+            reason = f"qa_failed:{report_id}" if report_id else "qa_failed"
+            orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", reason))
+            _update_signal(signal["id"], "rejected")
             continue
         bar = _ashare_bar(signal["symbol"], date_value)
         if not bar:
@@ -390,6 +411,10 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
             fee = _fee(quantity, price, side, session)
             max_cash_quantity = _round_lot((float(session["cash"]) - fee) / price, lot_size)
             quantity = max(0, min(quantity, max_cash_quantity))
+            if quantity <= 0:
+                orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", "insufficient_cash"))
+                _update_signal(signal["id"], "rejected")
+                continue
         else:
             if (position or {}).get("last_buy_date") == date_value:
                 orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", "t_plus_1"))
@@ -398,7 +423,8 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
             quantity = _round_lot(current_quantity, lot_size)
             fee = _fee(quantity, price, side, session)
         if quantity <= 0:
-            orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", "insufficient_quantity_or_cash"))
+            reason = "insufficient_position" if side == "sell" else "lot_size"
+            orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", reason))
             _update_signal(signal["id"], "rejected")
             continue
         fee = _fee(quantity, price, side, session)
@@ -407,6 +433,62 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         _update_signal(signal["id"], "filled")
     snapshot = create_snapshot(session_id, date_value)
     return {"date": date_value, "signals": signals, "orders": orders, "snapshot": snapshot}
+
+
+def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> list[str]:
+    start = parse_date(start_date).isoformat()
+    end = parse_date(end_date).isoformat()
+    symbol = session["symbol"]
+    if session.get("asset_class") == "equity" and session.get("venue") == "china":
+        with db() as connection:
+            calendar_rows = connection.execute(
+                """
+                select trade_date
+                from trade_calendar
+                where market = 'china' and is_open = 1 and trade_date between ? and ?
+                order by trade_date asc
+                """,
+                (start, end),
+            ).fetchall()
+        dates = [row["trade_date"] for row in calendar_rows]
+        if dates:
+            return dates
+        with db() as connection:
+            rows = connection.execute(
+                """
+                select distinct trade_date
+                from ashare_daily_bars
+                where symbol = ? and trade_date between ? and ?
+                order by trade_date asc
+                """,
+                (symbol, start, end),
+            ).fetchall()
+        return [row["trade_date"] for row in rows]
+    return []
+
+
+def run_replay(session_id: str, start_date: str, end_date: str, auto_signal: bool = True) -> dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise KeyError("Paper session not found.")
+    dates = _replay_dates(session, start_date, end_date)
+    update_session_status(session_id, "running")
+    days = []
+    try:
+        for trade_date in dates:
+            days.append(match_daily_orders(session_id, trade_date, auto_signal=auto_signal))
+    finally:
+        update_session_status(session_id, "paused")
+    return {
+        "sessionId": session_id,
+        "startDate": parse_date(start_date).isoformat(),
+        "endDate": parse_date(end_date).isoformat(),
+        "tradingDays": len(dates),
+        "days": days,
+        "finalSession": get_session(session_id),
+        "positions": list_positions(session_id),
+        "snapshots": list_snapshots(session_id),
+    }
 
 
 def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:

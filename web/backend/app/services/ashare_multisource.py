@@ -14,6 +14,15 @@ def _source_key(source: str) -> str:
     return source.strip().lower()
 
 
+def _ashare_symbol(symbol: str) -> str:
+    value = symbol.strip().upper()
+    if value.startswith(("SH", "SZ", "BJ")):
+        return value[2:]
+    if "." in value:
+        return value.split(".", 1)[0]
+    return value
+
+
 def _bounded_mismatches(items: list[dict[str, Any]], limit: int = 200) -> list[dict[str, Any]]:
     return items[:limit]
 
@@ -165,7 +174,7 @@ def compare_ashare_daily_sources(
     normalized_sources = [_source_key(source) for source in (sources or DEFAULT_SOURCES) if source.strip()]
     if not normalized_sources:
         raise ValueError("At least one data source is required.")
-    symbol_key = symbol.strip().upper()
+    symbol_key = _ashare_symbol(symbol)
     adjust_key = adjust or "raw"
     rows = _query_rows(symbol_key, start_date, end_date, adjust_key, normalized_sources)
     rows_by_source: dict[str, dict[str, dict[str, Any]]] = {source: {} for source in normalized_sources}
@@ -231,3 +240,36 @@ def list_quality_reports(limit: int = 100) -> list[dict[str, Any]]:
             (bounded_limit,),
         ).fetchall()
     return rows_to_dicts(rows)
+
+
+def blocking_quality_reports(symbol: str, trade_date: str | None = None) -> list[dict[str, Any]]:
+    symbol_key = _ashare_symbol(symbol)
+    predicates = ["report_type = ?", "asset_class = ?", "market = ?", "symbol = ?", "severity = ?"]
+    params: list[Any] = ["ashare_daily_multisource", "equity", "china", symbol_key, "critical"]
+    if trade_date:
+        predicates.append("(start_date is null or start_date <= ?)")
+        predicates.append("(end_date is null or end_date >= ?)")
+        params.extend([trade_date, trade_date])
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select *
+            from data_quality_reports
+            where {" and ".join(predicates)}
+            order by created_at desc
+            limit 20
+            """,
+            params,
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def quality_gate(symbol: str, trade_date: str | None = None) -> dict[str, Any]:
+    blockers = blocking_quality_reports(symbol, trade_date)
+    return {
+        "symbol": _ashare_symbol(symbol),
+        "tradeDate": trade_date,
+        "passed": not blockers,
+        "severity": "critical" if blockers else "ok",
+        "blockingReports": blockers,
+    }

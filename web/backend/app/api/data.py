@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -28,6 +30,8 @@ from ..services.data import (
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
 from ..services.parquet_lake import export_market_daily_bars, list_datasets, query_duckdb_bars
 from ..services.ashare_multisource import compare_ashare_daily_sources, list_quality_reports
+from ..services.free_data_pipeline import import_ashare_daily_sample
+from ..services.intraday import import_intraday_bars
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
 from ..services.tasks import create_task
@@ -97,6 +101,30 @@ class AshareDailyCompareRequest(BaseModel):
     priceRelToleranceBps: float = 5.0
     volumeRelTolerancePct: float = 5.0
     persist: bool = True
+
+
+class AshareDailySampleImportRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    startDate: str
+    endDate: str
+    providers: list[str] = Field(default_factory=lambda: ["akshare", "baostock", "adata"])
+    adjust: str = "raw"
+    primaryProvider: str = "akshare"
+    exportParquet: bool = True
+    compareSources: bool = True
+    continueOnError: bool = True
+
+
+class IntradayImportRequest(BaseModel):
+    symbol: str
+    assetClass: str = "equity"
+    market: str = "china"
+    venue: str | None = None
+    frequency: str = "5m"
+    dataType: str = "trade"
+    adjust: str = "raw"
+    source: str = "manual"
+    records: list[dict[str, Any]] = Field(min_length=1)
 
 
 @router.get("/symbols")
@@ -244,6 +272,42 @@ def compare_ashare_daily_data(request: AshareDailyCompareRequest):
 @router.get("/data/quality/reports")
 def data_quality_reports(limit: int = 100):
     return {"items": list_quality_reports(limit=limit)}
+
+
+@router.post("/data/free/ashare/daily/import-sample")
+def import_free_ashare_daily_sample(request: AshareDailySampleImportRequest):
+    try:
+        return import_ashare_daily_sample(
+            symbols=request.symbols,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            providers=request.providers,
+            adjust=request.adjust,
+            primary_provider=request.primaryProvider,
+            export_parquet=request.exportParquet,
+            compare_sources=request.compareSources,
+            continue_on_error=request.continueOnError,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data/intraday/import")
+def import_intraday_data(request: IntradayImportRequest):
+    try:
+        return import_intraday_bars(
+            request.records,
+            symbol=request.symbol,
+            asset_class=request.assetClass,
+            market=request.market,
+            venue=request.venue,
+            frequency=request.frequency,
+            data_type=request.dataType,
+            adjust=request.adjust,
+            source=request.source,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/markets")

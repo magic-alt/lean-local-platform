@@ -51,6 +51,23 @@ class FuturesMainRuleRequest(BaseModel):
     source: str = "manual"
 
 
+class FuturesMainMappingRequest(BaseModel):
+    product: str
+    startDate: str
+    endDate: str
+    exchange: str | None = None
+    source: str = "derived"
+
+
+class TqSdkImportRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    startDate: str
+    endDate: str
+    durationSeconds: int = Field(default=86400, gt=0)
+    tqAccount: str | None = None
+    tqPassword: str | None = None
+
+
 @router.post("/contracts")
 def import_contracts(request: FuturesContractImport):
     try:
@@ -100,5 +117,34 @@ def agri_main(date: str, products: str | None = None):
     try:
         product_list = [item.strip().upper() for item in products.split(",") if item.strip()] if products else None
         return futures.agri_main_monitor(date, product_list)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/main-mapping")
+def refresh_main_mapping(request: FuturesMainMappingRequest):
+    try:
+        return futures.refresh_main_mapping(
+            product=request.product,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            exchange=request.exchange,
+            source=request.source,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tqsdk/import")
+def import_tqsdk(request: TqSdkImportRequest):
+    try:
+        return futures.import_tqsdk_klines(
+            symbols=request.symbols,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            duration_seconds=request.durationSeconds,
+            tq_account=request.tqAccount,
+            tq_password=request.tqPassword,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

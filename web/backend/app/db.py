@@ -48,6 +48,8 @@ JSON_COLUMNS = {
     "terms_json": "terms",
     "partition_json": "partition",
     "sources_json": "sources",
+    "symbols_json": "symbols",
+    "details_json": "details",
 }
 
 
@@ -70,6 +72,8 @@ LONG_TEXT_COLUMNS = {
     "fields_json",
     "terms_json",
     "concepts_json",
+    "symbols_json",
+    "details_json",
     "error",
     "error_message",
 }
@@ -120,9 +124,12 @@ CODE_TEXT_COLUMNS = {
     "venue",
     "asset_class",
     "resolution",
+    "frequency",
     "data_type",
     "source",
     "status",
+    "severity",
+    "dataset",
     "kind",
     "side",
     "rule_type",
@@ -140,6 +147,8 @@ CODE_TEXT_COLUMNS = {
     "parser_version",
     "parse_status",
     "provider",
+    "main_symbol",
+    "continuous_symbol",
 }
 
 
@@ -274,7 +283,7 @@ def _mysql_text_type(column: str) -> str:
         return "varchar(64)"
     if column in CODE_TEXT_COLUMNS:
         return "varchar(96)"
-    if column.endswith("_date") or column.endswith("_at") or column in {"date", "fiscal_period", "delivery_month", "maturity_date"}:
+    if column.endswith("_date") or column.endswith("_at") or column in {"date", "timestamp", "start_time", "end_time", "fiscal_period", "delivery_month", "maturity_date"}:
         return "varchar(32)"
     if column in LONG_TEXT_COLUMNS or column.endswith("_json"):
         return "longtext"
@@ -495,6 +504,49 @@ def init_db() -> None:
                 batch_id text,
                 updated_at text not null,
                 primary key (instrument_id, trade_date, source)
+            );
+
+            create table if not exists market_intraday_bars (
+                instrument_id text not null,
+                symbol text not null,
+                asset_class text not null,
+                market text not null,
+                venue text,
+                timestamp text not null,
+                frequency text not null,
+                data_type text not null default 'trade',
+                open real,
+                high real,
+                low real,
+                close real,
+                volume real,
+                amount real,
+                open_interest real,
+                adjust text not null default 'raw',
+                source text not null,
+                batch_id text,
+                created_at text not null,
+                primary key (instrument_id, timestamp, frequency, data_type, adjust, source)
+            );
+
+            create table if not exists market_ticks (
+                id text primary key,
+                instrument_id text not null,
+                symbol text not null,
+                asset_class text not null,
+                market text not null,
+                venue text,
+                timestamp text not null,
+                last_price real,
+                bid_price real,
+                ask_price real,
+                bid_volume real,
+                ask_volume real,
+                volume real,
+                open_interest real,
+                source text not null,
+                batch_id text,
+                created_at text not null
             );
 
             create table if not exists parquet_datasets (
@@ -825,6 +877,57 @@ def init_db() -> None:
                 primary key (product, exchange)
             );
 
+            create table if not exists futures_main_mapping (
+                product text not null,
+                exchange text not null,
+                trade_date text not null,
+                main_symbol text not null,
+                continuous_symbol text,
+                rule text not null,
+                source text not null,
+                batch_id text,
+                updated_at text not null,
+                primary key (product, exchange, trade_date, source)
+            );
+
+            create table if not exists recording_jobs (
+                id text primary key,
+                name text not null,
+                asset_class text not null,
+                market text not null,
+                venue text,
+                symbols_json text not null,
+                frequency text,
+                status text not null,
+                source text not null,
+                parameters_json text not null,
+                created_at text not null,
+                updated_at text not null
+            );
+
+            create table if not exists recording_status (
+                job_id text primary key,
+                status text not null,
+                last_event_at text,
+                last_bar_at text,
+                last_error text,
+                updated_at text not null
+            );
+
+            create table if not exists data_gaps (
+                id text primary key,
+                dataset text not null,
+                asset_class text not null,
+                market text not null,
+                symbol text,
+                start_time text not null,
+                end_time text not null,
+                severity text not null,
+                source text not null,
+                details_json text not null,
+                created_at text not null
+            );
+
             create table if not exists data_import_batches (
                 id text primary key,
                 provider text not null,
@@ -1090,6 +1193,10 @@ def init_db() -> None:
                 on market_daily_bars(instrument_id, trade_date);
             create index if not exists idx_market_status_symbol_date
                 on market_trade_status(asset_class, market, symbol, trade_date);
+            create index if not exists idx_market_intraday_symbol_time
+                on market_intraday_bars(asset_class, market, symbol, frequency, timestamp);
+            create index if not exists idx_market_ticks_symbol_time
+                on market_ticks(asset_class, market, symbol, timestamp);
             create index if not exists idx_parquet_datasets_lookup
                 on parquet_datasets(asset_class, market, venue, resolution, data_type, adjust, source);
             create index if not exists idx_parquet_files_dataset
@@ -1132,6 +1239,10 @@ def init_db() -> None:
                 on futures_contracts(product, exchange, last_trade_date);
             create index if not exists idx_futures_daily_date
                 on futures_daily_bars(trade_date, contract_code);
+            create index if not exists idx_futures_main_mapping_date
+                on futures_main_mapping(product, exchange, trade_date);
+            create index if not exists idx_data_gaps_lookup
+                on data_gaps(dataset, asset_class, market, symbol);
             create index if not exists idx_import_batches_started_at
                 on data_import_batches(started_at desc);
             create index if not exists idx_stored_objects_lookup

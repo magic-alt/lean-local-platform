@@ -71,6 +71,34 @@
 - 当前只实现日线导出/query 的第一版，分钟线、Tick、期货连续合约和 crypto/futures 大表分区规范仍需后续扩展。
 - 多源校验只比较已入库数据，不会自动下载缺失源；需要先通过 provider import 把 AData/Baostock 等来源写入数据库。
 
+### 免费/开源数据源验证阶段
+
+实现内容：
+
+- 新增 A 股免费源批量编排服务和脚本：`scripts/import_ashare_free_sample.py`，按 symbols/providers 调用 AKShare、Baostock、AData，导入后可自动执行多源 QA 和 Parquet 导出。
+- 新增 API：`POST /api/data/free/ashare/daily/import-sample`。
+- 新增 QA 门禁：Paper 撮合前检查覆盖当天的 `critical` 多源质量报告，命中时拒单并记录 `qa_failed:{report_id}`。
+- 新增 Paper 连续 replay：`POST /api/paper/{session_id}/replay` 和 `scripts/run_paper_replay.py`，按交易日循环生成信号、撮合、持仓和净值快照。
+- 新增分钟线小样本表和导入入口：`market_intraday_bars`、`POST /api/data/intraday/import`。
+- 新增 vn.py/DataRecorder 预留表：`market_ticks`、`recording_jobs`、`recording_status`、`data_gaps`；当前只预留，不接实盘网关。
+- 新增 TqSdk 可选 adapter、导入脚本和 API：`scripts/import_tqsdk_futures.py`、`POST /api/futures/tqsdk/import`。
+- 新增期货主力映射表和刷新入口：`futures_main_mapping`、`POST /api/futures/main-mapping`。
+
+验证结果：
+
+- `python3 -m py_compile ...` 通过。
+- `./web/backend/.venv/bin/pytest web/backend/tests/test_free_data_pipeline.py web/backend/tests/test_paper_replay_gate.py web/backend/tests/test_free_sources_futures_intraday.py web/backend/tests/test_paper_trading.py web/backend/tests/test_cbond_futures_p2.py` 通过：`8 passed`。
+- `./web/backend/.venv/bin/pytest web/backend/tests` 通过：`44 passed, 1 skipped, 3 warnings in 1.34s`。
+- `npm run build` 通过；仍有既有 Vite chunk size warning。
+- 真实 MySQL `init_db()` 通过；`market_intraday_bars`、`market_ticks`、`futures_main_mapping`、`recording_jobs`、`recording_status`、`data_gaps` 表存在。
+
+剩余边界：
+
+- 批量导入编排具备能力，但真实 AKShare/AData/Baostock/TqSdk 下载仍受网络、包安装和公开源限流影响。
+- 当前分钟线只适合小样本验证，不做全市场分钟线。
+- TqSdk adapter 是可选接入；没有账号或包时不会影响平台主流程。
+- DataRecorder 仍是预留 schema，没有接入 vn.py 网关和实时录制服务。
+
 ### P0-001：全 A 历史股票池缺失，幸存者偏差未闭环
 
 实现内容：
@@ -174,7 +202,7 @@ cd web/backend
 .venv/bin/python -m pytest -q
 ```
 
-结果：`39 passed, 1 skipped, 3 warnings in 1.34s`。
+结果：`44 passed, 1 skipped, 3 warnings in 1.34s`。
 
 ```bash
 cd web/backend
@@ -236,8 +264,13 @@ docker compose config
 - `web/backend/app/services/parquet_lake.py`：从 `market_daily_bars` 导出 Parquet、记录文件元数据、用 DuckDB 查询派生行情仓。
 - `web/backend/app/services/ashare_multisource.py`：A 股日线多源覆盖率和价量差异报告，结果写入 `data_quality_reports`。
 - `web/backend/app/services/ashare_source_adapters.py`：可选 AData/Baostock provider adapter。
+- `web/backend/app/services/free_data_pipeline.py`：免费源 A 股样本批量导入、多源 QA、Parquet 刷新编排。
+- `web/backend/app/services/intraday.py`：分钟线小样本标准化入库。
+- `web/backend/app/services/tqsdk_adapter.py`：可选 TqSdk K 线下载和字段归一化。
 - `web/backend/app/services/data_quality.py`：A 股日线标准化、官方交易状态保留、fallback 推断。
 - `web/backend/app/services/data.py`：A 股研究数据导入、QA warning、LEAN zip/factor file 写入。
+- `web/backend/app/services/paper.py`：Paper 单日撮合、QA 门禁和连续 replay。
+- `web/backend/app/services/futures.py`：期货合约、日线、主力识别、主力映射刷新和 TqSdk 导入入口。
 - `web/backend/app/lean.py`：LEAN 数据目录、日线 zip、factor/map 文件生成。
 - `web/backend/app/services/ashare_execution.py`：A 股费用、滑点、100 股、涨跌停/停牌/T+1 helper。
 - `DockerDemoAlgorithm.py`：A 股 benchmark、order event 转发。
@@ -248,6 +281,9 @@ docker compose config
 - `web/backend/tests/test_csi300_pit.py`：公告调入/调出解析、PIT 区间和 `universe_as_of()` 生效日测试。
 - `web/backend/tests/test_parquet_lake.py`：Parquet 导出、DuckDB 查询和 API 接入测试。
 - `web/backend/tests/test_ashare_multisource.py`：A 股多源校验报告和落库测试。
+- `web/backend/tests/test_free_data_pipeline.py`：免费源批量编排测试。
+- `web/backend/tests/test_paper_replay_gate.py`：Paper replay 和 QA 门禁测试。
+- `web/backend/tests/test_free_sources_futures_intraday.py`：分钟线、TqSdk normalizer 和期货主力映射测试。
 - `scripts/import_csi300_pit_public.py`：按 manifest 下载/读取公开公告、记录 hash、解析事件并生成本地 PIT 成分表。
 - `scripts/import_csindex_csi300_pit.py`：中证指数官网公告抓取、附件缓存、调样事件解析和 PIT 重建脚本；当前官网详情接口存在 WAF 阻断，保留为后续补源入口。
 - `scripts/import_csindex_csi300_cached.py`：从本地中证指数官方缓存附件重建真实 `CSI300` PIT，并写入 `HS300.sqlite3`。
@@ -255,6 +291,9 @@ docker compose config
 - `data_sources/csi300_pit_sources.example.json`：公开公告 manifest 示例，仅用于验证导入管线，不写入生产库。
 - `scripts/export_market_parquet.py`：从标准行情表导出 Parquet 分区文件。
 - `scripts/compare_ashare_sources.py`：对已入库 A 股多源日线做覆盖率和价量差异校验。
+- `scripts/import_ashare_free_sample.py`：用 AKShare/Baostock/AData 批量导入 A 股样本并执行 QA/Parquet 编排。
+- `scripts/run_paper_replay.py`：命令行触发 Paper 连续交易日 replay。
+- `scripts/import_tqsdk_futures.py`：通过可选 TqSdk adapter 导入期货 K 线。
 
 ## 6. 当前平台等级
 

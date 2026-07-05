@@ -184,6 +184,55 @@ web/backend/.venv/bin/python scripts/compare_ashare_sources.py 600519 \
 
 校验结果写入 `data_quality_reports`，记录覆盖率、缺失日期、OHLC 价差、成交量差异和 severity。AData/Baostock 是可选依赖 provider；未安装时不会影响平台启动。
 
+免费公开源验证阶段可以用批量编排脚本串联导入、交叉校验和 Parquet 刷新：
+
+```bash
+web/backend/.venv/bin/python scripts/import_ashare_free_sample.py \
+  --symbols 600519,000001 \
+  --start-date 2022-01-01 \
+  --end-date 2026-07-04 \
+  --providers akshare,baostock,adata
+```
+
+对应 API：
+
+```text
+POST /api/data/free/ashare/daily/import-sample
+```
+
+Paper Replay 支持连续交易日回放；如果 `data_quality_reports` 中存在覆盖当天的 `critical` 报告，撮合会拒单并记录 `qa_failed:{report_id}`：
+
+```bash
+web/backend/.venv/bin/python scripts/run_paper_replay.py <session-id> \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-30
+```
+
+期货前期验证使用可选 TqSdk adapter。未安装 `tqsdk` 时平台仍可启动，调用该入口会返回明确错误：
+
+```bash
+web/backend/.venv/bin/python scripts/import_tqsdk_futures.py \
+  --symbols DCE.m2409,KQ.m@SHFE.rb \
+  --start-date 2024-01-01 \
+  --end-date 2024-03-01 \
+  --duration-seconds 86400
+```
+
+期货主力映射刷新 API：
+
+```text
+POST /api/futures/main-mapping
+POST /api/futures/tqsdk/import
+```
+
+分钟线小样本验证入口：
+
+```text
+POST /api/data/intraday/import
+```
+
+当前不建议下载全市场多年分钟线，也不启用 vn.py DataRecorder 实盘录制。数据库只预留了 `market_intraday_bars`、`market_ticks`、`recording_jobs`、`recording_status` 和 `data_gaps`，用于后续扩展。
+
 导入任意 CSV：
 
 ```bash

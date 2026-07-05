@@ -8,7 +8,9 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..lean import parse_date
+from .intraday import import_intraday_bars
 from .market_repository import upsert_instrument, upsert_market_daily_bars
+from .tqsdk_adapter import download_tqsdk_klines, exchange_from_tq_symbol, contract_code_from_tq_symbol
 
 
 DEFAULT_AGRI_PRODUCTS = [
@@ -361,3 +363,136 @@ def agri_main_monitor(as_of_date: str, products: list[str] | None = None) -> dic
         else:
             missing.append(product)
     return {"asOfDate": as_of, "count": len(items), "missing": missing, "items": items}
+
+
+def refresh_main_mapping(
+    *,
+    product: str,
+    start_date: str,
+    end_date: str,
+    exchange: str | None = None,
+    source: str = "derived",
+) -> dict[str, Any]:
+    product_key = _product(product)
+    start = _date(start_date, "start_date")
+    end = _date(end_date, "end_date")
+    values: list[Any] = [product_key, start, end]
+    exchange_clause = ""
+    if exchange:
+        exchange_clause = "and c.exchange = ?"
+        values.append(str(exchange).strip().upper())
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select distinct d.trade_date
+            from futures_daily_bars d
+            join futures_contracts c on c.contract_code = d.contract_code
+            where c.product = ? and d.trade_date between ? and ?
+              {exchange_clause}
+            order by d.trade_date asc
+            """,
+            values,
+        ).fetchall()
+    dates = [row["trade_date"] for row in rows]
+    batch_id = str(uuid.uuid4())
+    now = utc_now()
+    inserted = 0
+    missing: list[str] = []
+    with db() as connection:
+        for trade_date in dates:
+            item = main_contract(product_key, trade_date, exchange)
+            if not item:
+                missing.append(trade_date)
+                continue
+            exchange_key = str(item.get("exchange") or exchange or "").upper()
+            rule = item.get("rule") or {}
+            continuous_symbol = f"KQ.m@{exchange_key}.{product_key.lower()}" if exchange_key else None
+            connection.execute(
+                """
+                insert into futures_main_mapping
+                    (product, exchange, trade_date, main_symbol, continuous_symbol, rule,
+                     source, batch_id, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(product, exchange, trade_date, source) do update set
+                    main_symbol = excluded.main_symbol,
+                    continuous_symbol = excluded.continuous_symbol,
+                    rule = excluded.rule,
+                    batch_id = excluded.batch_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    product_key,
+                    exchange_key,
+                    trade_date,
+                    item["contract_code"],
+                    continuous_symbol,
+                    str(rule.get("rule_type") or "open_interest"),
+                    source,
+                    batch_id,
+                    now,
+                ),
+            )
+            inserted += 1
+    return {"batchId": batch_id, "product": product_key, "startDate": start, "endDate": end, "count": inserted, "missing": missing}
+
+
+def import_tqsdk_klines(
+    *,
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    duration_seconds: int = 86400,
+    tq_account: str | None = None,
+    tq_password: str | None = None,
+) -> dict[str, Any]:
+    imports: list[dict[str, Any]] = []
+    for symbol in symbols:
+        rows = download_tqsdk_klines(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            duration_seconds=duration_seconds,
+            tq_account=tq_account,
+            tq_password=tq_password,
+        )
+        contract_code = contract_code_from_tq_symbol(symbol)
+        exchange = exchange_from_tq_symbol(symbol) or "future"
+        product = _infer_product(contract_code)
+        import_contracts(
+            [
+                {
+                    "contract_code": contract_code,
+                    "product": product,
+                    "exchange": exchange,
+                    "source": "tqsdk",
+                }
+            ],
+            source="tqsdk",
+        )
+        if duration_seconds >= 86400:
+            daily_rows = [
+                {
+                    "contract_code": row["contract_code"],
+                    "trade_date": row["trade_date"],
+                    "open": row.get("open"),
+                    "high": row.get("high"),
+                    "low": row.get("low"),
+                    "close": row.get("close"),
+                    "volume": row.get("volume"),
+                    "open_interest": row.get("open_interest"),
+                }
+                for row in rows
+            ]
+            result = import_daily_bars(daily_rows, source="tqsdk")
+        else:
+            result = import_intraday_bars(
+                rows,
+                symbol=contract_code,
+                asset_class="future",
+                market="future",
+                venue=exchange,
+                frequency=f"{int(duration_seconds // 60)}m",
+                source="tqsdk",
+            )
+        imports.append({"symbol": symbol, "contractCode": contract_code, "exchange": exchange, "rows": len(rows), "result": result})
+    return {"count": len(imports), "imports": imports}
