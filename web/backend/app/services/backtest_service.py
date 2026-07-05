@@ -11,7 +11,7 @@ from ..repositories.backtest_repository import get_backtest, list_backtests, upd
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project
 from .ashare_multisource import quality_gate_range
-from .ashare_repository import assert_ashare_ready
+from .ashare_repository import assert_ashare_ready, assert_benchmark_ready
 from .run_fingerprint import build_run_fingerprint
 from .tasks import append_log, create_task, get_task, update_task
 from .trading_config import merge_ashare_trading_config
@@ -48,6 +48,17 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         parameters = merge_ashare_trading_config(parameters, request_data)
         symbols_to_gate = [parameters["ticker"]]
         benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
+        assert_benchmark_ready(
+            benchmark_symbol,
+            parameters["start"],
+            parameters["end"],
+            asset_class=str(parameters.get("assetClass") or "equity"),
+            market=str(parameters.get("market") or "china"),
+            venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+            resolution=str(parameters.get("resolution") or "daily"),
+            data_type=str(parameters.get("dataType") or "trade"),
+            adjust=adjust,
+        )
         if benchmark_symbol:
             symbols_to_gate.append(benchmark_symbol)
         for symbol in symbols_to_gate:

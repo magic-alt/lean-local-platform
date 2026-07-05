@@ -1221,8 +1221,6 @@ def init_db() -> None:
                 on projects(name);
             create index if not exists idx_data_assets_symbol
                 on data_assets(symbol);
-            create index if not exists idx_data_assets_status_created
-                on data_assets(status, created_at desc);
             create index if not exists idx_reports_run_created
                 on reports(run_id, created_at desc);
             create index if not exists idx_reports_status_created
@@ -1344,6 +1342,9 @@ def init_db() -> None:
         _add_column(connection, "index_membership_events", "adjustment_type", "text")
         connection.execute(
             "create index if not exists idx_backtest_runs_asset on backtest_runs(asset_class, venue, symbol)"
+        )
+        connection.execute(
+            "create index if not exists idx_data_assets_status_created on data_assets(status, created_at desc)"
         )
         connection.execute(
             "create index if not exists idx_data_assets_asset on data_assets(asset_class, venue, symbol)"

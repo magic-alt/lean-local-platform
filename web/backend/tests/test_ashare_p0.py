@@ -40,9 +40,10 @@ def sample_ashare_rows():
 
 def import_sample_ashare(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
+    from app.services.benchmark import import_benchmark_rows
     from app.services.data import import_ashare_research_data
 
-    return import_ashare_research_data(
+    asset = import_ashare_research_data(
         symbol="600519",
         provider="test",
         market="china",
@@ -58,6 +59,16 @@ def import_sample_ashare(tmp_path, monkeypatch):
         start_date=None,
         end_date=None,
     )
+    import_benchmark_rows(
+        symbol="000300",
+        source="test",
+        rows=[
+            {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
+            {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
+            {"date": "2024-01-04", "open": "3518", "high": "3530", "low": "3510", "close": "3522", "volume": "1200"},
+        ],
+    )
+    return asset
 
 
 def test_ashare_import_writes_research_tables_and_restores_asof_universe(tmp_path, monkeypatch):
@@ -195,6 +206,9 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["constraintVersion"] == 1
     assert job["fingerprint"]["parameters_sha256"]
     assert "git_commit" in job["fingerprint"]
+    assert job["fingerprint"]["benchmark_rows"] == 3
+    assert job["fingerprint"]["lean_zip_sha256"]
+    assert job["fingerprint"]["factor_file_sha256"]
 
 
 def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, monkeypatch):
@@ -290,6 +304,26 @@ def test_backtest_creation_allows_missing_local_ashare_cache_for_worker_restore(
     )
 
     assert job["status"] == "created"
+
+
+def test_backtest_creation_blocks_missing_benchmark(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    import app.services.backtest_service as backtest_service
+    from app.lean import LeanPlatformError
+
+    with pytest.raises(LeanPlatformError, match="benchmark_missing:999999"):
+        backtest_service.create_backtest_job(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+                "cash": 100000,
+                "parameters": {"benchmarkSymbol": "999999"},
+            }
+        )
 
 
 def test_backtest_creation_blocks_critical_quality_report(tmp_path, monkeypatch):

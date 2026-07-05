@@ -2,6 +2,15 @@
 
 本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
 
+## 2026-07-05 - 本次提交 - Fix Level 3 runtime P0 regressions
+
+- 修复 `init_db` 旧 schema 迁移顺序，先补 `data_assets.status` 再创建状态索引，恢复 API/import/Parquet/QA 启动链路。
+- 增加 A股 benchmark 覆盖 hard fail，`benchmarkSymbol` 缺失或窗口内无行情时拒绝创建/执行 backtest。
+- 在 worker 执行阶段重复校验 benchmark，防止旧任务绕过创建阶段 gate。
+- 补齐创建/失败路径 run fingerprint 的本地 LEAN zip、factor、map hash 和 benchmark cache 状态。
+- 增加旧 schema 迁移、benchmark missing、created fingerprint hash 的回归测试覆盖。
+- 验证 API A/B 回测、free import、Parquet rebuild、多源 QA、后端全量测试、LEAN Docker 集成测试和前端 build。
+
 ## 2026-07-05 - 本次提交 - Fix efficiency and scalability P2 gaps
 
 - 增加前端 Vite manual chunks，拆分 React、Ant Design、ECharts、zrender 和 Monaco 包。

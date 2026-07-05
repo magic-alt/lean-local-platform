@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..lean import LeanPlatformError
 from .market_repository import upsert_instrument, upsert_market_daily_bars, upsert_market_trade_status
 
 
@@ -966,3 +967,53 @@ def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw") 
     qa_report = batch.get("qa_report") or {}
     if batch.get("status") != "success" or not qa_report.get("passed", False):
         raise LeanWebError(f"Latest A-share data QA failed for {symbol}: {qa_report or batch.get('error')}")
+
+
+def assert_benchmark_ready(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str = "china",
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+) -> None:
+    benchmark = str(symbol or "").strip().upper()
+    if not benchmark:
+        raise LeanPlatformError("benchmark_missing: A-share benchmarkSymbol is required.")
+    with db() as connection:
+        row = connection.execute(
+            """
+            select count(distinct trade_date) as row_count,
+                   min(trade_date) as first_date,
+                   max(trade_date) as last_date
+            from market_daily_bars
+            where symbol = ? and asset_class = ? and market = ? and venue = ?
+              and resolution = ? and data_type = ? and adjust = ?
+              and trade_date between ? and ?
+            """,
+            (
+                benchmark,
+                asset_class.lower(),
+                market.lower(),
+                venue.lower(),
+                resolution.lower(),
+                data_type.lower(),
+                adjust or "raw",
+                start,
+                end,
+            ),
+        ).fetchone()
+    benchmark_row = dict(row) if row else {}
+    row_count = int(benchmark_row.get("row_count") or 0)
+    if row_count <= 0:
+        raise LeanPlatformError(f"benchmark_missing:{benchmark} has no daily bars in {start} -> {end}.")
+    trade_dates = trade_dates_between(market.lower(), start, end)
+    expected_dates = len(trade_dates)
+    if expected_dates and row_count < expected_dates:
+        raise LeanPlatformError(
+            f"benchmark_missing:{benchmark} has {row_count}/{expected_dates} daily bars in {start} -> {end}."
+        )

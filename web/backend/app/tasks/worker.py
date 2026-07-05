@@ -19,6 +19,7 @@ from ..repositories.backtest_repository import get_backtest, update_backtest
 from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
 from ..services.ashare_multisource import quality_gate_range
+from ..services.ashare_repository import assert_benchmark_ready
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache
@@ -158,6 +159,17 @@ def run_backtest_task(task_id: str, run_id: str):
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
             gate_symbols = [str(parameters["ticker"]).upper()]
             benchmark_for_gate = str(parameters.get("benchmarkSymbol") or "").upper()
+            assert_benchmark_ready(
+                benchmark_for_gate,
+                parameters["start"],
+                parameters["end"],
+                asset_class=str(parameters.get("assetClass") or "equity"),
+                market=str(parameters.get("market") or "china"),
+                venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+                resolution=str(parameters.get("resolution") or "daily"),
+                data_type=str(parameters.get("dataType") or "trade"),
+                adjust=str(parameters.get("adjust") or "raw"),
+            )
             if benchmark_for_gate:
                 gate_symbols.append(benchmark_for_gate)
             for symbol in gate_symbols:

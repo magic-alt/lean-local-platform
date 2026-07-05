@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import lean as lean_module
 from ..core.config import BACKEND_DIR, GIT_ROOT
 from ..db import db, rows_to_dicts, utc_now
 
@@ -210,6 +211,53 @@ def _first_cache_file(lean_cache: dict[str, Any] | None, name: str) -> dict[str,
     return {}
 
 
+def _local_cache_file(path: Path) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "exists": path.exists() and path.is_file(),
+        "sha256": _file_hash(path),
+        "source": "local_lean_data",
+    }
+
+
+def _local_ashare_cache(parameters: dict[str, Any]) -> dict[str, Any]:
+    asset_class = str(parameters.get("assetClass") or "equity").lower()
+    market = str(parameters.get("market") or parameters.get("venue") or "china").lower()
+    venue = str(parameters.get("venue") or parameters.get("market") or "china").lower()
+    if asset_class != "equity" or (market != "china" and venue != "china"):
+        return {}
+    raw_symbol = str(parameters.get("ticker") or parameters.get("symbol") or "").strip()
+    if not raw_symbol:
+        return {}
+    source = parameters.get("source") or parameters.get("provider") or "akshare"
+    adjust = parameters.get("adjust") or "raw"
+
+    def files_for(symbol: str) -> dict[str, Any]:
+        normalized = lean_module.normalize_symbol(symbol, "china")
+        ticker = lean_module.symbol_key(normalized)
+        data_dir = lean_module.DATA_DIR / "equity" / "china"
+        return {
+            "symbol": normalized,
+            "files": {
+                "daily": _local_cache_file(data_dir / "daily" / f"{ticker}.zip"),
+                "factor": _local_cache_file(data_dir / "factor_files" / f"{ticker}.csv"),
+                "map": _local_cache_file(data_dir / "map_files" / f"{ticker}.csv"),
+            },
+        }
+
+    primary = files_for(raw_symbol)
+    result = {
+        "symbol": primary["symbol"],
+        "source": source,
+        "adjust": adjust,
+        "files": primary["files"],
+    }
+    benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").strip()
+    if benchmark_symbol:
+        result["benchmark"] = files_for(benchmark_symbol)
+    return result
+
+
 def _requirements_hash() -> str | None:
     return _file_hash(BACKEND_DIR / "requirements.txt")
 
@@ -227,6 +275,8 @@ def build_run_fingerprint(
     git = git_state()
     data = data_fingerprint(parameters)
     docker = docker_image_digest(docker_image)
+    if lean_cache is None:
+        lean_cache = _local_ashare_cache(parameters)
     daily_cache = _first_cache_file(lean_cache, "daily")
     factor_cache = _first_cache_file(lean_cache, "factor")
     parquet_files = data.get("parquetFiles") or []
