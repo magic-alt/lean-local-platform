@@ -4,7 +4,7 @@
 仓库：`/Users/kaermax/lean-platform`  
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
-当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
+当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。2026-07-05 继续补齐 P1 稳定模拟盘能力：真实 LEAN Docker integration 已在有 Docker 权限环境通过，Paper 日报落库/API 化，Paper 组合约束支持最大持仓、单票权重、现金下限、黑名单、观察池/只观察名单，Compose 支持 Redis/API/MySQL 等宿主端口覆盖并完成 API/worker/MySQL/Redis 一键启动验收，交易状态写入新增来源优先级，OHLCV 推断状态不会覆盖官方/手工状态。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
 ## 1. 总体结论
 
@@ -15,7 +15,7 @@
 - 代码层能力：本次已实现并有单测/集成测试覆盖。
 - 生产数据层能力：仓库当前没有 TuShare Pro/JQData/RQData 凭据，也没有全 A 批量历史数据文件，因此实际运行库仍需要导入证券主数据、全 A 历史池、指数行情、官方停复牌/涨跌停/ST、复权因子和公司行动。
 
-当前平台已经更接近 Level 2.5，可以继续做受控数据下的 A 股日线研究和小范围影子 Paper Replay。正式模拟盘仍不建议马上开始，除非明确标记数据覆盖边界。下一阶段优先级不是大规模重构，而是补全组合级约束、Paper 日报、QA 前置门禁、2005-2017 CSI300 PIT 和全 A/退市/ST 数据。
+当前平台已经具备小范围影子 Paper Replay 的核心工程闭环，可以继续做受控数据下的 A 股日线研究和有限范围模拟跟踪。正式稳定模拟盘仍需明确标记数据覆盖边界，尤其是 2005-2017 CSI300 PIT、全 A/退市/ST/停复牌官方状态和更完整 QA 前置门禁。下一阶段优先级不是大规模重构，而是补生产数据覆盖和把 QA critical 更严格地前置到回测创建。
 
 ## 2. 本次实现摘要
 
@@ -388,14 +388,16 @@ iFinD/Choice/Wind 的购买触发条件：
 
 #### P1-002：Paper Replay 每日任务链
 
-- 问题：已有 Paper 原型，但缺少每日自动更新、信号、撮合、持仓、日报闭环。
-- 推荐方案：增加单命令每日任务，串联数据导入、QA、策略信号、模拟订单、组合快照、报告。
+- 状态：基础版已完成。
+- 已实现：`match_daily_orders` 每日撮合后写入 `paper_daily_reports`，日报包含信号、待执行信号、订单、成交、拒单、持仓、NAV、benchmark 和 QA gate 状态；`GET /api/paper/{session_id}/reports` 可读取。
+- 剩余：增加调度器或 CLI 串联每日数据更新、QA、信号生成、撮合和报告推送。
 - 验收标准：连续 10 个交易日无人值守跑通，有异常日志和日报。
 
 #### P1-003：组合级约束
 
-- 问题：当前更偏单票约束，缺少最大持仓数、单票权重、行业权重、黑名单、观察池、现金下限。
-- 推荐方案：定义统一 portfolio constraint config，回测和 Paper 共用。
+- 状态：Paper 基础版已完成。
+- 已实现：Paper 撮合支持 `maxPositions`、`maxPositionWeight`、`minCash`、`blacklist`、`watchlist`、`observeOnlySymbols`，默认禁止买入 ST；违反约束会生成 rejected order 并记录 `blacklisted`、`not_in_watchlist`、`observe_only`、`max_positions`、`cash_floor`、`st_blocked` 等原因。
+- 剩余：回测侧复用同一组合约束配置，并扩展行业权重上限、流动性容量和风控熔断。
 - 验收标准：违反约束的订单被拒绝，并记录拒绝原因。
 
 #### P1-004：数据 QA 升级为回测前置门禁

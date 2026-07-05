@@ -43,6 +43,12 @@ JSON_COLUMNS = {
     "performance_json": "performance",
     "fingerprint_json": "fingerprint",
     "positions_json": "positions",
+    "report_json": "report",
+    "signals_json": "signals",
+    "rejects_json": "rejects",
+    "snapshot_json": "snapshot",
+    "benchmark_json": "benchmark",
+    "qa_json": "qa",
     "concepts_json": "concepts",
     "qa_report_json": "qa_report",
     "fields_json": "fields",
@@ -69,6 +75,12 @@ LONG_TEXT_COLUMNS = {
     "trades_json",
     "holdings_json",
     "performance_json",
+    "report_json",
+    "signals_json",
+    "rejects_json",
+    "snapshot_json",
+    "benchmark_json",
+    "qa_json",
     "result_json",
     "fields_json",
     "terms_json",
@@ -1174,6 +1186,23 @@ def init_db() -> None:
                 unique(session_id, trade_date)
             );
 
+            create table if not exists paper_daily_reports (
+                id text primary key,
+                session_id text not null,
+                trade_date text not null,
+                report_json text not null,
+                signals_json text not null,
+                orders_json text not null,
+                trades_json text not null,
+                rejects_json text not null,
+                positions_json text not null,
+                snapshot_json text not null,
+                benchmark_json text not null,
+                qa_json text not null,
+                created_at text not null,
+                unique(session_id, trade_date)
+            );
+
             create index if not exists idx_backtest_runs_created_at
                 on backtest_runs(created_at desc);
             create index if not exists idx_backtest_runs_symbol
@@ -1262,6 +1291,8 @@ def init_db() -> None:
                 on paper_orders(session_id, trade_date);
             create index if not exists idx_paper_snapshots_session_date
                 on paper_portfolio_snapshots(session_id, trade_date);
+            create index if not exists idx_paper_reports_session_date
+                on paper_daily_reports(session_id, trade_date);
             """
         )
         _add_column(connection, "backtest_runs", "task_id", "text")

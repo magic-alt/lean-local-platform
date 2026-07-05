@@ -31,6 +31,19 @@ Required supporting service:
 redis-server --port 6379
 ```
 
+Compose startup with MySQL, Redis, API, and worker:
+
+```bash
+cd /Users/kaermax/lean-platform
+docker compose --profile app up -d --build mysql redis api worker
+```
+
+If a host port is already in use:
+
+```bash
+LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker
+```
+
 Useful environment variables:
 
 ```bash

@@ -21,6 +21,13 @@ class PaperSessionCreate(BaseModel):
     executionPolicy: str | None = None
     allowSameDayClose: bool = False
     benchmarkSymbol: str | None = None
+    maxPositions: int | None = Field(default=None, ge=0)
+    maxPositionWeight: float | None = Field(default=None, ge=0, le=1)
+    minCash: float | None = Field(default=None, ge=0)
+    blacklist: list[str] | str | None = None
+    watchlist: list[str] | str | None = None
+    observeOnlySymbols: list[str] | str | None = None
+    allowStBuy: bool = False
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -122,6 +129,19 @@ def positions(session_id: str):
 @router.get("/{session_id}/snapshots")
 def snapshots(session_id: str):
     return paper_service.list_snapshots(session_id)
+
+
+@router.get("/{session_id}/reports")
+def reports(session_id: str):
+    return paper_service.list_daily_reports(session_id)
+
+
+@router.get("/{session_id}/reports/{trade_date}")
+def report(session_id: str, trade_date: str):
+    item = paper_service.get_daily_report(session_id, trade_date)
+    if not item:
+        raise HTTPException(status_code=404, detail="Paper daily report not found.")
+    return item
 
 
 @router.post("/{session_id}/run-day")

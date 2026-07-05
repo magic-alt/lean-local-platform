@@ -2,9 +2,14 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${LEAN_REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   mysql:
     image: mysql:8.4
@@ -19,7 +24,7 @@ services:
       - --innodb-buffer-pool-size=1G
       - --max-allowed-packet=256M
     ports:
-      - "3306:3306"
+      - "${LEAN_MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -36,15 +41,15 @@ services:
       CLICKHOUSE_PASSWORD: lean
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "${LEAN_CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
 
   prometheus:
     image: prom/prometheus:v2.55.1
     ports:
-      - "9090:9090"
+      - "${LEAN_PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -54,7 +59,7 @@ services:
   grafana:
     image: grafana/grafana:11.4.0
     ports:
-      - "3000:3000"
+      - "${LEAN_GRAFANA_PORT:-3000}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
@@ -74,7 +79,7 @@ services:
       dockerfile: web/backend/Dockerfile
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "8000:8000"
+      - "${LEAN_API_PORT:-8000}:8000"
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
@@ -93,7 +98,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       mysql:
         condition: service_healthy
       clickhouse:
@@ -121,7 +126,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       mysql:
         condition: service_healthy
       clickhouse:

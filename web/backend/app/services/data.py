@@ -545,7 +545,8 @@ def import_ashare_research_data(
             batch_id=batch_id,
         )
         warnings = qa_report.setdefault("warnings", [])
-        if _has_official_trade_status(normalized_rows):
+        has_official_trade_status = _has_official_trade_status(normalized_rows)
+        if has_official_trade_status:
             warnings.append("trade_status_official_fields_used")
         else:
             warnings.append("trade_status_inferred_from_ohlcv")
@@ -569,8 +570,9 @@ def import_ashare_research_data(
             is_st=any(bool(row.get("is_st")) for row in normalized_rows),
         )
         trade_status = build_ashare_trade_status(normalized_rows)
+        status_source = f"{source}:official_status" if has_official_trade_status else f"{source}:ohlcv_inferred"
         upsert_daily_bars(normalized_rows, source=source, batch_id=batch_id, adjust=adjust or "raw")
-        upsert_trade_status(trade_status, source=source, batch_id=batch_id)
+        upsert_trade_status(trade_status, source=status_source, batch_id=batch_id)
         upsert_adjustment_factors(normalized_rows, source=source, batch_id=batch_id)
         upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
 
@@ -596,6 +598,7 @@ def import_ashare_research_data(
             "security": True,
             "daily_bars": len(normalized_rows),
             "trade_status": len(trade_status),
+            "trade_status_source": status_source,
             "adjustment_factors": len(normalized_rows),
             "universe": "ALL_A",
             "first_date": first_date,

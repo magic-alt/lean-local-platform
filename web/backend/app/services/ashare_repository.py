@@ -323,9 +323,30 @@ def upsert_daily_bars(rows: list[dict[str, Any]], source: str, batch_id: str, ad
         )
 
 
+def _trade_status_source_priority(source: str) -> int:
+    value = str(source or "").lower()
+    if any(token in value for token in ("official", "tushare", "jqdata", "rqdata", "ifind", "choice", "wind", "stk_limit", "suspend")):
+        return 100
+    if "manual" in value:
+        return 90
+    if any(token in value for token in ("adata", "baostock", "akshare", "sina", "eastmoney")) and "inferred" not in value:
+        return 70
+    if "inferred" in value or "ohlcv" in value:
+        return 10
+    return 50
+
+
 def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) -> None:
+    persisted_rows: list[dict[str, Any]] = []
+    source_priority = _trade_status_source_priority(source)
     with db() as connection:
         for row in rows:
+            existing = connection.execute(
+                "select source from ashare_trade_status where symbol = ? and trade_date = ?",
+                (row["symbol"], row["trade_date"]),
+            ).fetchone()
+            if existing and _trade_status_source_priority(existing["source"]) > source_priority:
+                continue
             connection.execute(
                 """
                 insert into ashare_trade_status
@@ -363,8 +384,9 @@ def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) 
                     batch_id,
                 ),
             )
+            persisted_rows.append(row)
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
+    for row in persisted_rows:
         grouped.setdefault(row["symbol"], []).append(row)
     for symbol, symbol_rows in grouped.items():
         upsert_market_trade_status(

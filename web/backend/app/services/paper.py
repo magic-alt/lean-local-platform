@@ -60,6 +60,25 @@ def list_snapshots(session_id: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def list_daily_reports(session_id: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            "select * from paper_daily_reports where session_id = ? order by trade_date asc",
+            (session_id,),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def get_daily_report(session_id: str, trade_date: str) -> dict[str, Any] | None:
+    date_value = parse_date(trade_date).isoformat()
+    with db() as connection:
+        row = connection.execute(
+            "select * from paper_daily_reports where session_id = ? and trade_date = ?",
+            (session_id, date_value),
+        ).fetchone()
+    return row_to_dict(row)
+
+
 def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
     request = asset_request(
         parameters["symbol"],
@@ -286,6 +305,41 @@ def _session_parameters(session: dict[str, Any]) -> dict[str, Any]:
     return session.get("parameters") or {}
 
 
+def _parameter_list(parameters: dict[str, Any], *keys: str) -> set[str]:
+    for key in keys:
+        if key not in parameters:
+            continue
+        value = parameters.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            return {item.strip().upper() for item in value.split(",") if item.strip()}
+        if isinstance(value, (list, tuple, set)):
+            return {str(item).strip().upper() for item in value if str(item).strip()}
+    return set()
+
+
+def _parameter_float(parameters: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in parameters and parameters.get(key) not in (None, ""):
+            return float(parameters[key])
+    return None
+
+
+def _parameter_int(parameters: dict[str, Any], *keys: str) -> int | None:
+    value = _parameter_float(parameters, *keys)
+    return int(value) if value is not None else None
+
+
+def _parameter_bool(parameters: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = parameters.get(key)
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _execution_policy(session: dict[str, Any]) -> str:
     parameters = _session_parameters(session)
     policy = str(parameters.get("executionPolicy") or parameters.get("execution_policy") or "next_open").strip().lower()
@@ -391,6 +445,59 @@ def _round_lot(quantity: float, lot_size: int = 100) -> int:
         return 0
     sign = 1 if quantity > 0 else -1
     return sign * (abs(int(quantity)) // lot_size) * lot_size
+
+
+def _status_for(symbol: str, trade_date: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            "select * from ashare_trade_status where symbol = ? and trade_date = ?",
+            (symbol, trade_date),
+        ).fetchone()
+    status = row_to_dict(row)
+    if not status:
+        return None
+    for field in ("is_suspended", "is_limit_up", "is_limit_down", "can_buy", "can_sell", "is_st"):
+        if field in status:
+            status[field] = bool(status[field])
+    return status
+
+
+def _portfolio_constraint_rejection(
+    session: dict[str, Any],
+    signal: dict[str, Any],
+    side: str,
+    execution_date: str,
+    current_quantity: float,
+) -> str | None:
+    if side != "buy":
+        return None
+    parameters = _session_parameters(session)
+    symbol = str(signal["symbol"]).upper()
+    if symbol in _parameter_list(parameters, "blacklist", "blacklistSymbols", "blockedSymbols"):
+        return "blacklisted"
+    if symbol in _parameter_list(parameters, "observeOnlySymbols", "observe_only_symbols", "observeOnly"):
+        return "observe_only"
+    watchlist = _parameter_list(parameters, "watchlist", "watchlistSymbols", "observableSymbols")
+    if watchlist and symbol not in watchlist:
+        return "not_in_watchlist"
+    if not _parameter_bool(parameters, "allowStBuy", False):
+        status = _status_for(symbol, execution_date)
+        if status and status.get("is_st"):
+            return "st_blocked"
+    max_positions = _parameter_int(parameters, "maxPositions", "max_positions", "maxHoldings")
+    if max_positions is not None and current_quantity <= 0:
+        current_positions = [position for position in list_positions(session["id"]) if float(position.get("quantity") or 0) > 0]
+        if len(current_positions) >= max_positions:
+            return "max_positions"
+    return None
+
+
+def _target_percent(session: dict[str, Any], signal: dict[str, Any]) -> float:
+    target = float(signal.get("target_percent") or 1.0)
+    cap = _parameter_float(_session_parameters(session), "maxPositionWeight", "max_position_weight", "singleStockMaxWeight")
+    if cap is not None:
+        target = min(target, max(0.0, cap))
+    return max(0.0, target)
 
 
 def _update_signal(signal_id: str, status: str) -> None:
@@ -519,16 +626,24 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         current_quantity = float((position or {}).get("quantity") or 0)
         price = _execution_price(bar, policy)
         lot_size = int((session.get("parameters") or {}).get("lotSize") or 100)
+        constraint_reason = _portfolio_constraint_rejection(session, signal, side, date_value, current_quantity)
+        if constraint_reason:
+            orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", constraint_reason))
+            _update_signal(signal["id"], "rejected")
+            continue
         if side == "buy":
-            target = float(signal.get("target_percent") or 1.0)
+            target = _target_percent(session, signal)
             desired = _round_lot((float(session["equity"]) * target) / price, lot_size)
             quantity = max(0, desired - current_quantity)
             quantity = _round_lot(quantity, lot_size)
             fee = _fee(quantity, price, side, session)
-            max_cash_quantity = _round_lot((float(session["cash"]) - fee) / price, lot_size)
+            min_cash = _parameter_float(_session_parameters(session), "minCash", "min_cash", "cashFloor") or 0.0
+            available_cash = max(0.0, float(session["cash"]) - min_cash)
+            max_cash_quantity = _round_lot((available_cash - fee) / price, lot_size)
             quantity = max(0, min(quantity, max_cash_quantity))
             if quantity <= 0:
-                orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", "insufficient_cash"))
+                reason = "cash_floor" if available_cash <= 0 else "insufficient_cash"
+                orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", reason))
                 _update_signal(signal["id"], "rejected")
                 continue
         else:
@@ -548,7 +663,8 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         orders.append(_record_order(session_id, signal, side, quantity, date_value, price, price, fee, "filled"))
         _update_signal(signal["id"], "filled")
     snapshot = create_snapshot(session_id, date_value)
-    return {"date": date_value, "executionPolicy": policy, "signals": signals, "orders": orders, "snapshot": snapshot}
+    report = create_daily_report(session_id, date_value)
+    return {"date": date_value, "executionPolicy": policy, "signals": signals, "orders": orders, "snapshot": snapshot, "report": report}
 
 
 def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> list[str]:
@@ -604,7 +720,109 @@ def run_replay(session_id: str, start_date: str, end_date: str, auto_signal: boo
         "finalSession": get_session(session_id),
         "positions": list_positions(session_id),
         "snapshots": list_snapshots(session_id),
+        "reports": list_daily_reports(session_id),
     }
+
+
+def _orders_for_date(session_id: str, trade_date: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select * from paper_orders
+            where session_id = ? and trade_date = ?
+            order by created_at asc
+            """,
+            (session_id, trade_date),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def _latest_snapshot(session_id: str, trade_date: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            "select * from paper_portfolio_snapshots where session_id = ? and trade_date = ?",
+            (session_id, trade_date),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise KeyError("Paper session not found.")
+    date_value = parse_date(trade_date).isoformat()
+    policy = _execution_policy(session)
+    signals = _signals_for_date(session_id, date_value)
+    execution_signals = _open_signals_due(session, date_value, policy)
+    orders = _orders_for_date(session_id, date_value)
+    trades = [order for order in orders if order.get("status") == "filled"]
+    rejects = [order for order in orders if order.get("status") == "rejected"]
+    positions = list_positions(session_id)
+    snapshot = _latest_snapshot(session_id, date_value) or create_snapshot(session_id, date_value)
+    benchmark = {
+        "symbol": snapshot.get("benchmark_symbol"),
+        "close": snapshot.get("benchmark_close"),
+        "return": snapshot.get("benchmark_return"),
+    }
+    qa = quality_gate(session["symbol"], date_value)
+    report = {
+        "sessionId": session_id,
+        "tradeDate": date_value,
+        "executionPolicy": policy,
+        "signals": signals,
+        "executionSignals": execution_signals,
+        "orders": orders,
+        "trades": trades,
+        "rejects": rejects,
+        "positions": positions,
+        "snapshot": snapshot,
+        "nav": snapshot.get("equity"),
+        "benchmark": benchmark,
+        "qa": qa,
+        "generatedAt": utc_now(),
+    }
+    report_id = str(uuid.uuid4())
+    now = report["generatedAt"]
+    with db() as connection:
+        connection.execute(
+            """
+            insert into paper_daily_reports
+                (id, session_id, trade_date, report_json, signals_json, orders_json,
+                 trades_json, rejects_json, positions_json, snapshot_json, benchmark_json, qa_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(session_id, trade_date) do update set
+                report_json = excluded.report_json,
+                signals_json = excluded.signals_json,
+                orders_json = excluded.orders_json,
+                trades_json = excluded.trades_json,
+                rejects_json = excluded.rejects_json,
+                positions_json = excluded.positions_json,
+                snapshot_json = excluded.snapshot_json,
+                benchmark_json = excluded.benchmark_json,
+                qa_json = excluded.qa_json,
+                created_at = excluded.created_at
+            """,
+            (
+                report_id,
+                session_id,
+                date_value,
+                json_dump(report),
+                json_dump(signals),
+                json_dump(orders),
+                json_dump(trades),
+                json_dump(rejects),
+                json_dump(positions),
+                json_dump(snapshot),
+                json_dump(benchmark),
+                json_dump(qa),
+                now,
+            ),
+        )
+        row = connection.execute(
+            "select * from paper_daily_reports where session_id = ? and trade_date = ?",
+            (session_id, date_value),
+        ).fetchone()
+    return row_to_dict(row) or report
 
 
 def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:

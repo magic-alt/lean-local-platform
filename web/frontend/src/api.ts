@@ -698,6 +698,13 @@ export const api = {
     executionPolicy?: string;
     allowSameDayClose?: boolean;
     benchmarkSymbol?: string;
+    maxPositions?: number;
+    maxPositionWeight?: number;
+    minCash?: number;
+    blacklist?: string;
+    watchlist?: string;
+    observeOnlySymbols?: string;
+    allowStBuy?: boolean;
     parameters?: Record<string, unknown>;
   }) =>
     request<PaperSession>("/api/paper", {
@@ -705,6 +712,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  paperReports: (id: string) => request<unknown[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
   updatePaperSessionStatus: (id: string, status: string) =>
     request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
       method: "POST",

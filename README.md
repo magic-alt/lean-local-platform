@@ -210,6 +210,8 @@ web/backend/.venv/bin/python scripts/run_paper_replay.py <session-id> \
 
 A 股 Paper 默认使用显式成交口径 `executionPolicy=next_open`，信号日和成交日分离；也支持 `next_close`、`next_vwap`。`same_close` 属于高风险口径，必须显式设置 `allowSameDayClose=true` 才允许使用。Paper 快照会记录 `benchmarkSymbol`、benchmark close 和 benchmark return；A 股默认 benchmark 为 `000300`。
 
+Paper 每日撮合会持久化 `paper_daily_reports`，日报内容包含当日信号、待执行信号、订单、成交、拒单、拒单原因、持仓、NAV、benchmark 和 QA gate 状态。Paper 组合约束支持 `maxPositions`、`maxPositionWeight`、`minCash`、`blacklist`、`watchlist`、`observeOnlySymbols`，并默认禁止买入 ST，除非显式设置 `allowStBuy=true`。
+
 导入沪深300 benchmark 行情并生成 LEAN cache：
 
 ```bash
@@ -301,7 +303,13 @@ Grafana:    http://127.0.0.1:3000
 如需把 API 和 worker 也放进 Compose：
 
 ```bash
-docker compose --profile app up -d
+docker compose --profile app up -d --build
+```
+
+本机端口被占用时可以覆盖宿主端口；容器内部仍使用服务名互联：
+
+```bash
+LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker
 ```
 
 本地开发仍可只用下面的手动 API/worker/frontend 启动方式。

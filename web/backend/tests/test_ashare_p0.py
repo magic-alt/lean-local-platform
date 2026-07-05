@@ -312,7 +312,7 @@ def test_security_master_restores_history_and_filters_new_and_delisted(tmp_path,
 def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejects(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
-    from app.services.ashare_repository import import_security_master, import_trade_status, is_tradeable, trade_status_as_of
+    from app.services.ashare_repository import import_security_master, import_trade_status, is_tradeable, trade_status_as_of, upsert_trade_status
 
     import_security_master(
         [{"symbol": "600001", "name": "Official Status", "listed_date": "2020-01-01", "status": "listed"}],
@@ -343,6 +343,23 @@ def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejec
     status = trade_status_as_of(["600001"], "2024-01-02")["600001"]
     assert status["limit_up"] == 11.0
     assert status["can_buy"] is False
+    upsert_trade_status(
+        [
+            {
+                "symbol": "600001",
+                "trade_date": "2024-01-02",
+                "is_suspended": False,
+                "is_limit_up": False,
+                "can_buy": True,
+                "can_sell": True,
+            }
+        ],
+        source="unit:ohlcv_inferred",
+        batch_id="inferred-batch",
+    )
+    status = trade_status_as_of(["600001"], "2024-01-02")["600001"]
+    assert status["can_buy"] is False
+    assert status["source"] == "official-unit"
     can_buy, reason = is_tradeable("600001", "2024-01-02", "buy")
     assert can_buy is False
     assert reason == "blocked_buy"

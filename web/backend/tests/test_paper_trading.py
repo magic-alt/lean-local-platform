@@ -49,7 +49,7 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows()
 
-    from app.services.paper import create_session, create_signal, list_orders, list_positions, list_snapshots, match_daily_orders
+    from app.services.paper import create_session, create_signal, list_daily_reports, list_orders, list_positions, list_snapshots, match_daily_orders
 
     session = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
     signal = create_signal(
@@ -77,3 +77,70 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     assert positions[0]["quantity"] == orders[0]["quantity"]
     assert snapshots[0]["equity"] > 0
     assert snapshots[-1]["positions"][0]["symbol"] == "600519"
+    reports = list_daily_reports(session["id"])
+    assert reports[-1]["report"]["tradeDate"] == "2024-01-04"
+    assert reports[-1]["trades"][0]["status"] == "filled"
+    assert reports[-1]["positions"][0]["symbol"] == "600519"
+    assert reports[-1]["snapshot"]["equity"] > 0
+    assert reports[-1]["qa"]["passed"] is True
+
+
+def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_status(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows()
+
+    from app.services.paper import create_session, create_signal, match_daily_orders
+
+    blacklist = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "blacklist": "600519"})
+    create_signal(blacklist["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(blacklist["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "blacklisted"
+
+    watchlist = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "watchlist": "000001"})
+    create_signal(watchlist["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(watchlist["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "not_in_watchlist"
+
+    cash_floor = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "minCash": 100000})
+    create_signal(cash_floor["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(cash_floor["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "cash_floor"
+
+    max_positions = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "maxPositions": 0})
+    create_signal(max_positions["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(max_positions["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "max_positions"
+
+    missing_status = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
+    create_signal(missing_status["id"], trade_date="2024-01-02", side="buy", target_percent=1)
+    import app.db as db_module
+
+    with db_module.db() as connection:
+        connection.execute("delete from ashare_trade_status where symbol = ? and trade_date = ?", ("600519", "2024-01-03"))
+    assert match_daily_orders(missing_status["id"], "2024-01-03", auto_signal=False)["orders"][0]["reason"] == "trade_status_missing"
+
+
+def test_paper_constraints_cap_weight_and_block_st_buy(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows()
+
+    from app.services.ashare_repository import import_trade_status
+    from app.services.paper import create_session, create_signal, match_daily_orders
+
+    capped = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "maxPositionWeight": 0.1})
+    create_signal(capped["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    capped_order = match_daily_orders(capped["id"], "2024-01-04", auto_signal=False)["orders"][0]
+    assert capped_order["status"] == "filled"
+    assert capped_order["quantity"] <= 1000
+
+    import_trade_status(
+        [
+            {
+                "symbol": "600519",
+                "tradeDate": "2024-01-04",
+                "isSt": True,
+                "canBuy": True,
+                "canSell": True,
+            }
+        ],
+        source="official-unit",
+    )
+    st_blocked = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
+    create_signal(st_blocked["id"], trade_date="2024-01-03", side="buy", target_percent=1)
+    assert match_daily_orders(st_blocked["id"], "2024-01-04", auto_signal=False)["orders"][0]["reason"] == "st_blocked"
