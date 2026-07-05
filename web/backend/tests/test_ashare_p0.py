@@ -174,6 +174,11 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
             "cash": 100000,
             "fast": 1,
             "slow": 2,
+            "extra": {
+                "maxPositionWeight": 0.2,
+                "minCash": 1000,
+                "blacklist": "000001,600000",
+            },
         }
     )
 
@@ -183,6 +188,11 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["benchmarkSymbol"] == "000300"
     assert job["parameters"]["benchmarkMarket"] == "china"
     assert job["parameters"]["executionPolicy"] == "next_open"
+    assert job["parameters"]["maxPositionWeight"] == 0.2
+    assert job["parameters"]["minCash"] == 1000.0
+    assert job["parameters"]["cashBuffer"] == 1000.0
+    assert job["parameters"]["blacklist"] == ["000001", "600000"]
+    assert job["parameters"]["constraintVersion"] == 1
 
 
 def test_benchmark_rows_import_to_market_bars_and_lean_cache(tmp_path, monkeypatch):

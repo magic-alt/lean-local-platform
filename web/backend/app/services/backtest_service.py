@@ -12,6 +12,7 @@ from ..runners.docker_runner import DockerRunner
 from .projects import get_project
 from .ashare_repository import assert_ashare_ready
 from .tasks import append_log, create_task, get_task, update_task
+from .trading_config import merge_ashare_trading_config
 
 
 def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
@@ -41,21 +42,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
         adjust = str(parameters.get("adjust") or "raw")
         assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust)
-        parameters.update(
-            {
-                "ashareRules": True,
-                "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
-                "benchmarkSymbol": str(parameters.get("benchmarkSymbol") or request_data.get("benchmarkSymbol") or "000300").upper(),
-                "benchmarkMarket": "china",
-                "executionPolicy": str(parameters.get("executionPolicy") or request_data.get("executionPolicy") or "next_open"),
-                "lotSize": int(parameters.get("lotSize") or 100),
-                "commissionRate": float(parameters.get("commissionRate") or 0.0003),
-                "minCommission": float(parameters.get("minCommission") or 5.0),
-                "stampTaxSell": float(parameters.get("stampTaxSell") or 0.001),
-                "transferFeeRate": float(parameters.get("transferFeeRate") or 0.00001),
-                "slippageBps": float(parameters.get("slippageBps") or 5.0),
-            }
-        )
+        parameters = merge_ashare_trading_config(parameters, request_data)
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
     project_id = request_data.get("projectId")

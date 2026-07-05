@@ -183,6 +183,97 @@ def _fetch_market_rows(scope: dict[str, str], start_date: str | None, end_date: 
     return rows_to_dicts(rows)
 
 
+def _market_row_count(scope: dict[str, str], start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    predicates = [
+        "asset_class = ?",
+        "market = ?",
+        "venue = ?",
+        "resolution = ?",
+        "data_type = ?",
+        "adjust = ?",
+        "source = ?",
+    ]
+    params: list[Any] = [
+        scope["asset_class"],
+        scope["market"],
+        scope["venue"],
+        scope["resolution"],
+        scope["data_type"],
+        scope["adjust"],
+        scope["source"],
+    ]
+    if start_date:
+        predicates.append("trade_date >= ?")
+        params.append(start_date)
+    if end_date:
+        predicates.append("trade_date <= ?")
+        params.append(end_date)
+    with db() as connection:
+        row = connection.execute(
+            f"""
+            select count(*) as row_count, min(trade_date) as first_date, max(trade_date) as last_date
+            from market_daily_bars
+            where {" and ".join(predicates)}
+            """,
+            params,
+        ).fetchone()
+    return {"rowCount": row["row_count"] if row else 0, "firstDate": row["first_date"] if row else None, "lastDate": row["last_date"] if row else None}
+
+
+def _available_scopes(
+    *,
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    sources: list[str] | None = None,
+) -> list[dict[str, str]]:
+    predicates: list[str] = []
+    params: list[Any] = []
+    filters = {
+        "asset_class": asset_class,
+        "market": market,
+        "venue": venue,
+        "resolution": resolution,
+        "data_type": data_type,
+        "adjust": adjust,
+    }
+    for column, value in filters.items():
+        if value:
+            predicates.append(f"{column} = ?")
+            params.append(_clean(value))
+    if sources:
+        normalized = [_clean(source) for source in sources if source.strip()]
+        if normalized:
+            predicates.append(f"source in ({', '.join('?' for _ in normalized)})")
+            params.extend(normalized)
+    where = f"where {' and '.join(predicates)}" if predicates else ""
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select distinct asset_class, market, venue, resolution, data_type, adjust, source
+            from market_daily_bars
+            {where}
+            order by asset_class, market, venue, resolution, data_type, adjust, source
+            """,
+            params,
+        ).fetchall()
+    return [
+        _normalize_scope(
+            row["asset_class"],
+            row["market"],
+            row["venue"],
+            row["resolution"],
+            row["data_type"],
+            row["adjust"],
+            row["source"],
+        )
+        for row in rows
+    ]
+
+
 def _write_partition(frame: Any, root: Path, year: int) -> dict[str, Any]:
     partition_dir = root / f"year={year}"
     partition_dir.mkdir(parents=True, exist_ok=True)
@@ -332,6 +423,224 @@ def export_market_daily_bars(
         "requested_end_date": end_date,
     }
     return _upsert_dataset(scope, root, rows, files, metadata)
+
+
+def _parquet_files_for_dataset(dataset_id: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select *
+            from parquet_files
+            where dataset_id = ?
+            order by first_timestamp asc, file_path asc
+            """,
+            (dataset_id,),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def _persist_consistency_report(report: dict[str, Any]) -> str:
+    created_at = utc_now()
+    report_id = str(uuid.uuid4())
+    with db() as connection:
+        connection.execute(
+            """
+            insert into data_quality_reports
+                (id, report_type, asset_class, market, symbol, start_date, end_date,
+                 sources_json, severity, result_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                "parquet_consistency",
+                report.get("assetClass") or "multi",
+                report.get("market") or "multi",
+                None,
+                report.get("startDate"),
+                report.get("endDate"),
+                json_dump(report.get("sources") or []),
+                report["severity"],
+                json_dump(report),
+                created_at,
+            ),
+        )
+    return report_id
+
+
+def parquet_consistency_report(
+    *,
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    sources: list[str] | None = None,
+    persist: bool = True,
+) -> dict[str, Any]:
+    normalized_sources = [_clean(source) for source in sources or [] if source.strip()]
+    with db() as connection:
+        predicates: list[str] = []
+        params: list[Any] = []
+        filters = {
+            "asset_class": asset_class,
+            "market": market,
+            "venue": venue,
+            "resolution": resolution,
+            "data_type": data_type,
+            "adjust": adjust,
+        }
+        for column, value in filters.items():
+            if value:
+                predicates.append(f"{column} = ?")
+                params.append(_clean(value))
+        if normalized_sources:
+            predicates.append(f"source in ({', '.join('?' for _ in normalized_sources)})")
+            params.extend(normalized_sources)
+        where = f"where {' and '.join(predicates)}" if predicates else ""
+        rows = connection.execute(
+            f"""
+            select *
+            from parquet_datasets
+            {where}
+            order by dataset_key asc
+            """,
+            params,
+        ).fetchall()
+    datasets = rows_to_dicts(rows)
+    items: list[dict[str, Any]] = []
+    for dataset in datasets:
+        scope = _normalize_scope(
+            dataset["asset_class"],
+            dataset["market"],
+            dataset["venue"],
+            dataset["resolution"],
+            dataset["data_type"],
+            dataset["adjust"],
+            dataset["source"],
+        )
+        files = _parquet_files_for_dataset(dataset["id"])
+        missing_files = [item["file_path"] for item in files if not Path(item["file_path"]).exists()]
+        hash_mismatches = [
+            {"filePath": item["file_path"], "expected": item["sha256"], "actual": _sha256(Path(item["file_path"]))}
+            for item in files
+            if Path(item["file_path"]).exists() and _sha256(Path(item["file_path"])) != item["sha256"]
+        ]
+        mysql_counts = _market_row_count(scope, dataset.get("start_date"), dataset.get("end_date"))
+        duckdb_counts = {"enabled": duckdb is not None, "rowCount": None, "firstDate": None, "lastDate": None, "error": None}
+        if duckdb is not None and files and not missing_files:
+            paths = ", ".join(_sql_string(item["file_path"]) for item in files)
+            try:
+                row = duckdb.connect(database=":memory:").execute(
+                    f"""
+                    select count(*) as row_count, min(trade_date) as first_date, max(trade_date) as last_date
+                    from read_parquet([{paths}])
+                    """
+                ).fetchone()
+                duckdb_counts.update({"rowCount": row[0], "firstDate": str(row[1]) if row[1] is not None else None, "lastDate": str(row[2]) if row[2] is not None else None})
+            except Exception as exc:
+                duckdb_counts["error"] = str(exc)
+        issues = []
+        if missing_files:
+            issues.append("missing_parquet_files")
+        if hash_mismatches:
+            issues.append("parquet_sha256_mismatch")
+        if mysql_counts["rowCount"] != dataset["row_count"]:
+            issues.append("mysql_dataset_row_count_mismatch")
+        if duckdb_counts["rowCount"] is not None and duckdb_counts["rowCount"] != dataset["row_count"]:
+            issues.append("duckdb_dataset_row_count_mismatch")
+        if duckdb_counts["error"]:
+            issues.append("duckdb_query_failed")
+        severity = "critical" if any(issue in issues for issue in {"missing_parquet_files", "parquet_sha256_mismatch", "mysql_dataset_row_count_mismatch", "duckdb_dataset_row_count_mismatch"}) else ("warning" if issues or duckdb is None else "ok")
+        items.append(
+            {
+                "datasetId": dataset["id"],
+                "datasetKey": dataset["dataset_key"],
+                "severity": severity,
+                "passed": severity == "ok",
+                "issues": issues,
+                "datasetRows": dataset["row_count"],
+                "datasetFiles": dataset["file_count"],
+                "mysql": mysql_counts,
+                "duckdb": duckdb_counts,
+                "missingFiles": missing_files,
+                "hashMismatches": hash_mismatches,
+            }
+        )
+    severity = "critical" if any(item["severity"] == "critical" for item in items) else ("warning" if any(item["severity"] == "warning" for item in items) else "ok")
+    report = {
+        "reportType": "parquet_consistency",
+        "assetClass": asset_class,
+        "market": market,
+        "venue": venue,
+        "resolution": resolution,
+        "dataType": data_type,
+        "adjust": adjust,
+        "sources": normalized_sources,
+        "startDate": min((item["mysql"]["firstDate"] for item in items if item["mysql"]["firstDate"]), default=None),
+        "endDate": max((item["mysql"]["lastDate"] for item in items if item["mysql"]["lastDate"]), default=None),
+        "severity": severity,
+        "passed": severity == "ok",
+        "datasetCount": len(items),
+        "criticalCount": sum(1 for item in items if item["severity"] == "critical"),
+        "warningCount": sum(1 for item in items if item["severity"] == "warning"),
+        "items": items,
+    }
+    if persist:
+        report["reportId"] = _persist_consistency_report(report)
+    return report
+
+
+def rebuild_all_market_parquet(
+    *,
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    sources: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    continue_on_error: bool = True,
+    persist_report: bool = True,
+) -> dict[str, Any]:
+    scopes = _available_scopes(
+        asset_class=asset_class,
+        market=market,
+        venue=venue,
+        resolution=resolution,
+        data_type=data_type,
+        adjust=adjust,
+        sources=sources,
+    )
+    rebuilt: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for scope in scopes:
+        try:
+            rebuilt.append(export_market_daily_bars(**scope, start_date=start_date, end_date=end_date))
+        except Exception as exc:
+            errors.append({"scope": scope, "error": str(exc)})
+            if not continue_on_error:
+                raise
+    consistency = parquet_consistency_report(
+        asset_class=asset_class,
+        market=market,
+        venue=venue,
+        resolution=resolution,
+        data_type=data_type,
+        adjust=adjust,
+        sources=sources,
+        persist=persist_report,
+    )
+    return {
+        "scopeCount": len(scopes),
+        "rebuiltCount": len(rebuilt),
+        "errorCount": len(errors),
+        "rebuilt": rebuilt,
+        "errors": errors,
+        "consistencyReport": consistency,
+    }
 
 
 def list_datasets() -> list[dict[str, Any]]:

@@ -173,6 +173,25 @@ GET  /api/data/parquet/datasets
 
 新增的 `parquet_datasets` 和 `parquet_files` 表会记录 dataset key、分区文件、行数、日期范围、sha256、大小和导出元数据；Parquet 文件是 MySQL 标准行情表的可重建派生物，不是新的事实源。
 
+全量重建已入库行情的 Parquet 派生仓并生成一致性报告：
+
+```bash
+web/backend/.venv/bin/python scripts/rebuild_market_parquet.py \
+  --asset-class equity \
+  --market china \
+  --venue china \
+  --resolution daily \
+  --data-type trade \
+  --adjust raw
+```
+
+该任务会按 `market_daily_bars` 中实际存在的 scope 重建 Parquet，随后比较 MySQL 行数/日期范围、`parquet_files.sha256` 和 DuckDB 读取结果，并把报告写入 `data_quality_reports.report_type=parquet_consistency`。若出现 critical 一致性问题，脚本以非 0 退出。对应 API：
+
+```text
+POST /api/data/parquet/rebuild
+POST /api/data/parquet/consistency
+```
+
 A 股多源日线校验支持比较已入库的 `akshare`、`adata`、`baostock` 等来源：
 
 ```bash
@@ -183,6 +202,22 @@ web/backend/.venv/bin/python scripts/compare_ashare_sources.py 600519 \
 ```
 
 校验结果写入 `data_quality_reports`，记录覆盖率、缺失日期、OHLC 价差、成交量差异和 severity。AData/Baostock 是可选依赖 provider；未安装时不会影响平台启动。
+
+批量多源 QA 可用于生成验收报告：
+
+```bash
+web/backend/.venv/bin/python scripts/compare_ashare_sources_batch.py \
+  --symbols 600519,000001 \
+  --sources akshare,baostock \
+  --start-date 2026-01-01 \
+  --end-date 2026-07-03
+```
+
+批量报告写入 `data_quality_reports.report_type=ashare_daily_multisource_batch`，汇总 `criticalSymbols`、`warningSymbols`、`passed` 和每个 symbol 的报告 ID；critical 场景自动生成验收报告并以非 0 退出。对应 API：
+
+```text
+POST /api/data/quality/ashare/daily/compare-batch
+```
 
 免费公开源验证阶段可以用批量编排脚本串联导入、交叉校验和 Parquet 刷新：
 
@@ -208,7 +243,7 @@ web/backend/.venv/bin/python scripts/run_paper_replay.py <session-id> \
   --end-date 2026-06-30
 ```
 
-A 股 Paper 默认使用显式成交口径 `executionPolicy=next_open`，信号日和成交日分离；也支持 `next_close`、`next_vwap`。`same_close` 属于高风险口径，必须显式设置 `allowSameDayClose=true` 才允许使用。Paper 快照会记录 `benchmarkSymbol`、benchmark close 和 benchmark return；A 股默认 benchmark 为 `000300`。
+A 股 Paper 默认使用显式成交口径 `executionPolicy=next_open`，信号日和成交日分离；也支持 `next_close`、`next_vwap`。`same_close` 属于高风险口径，必须显式设置 `allowSameDayClose=true` 才允许使用。Paper 快照会记录 `benchmarkSymbol`、benchmark close 和 benchmark return；A 股默认 benchmark 为 `000300`。Paper 与 backtest 通过共享 A 股交易配置统一默认成本、滑点、交易日历、benchmark 和组合约束参数，策略层不应直接绕过这些配置。
 
 Paper 每日撮合会持久化 `paper_daily_reports`，日报内容包含当日信号、待执行信号、订单、成交、拒单、拒单原因、持仓、NAV、benchmark 和 QA gate 状态。Paper 组合约束支持 `maxPositions`、`maxPositionWeight`、`minCash`、`blacklist`、`watchlist`、`observeOnlySymbols`，并默认禁止买入 ST，除非显式设置 `allowStBuy=true`。
 
@@ -245,7 +280,7 @@ POST /api/futures/tqsdk/import
 POST /api/data/intraday/import
 ```
 
-当前不建议下载全市场多年分钟线，也不启用 vn.py DataRecorder 实盘录制。数据库只预留了 `market_intraday_bars`、`market_ticks`、`recording_jobs`、`recording_status` 和 `data_gaps`，用于后续扩展。
+当前不建议下载全市场多年分钟线，也不启用 vn.py DataRecorder 实盘录制。数据库只预留了 `market_intraday_bars`、`market_ticks`、`recording_jobs`、`recording_status` 和 `data_gaps`，用于后续扩展；这些扩展表为空不影响 A 股日线回测和 Paper 主流程。
 
 导入任意 CSV：
 

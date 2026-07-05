@@ -59,3 +59,17 @@ Main modules:
 - `app/services/`: project, task, and object-store domain services.
 - `app/tasks/`: Celery app and worker jobs.
 - `app/lean.py`: LEAN Docker command construction, data conversion helpers, and result parsing.
+
+Useful data maintenance tasks:
+
+```bash
+# Rebuild derived Parquet datasets from MySQL market_daily_bars and persist a consistency report.
+.venv/bin/python ../../scripts/rebuild_market_parquet.py \
+  --asset-class equity --market china --venue china --resolution daily --data-type trade --adjust raw
+
+# Generate a batch A-share multisource QA acceptance report from already ingested provider data.
+.venv/bin/python ../../scripts/compare_ashare_sources_batch.py \
+  --symbols 600519,000001 --sources akshare,baostock --start-date 2026-01-01 --end-date 2026-07-03
+```
+
+Backtest and Paper A-share defaults share `app/services/trading_config.py`, including fees, slippage, calendar, benchmark, max positions, max weight, cash floor, blacklist, and watchlist settings.

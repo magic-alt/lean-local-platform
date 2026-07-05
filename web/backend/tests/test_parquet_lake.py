@@ -80,6 +80,62 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     assert result["items"][0]["timestamp"] == "2026-01-02"
     assert result["items"][0]["close"] == 101.0
 
+    consistency = parquet_lake.parquet_consistency_report(sources=["akshare"], persist=False)
+    assert consistency["severity"] == "ok"
+    assert consistency["datasetCount"] == 1
+    assert consistency["items"][0]["mysql"]["rowCount"] == 2
+    assert consistency["items"][0]["duckdb"]["rowCount"] == 2
+
+
+def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_report(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    pytest.importorskip("duckdb")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+    from app.services.ashare_multisource import list_quality_reports
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+
+    with db_module.db() as connection:
+        for source, symbol, close in (("akshare", "600519", 100.0), ("baostock", "000001", 10.0)):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                     data_type, open, high, low, close, volume, adjust, source, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"inst-{symbol}-{source}",
+                    symbol,
+                    "equity",
+                    "china",
+                    "china",
+                    "2026-07-03",
+                    "daily",
+                    "trade",
+                    close - 1,
+                    close + 1,
+                    close - 2,
+                    close,
+                    1000,
+                    "raw",
+                    source,
+                    "now",
+                ),
+            )
+
+    result = parquet_lake.rebuild_all_market_parquet(asset_class="equity", market="china")
+
+    assert result["scopeCount"] == 2
+    assert result["rebuiltCount"] == 2
+    assert result["consistencyReport"]["severity"] == "ok"
+    saved = list_quality_reports()
+    assert saved[0]["report_type"] == "parquet_consistency"
+    assert saved[0]["severity"] == "ok"
+
 
 def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):
     pytest.importorskip("polars")

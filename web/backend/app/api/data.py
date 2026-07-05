@@ -28,8 +28,8 @@ from ..services.data import (
     symbols_for_asset,
 )
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
-from ..services.parquet_lake import export_market_daily_bars, list_datasets, query_duckdb_bars
-from ..services.ashare_multisource import compare_ashare_daily_sources, list_quality_reports
+from ..services.parquet_lake import export_market_daily_bars, list_datasets, parquet_consistency_report, query_duckdb_bars, rebuild_all_market_parquet
+from ..services.ashare_multisource import compare_ashare_daily_sources, compare_ashare_daily_sources_batch, list_quality_reports
 from ..services.free_data_pipeline import import_ashare_daily_sample
 from ..services.intraday import import_intraday_bars
 from ..services.market_repository import upsert_market_daily_bars
@@ -91,6 +91,31 @@ class ParquetExportRequest(BaseModel):
     endDate: str | None = None
 
 
+class ParquetRebuildRequest(BaseModel):
+    assetClass: str | None = None
+    market: str | None = None
+    venue: str | None = None
+    resolution: str | None = None
+    dataType: str | None = None
+    adjust: str | None = None
+    sources: list[str] | None = None
+    startDate: str | None = None
+    endDate: str | None = None
+    continueOnError: bool = True
+    persistReport: bool = True
+
+
+class ParquetConsistencyRequest(BaseModel):
+    assetClass: str | None = None
+    market: str | None = None
+    venue: str | None = None
+    resolution: str | None = None
+    dataType: str | None = None
+    adjust: str | None = None
+    sources: list[str] | None = None
+    persist: bool = True
+
+
 class AshareDailyCompareRequest(BaseModel):
     symbol: str
     sources: list[str] = Field(default_factory=lambda: ["akshare", "adata", "baostock"])
@@ -101,6 +126,12 @@ class AshareDailyCompareRequest(BaseModel):
     priceRelToleranceBps: float = 5.0
     volumeRelTolerancePct: float = 5.0
     persist: bool = True
+
+
+class AshareDailyCompareBatchRequest(AshareDailyCompareRequest):
+    symbol: str | None = None
+    symbols: list[str] = Field(min_length=1)
+    persistSymbolReports: bool = True
 
 
 class AshareDailySampleImportRequest(BaseModel):
@@ -251,6 +282,43 @@ def parquet_datasets():
     return {"items": list_datasets()}
 
 
+@router.post("/data/parquet/rebuild")
+def rebuild_parquet_data(request: ParquetRebuildRequest):
+    try:
+        return rebuild_all_market_parquet(
+            asset_class=request.assetClass,
+            market=request.market,
+            venue=request.venue,
+            resolution=request.resolution,
+            data_type=request.dataType,
+            adjust=request.adjust,
+            sources=request.sources,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            continue_on_error=request.continueOnError,
+            persist_report=request.persistReport,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data/parquet/consistency")
+def parquet_consistency(request: ParquetConsistencyRequest):
+    try:
+        return parquet_consistency_report(
+            asset_class=request.assetClass,
+            market=request.market,
+            venue=request.venue,
+            resolution=request.resolution,
+            data_type=request.dataType,
+            adjust=request.adjust,
+            sources=request.sources,
+            persist=request.persist,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/data/quality/ashare/daily/compare")
 def compare_ashare_daily_data(request: AshareDailyCompareRequest):
     try:
@@ -264,6 +332,25 @@ def compare_ashare_daily_data(request: AshareDailyCompareRequest):
             price_rel_tolerance_bps=request.priceRelToleranceBps,
             volume_rel_tolerance_pct=request.volumeRelTolerancePct,
             persist=request.persist,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data/quality/ashare/daily/compare-batch")
+def compare_ashare_daily_data_batch(request: AshareDailyCompareBatchRequest):
+    try:
+        return compare_ashare_daily_sources_batch(
+            symbols=request.symbols,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            sources=request.sources,
+            adjust=request.adjust,
+            price_abs_tolerance=request.priceAbsTolerance,
+            price_rel_tolerance_bps=request.priceRelToleranceBps,
+            volume_rel_tolerance_pct=request.volumeRelTolerancePct,
+            persist=request.persist,
+            persist_symbol_reports=request.persistSymbolReports,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

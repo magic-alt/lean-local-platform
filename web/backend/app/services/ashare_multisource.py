@@ -159,6 +159,34 @@ def _persist_report(report: dict[str, Any]) -> str:
     return report_id
 
 
+def _persist_batch_report(report: dict[str, Any]) -> str:
+    created_at = utc_now()
+    report_id = str(uuid.uuid4())
+    with db() as connection:
+        connection.execute(
+            """
+            insert into data_quality_reports
+                (id, report_type, asset_class, market, symbol, start_date, end_date,
+                 sources_json, severity, result_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                "ashare_daily_multisource_batch",
+                "equity",
+                "china",
+                None,
+                report.get("startDate"),
+                report.get("endDate"),
+                json_dump(report["sources"]),
+                report["severity"],
+                json_dump(report),
+                created_at,
+            ),
+        )
+    return report_id
+
+
 def compare_ashare_daily_sources(
     *,
     symbol: str,
@@ -225,6 +253,62 @@ def compare_ashare_daily_sources(
     if persist:
         report["reportId"] = _persist_report(report)
     return report
+
+
+def compare_ashare_daily_sources_batch(
+    *,
+    symbols: list[str],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    sources: list[str] | None = None,
+    adjust: str = "raw",
+    price_abs_tolerance: float = 0.02,
+    price_rel_tolerance_bps: float = 5.0,
+    volume_rel_tolerance_pct: float = 5.0,
+    persist: bool = True,
+    persist_symbol_reports: bool = True,
+) -> dict[str, Any]:
+    normalized_symbols = [_ashare_symbol(symbol) for symbol in symbols if symbol.strip()]
+    normalized_sources = [_source_key(source) for source in (sources or DEFAULT_SOURCES) if source.strip()]
+    if not normalized_symbols:
+        raise ValueError("At least one symbol is required.")
+    reports = [
+        compare_ashare_daily_sources(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            sources=normalized_sources,
+            adjust=adjust,
+            price_abs_tolerance=price_abs_tolerance,
+            price_rel_tolerance_bps=price_rel_tolerance_bps,
+            volume_rel_tolerance_pct=volume_rel_tolerance_pct,
+            persist=persist_symbol_reports,
+        )
+        for symbol in normalized_symbols
+    ]
+    critical = [report for report in reports if report["severity"] == "critical"]
+    warnings = [report for report in reports if report["severity"] == "warning"]
+    severity = "critical" if critical else ("warning" if warnings else "ok")
+    acceptance = {
+        "reportType": "ashare_daily_multisource_batch",
+        "symbols": normalized_symbols,
+        "symbolCount": len(normalized_symbols),
+        "startDate": start_date,
+        "endDate": end_date,
+        "adjust": adjust or "raw",
+        "sources": normalized_sources,
+        "severity": severity,
+        "passed": not critical,
+        "okCount": sum(1 for report in reports if report["severity"] == "ok"),
+        "warningCount": len(warnings),
+        "criticalCount": len(critical),
+        "criticalSymbols": [report["symbol"] for report in critical],
+        "warningSymbols": [report["symbol"] for report in warnings],
+        "reports": reports,
+    }
+    if persist:
+        acceptance["reportId"] = _persist_batch_report(acceptance)
+    return acceptance
 
 
 def list_quality_reports(limit: int = 100) -> list[dict[str, Any]]:

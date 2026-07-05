@@ -6,6 +6,8 @@
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
 当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。2026-07-05 继续补齐 P1 稳定模拟盘能力：真实 LEAN Docker integration 已在有 Docker 权限环境通过，Paper 日报落库/API 化，Paper 组合约束支持最大持仓、单票权重、现金下限、黑名单、观察池/只观察名单，Compose 支持 Redis/API/MySQL 等宿主端口覆盖并完成 API/worker/MySQL/Redis 一键启动验收，交易状态写入新增来源优先级，OHLCV 推断状态不会覆盖官方/手工状态。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
+2026-07-05 P2 效率和扩展性补强：新增全量 Parquet 重建任务和 `parquet_consistency` 一致性报告；新增 A 股多源 QA 批量验收报告 `ashare_daily_multisource_batch`，critical 场景自动落库并以非 0 退出；Paper 与 backtest 共用 A 股成本、滑点、交易日历、benchmark 和组合约束默认配置；期货和分钟线表仍作为扩展项预留，当前为空不影响 A 股日线主流程。
+
 ## 1. 总体结论
 
 本次 P0 修复后，平台在代码机制上已经补齐上一轮最影响回测可信度的 5 个缺口：历史股票池 as-of 查询、上市/退市过滤、复权因子 factor 文件生成、官方交易状态优先、A 股 benchmark 参数、真实 LEAN 订单事件集成断言。2026-07-05 追加修复 Level 3 复审发现的阻塞项：A 股增量导入改为从 MySQL 全量窗口重建 LEAN zip/factor/map，Paper 默认 `next_open` 并禁止隐式 same-day close，`000300` benchmark 已导入 `2005-01-04 -> 2026-07-03` 共 5220 行，回测 worker 写入 `backtest_runs.fingerprint`，并在启动 LEAN 前自动恢复/校验主标的和 benchmark 的 LEAN cache。  
@@ -53,23 +55,24 @@
 - 新增元数据表 `parquet_datasets`、`parquet_files`，记录 dataset key、分区文件、行数、日期范围、sha256、大小、schema version 和导出元数据。
 - 新增数据质量表 `data_quality_reports`，保存 A 股多源日线覆盖率、价差、成交量差异和 severity。
 - 新增 `web/backend/app/services/parquet_lake.py`：从 MySQL/SQLite `market_daily_bars` 导出分区 Parquet，并用 DuckDB 查询 Parquet。
-- 新增 `/api/data/parquet/export`、`/api/data/parquet/datasets`，并支持 `/api/data/query?source=duckdb&providerSource=akshare`。
+- 新增 `/api/data/parquet/export`、`/api/data/parquet/rebuild`、`/api/data/parquet/consistency`、`/api/data/parquet/datasets`，并支持 `/api/data/query?source=duckdb&providerSource=akshare`。
 - 新增 `web/backend/app/services/ashare_multisource.py`：基于已入库 `ashare_daily_bars` 对比 `akshare/adata/baostock` 等来源。
-- 新增 `/api/data/quality/ashare/daily/compare`、`/api/data/quality/reports`。
+- 新增 `/api/data/quality/ashare/daily/compare`、`/api/data/quality/ashare/daily/compare-batch`、`/api/data/quality/reports`。
 - 新增可选 AData/Baostock provider adapter；动态导入，未安装不影响平台启动。
-- 新增脚本 `scripts/export_market_parquet.py` 和 `scripts/compare_ashare_sources.py`。
+- 新增脚本 `scripts/export_market_parquet.py`、`scripts/rebuild_market_parquet.py`、`scripts/compare_ashare_sources.py` 和 `scripts/compare_ashare_sources_batch.py`。
 
 验证结果：
 
-- `web/backend/.venv/bin/python -m py_compile ...` 通过。
-- 已安装 requirements 中声明但当前 venv 缺失的 `duckdb`、`polars`。
-- `./web/backend/.venv/bin/pytest web/backend/tests/test_parquet_lake.py web/backend/tests/test_ashare_multisource.py web/backend/tests/test_market_data.py` 通过：`5 passed`。
+- `web/backend/.venv/bin/python scripts/rebuild_market_parquet.py --help` 通过。
+- `web/backend/.venv/bin/python scripts/compare_ashare_sources_batch.py --help` 通过。
+- `cd web/backend && .venv/bin/python -m pytest -q tests/test_parquet_lake.py tests/test_ashare_multisource.py tests/test_ashare_p0.py tests/test_paper_trading.py` 通过：`21 passed`。
+- `cd web/backend && .venv/bin/python -m pytest -q` 通过：`53 passed, 1 skipped`。
 
 剩余边界：
 
 - Parquet 是从 `market_daily_bars` 派生的研究仓；若上游 MySQL 数据不完整，Parquet 不会自动补数据。
 - 当前只实现日线导出/query 的第一版，分钟线、Tick、期货连续合约和 crypto/futures 大表分区规范仍需后续扩展。
-- 多源校验只比较已入库数据，不会自动下载缺失源；需要先通过 provider import 把 AData/Baostock 等来源写入数据库。
+- 多源校验只比较已入库数据，不会自动下载缺失源；需要先通过 provider import 把 AData/Baostock 等来源写入数据库。批量验收报告可自动标记 critical/warning，但不会替代真实 provider 数据导入。
 
 ### 免费/开源数据源验证阶段
 
@@ -261,8 +264,9 @@ docker compose config
 - `web/backend/app/db.py`：新增 `corporate_actions` 表。
 - `web/backend/app/services/ashare_repository.py`：证券主数据、历史股票池、交易状态、复权因子、公司行动、可交易性判断。
 - `web/backend/app/services/csi300_pit.py`：沪深300公告级 PIT 成分解析、事件落库、区间生成和审计 artifact 记录。
-- `web/backend/app/services/parquet_lake.py`：从 `market_daily_bars` 导出 Parquet、记录文件元数据、用 DuckDB 查询派生行情仓。
-- `web/backend/app/services/ashare_multisource.py`：A 股日线多源覆盖率和价量差异报告，结果写入 `data_quality_reports`。
+- `web/backend/app/services/parquet_lake.py`：从 `market_daily_bars` 导出/全量重建 Parquet、记录文件元数据、用 DuckDB 查询派生行情仓，并生成一致性报告。
+- `web/backend/app/services/ashare_multisource.py`：A 股日线多源覆盖率、价量差异和批量验收报告，结果写入 `data_quality_reports`。
+- `web/backend/app/services/trading_config.py`：Paper 与 backtest 共用的 A 股成本、滑点、交易日历、benchmark 和组合约束默认配置。
 - `web/backend/app/services/ashare_source_adapters.py`：可选 AData/Baostock provider adapter。
 - `web/backend/app/services/free_data_pipeline.py`：免费源 A 股样本批量导入、多源 QA、Parquet 刷新编排。
 - `web/backend/app/services/intraday.py`：分钟线小样本标准化入库。
@@ -290,7 +294,9 @@ docker compose config
 - `data_sources/csi300_pit_sources.json`：本地生产 manifest，记录 2017-12-08 起的真实官方缓存 source、hash、覆盖边界和初始重建成员。
 - `data_sources/csi300_pit_sources.example.json`：公开公告 manifest 示例，仅用于验证导入管线，不写入生产库。
 - `scripts/export_market_parquet.py`：从标准行情表导出 Parquet 分区文件。
+- `scripts/rebuild_market_parquet.py`：全量重建匹配 scope 的 Parquet 派生仓并生成一致性报告。
 - `scripts/compare_ashare_sources.py`：对已入库 A 股多源日线做覆盖率和价量差异校验。
+- `scripts/compare_ashare_sources_batch.py`：批量执行 A 股多源 QA 并生成验收报告。
 - `scripts/import_ashare_free_sample.py`：用 AKShare/Baostock/AData 批量导入 A 股样本并执行 QA/Parquet 编排。
 - `scripts/run_paper_replay.py`：命令行触发 Paper 连续交易日 replay。
 - `scripts/import_tqsdk_futures.py`：通过可选 TqSdk adapter 导入期货 K 线。
@@ -418,14 +424,32 @@ iFinD/Choice/Wind 的购买触发条件：
 
 #### P1-006：Parquet/DuckDB 行情仓生产化
 
-- 问题：当前 Parquet/DuckDB 已可从 `market_daily_bars` 导出并查询日线，但还不是每日增量更新链路。
-- 推荐方案：把 Parquet 导出纳入数据导入任务；每个 batch 结束后按受影响 dataset 增量刷新，并记录 dataset/file hash 到报告。
+- 状态：基础版已完成。
+- 已实现：新增全量重建任务 `scripts/rebuild_market_parquet.py` 和 API `POST /api/data/parquet/rebuild`；重建后自动生成 `parquet_consistency` 报告，比较 MySQL 行数/日期范围、Parquet 文件 sha256 和 DuckDB 读取结果。
+- 剩余：还不是每日调度增量链路，分钟线、Tick、期货连续合约和 crypto/futures 大表分区仍需扩展。
 - 验收标准：
   - `market_daily_bars` 新增或更新后，对应 Parquet dataset 可一键刷新。
   - `/api/data/query?source=duckdb` 与 MySQL 查询在同一 symbol/date/source 下行数和 OHLCV 一致。
   - 数据 QA 报告能引用 `parquet_datasets.id`、`parquet_files.sha256` 和上游 batch id。
 
 ### P2：提高效率和扩展性
+
+#### P2-000：批量 QA、派生仓一致性和共享交易配置
+
+- 状态：基础版已完成。
+- 已实现：
+  - 全量 Parquet 重建任务和一致性报告：`scripts/rebuild_market_parquet.py`、`POST /api/data/parquet/rebuild`、`POST /api/data/parquet/consistency`。
+  - A 股多源 QA 批量验收报告：`scripts/compare_ashare_sources_batch.py`、`POST /api/data/quality/ashare/daily/compare-batch`，critical 场景自动落库并返回失败退出码。
+  - Paper 与 backtest 共用 `ashare_trading_config`，统一默认手续费、印花税、过户费、滑点、交易日历、benchmark、最大持仓、单票权重、现金下限、黑名单和观察池配置。
+  - 期货和分钟线表继续作为扩展项预留，当前空表不阻塞 A 股日线主链路。
+- 剩余：
+  - 将 Parquet 重建和多源 QA 接入每日调度。
+  - 将共享交易配置扩展到期货、ETF、可转债和分钟线撮合。
+  - 为前端增加批量报告入口和差异可视化。
+- 验收标准：
+  - Parquet 全量重建后 `parquet_consistency` severity 为 `ok`，文件 sha256 与落库记录一致。
+  - 多源 QA critical 时生成 `ashare_daily_multisource_batch` 报告，报告包含 failed symbols 和单票报告 ID。
+  - 同一 A 股参数在 backtest 与 Paper 中产生一致的默认成本、滑点、日历和组合约束配置。
 
 #### P2-001：TuShare/JQData/RQData adapter 契约
 

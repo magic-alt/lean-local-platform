@@ -6,6 +6,7 @@ from ..domain.assets import asset_request
 from ..lean import LeanPlatformError, market_key, normalize_symbol, parse_date
 from .ashare_repository import is_tradeable
 from .ashare_multisource import quality_gate
+from .trading_config import ashare_trading_config
 
 
 def _side(value: str) -> str:
@@ -104,8 +105,7 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         "cash": cash,
     }
     if request.asset_class == "equity" and request.venue == "china":
-        clean.setdefault("executionPolicy", "next_open")
-        clean.setdefault("benchmarkSymbol", "000300")
+        clean.update(ashare_trading_config(clean, parameters))
     with db() as connection:
         connection.execute(
             """
