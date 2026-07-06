@@ -89,11 +89,19 @@ def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
         "job-1",
         result_json,
         summary_json,
-        {"results_dir": str(tmp_path), "work_dir": str(work_dir), "parameters": {}},
+        {
+            "results_dir": str(tmp_path),
+            "work_dir": str(work_dir),
+            "parameters": {},
+            "validation": {"passed": True, "severity": "ok"},
+            "experiment": {"runId": "job-1", "parameters": {"sha256": "abc"}},
+        },
     )
 
     assert saved["raw_result_object_id"]
     assert saved["summary_object_id"]
+    assert saved["performance"]["validation"]["passed"] is True
+    assert saved["performance"]["experiment"]["runId"] == "job-1"
     artifact_objects = saved["performance"]["artifact_objects"]
     assert {item["kind"] for item in artifact_objects} >= {
         "lean-result",

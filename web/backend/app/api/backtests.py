@@ -118,6 +118,17 @@ def results(run_id: str):
     return result(run_id)
 
 
+@router.get("/{run_id}/validation")
+def validation(run_id: str):
+    run = detail(run_id)
+    return {
+        "job_id": run["id"],
+        "validation": run.get("validation"),
+        "experiment": run.get("experiment"),
+        "fingerprint": run.get("fingerprint"),
+    }
+
+
 @router.post("/{run_id}/cancel")
 def cancel(run_id: str):
     try:

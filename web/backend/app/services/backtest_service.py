@@ -12,6 +12,7 @@ from ..runners.docker_runner import DockerRunner
 from .projects import get_project
 from .ashare_multisource import quality_gate_range
 from .ashare_repository import assert_ashare_ready, assert_benchmark_ready
+from .backtest_validation import build_backtest_validation, build_experiment_record
 from .run_fingerprint import build_run_fingerprint
 from .tasks import append_log, create_task, get_task, update_task
 from .trading_config import merge_ashare_trading_config
@@ -92,14 +93,23 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         strategy_path=strategy_path,
         config_path=run_dir / "config.json",
     )
+    validation = build_backtest_validation(parameters, fingerprint)
+    experiment = build_experiment_record(
+        run_id=run_id,
+        parameters=parameters,
+        fingerprint=fingerprint,
+        project_id=project_id,
+        strategy_path=str(strategy_path),
+        validation=validation,
+    )
     with db() as connection:
         connection.execute(
             """
             insert into backtest_runs
                 (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
                  parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, created_at,
-                 fingerprint_json)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fingerprint_json, validation_json, experiment_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -120,6 +130,8 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 task["log_path"],
                 now,
                 json_dump(fingerprint),
+                json_dump(validation),
+                json_dump(experiment),
             ),
         )
     return get_backtest(run_id) or {}

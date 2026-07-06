@@ -3,6 +3,7 @@ from typing import Any
 
 COMMON_HEADER = '''from AlgorithmImports import *
 from datetime import datetime
+import math
 
 try:
     from ashare_execution import AShareExecutionHelper, apply_ashare_models
@@ -198,6 +199,129 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         elif self.rsi.current.value > self.sell_above and invested:
             self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("RSI", "RSI", self.rsi.current.value)
+''',
+    },
+    "donchian_breakout": {
+        "key": "donchian_breakout",
+        "name": "Donchian Breakout",
+        "description": "Trend-following breakout using rolling high and low channels.",
+        "parameters": [
+            {"key": "lookback", "label": "Lookback", "type": "number", "default": 20, "min": 2},
+            {"key": "exitLookback", "label": "Exit Lookback", "type": "number", "default": 10, "min": 2},
+        ],
+        "body": '''        self.lookback = int(self.get_parameter("lookback", 20))
+        self.exit_lookback = int(self.get_parameter("exitLookback", 10))
+        self.highs = []
+        self.lows = []
+        self.set_warm_up(max(self.lookback, self.exit_lookback), self.resolution)
+
+    def on_data(self, data):
+        if not data.contains_key(self.symbol):
+            return
+        bar = data[self.symbol]
+        previous_high = max(self.highs[-self.lookback:]) if len(self.highs) >= self.lookback else None
+        previous_low = min(self.lows[-self.exit_lookback:]) if len(self.lows) >= self.exit_lookback else None
+        self.highs.append(float(bar.high))
+        self.lows.append(float(bar.low))
+        self.highs = self.highs[-max(self.lookback, self.exit_lookback):]
+        self.lows = self.lows[-max(self.lookback, self.exit_lookback):]
+        if self.is_warming_up or previous_high is None or previous_low is None:
+            return
+        invested = self.portfolio[self.symbol].invested
+        if float(bar.close) > previous_high and not invested:
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+        elif float(bar.close) < previous_low and invested:
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+        self.plot("Donchian", "Upper", previous_high)
+        self.plot("Donchian", "Lower", previous_low)
+''',
+    },
+    "bollinger_reversion": {
+        "key": "bollinger_reversion",
+        "name": "Bollinger Reversion",
+        "description": "Mean reversion template using rolling close bands.",
+        "parameters": [
+            {"key": "period", "label": "Period", "type": "number", "default": 20, "min": 2},
+            {"key": "deviation", "label": "Deviation", "type": "number", "default": 2.0, "min": 0.1},
+        ],
+        "body": '''        self.period = int(self.get_parameter("period", 20))
+        self.deviation = float(self.get_parameter("deviation", 2.0))
+        self.closes = []
+        self.set_warm_up(self.period, self.resolution)
+
+    def on_data(self, data):
+        if not data.contains_key(self.symbol):
+            return
+        close = float(data[self.symbol].close)
+        self.closes.append(close)
+        self.closes = self.closes[-self.period:]
+        if self.is_warming_up or len(self.closes) < self.period:
+            return
+        mean = sum(self.closes) / len(self.closes)
+        variance = sum((value - mean) ** 2 for value in self.closes) / len(self.closes)
+        band_width = self.deviation * math.sqrt(variance)
+        lower = mean - band_width
+        upper = mean + band_width
+        invested = self.portfolio[self.symbol].invested
+        if close < lower and not invested:
+            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+        elif close > mean and invested:
+            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+        self.plot("Bollinger", "Middle", mean)
+        self.plot("Bollinger", "Upper", upper)
+        self.plot("Bollinger", "Lower", lower)
+''',
+    },
+    "etf_rotation": {
+        "key": "etf_rotation",
+        "name": "ETF Momentum Rotation",
+        "description": "Rotate into the strongest ETF by rolling momentum.",
+        "parameters": [
+            {"key": "symbols", "label": "ETF Symbols", "type": "text", "default": "SPY,QQQ,IWM"},
+            {"key": "lookback", "label": "Momentum Lookback", "type": "number", "default": 63, "min": 2},
+            {"key": "rebalanceDays", "label": "Rebalance Days", "type": "number", "default": 21, "min": 1},
+        ],
+        "body": '''        raw_symbols = self.get_parameter("symbols", ticker)
+        self.lookback = int(self.get_parameter("lookback", 63))
+        self.rebalance_days = int(self.get_parameter("rebalanceDays", 21))
+        self.last_rebalance = None
+        self.rotation_symbols = []
+        self.price_history = {}
+        seen = set()
+        for item in raw_symbols.split(","):
+            rotation_ticker = item.strip().upper()
+            if not rotation_ticker or rotation_ticker in seen:
+                continue
+            seen.add(rotation_ticker)
+            rotation_security = security if rotation_ticker == ticker else self.add_equity(rotation_ticker, self.resolution, market, data_normalization_mode=DataNormalizationMode.RAW)
+            self.rotation_symbols.append(rotation_security.symbol)
+            self.price_history[rotation_security.symbol] = []
+        self.set_warm_up(self.lookback, self.resolution)
+
+    def on_data(self, data):
+        for rotation_symbol in self.rotation_symbols:
+            if data.contains_key(rotation_symbol):
+                history = self.price_history[rotation_symbol]
+                history.append(float(data[rotation_symbol].close))
+                self.price_history[rotation_symbol] = history[-self.lookback:]
+        if self.is_warming_up:
+            return
+        today = self.time.date()
+        if self.last_rebalance and (today - self.last_rebalance).days < self.rebalance_days:
+            return
+        scores = []
+        for rotation_symbol in self.rotation_symbols:
+            history = self.price_history.get(rotation_symbol) or []
+            if len(history) >= self.lookback and history[0] > 0:
+                scores.append((history[-1] / history[0] - 1.0, rotation_symbol))
+        if not scores:
+            return
+        scores.sort(reverse=True, key=lambda item: item[0])
+        winner = scores[0][1]
+        for rotation_symbol in self.rotation_symbols:
+            self.set_holdings(rotation_symbol, 1.0 if rotation_symbol == winner else 0.0)
+        self.last_rebalance = today
+        self.plot("Rotation", "BestMomentum", scores[0][0])
 ''',
     },
     "crypto_momentum": {

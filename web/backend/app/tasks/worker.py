@@ -20,6 +20,7 @@ from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
 from ..services.ashare_multisource import quality_gate_range
 from ..services.ashare_repository import assert_benchmark_ready
+from ..services.backtest_validation import build_backtest_validation, build_experiment_record
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache
@@ -139,16 +140,28 @@ def run_backtest_task(task_id: str, run_id: str):
     strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
 
     def update_fingerprint() -> None:
+        fingerprint = build_run_fingerprint(
+            run_id=run_id,
+            parameters=parameters,
+            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+            lean_cache=lean_cache,
+            strategy_path=strategy_path,
+            config_path=run_dir / "config.json",
+        )
+        validation = build_backtest_validation(parameters, fingerprint)
+        experiment = build_experiment_record(
+            run_id=run_id,
+            parameters=parameters,
+            fingerprint=fingerprint,
+            project_id=task.get("project_id"),
+            strategy_path=str(strategy_path),
+            validation=validation,
+        )
         update_backtest(
             run_id,
-            fingerprint_json=build_run_fingerprint(
-                run_id=run_id,
-                parameters=parameters,
-                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                lean_cache=lean_cache,
-                strategy_path=strategy_path,
-                config_path=run_dir / "config.json",
-            ),
+            fingerprint_json=fingerprint,
+            validation_json=validation,
+            experiment_json=experiment,
         )
 
     try:

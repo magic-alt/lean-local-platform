@@ -327,6 +327,10 @@ def parse_result_payload(
     holdings = _values(data.get("holdings") or data.get("Holdings"))
     trades = order_events or chart_data.get("orders") or []
     performance = performance_analytics(statistics, chart_data, order_events, data)
+    if run.get("validation"):
+        performance["validation"] = run.get("validation")
+    if run.get("experiment"):
+        performance["experiment"] = run.get("experiment")
     if performance.get("calmar") is not None:
         statistics.setdefault("Calmar Ratio", f"{performance['calmar']:.3f}")
     return {

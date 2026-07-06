@@ -171,6 +171,8 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
 
     import app.services.backtest_service as backtest_service
     import app.services.tasks as task_service
+    from app.main import app
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
@@ -209,6 +211,31 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["fingerprint"]["benchmark_rows"] == 3
     assert job["fingerprint"]["lean_zip_sha256"]
     assert job["fingerprint"]["factor_file_sha256"]
+    assert job["validation"]["passed"] is True
+    assert job["validation"]["marketRules"]["tPlusOne"] is True
+    assert job["validation"]["marketRules"]["limitUpBuyBlocked"] is True
+    assert job["validation"]["marketRules"]["feeModel"]["stampTaxSell"] == 0.001
+    assert job["validation"]["data"]["coverage"]["bar_count"] == 3
+    assert job["validation"]["data"]["coverage"]["status_count"] == 3
+    assert job["validation"]["data"]["benchmark"]["symbol"] == "000300"
+    assert job["validation"]["data"]["benchmark"]["rows"] == 3
+    assert {gate["name"] for gate in job["validation"]["gates"]} >= {
+        "ashare_data_coverage",
+        "ashare_trade_status",
+        "ashare_import_batch_qa",
+        "benchmark_data",
+        "ashare_multisource_quality",
+    }
+    assert job["experiment"]["parameters"]["sha256"] == job["fingerprint"]["parameters_sha256"]
+    assert job["experiment"]["data"]["marketDailyBars"]["row_count"] == 3
+    assert job["experiment"]["data"]["benchmark"]["symbol"] == "000300"
+    assert job["experiment"]["environment"]["dockerImage"] == job["parameters"]["dockerImage"]
+
+    response = TestClient(app).get(f"/api/backtests/{job['id']}/validation")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation"]["passed"] is True
+    assert payload["experiment"]["validation"]["passed"] is True
 
 
 def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, monkeypatch):

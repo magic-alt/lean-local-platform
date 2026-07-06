@@ -42,6 +42,8 @@ JSON_COLUMNS = {
     "holdings_json": "holdings",
     "performance_json": "performance",
     "fingerprint_json": "fingerprint",
+    "validation_json": "validation",
+    "experiment_json": "experiment",
     "positions_json": "positions",
     "report_json": "report",
     "signals_json": "signals",
@@ -75,6 +77,8 @@ LONG_TEXT_COLUMNS = {
     "trades_json",
     "holdings_json",
     "performance_json",
+    "validation_json",
+    "experiment_json",
     "report_json",
     "signals_json",
     "rejects_json",
@@ -1016,7 +1020,9 @@ def init_db() -> None:
                 started_at text,
                 finished_at text,
                 duration_seconds real,
-                fingerprint_json text
+                fingerprint_json text,
+                validation_json text,
+                experiment_json text
             );
 
             create table if not exists backtest_results (
@@ -1320,6 +1326,8 @@ def init_db() -> None:
         _add_column(connection, "backtest_runs", "queued_at", "text")
         _add_column(connection, "backtest_runs", "duration_seconds", "real")
         _add_column(connection, "backtest_runs", "fingerprint_json", "text")
+        _add_column(connection, "backtest_runs", "validation_json", "text")
+        _add_column(connection, "backtest_runs", "experiment_json", "text")
         _add_column(connection, "data_assets", "asset_class", "text not null default 'equity'")
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")

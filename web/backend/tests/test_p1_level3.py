@@ -37,6 +37,26 @@ def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
     assert "set_benchmark(lambda time: 1)" not in code
 
 
+def test_strategy_templates_include_p1_standard_set():
+    from app.services.strategies import list_templates, render_python_template
+
+    templates = {item["key"]: item for item in list_templates()}
+
+    assert {
+        "buy_hold",
+        "sma_cross",
+        "donchian_breakout",
+        "rsi_reversion",
+        "bollinger_reversion",
+        "etf_rotation",
+        "future_trend",
+    } <= set(templates)
+    assert templates["donchian_breakout"]["parameters"][0]["key"] == "lookback"
+    assert templates["etf_rotation"]["parameters"][0]["key"] == "symbols"
+    assert "max(self.highs" in render_python_template("DonchianAlgorithm", "donchian_breakout")
+    assert "self.rotation_symbols" in render_python_template("RotationAlgorithm", "etf_rotation")
+
+
 def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
 
