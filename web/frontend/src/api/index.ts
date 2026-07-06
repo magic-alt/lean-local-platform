@@ -26,6 +26,7 @@ import type {
   BacktestExperiment,
   BacktestValidationResponse,
   BacktestResult,
+  BacktestCompareResult,
   OptimizationRun,
   ResearchSession,
   ReportRecord,
@@ -238,11 +239,18 @@ export const api = {
     start: string;
     end: string;
     cash: number;
-    fastValues: number[];
-    slowValues: number[];
+    parameters?: Record<string, unknown>;
+    parameterGrid: Record<string, unknown[]>;
+    maxCandidates?: number;
     dockerImage: string;
   }) =>
     request<OptimizationRun>("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  compareBacktests: (payload: { runIds: string[]; includeCurves?: boolean }) =>
+    request<BacktestCompareResult>("/api/compare/backtests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -263,6 +271,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  reportExportUrl: (id: string, format: "html" | "pdf" | "markdown" | "csv" | "json") =>
+    `/api/reports/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
   objectStoreItems: () => request<ObjectStoreItem[]>("/api/object-store"),
   uploadObjectStoreItem: (key: string, formData: FormData) =>
     request<ObjectStoreItem>(`/api/object-store/${encodePath(key)}`, {

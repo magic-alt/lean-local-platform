@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -8,7 +9,9 @@ from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.config import validate_backtest_parameters
 from ..lean_engine.errors import LeanPlatformError
+from ..services.optimization import normalize_parameter_grid
 from ..services.projects import get_project
+from ..services.strategies import list_templates
 from ..services.tasks import create_task
 from ..tasks.worker import optimize_task
 
@@ -26,8 +29,11 @@ class OptimizationRequest(BaseModel):
     start: str
     end: str
     cash: float = Field(default=100000, gt=0)
-    fastValues: list[int] = Field(default_factory=lambda: [5, 10, 15])
-    slowValues: list[int] = Field(default_factory=lambda: [20, 30, 50])
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameterGrid: dict[str, Any] = Field(default_factory=dict)
+    maxCandidates: int = Field(default=50, ge=1, le=200)
+    fastValues: list[int] | None = None
+    slowValues: list[int] | None = None
     dockerImage: str = DEFAULT_DOCKER_IMAGE
 
 
@@ -44,6 +50,15 @@ def create_optimization(request: OptimizationRequest):
         project = get_project(request.projectId)
         if project["language"] != "Python":
             raise LeanPlatformError("CSharp optimization is not enabled in this local web version yet.")
+        parameter_grid = normalize_parameter_grid(
+            request.parameterGrid,
+            fast_values=request.fastValues,
+            slow_values=request.slowValues,
+            max_candidates=request.maxCandidates,
+        )
+        first_grid_values = {key: values[0] for key, values in parameter_grid.items()}
+        project_parameters = dict((project.get("config") or {}).get("parameters") or {})
+        base_parameters = {**project_parameters, **request.parameters, **first_grid_values}
         base = validate_backtest_parameters({
             "ticker": request.symbol,
             "assetClass": request.assetClass,
@@ -53,18 +68,21 @@ def create_optimization(request: OptimizationRequest):
             "dataType": request.dataType,
             "start": request.start,
             "end": request.end,
-            "fast": min(request.fastValues or [10]),
-            "slow": max(request.slowValues or [30]),
             "cash": request.cash,
+            **base_parameters,
         })
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     optimization_id = str(uuid.uuid4())
+    template_key = str((project.get("config") or {}).get("templateKey") or "")
+    template = next((item for item in list_templates() if item["key"] == template_key), None)
     parameters = {
         **base,
-        "fastValues": request.fastValues,
-        "slowValues": request.slowValues,
+        "baseParameters": {**project_parameters, **request.parameters},
+        "parameterGrid": parameter_grid,
+        "parameterSchema": template.get("parameters") if template else [],
+        "maxCandidates": request.maxCandidates,
         "dockerImage": request.dockerImage,
     }
     task = create_task("optimization", f"Optimize {base['ticker']}", parameters, request.projectId, optimization_id)

@@ -95,6 +95,101 @@ def test_reports_api_supports_paged_backtest_and_report_rows(tmp_path, monkeypat
     assert len(payload["items"]) == 1
 
 
+def test_generic_optimization_grid_expands_candidates():
+    from app.services.optimization import best_candidate, normalize_parameter_grid, parameter_combinations
+
+    grid = normalize_parameter_grid({"period": "10,20", "threshold": [0.1, 0.2]}, max_candidates=10)
+    candidates = parameter_combinations({"ticker": "SPY", "cash": 100000}, grid)
+
+    assert grid == {"period": [10, 20], "threshold": [0.1, 0.2]}
+    assert len(candidates) == 4
+    assert candidates[0]["period"] == 10
+    assert candidates[-1]["threshold"] == 0.2
+    assert best_candidate(
+        [
+            {"status": "success", "statistics": {"Sharpe Ratio": "0.50"}},
+            {"status": "success", "statistics": {"Sharpe Ratio": "1.25"}},
+        ]
+    )["statistics"]["Sharpe Ratio"] == "1.25"
+
+
+def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.db import json_dump
+    from app.main import app
+
+    with db_module.db() as connection:
+        for index, run_id in enumerate(("run-a", "run-b"), start=1):
+            connection.execute(
+                """
+                insert into backtest_runs
+                    (id, symbol, asset_class, venue, resolution, data_type, parameters_json, status,
+                     docker_image, results_dir, result_json_path, statistics_json, validation_json, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    "SPY",
+                    "equity",
+                    "usa",
+                    "daily",
+                    "trade",
+                    json_dump({"start": "2020-01-01", "end": "2020-12-31"}),
+                    "success",
+                    "lean:test",
+                    str(tmp_path / run_id),
+                    str(tmp_path / run_id / "result.json"),
+                    json_dump({"Sharpe Ratio": str(index), "Compounding Annual Return": f"{index * 10}%"}),
+                    json_dump({"passed": True, "severity": "ok", "gates": []}),
+                    f"2026-07-05T00:0{index}:00+00:00",
+                ),
+            )
+            connection.execute(
+                """
+                insert into backtest_results
+                    (id, job_id, summary_metrics_json, equity_curve_json, drawdown_curve_json,
+                     orders_json, trades_json, holdings_json, statistics_json, performance_json,
+                     raw_result_path, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"result-{run_id}",
+                    run_id,
+                    json_dump({"Sharpe Ratio": str(index), "Compounding Annual Return": f"{index * 10}%"}),
+                    json_dump([{"time": "2020-01-01T00:00:00+00:00", "value": 100}, {"time": "2020-12-31T00:00:00+00:00", "value": 100 + index}]),
+                    json_dump([{"time": "2020-12-31T00:00:00+00:00", "value": -0.01 * index}]),
+                    json_dump([]),
+                    json_dump([]),
+                    json_dump([]),
+                    json_dump({"Sharpe Ratio": str(index)}),
+                    json_dump({"strategy_return": 0.01 * index, "calmar": index}),
+                    str(tmp_path / run_id / "result.json"),
+                    f"2026-07-05T00:1{index}:00+00:00",
+                ),
+            )
+
+    client = TestClient(app)
+    compare = client.post("/api/compare/backtests", json={"runIds": ["run-a", "run-b"]})
+    assert compare.status_code == 200
+    payload = compare.json()
+    assert payload["rankings"]["bySharpe"][0] == "run-b"
+    assert payload["items"][0]["equityCurve"]
+
+    markdown = client.get("/api/reports/backtest:run-a/export", params={"format": "markdown"})
+    assert markdown.status_code == 200
+    assert "Backtest Report" in markdown.text
+    csv_response = client.get("/api/reports/backtest:run-a/export", params={"format": "csv"})
+    assert csv_response.status_code == 200
+    assert "metrics,Sharpe Ratio,1" in csv_response.text
+    json_response = client.get("/api/reports/backtest:run-a/export", params={"format": "json"})
+    assert json_response.status_code == 200
+    assert json_response.json()["runId"] == "run-a"
+    pdf_response = client.get("/api/reports/backtest:run-a/export", params={"format": "pdf"})
+    assert pdf_response.status_code == 200
+    assert pdf_response.content.startswith(b"%PDF-1.4")
+
+
 def test_data_assets_are_retained_and_marked_superseded(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

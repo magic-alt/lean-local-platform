@@ -322,12 +322,41 @@ export interface OptimizationRun {
   project_id: string;
   status: string;
   parameters: Record<string, unknown>;
-  result?: { candidates?: Array<Record<string, unknown>> } | null;
+  result?: {
+    parameterGrid?: Record<string, unknown[]>;
+    candidateCount?: number;
+    best?: Record<string, unknown> | null;
+    candidates?: Array<Record<string, unknown>>;
+  } | null;
   results_dir: string;
   error?: string | null;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+}
+
+export interface BacktestCompareItem {
+  runId: string;
+  name?: string | null;
+  symbol?: string | null;
+  assetClass?: string | null;
+  venue?: string | null;
+  status: string;
+  projectId?: string | null;
+  createdAt?: string | null;
+  finishedAt?: string | null;
+  parameters: Record<string, unknown>;
+  metrics: Record<string, number | null>;
+  equityCurve?: ChartPoint[];
+  drawdownCurve?: ChartPoint[];
+  validation?: BacktestValidation | null;
+  experiment?: BacktestExperiment | null;
+  error?: string | null;
+}
+
+export interface BacktestCompareResult {
+  items: BacktestCompareItem[];
+  rankings: Record<string, string[]>;
 }
 
 export interface ResearchSession {

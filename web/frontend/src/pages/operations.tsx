@@ -238,7 +238,18 @@ export function ReportsPage() {
             { title: "Benchmark", render: (_, report) => shortValue(asRecord(asRecord(report.validation?.data).benchmark).symbol) },
             { title: "Result", render: (_, report) => report.result_json_path || report.raw_result_object_id ? "available" : "-" },
             { title: "Objects", render: (_, report) => report.storedObjects?.length || 0 },
-            { title: "Open", render: (_, report) => report.report_path ? <a href={`/api/reports/${encodeURIComponent(report.id)}/file`} target="_blank">HTML</a> : "-" }
+            {
+              title: "Export",
+              render: (_, report) => (
+                <Space>
+                  <a href={api.reportExportUrl(report.id, "html")} target="_blank">HTML</a>
+                  <a href={api.reportExportUrl(report.id, "pdf")} target="_blank">PDF</a>
+                  <a href={api.reportExportUrl(report.id, "markdown")} target="_blank">MD</a>
+                  <a href={api.reportExportUrl(report.id, "csv")} target="_blank">CSV</a>
+                  <a href={api.reportExportUrl(report.id, "json")} target="_blank">JSON</a>
+                </Space>
+              )
+            }
           ]}
         />
       </Card>

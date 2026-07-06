@@ -8,6 +8,7 @@ export {
   ResearchPage,
   RunDetailPage
 } from "./core";
+export { ComparePage } from "./compare";
 export { P2ResearchPage } from "./research";
 export {
   MonitoringPage,

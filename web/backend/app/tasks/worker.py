@@ -23,6 +23,7 @@ from ..services.experiments import record_experiment_versions
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache
+from ..services.optimization import best_candidate, candidate_suffix, parameter_combinations
 from ..services.run_fingerprint import build_run_fingerprint
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
@@ -327,40 +328,58 @@ def optimize_task(task_id: str, optimization_id: str):
     _update_table("optimization_runs", optimization_id, status="running", started_at=utc_now(), error=None)
     results = []
     try:
-        fast_values = parameters.get("fastValues") or [10]
-        slow_values = parameters.get("slowValues") or [30]
-        for fast in fast_values:
-            for slow in slow_values:
-                if int(fast) >= int(slow):
-                    continue
-                child_params = {**parameters, "fast": int(fast), "slow": int(slow)}
-                run_id = new_run_id(child_params["ticker"], child_params["start"], child_params["end"]) + f"-f{fast}-s{slow}"
-                append_log(task_id, f"Running candidate fast={fast} slow={slow}")
-                output = run_docker_backtest(
-                    run_id,
-                    child_params,
-                    child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                    RUNS_DIR / run_id,
-                    lambda line: append_log(task_id, line),
-                    algorithm_path=Path(project["project_path"]) / project["main_file"],
-                    algorithm_class=project["algorithm_class"],
-                    language=project["language"],
-                    project_dir=Path(project["project_path"]),
-                )
-                if output["exit_code"] != 0 or not output["result_json_path"]:
-                    raise LeanPlatformError(f"Candidate fast={fast} slow={slow} did not produce a result JSON.")
-                results.append({
-                    "runId": run_id,
-                    "fast": fast,
-                    "slow": slow,
-                    "statistics": output["statistics"],
-                    "resultJson": output["result_json_path"],
-                })
+        parameter_grid = parameters.get("parameterGrid") or {}
+        base_parameters = {key: value for key, value in parameters.items() if key not in {"parameterGrid", "parameterSchema", "baseParameters", "maxCandidates"}}
+        candidates = parameter_combinations(base_parameters, parameter_grid)
+        grid_keys = list(parameter_grid)
+        append_log(task_id, f"Optimization expanded to {len(candidates)} candidate(s): {', '.join(grid_keys)}")
+        for index, child_params in enumerate(candidates, start=1):
+            overrides = {key: child_params.get(key) for key in grid_keys}
+            run_id = (
+                new_run_id(child_params["ticker"], child_params["start"], child_params["end"])
+                + "-"
+                + candidate_suffix(index, overrides)
+            )
+            append_log(task_id, f"Running candidate {index}/{len(candidates)} {overrides}")
+            output = run_docker_backtest(
+                run_id,
+                child_params,
+                child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                RUNS_DIR / run_id,
+                lambda line: append_log(task_id, line),
+                algorithm_path=Path(project["project_path"]) / project["main_file"],
+                algorithm_class=project["algorithm_class"],
+                language=project["language"],
+                project_dir=Path(project["project_path"]),
+            )
+            candidate_result = {
+                "runId": run_id,
+                "index": index,
+                "status": "success" if output["exit_code"] == 0 and output["result_json_path"] else "failed",
+                "parameters": child_params,
+                "overrides": overrides,
+                "statistics": output["statistics"],
+                "resultJson": output["result_json_path"],
+                "summaryJson": output.get("summary_json_path"),
+                "reportHtml": output.get("report_html_path"),
+                "exitCode": output["exit_code"],
+                "error": output.get("error"),
+            }
+            results.append(candidate_result)
+            if candidate_result["status"] != "success":
+                raise LeanPlatformError(f"Candidate {index} {overrides} did not produce a result JSON.")
+        best = best_candidate(results)
         _update_table(
             "optimization_runs",
             optimization_id,
             status="success",
-            result_json={"candidates": results},
+            result_json={
+                "parameterGrid": parameter_grid,
+                "parameterSchema": parameters.get("parameterSchema") or [],
+                "candidateCount": len(results),
+                "best": best,
+                "candidates": results,
+            },
             finished_at=utc_now(),
         )
         update_task(task_id, status="success", artifacts_json=[], finished_at=utc_now())

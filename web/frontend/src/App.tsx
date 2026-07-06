@@ -2,6 +2,7 @@ import { Layout, Menu, Space, Tag } from "antd";
 import {
   AppstoreOutlined,
   CodeOutlined,
+  BarChartOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -17,6 +18,7 @@ import { useMemo } from "react";
 
 import {
   BacktestsPage,
+  ComparePage,
   Dashboard,
   DataPage,
   MonitoringPage,
@@ -42,6 +44,7 @@ function AppShell() {
     { key: "/projects", icon: <FolderOpenOutlined />, label: <Link to="/projects">Projects</Link> },
     { key: "/data", icon: <DatabaseOutlined />, label: <Link to="/data">Data</Link> },
     { key: "/backtests", icon: <PlayCircleOutlined />, label: <Link to="/backtests">Backtests</Link> },
+    { key: "/compare", icon: <BarChartOutlined />, label: <Link to="/compare">Compare</Link> },
     { key: "/optimization", icon: <SlidersOutlined />, label: <Link to="/optimization">Optimization</Link> },
     { key: "/paper", icon: <ExperimentOutlined />, label: <Link to="/paper">Paper</Link> },
     { key: "/research", icon: <ExperimentOutlined />, label: <Link to="/research">Research</Link> },
@@ -65,6 +68,7 @@ function AppShell() {
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/backtests" element={<BacktestsPage />} />
+            <Route path="/compare" element={<ComparePage />} />
             <Route path="/runs/:id" element={<RunDetailPage />} />
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/paper" element={<PaperPage />} />

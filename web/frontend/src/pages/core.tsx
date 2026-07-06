@@ -855,16 +855,47 @@ export function RunDetailPage() {
 
 export function OptimizationPage() {
   const projects = useAsyncData(api.projects, []);
+  const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const optimizations = useAsyncData(api.optimizations, []);
   const [form] = Form.useForm();
   const assetClass = Form.useWatch("assetClass", form) || "equity";
+  const selectedProjectId = Form.useWatch("projectId", form);
+  const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
+  const selectedTemplate = projectTemplate(selectedProject, templates.data);
   const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
+  function parseGridValues(value: unknown) {
+    return String(value ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        if (item.toLowerCase() === "true") return true;
+        if (item.toLowerCase() === "false") return false;
+        const numeric = Number(item);
+        return Number.isFinite(numeric) ? numeric : item;
+      });
+  }
+  function parseJsonObject(value: unknown) {
+    const text = String(value ?? "").trim();
+    if (!text) return {};
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  }
+  function bestCandidate(run: OptimizationRun) {
+    return (run.result?.best ?? null) as Record<string, unknown> | null;
+  }
   async function submit(values: any) {
+    const gridFromFields = Object.fromEntries(
+      Object.entries(values.parameterGrid ?? {})
+        .map(([key, value]) => [key, parseGridValues(value)])
+        .filter(([, value]) => Array.isArray(value) && value.length)
+    );
+    const parameterGrid = { ...gridFromFields, ...parseJsonObject(values.parameterGridJson) };
     await api.createOptimization({
       ...values,
-      fastValues: String(values.fastValues).split(",").map((x) => Number(x.trim())).filter(Boolean),
-      slowValues: String(values.slowValues).split(",").map((x) => Number(x.trim())).filter(Boolean)
+      parameters: parseJsonObject(values.parametersJson),
+      parameterGrid
     });
     message.success("Optimization queued");
     optimizations.reload();
@@ -873,9 +904,9 @@ export function OptimizationPage() {
     <>
       <div className="toolbar"><h1 className="page-title">Optimization</h1><Button icon={<ReloadOutlined />} onClick={optimizations.reload}>Refresh</Button></div>
       <Card title="Parameter Grid">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", symbol: "AAPL", start: "2018-01-01", end: "2024-12-31", cash: 100000, fastValues: "5,10,15", slowValues: "20,30,50", dockerImage: "quantconnect/lean:latest" }}>
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", symbol: "AAPL", start: "2018-01-01", end: "2024-12-31", cash: 100000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
           <div className="field-grid">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project) }); }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
             <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
@@ -884,16 +915,34 @@ export function OptimizationPage() {
             <Form.Item name="symbol" label="Symbol"><Input /></Form.Item>
             <Form.Item name="start" label="Start"><Input type="date" /></Form.Item>
             <Form.Item name="end" label="End"><Input type="date" /></Form.Item>
-            <Form.Item name="fastValues" label="Fast Values"><Input /></Form.Item>
-            <Form.Item name="slowValues" label="Slow Values"><Input /></Form.Item>
             <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="maxCandidates" label="Max Candidates"><InputNumber min={1} max={200} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
           </div>
+          <div className="field-grid">
+            {(selectedTemplate?.parameters ?? []).map((parameter) => (
+              <Form.Item key={parameter.key} name={["parameterGrid", parameter.key]} label={`${parameter.label} Grid`}>
+                <Input placeholder={String(parameter.default ?? "")} />
+              </Form.Item>
+            ))}
+          </div>
+          <Form.Item name="parameterGridJson" label="Custom Parameter Grid JSON">
+            <Input.TextArea rows={3} placeholder='{"period":[10,20,30],"threshold":[0.1,0.2]}' />
+          </Form.Item>
+          <Form.Item name="parametersJson" label="Fixed Parameters JSON">
+            <Input.TextArea rows={3} placeholder='{"benchmarkSymbol":"SPY"}' />
+          </Form.Item>
           <Button type="primary" icon={<SlidersOutlined />} htmlType="submit">Queue Optimization</Button>
         </Form>
       </Card>
       <Card title="Optimization Runs" style={{ marginTop: 16 }}>
-        <Table<OptimizationRun> rowKey="id" dataSource={optimizations.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "Created", dataIndex: "created_at" }]} />
+        <Table<OptimizationRun> rowKey="id" dataSource={optimizations.data} size="small" columns={[
+          { title: "ID", dataIndex: "id", ellipsis: true },
+          { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
+          { title: "Candidates", render: (_, run) => run.result?.candidateCount ?? run.result?.candidates?.length ?? "-" },
+          { title: "Best", render: (_, run) => shortValue(bestCandidate(run)?.overrides ?? "-") },
+          { title: "Created", dataIndex: "created_at" }
+        ]} />
       </Card>
     </>
   );

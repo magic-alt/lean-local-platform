@@ -3,11 +3,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
+from ..services.report_export import csv_report, json_report, markdown_report, pdf_report, report_payload
 from ..services.tasks import create_task
 from ..tasks.worker import generate_report_task
 
@@ -236,3 +237,51 @@ def report_file(report_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report file not found.")
     return FileResponse(path)
+
+
+def _export_report_item(report_id: str) -> dict[str, Any]:
+    item = detail(report_id)
+    run_id = item.get("run_id")
+    if run_id:
+        backtest_item = _backtest_report(_backtest_report_id(run_id))
+        if backtest_item:
+            item = {**backtest_item, **{key: value for key, value in item.items() if value not in (None, "", [])}}
+    return item
+
+
+@router.get("/{report_id}/export")
+def export_report(report_id: str, format: str = "html"):
+    export_format = format.strip().lower()
+    item = _export_report_item(report_id)
+    filename_base = f"backtest-report-{_run_id_from_report_id(report_id).replace(':', '-')}"
+    if export_format == "html":
+        path = Path(item.get("report_path") or item.get("report_html_path") or "")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="HTML report file not found.")
+        return FileResponse(path, media_type="text/html", filename=f"{filename_base}.html")
+
+    payload = report_payload(item)
+    if export_format == "json":
+        return JSONResponse(
+            payload,
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.json"'},
+        )
+    if export_format in {"md", "markdown"}:
+        return Response(
+            markdown_report(payload),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.md"'},
+        )
+    if export_format == "csv":
+        return Response(
+            csv_report(payload),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+        )
+    if export_format == "pdf":
+        return Response(
+            pdf_report(payload),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+        )
+    raise HTTPException(status_code=400, detail="Unsupported report export format.")
