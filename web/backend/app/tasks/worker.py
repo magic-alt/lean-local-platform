@@ -21,10 +21,12 @@ from ..services.data import fetch_and_import_symbol
 from ..services.ashare_multisource import quality_gate_range
 from ..services.ashare_repository import assert_benchmark_ready
 from ..services.backtest_validation import build_backtest_validation, build_experiment_record
+from ..services.experiments import record_experiment_versions
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache
 from ..services.run_fingerprint import build_run_fingerprint
+from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
 from ..services.tasks import append_log, get_task, update_task
 
@@ -117,8 +119,8 @@ def fetch_data_batch_task(task_id: str):
         raise
 
 
-@celery_app.task(name="lean_web.run_backtest")
-def run_backtest_task(task_id: str, run_id: str):
+@celery_app.task(name="lean_web.run_backtest", bind=True, max_retries=None)
+def run_backtest_task(self, task_id: str, run_id: str):
     task = get_task(task_id)
     parameters = task["parameters"]
     project = _task_project(task)
@@ -129,6 +131,22 @@ def run_backtest_task(task_id: str, run_id: str):
         _record_task_metric("backtest", CANCELLED)
         _record_backtest_metric(CANCELLED)
         return {"status": CANCELLED, "run_id": run_id}
+
+    settings = get_settings()
+    max_concurrent = int(settings.get("maxConcurrentJobs") or 1)
+    timeout_seconds = int(settings.get("jobTimeoutSeconds") or 7200)
+    lease = acquire_scheduler_lease(
+        resource="backtest",
+        holder_id=run_id,
+        limit=max_concurrent,
+        ttl_seconds=timeout_seconds + 600,
+        metadata={"task_id": task_id, "run_id": run_id},
+    )
+    if lease is None:
+        append_log(task_id, f"Backtest concurrency limit reached ({max_concurrent}); waiting for a scheduler slot.")
+        update_task(task_id, status="queued", error=None)
+        update_backtest(run_id, status="queued", error=None, error_message=None)
+        raise self.retry(countdown=5)
 
     append_log(task_id, f"Task {task_id} started.")
     update_task(task_id, status="running", started_at=utc_now(), error=None)
@@ -163,10 +181,16 @@ def run_backtest_task(task_id: str, run_id: str):
             validation_json=validation,
             experiment_json=experiment,
         )
+        record_experiment_versions(
+            run_id=run_id,
+            project_id=task.get("project_id"),
+            fingerprint=fingerprint,
+            validation=validation,
+            experiment=experiment,
+        )
 
     try:
-        settings = get_settings()
-        runner = LeanRunner(timeout_seconds=int(settings.get("jobTimeoutSeconds") or 7200))
+        runner = LeanRunner(timeout_seconds=timeout_seconds)
         container_name = runner.container_name_for(run_id)
         update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
@@ -289,6 +313,8 @@ def run_backtest_task(task_id: str, run_id: str):
         _record_task_metric("backtest", "failed")
         _record_backtest_metric("failed")
         raise
+    finally:
+        release_scheduler_lease(lease.get("id"))
 
 
 @celery_app.task(name="lean_web.optimize")

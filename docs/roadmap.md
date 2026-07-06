@@ -42,6 +42,8 @@ Required:
 Current status:
 
 - A-share daily data, benchmark gate, QA gate, LEAN cache, run fingerprint, validation, and experiment metadata are implemented.
+- Scheduler leases enforce `maxConcurrentJobs` before LEAN container startup.
+- StrategyVersion, DatasetVersion, and Experiment rows are persisted for each backtest run.
 - Strategy templates include standard P1 set.
 - Result analytics include key metrics and benchmark comparison.
 - Optimization/research APIs exist but need stronger acceptance.
@@ -91,6 +93,8 @@ Completed or partially completed:
 - data QA gate.
 - run fingerprint.
 - validation/experiment JSON.
+- scheduler lease/slot enforcement.
+- strategy/dataset/experiment version entities.
 - UI validation tab.
 - standard strategy templates.
 - benchmark return, excess return, alpha/beta, Calmar, monthly/yearly returns.
@@ -98,7 +102,7 @@ Completed or partially completed:
 Remaining:
 
 - immutable raw provider snapshots.
-- formal `DatasetVersion` entity.
+- richer version browsing/filtering UI.
 - complete report export formats.
 - golden standard backtest suite with deterministic expected values.
 - broader ETF/convertible/futures validation gates.
@@ -153,4 +157,3 @@ Trusted P1 boundary is A-share daily equity and CSI300-like benchmark data where
 - LEAN cache can be restored or rebuilt.
 
 Everything outside this boundary must be labelled research or partial until it has equivalent gates.
-

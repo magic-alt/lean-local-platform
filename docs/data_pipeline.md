@@ -135,16 +135,18 @@ Each backtest stores:
 - `fingerprint`: git state, parameters hash, data row counts, batch id, cache hashes, Docker image digest.
 - `validation`: A-share rules, data gates, benchmark gates.
 - `experiment`: strategy, parameters, data, environment, and validation summary.
+- `strategy_versions`: strategy path, source hash, git commit, git dirty state.
+- `dataset_versions`: data scope, row counts, trade status counts, benchmark rows, cache hashes.
+- `experiments`: run-to-version linkage plus full fingerprint/validation snapshots.
 
-These fields live on `backtest_runs` as JSON columns.
+The first three fields live on `backtest_runs` as JSON columns. The version records live in normalized tables.
 
 ## Upgrade Path
 
 P1 requirements that are still incomplete or partial:
 
 - immutable raw provider snapshots
-- formal dataset version entity
+- richer version browsing and comparison UI
 - full data quality reports for ETF, convertible bonds, futures, and factors
 - PIT data coverage report for every research universe
 - board-specific A-share limit rules as first-class metadata
-

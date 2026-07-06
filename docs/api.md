@@ -21,6 +21,7 @@ GET    /api/backtests/{run_id}/status
 GET    /api/backtests/{run_id}/result
 GET    /api/backtests/{run_id}/results
 GET    /api/backtests/{run_id}/validation
+GET    /api/backtests/{run_id}/versions
 POST   /api/backtests/{run_id}/cancel
 GET    /api/backtests/{run_id}/logs
 GET    /api/backtests/{run_id}/chart-data
@@ -49,6 +50,17 @@ GET    /api/backtests/{run_id}/artifacts/{name}
 ```
 
 For China equity, the service injects A-share trading config and blocks runs with missing benchmark or critical QA gates.
+
+`GET /api/backtests/{run_id}/versions` returns the normalized version records linked to a run:
+
+```json
+{
+  "job_id": "...",
+  "experiment": {},
+  "strategyVersion": {},
+  "datasetVersion": {}
+}
+```
 
 ## Strategies and Projects
 
@@ -234,4 +246,3 @@ Recommended P2/P3 change:
 GET /api/backtests/{id}/logs?cursor=<byte_offset>&limit=65536
 -> {logs, nextCursor, eof}
 ```
-

@@ -230,12 +230,31 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["experiment"]["data"]["marketDailyBars"]["row_count"] == 3
     assert job["experiment"]["data"]["benchmark"]["symbol"] == "000300"
     assert job["experiment"]["environment"]["dockerImage"] == job["parameters"]["dockerImage"]
+    from app.services.experiments import get_experiment_versions
+
+    versions = get_experiment_versions(job["id"])
+    assert versions is not None
+    assert versions["experiment"]["run_id"] == job["id"]
+    assert versions["experiment"]["strategy_version_id"].startswith("strategy:")
+    assert versions["experiment"]["dataset_version_id"].startswith("dataset:")
+    assert versions["strategyVersion"]["source_sha256"] == job["fingerprint"]["strategy_file_sha256"]
+    assert versions["datasetVersion"]["symbol"] == "600519"
+    assert versions["datasetVersion"]["row_count"] == 3
+    assert versions["datasetVersion"]["benchmark_symbol"] == "000300"
+    assert versions["datasetVersion"]["benchmark_row_count"] == 3
 
     response = TestClient(app).get(f"/api/backtests/{job['id']}/validation")
     assert response.status_code == 200
     payload = response.json()
     assert payload["validation"]["passed"] is True
     assert payload["experiment"]["validation"]["passed"] is True
+
+    response = TestClient(app).get(f"/api/backtests/{job['id']}/versions")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["experiment"]["run_id"] == job["id"]
+    assert payload["strategyVersion"]["id"].startswith("strategy:")
+    assert payload["datasetVersion"]["id"].startswith("dataset:")
 
 
 def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, monkeypatch):

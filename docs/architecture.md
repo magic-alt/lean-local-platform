@@ -9,6 +9,7 @@ Current implementation is between Level 3 and early Level 4:
 - Level 3 main chain is available: Web -> Backend -> Celery task -> LEAN Docker -> raw artifacts -> parser -> UI.
 - P0 has hardened the LEAN run chain with artifact manifests and raw artifact archiving.
 - P1 has added trusted backtest validation metadata for A-share rules, data coverage, benchmark coverage, QA gates, experiment fingerprint, and UI visibility.
+- P1 also has database-backed scheduler leases for `maxConcurrentJobs` and version rows for strategy, dataset, and experiment records.
 - P2/P3 features exist only partially. Optimization, factors, paper replay, convertible bonds, futures, ClickHouse, Prometheus, and Grafana have code or infrastructure, but they are not yet the primary acceptance chain.
 
 ## Module Map
@@ -25,6 +26,7 @@ Browser
       backtest_validation.py
       result_service.py
       strategies.py
+      scheduler.py, experiments.py
       data.py, ashare_repository.py, lean_cache.py
   -> Task layer
       tasks/worker.py
@@ -94,6 +96,7 @@ Strategy selection or project upload
   -> validate_backtest_parameters()
   -> A-share preflight, QA gate, benchmark gate when market=china
   -> create task and backtest_runs row
+  -> acquire scheduler lease before LEAN execution
   -> Celery run_backtest_task()
   -> LeanRunner.run_backtest()
   -> create web/runtime/runs/<run_id>
@@ -125,5 +128,5 @@ Strategy selection or project upload
 - Each run must have an isolated `web/runtime/runs/<run_id>` workspace.
 - Raw outputs must be preserved before and after parsing.
 - Every trusted backtest should carry `fingerprint`, `validation`, and `experiment` metadata.
+- Every trusted backtest should persist linked `strategy_versions`, `dataset_versions`, and `experiments` rows.
 - A-share backtests must use explicit benchmark data and must not fall back to constant benchmark curves.
-

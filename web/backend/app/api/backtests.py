@@ -17,6 +17,7 @@ from ..services.backtest_service import (
     mark_backtest_queued,
     query_backtests,
 )
+from ..services.experiments import get_experiment_versions
 from ..services.result_service import result_for_job
 from ..services.tasks import task_logs
 from ..tasks.worker import run_backtest_task
@@ -127,6 +128,15 @@ def validation(run_id: str):
         "experiment": run.get("experiment"),
         "fingerprint": run.get("fingerprint"),
     }
+
+
+@router.get("/{run_id}/versions")
+def versions(run_id: str):
+    run = detail(run_id)
+    version_record = get_experiment_versions(run_id)
+    if version_record is None:
+        raise HTTPException(status_code=404, detail="Experiment versions not found.")
+    return {"job_id": run["id"], **version_record}
 
 
 @router.post("/{run_id}/cancel")

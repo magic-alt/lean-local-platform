@@ -13,6 +13,7 @@ from .projects import get_project
 from .ashare_multisource import quality_gate_range
 from .ashare_repository import assert_ashare_ready, assert_benchmark_ready
 from .backtest_validation import build_backtest_validation, build_experiment_record
+from .experiments import record_experiment_versions
 from .run_fingerprint import build_run_fingerprint
 from .tasks import append_log, create_task, get_task, update_task
 from .trading_config import merge_ashare_trading_config
@@ -134,6 +135,13 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 json_dump(experiment),
             ),
         )
+    record_experiment_versions(
+        run_id=run_id,
+        project_id=project_id,
+        fingerprint=fingerprint,
+        validation=validation,
+        experiment=experiment,
+    )
     return get_backtest(run_id) or {}
 
 

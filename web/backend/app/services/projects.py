@@ -118,6 +118,7 @@ def delete_project(project_id: str) -> dict[str, Any]:
                 _remove_path(row["report_path"])
                 deleted["reports"] += 1
             connection.execute(f"delete from reports where run_id in ({placeholders})", run_ids)
+            connection.execute(f"delete from experiments where run_id in ({placeholders})", run_ids)
             connection.execute(f"delete from backtest_runs where id in ({placeholders})", run_ids)
 
         tasks = connection.execute("select * from tasks where project_id = ?", (project_id,)).fetchall()

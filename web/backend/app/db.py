@@ -59,6 +59,7 @@ JSON_COLUMNS = {
     "sources_json": "sources",
     "symbols_json": "symbols",
     "details_json": "details",
+    "scope_json": "scope",
 }
 
 
@@ -91,6 +92,7 @@ LONG_TEXT_COLUMNS = {
     "concepts_json",
     "symbols_json",
     "details_json",
+    "scope_json",
     "error",
     "error_message",
 }
@@ -110,6 +112,7 @@ PATH_TEXT_COLUMNS = {
     "raw_result_path",
     "source_path",
     "root_path",
+    "strategy_path",
 }
 MYSQL_RESERVED_COLUMNS = {"rows", "key"}
 ID_TEXT_COLUMNS = {
@@ -1121,6 +1124,73 @@ def init_db() -> None:
                 updated_at text not null
             );
 
+            create table if not exists scheduler_leases (
+                id text primary key,
+                resource text not null,
+                slot_index integer not null,
+                holder_id text not null,
+                limit_count integer not null,
+                acquired_at text not null,
+                expires_at text not null,
+                metadata_json text not null,
+                unique(resource, holder_id),
+                unique(resource, slot_index)
+            );
+
+            create table if not exists strategy_versions (
+                id text primary key,
+                project_id text,
+                strategy_path text,
+                source_sha256 text,
+                git_commit text,
+                git_branch text,
+                git_dirty integer not null default 0,
+                git_status_hash text,
+                metadata_json text not null,
+                created_at text not null
+            );
+
+            create table if not exists dataset_versions (
+                id text primary key,
+                dataset_key text not null,
+                asset_class text,
+                market text,
+                venue text,
+                resolution text,
+                data_type text,
+                adjust text,
+                symbol text,
+                start_date text,
+                end_date text,
+                row_count integer not null default 0,
+                status_count integer not null default 0,
+                benchmark_symbol text,
+                benchmark_row_count integer not null default 0,
+                data_batch_id text,
+                lean_zip_sha256 text,
+                factor_file_sha256 text,
+                parquet_dataset_id text,
+                parquet_file_sha256 text,
+                metadata_json text not null,
+                created_at text not null
+            );
+
+            create table if not exists experiments (
+                id text primary key,
+                run_id text not null unique,
+                strategy_version_id text not null,
+                dataset_version_id text not null,
+                parameter_hash text,
+                docker_image text,
+                docker_image_digest text,
+                git_commit text,
+                fingerprint_json text not null,
+                validation_json text not null,
+                experiment_json text not null,
+                created_at text not null,
+                updated_at text not null
+            );
+
             create table if not exists paper_sessions (
                 id text primary key,
                 project_id text,
@@ -1301,6 +1371,14 @@ def init_db() -> None:
                 on stored_objects(namespace, object_key, updated_at);
             create index if not exists idx_stored_objects_hash
                 on stored_objects(sha256);
+            create index if not exists idx_scheduler_leases_resource
+                on scheduler_leases(resource, expires_at);
+            create index if not exists idx_strategy_versions_project
+                on strategy_versions(project_id, created_at desc);
+            create index if not exists idx_dataset_versions_lookup
+                on dataset_versions(asset_class, market, symbol, start_date, end_date);
+            create index if not exists idx_experiments_run
+                on experiments(run_id);
             create index if not exists idx_paper_sessions_created_at
                 on paper_sessions(created_at desc);
             create index if not exists idx_paper_signals_session_date
@@ -1328,6 +1406,7 @@ def init_db() -> None:
         _add_column(connection, "backtest_runs", "fingerprint_json", "text")
         _add_column(connection, "backtest_runs", "validation_json", "text")
         _add_column(connection, "backtest_runs", "experiment_json", "text")
+        _add_column(connection, "scheduler_leases", "slot_index", "integer not null default 0")
         _add_column(connection, "data_assets", "asset_class", "text not null default 'equity'")
         _add_column(connection, "data_assets", "venue", "text")
         _add_column(connection, "data_assets", "resolution", "text not null default 'daily'")

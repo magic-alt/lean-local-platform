@@ -97,6 +97,8 @@ LEAN_DB_OBJECT_CHUNK_BYTES
 TUSHARE_TOKEN
 ```
 
+`BACKTEST_MAX_CONCURRENT_JOBS` is enforced by database-backed `scheduler_leases` before a LEAN container starts. When no slot is available, the Celery task remains queued and retries instead of launching another container.
+
 Default database URL is MySQL:
 
 ```text
@@ -196,4 +198,3 @@ Use dependency health before running long backtests.
 - Pin LEAN image digest for reproducible releases.
 - Monitor MySQL disk growth from `stored_object_chunks`.
 - Archive or prune old `web/runtime/runs` after verifying object-store persistence.
-
