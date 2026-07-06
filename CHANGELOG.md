@@ -2,6 +2,17 @@
 
 本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
 
+## 2026-07-06 - 本次提交 - Close Level 3 P1 audit gaps
+
+- 将 AKShare 公开参考数据导入错误持久化为 `ashare_reference_public_import` QA 报告，并在 reference coverage API 暴露 `warnings`/`referenceSources`，覆盖 `st_endpoint_unavailable`。
+- 补齐 Paper reports API 顶层 `pendingSignals`、`rejectedOrders`、`rejectReasons`、benchmark 与 QA gate alias，保持前端/API 字段统一。
+- 新增 `scripts/run_paper_replay_acceptance.py` 固定验收场景，创建同一 replay 中同时包含 fill 和 rejected 的 Paper session。
+- 修正 run fingerprint dirty 判断，过滤运行产物类 untracked 噪声但保留源码类 untracked，并记录 raw git status hash。
+- Backtest result summary 显式写入 Strategy/Benchmark/Excess Return，并在 Alpha/Beta 无法可靠计算时记录 benchmark metric status。
+- 新增 `scripts/run_daily_pipeline.py` 日终流水线 CLI，串联 reference、multi-source QA、Parquet、benchmark coverage、Paper Replay 和 report summary。
+- 增加对应后端回归测试；后端全量 pytest 与前端 build 均通过。
+- 真实 MySQL 验证 Paper Replay acceptance：21 个交易日、1 笔成交、1 笔 `blacklisted` 拒单、21 份日报。
+
 ## 2026-07-06 - 本次提交 - Import public A-share reference data
 
 - 新增 AKShare 公开参考数据导入脚本，写入退市证券、公司行动和停牌状态到 canonical MySQL 表。

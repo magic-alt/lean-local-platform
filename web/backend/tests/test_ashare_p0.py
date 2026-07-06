@@ -434,6 +434,54 @@ def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkey
     assert fingerprint["requirements_hash"]
 
 
+def test_git_state_dirty_ignores_untracked_runtime_artifacts(monkeypatch):
+    from app.services import run_fingerprint
+
+    def fake_run_git(args):
+        if args == ["status", "--porcelain", "--untracked-files=no"]:
+            return ""
+        if args == ["status", "--porcelain"]:
+            return "?? runtime/generated.log"
+        if args == ["rev-parse", "HEAD"]:
+            return "abc123"
+        if args == ["branch", "--show-current"]:
+            return "main"
+        return None
+
+    monkeypatch.setattr(run_fingerprint, "_run_git", fake_run_git)
+
+    state = run_fingerprint.git_state()
+
+    assert state["dirty"] is False
+    assert state["rawDirty"] is True
+    assert state["statusMode"] == "tracked_plus_non_runtime_untracked"
+    assert state["ignoredUntrackedCount"] == 1
+    assert state["meaningfulUntrackedCount"] == 0
+
+
+def test_git_state_dirty_keeps_untracked_source_files(monkeypatch):
+    from app.services import run_fingerprint
+
+    def fake_run_git(args):
+        if args == ["status", "--porcelain", "--untracked-files=no"]:
+            return ""
+        if args == ["status", "--porcelain"]:
+            return "?? scripts/new_pipeline.py"
+        if args == ["rev-parse", "HEAD"]:
+            return "abc123"
+        if args == ["branch", "--show-current"]:
+            return "main"
+        return None
+
+    monkeypatch.setattr(run_fingerprint, "_run_git", fake_run_git)
+
+    state = run_fingerprint.git_state()
+
+    assert state["dirty"] is True
+    assert state["rawDirty"] is True
+    assert state["meaningfulUntrackedCount"] == 1
+
+
 def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatch):
     import_sample_ashare(tmp_path, monkeypatch)
 

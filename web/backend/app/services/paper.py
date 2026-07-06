@@ -104,9 +104,37 @@ def _daily_report_api_item(item: dict[str, Any]) -> dict[str, Any]:
         "dataSourceStatus",
         "warnings",
         "fingerprint",
+        "signals",
+        "pendingSignals",
+        "executionSignals",
+        "orders",
+        "trades",
+        "rejects",
+        "positions",
+        "snapshot",
+        "benchmark",
+        "qa",
     ):
         if key in report and key not in item:
             item[key] = report[key]
+    if "pendingSignals" not in item:
+        item["pendingSignals"] = report.get("pendingSignals") or report.get("executionSignals") or []
+    if "executionSignals" not in item:
+        item["executionSignals"] = item["pendingSignals"]
+    if "rejectedOrders" not in item:
+        item["rejectedOrders"] = item.get("rejects") or report.get("rejects") or []
+    if "rejectReasons" not in item:
+        item["rejectReasons"] = item.get("rejectionReasons") or report.get("rejectionReasons") or []
+    benchmark = item.get("benchmark") or {}
+    if "benchmarkSymbol" not in item:
+        item["benchmarkSymbol"] = benchmark.get("symbol")
+    if "benchmarkClose" not in item:
+        item["benchmarkClose"] = benchmark.get("close")
+    if "benchmarkReturn" not in item:
+        item["benchmarkReturn"] = benchmark.get("return")
+    qa = item.get("qa") or {}
+    if "qaGateStatus" not in item:
+        item["qaGateStatus"] = qa.get("severity")
     return item
 
 

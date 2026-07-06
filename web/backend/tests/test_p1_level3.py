@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import sys
 
 
 def configure_temp_db(tmp_path, monkeypatch):
@@ -124,6 +125,7 @@ def test_reference_data_coverage_api_exposes_level3_data_gaps(tmp_path, monkeypa
     configure_temp_db(tmp_path, monkeypatch)
 
     from app.main import app
+    from app.db import json_dump, utc_now
     from app.services.ashare_repository import import_security_master, import_trade_status, upsert_corporate_actions
     from app.services.pit_data import import_index_members
 
@@ -168,17 +170,92 @@ def test_reference_data_coverage_api_exposes_level3_data_gaps(tmp_path, monkeypa
         [{"symbol": "600519", "exDate": "2024-06-30", "actionType": "dividend", "cashDividend": 10.0}],
         source="unit",
     )
+    import app.db as db_module
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into data_quality_reports
+                (id, report_type, asset_class, market, symbol, start_date, end_date,
+                 sources_json, severity, result_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "reference-report-1",
+                "ashare_reference_public_import",
+                "equity",
+                "china",
+                None,
+                "2026-07-03",
+                "2026-07-03",
+                json_dump(["akshare"]),
+                "warning",
+                json_dump(
+                    {
+                        "warnings": ["st_endpoint_unavailable"],
+                        "sourceStatus": {
+                            "provider": "akshare",
+                            "errors": [{"source": "stock_zh_a_st_em", "error": "connection reset"}],
+                        },
+                    }
+                ),
+                utc_now(),
+            ),
+        )
 
     response = TestClient(app).get("/api/ashare/reference-data/coverage", params={"indexCode": "CSI300"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["passed"] is True
+    assert payload["severity"] == "warning"
+    assert payload["warnings"] == ["st_endpoint_unavailable"]
+    assert payload["referenceSources"]["errors"][0]["source"] == "stock_zh_a_st_em"
     assert payload["securities"]["delisted"] == 1
     assert payload["securities"]["st"] == 1
     assert payload["tradeStatus"]["suspendedDays"] == 1
     assert payload["corporateActions"]["rows"] == 1
     assert payload["pit"]["rows"] == 1
+
+
+def test_reference_public_import_persists_provider_warning(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    import app.db as db_module
+    from scripts.import_ashare_reference_public import persist_reference_import_report
+
+    result = {
+        "source": "akshare",
+        "asOfDate": "2026-07-03",
+        "delisted": {"count": 1},
+        "st": {"count": 0},
+        "suspended": {"count": 2},
+        "corporateActions": {"count": 3},
+        "errors": [{"source": "stock_zh_a_st_em", "error": "connection reset"}],
+    }
+
+    persist_reference_import_report(result)
+
+    with db_module.db() as connection:
+        row = connection.execute("select * from data_quality_reports where report_type = 'ashare_reference_public_import'").fetchone()
+    assert row["severity"] == "warning"
+    payload = db_module.row_to_dict(row)
+    assert payload["result"]["warnings"] == ["st_endpoint_unavailable"]
+    assert payload["result"]["sourceStatus"]["counts"]["corporateActions"] == 3
+
+
+def test_daily_pipeline_cli_dry_run_lists_level3_steps(tmp_path, monkeypatch, capsys):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from scripts import run_daily_pipeline
+
+    monkeypatch.setattr(sys, "argv", ["run_daily_pipeline.py", "--dry-run", "--date", "2026-07-06"])
+
+    assert run_daily_pipeline.main() == 0
+    payload = capsys.readouterr().out
+    assert "reference" in payload
+    assert "multi_source_qa" in payload
+    assert "paper_replay" in payload
 
 
 def test_csi300_public_pit_manifest_reads_csindex_cache_local_path(tmp_path):

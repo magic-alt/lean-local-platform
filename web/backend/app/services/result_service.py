@@ -172,6 +172,57 @@ def _latest_benchmark_return(series: list[dict[str, Any]]) -> float | None:
     return values[-1] / values[0] - 1.0
 
 
+def _return_by_time(series: list[dict[str, Any]]) -> dict[str, float]:
+    points: list[tuple[datetime, float]] = []
+    for point in series:
+        time_value = _dt(point.get("time"))
+        value = _float(point.get("value"))
+        if time_value is not None and value is not None and value != 0:
+            points.append((time_value, value))
+    points.sort(key=lambda item: item[0])
+    returns: dict[str, float] = {}
+    for previous, current in zip(points, points[1:]):
+        if previous[1]:
+            returns[current[0].isoformat()] = current[1] / previous[1] - 1.0
+    return returns
+
+
+def _aligned_alpha_beta(
+    equity_curve: list[dict[str, Any]],
+    benchmark_series: list[dict[str, Any]],
+) -> dict[str, Any]:
+    strategy_returns = _return_by_time(equity_curve)
+    benchmark_returns = _return_by_time(benchmark_series)
+    common = sorted(set(strategy_returns) & set(benchmark_returns))
+    if len(common) < 2:
+        return {"alpha": None, "beta": None, "status": "insufficient_aligned_points_for_alpha_beta", "points": len(common)}
+    strategy_values = [strategy_returns[key] for key in common]
+    benchmark_values = [benchmark_returns[key] for key in common]
+    mean_strategy = sum(strategy_values) / len(strategy_values)
+    mean_benchmark = sum(benchmark_values) / len(benchmark_values)
+    variance = sum((value - mean_benchmark) ** 2 for value in benchmark_values)
+    if abs(variance) < 1e-18:
+        return {"alpha": None, "beta": None, "status": "zero_benchmark_variance", "points": len(common)}
+    covariance = sum((s - mean_strategy) * (b - mean_benchmark) for s, b in zip(strategy_values, benchmark_values))
+    beta = covariance / variance
+    alpha = mean_strategy - beta * mean_benchmark
+    return {"alpha": alpha, "beta": beta, "status": "computed_from_aligned_chart_returns", "points": len(common)}
+
+
+def _summary_with_benchmark_metrics(statistics: dict[str, Any], performance: dict[str, Any]) -> dict[str, Any]:
+    summary = summary_metrics(statistics)
+    metric_status = performance.get("benchmarkMetricStatus")
+    summary["Strategy Return"] = performance.get("strategy_return")
+    summary["Benchmark Return"] = performance.get("benchmark_return")
+    summary["Excess Return"] = performance.get("excess_return")
+    summary["Benchmark Metric Status"] = metric_status
+    if performance.get("computed_alpha") is not None:
+        summary["Computed Alpha"] = performance.get("computed_alpha")
+    if performance.get("computed_beta") is not None:
+        summary["Computed Beta"] = performance.get("computed_beta")
+    return summary
+
+
 def _industry_exposure(filled: list[dict[str, Any]]) -> list[dict[str, Any]]:
     positions: dict[str, dict[str, float]] = {}
     for event in filled:
@@ -216,6 +267,12 @@ def performance_analytics(
         end = _float(equity_curve[-1].get("value"))
         strategy_return = end / start - 1.0 if start else None
     benchmark_return = _latest_benchmark_return(chart_data["series"].get("benchmark") or [])
+    alpha_beta = _aligned_alpha_beta(equity_curve, chart_data["series"].get("benchmark") or [])
+    metric_status = "benchmark_return_available"
+    if benchmark_return is None:
+        metric_status = "benchmark_curve_missing_or_insufficient_points"
+    elif alpha_beta["status"] != "computed_from_aligned_chart_returns":
+        metric_status = alpha_beta["status"]
     return {
         "monthly_returns": _period_returns(equity_curve, "month"),
         "yearly_returns": _period_returns(equity_curve, "year"),
@@ -236,6 +293,10 @@ def performance_analytics(
         "excess_return": (strategy_return - benchmark_return) if strategy_return is not None and benchmark_return is not None else None,
         "strategy_return": strategy_return,
         "benchmark_return": benchmark_return,
+        "computed_alpha": alpha_beta["alpha"],
+        "computed_beta": alpha_beta["beta"],
+        "benchmarkMetricStatus": metric_status,
+        "benchmarkMetricPoints": alpha_beta["points"],
         "industry_exposure": _industry_exposure(filled),
     }
 
@@ -269,7 +330,7 @@ def parse_result_payload(
     if performance.get("calmar") is not None:
         statistics.setdefault("Calmar Ratio", f"{performance['calmar']:.3f}")
     return {
-        "summary_metrics": summary_metrics(statistics),
+        "summary_metrics": _summary_with_benchmark_metrics(statistics, performance),
         "statistics": statistics,
         "performance": performance,
         "equity_curve": chart_data["series"].get("equity") or [],

@@ -1,3 +1,6 @@
+import sys
+
+
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
     import app.domain.assets as assets_module
@@ -315,7 +318,48 @@ def test_paper_replay_acceptance_has_fill_rejections_and_canonical_report_fields
     assert report["schemaVersion"] == 1
     assert report["tradeDate"] == "2024-01-04"
     assert report["executionPolicy"] == "next_open"
+    assert "pendingSignals" in report
+    assert report["executionSignals"] == report["pendingSignals"]
     assert report["NAV"] == report["snapshot"]["equity"]
     assert report["benchmark"]["symbol"] == "000300"
+    assert report["benchmarkSymbol"] == "000300"
+    assert report["benchmarkClose"] == report["benchmark"]["close"]
+    assert report["benchmarkReturn"] == report["benchmark"]["return"]
     assert set(report["rejectionReasons"]) == set(reasons.values())
+    assert set(report["rejectReasons"]) == set(reasons.values())
+    assert {order["symbol"] for order in report["rejectedOrders"]} == set(reasons)
+    assert report["qaGateStatus"] == "ok"
     assert len(report["fingerprint"]) == 64
+
+
+def test_paper_replay_acceptance_script_creates_fill_and_reject(tmp_path, monkeypatch, capsys):
+    configure_temp_platform(tmp_path, monkeypatch)
+    for symbol in ("600519", "000001"):
+        import_rows_for_symbol(symbol)
+    import_benchmark_rows()
+
+    from scripts import run_paper_replay_acceptance
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_paper_replay_acceptance.py",
+            "--symbols",
+            "600519,000001",
+            "--benchmark",
+            "000300",
+            "--start-date",
+            "2024-01-03",
+            "--end-date",
+            "2024-01-04",
+            "--min-trading-days",
+            "2",
+        ],
+    )
+
+    assert run_paper_replay_acceptance.main() == 0
+    output = capsys.readouterr().out
+    assert '"fills": 1' in output
+    assert '"rejects": 1' in output
+    assert "blacklisted" in output

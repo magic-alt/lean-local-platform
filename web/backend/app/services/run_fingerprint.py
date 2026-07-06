@@ -50,13 +50,43 @@ def _run_git(args: list[str]) -> str | None:
     return completed.stdout.strip()
 
 
+_RUNTIME_UNTRACKED_PREFIXES = (
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".mypy_cache/",
+    "runtime/",
+    "web/backend/runtime/",
+    "web/frontend/dist/",
+)
+
+
+def _is_runtime_untracked(line: str) -> bool:
+    if not line.startswith("?? "):
+        return False
+    path = line[3:]
+    if "__pycache__/" in path or path.endswith((".pyc", ".pyo")):
+        return True
+    return path == ".DS_Store" or any(path.startswith(prefix) for prefix in _RUNTIME_UNTRACKED_PREFIXES)
+
+
 def git_state() -> dict[str, Any]:
-    status = _run_git(["status", "--porcelain"]) or ""
+    tracked_status = _run_git(["status", "--porcelain", "--untracked-files=no"]) or ""
+    raw_status = _run_git(["status", "--porcelain"]) or ""
+    meaningful_untracked = [
+        line for line in raw_status.splitlines() if line.startswith("?? ") and not _is_runtime_untracked(line)
+    ]
+    ignored_untracked = [line for line in raw_status.splitlines() if _is_runtime_untracked(line)]
+    status = "\n".join([line for line in [tracked_status, *meaningful_untracked] if line])
     return {
         "commit": _run_git(["rev-parse", "HEAD"]),
         "branch": _run_git(["branch", "--show-current"]),
         "dirty": bool(status),
         "statusHash": hashlib.sha256(status.encode("utf-8")).hexdigest() if status else None,
+        "statusMode": "tracked_plus_non_runtime_untracked",
+        "meaningfulUntrackedCount": len(meaningful_untracked),
+        "ignoredUntrackedCount": len(ignored_untracked),
+        "rawDirty": bool(raw_status),
+        "rawStatusHash": hashlib.sha256(raw_status.encode("utf-8")).hexdigest() if raw_status else None,
     }
 
 

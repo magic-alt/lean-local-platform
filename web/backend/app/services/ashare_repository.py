@@ -894,10 +894,24 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
             """,
             (code,),
         ).fetchone()
+        reference_report = connection.execute(
+            """
+            select *
+            from data_quality_reports
+            where report_type = 'ashare_reference_public_import'
+              and asset_class = 'equity'
+              and market = 'china'
+            order by created_at desc
+            limit 1
+            """
+        ).fetchone()
     securities = row_to_dict(securities) or {}
     trade_status = row_to_dict(trade_status) or {}
     actions = row_to_dict(actions) or {}
     pit = row_to_dict(pit) or {}
+    reference_report = row_to_dict(reference_report) or {}
+    reference_result = reference_report.get("result") or {}
+    warnings = list(dict.fromkeys(reference_result.get("warnings") or []))
     issues = []
     if int(securities["total"] or 0) == 0:
         issues.append("security_master_missing")
@@ -911,12 +925,14 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
         issues.append("corporate_actions_missing")
     if int(pit["total"] or 0) == 0:
         issues.append(f"{code.lower()}_pit_missing")
-    severity = "critical" if any(issue.endswith("_missing") for issue in issues) else "ok"
+    severity = "critical" if any(issue.endswith("_missing") for issue in issues) else ("warning" if warnings else "ok")
     return {
         "indexCode": code,
         "severity": severity,
-        "passed": severity == "ok",
+        "passed": severity != "critical",
         "issues": issues,
+        "warnings": warnings,
+        "referenceSources": reference_result.get("sourceStatus") or {},
         "securities": {
             "total": int(securities.get("total") or 0),
             "delisted": int(securities.get("delisted") or 0),

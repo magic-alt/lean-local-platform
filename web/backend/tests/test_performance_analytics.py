@@ -65,3 +65,6 @@ def test_parse_result_payload_adds_performance_analytics(tmp_path):
     assert performance["trade_pnl_summary"]["count"] == 1
     assert performance["trade_pnl"][0]["holding_days"] == 31
     assert round(performance["excess_return"], 6) == 0.06
+    assert parsed["summary_metrics"]["Benchmark Return"] == pytest.approx(0.04)
+    assert parsed["summary_metrics"]["Excess Return"] == pytest.approx(0.06)
+    assert parsed["summary_metrics"]["Benchmark Metric Status"] == "insufficient_aligned_points_for_alpha_beta"

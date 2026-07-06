@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import sys
+import uuid
 from datetime import date, datetime, timezone
 from numbers import Number
 from pathlib import Path
@@ -16,7 +17,7 @@ BACKEND = ROOT / "web" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.db import db, init_db  # noqa: E402
+from app.db import db, init_db, json_dump, utc_now  # noqa: E402
 from app.services.ashare_repository import import_security_master, import_trade_status, upsert_corporate_actions  # noqa: E402
 
 
@@ -247,6 +248,70 @@ def fetch_dividend_records(ak: Any, symbols: list[str], start_date: str | None, 
     return records, errors
 
 
+def _warning_code(error: dict[str, str]) -> str | None:
+    source = error.get("source")
+    if source == "stock_zh_a_st_em":
+        return "st_endpoint_unavailable"
+    if source == "stock_zh_a_stop_em":
+        return "suspended_primary_endpoint_unavailable"
+    if source == "stock_tfp_em":
+        return "suspended_fallback_endpoint_unavailable"
+    if source in {"stock_info_sh_delist", "stock_info_sz_delist"}:
+        return "delisted_endpoint_unavailable"
+    if source == "stock_dividend_cninfo":
+        return "corporate_action_endpoint_unavailable"
+    return None
+
+
+def _source_status(result: dict[str, Any]) -> dict[str, Any]:
+    errors = result.get("errors") or []
+    return {
+        "provider": result.get("source"),
+        "asOfDate": result.get("asOfDate"),
+        "warnings": result.get("warnings") or [],
+        "errors": errors,
+        "counts": {
+            "delisted": (result.get("delisted") or {}).get("count", 0),
+            "st": (result.get("st") or {}).get("count", 0),
+            "suspended": (result.get("suspended") or {}).get("count", 0),
+            "corporateActions": (result.get("corporateActions") or {}).get("count", 0),
+        },
+    }
+
+
+def persist_reference_import_report(result: dict[str, Any]) -> str:
+    report_id = str(uuid.uuid4())
+    warnings = list(dict.fromkeys(code for error in (result.get("errors") or []) if (code := _warning_code(error))))
+    result["warnings"] = warnings
+    result["sourceStatus"] = _source_status(result)
+    severity = "warning" if warnings else "ok"
+    with db() as connection:
+        connection.execute(
+            """
+            insert into data_quality_reports
+                (id, report_type, asset_class, market, symbol, start_date, end_date,
+                 sources_json, severity, result_json, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                "ashare_reference_public_import",
+                "equity",
+                "china",
+                None,
+                result.get("asOfDate"),
+                result.get("asOfDate"),
+                json_dump([result.get("source") or "akshare"]),
+                severity,
+                json_dump(result),
+                utc_now(),
+            ),
+        )
+    result["reportId"] = report_id
+    result["severity"] = severity
+    return report_id
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import public A-share reference data into MySQL canonical tables.")
     parser.add_argument("--symbols", default="600519,000001", help="Comma-separated symbols for per-symbol corporate actions.")
@@ -301,6 +366,7 @@ def main() -> int:
         if records:
             result["corporateActions"] = upsert_corporate_actions(records, source="akshare:stock_dividend_cninfo")
 
+    persist_reference_import_report(result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["delisted"]["count"] or result["st"]["count"] or result["suspended"]["count"] or result["corporateActions"]["count"] else 2
 
