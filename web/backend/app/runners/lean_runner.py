@@ -23,6 +23,48 @@ class LeanRunner:
     def container_name_for(run_id: str) -> str:
         return f"lean-{run_id}"[:60]
 
+    @staticmethod
+    def _artifact_manifest(
+        *,
+        run_id: str,
+        run_dir: Path,
+        results_dir: Path,
+        config_path: Path,
+        exit_code: int,
+        timed_out: bool,
+        error: str | None,
+        container_name: str,
+    ) -> dict[str, Any]:
+        def item(path: Path, kind: str) -> dict[str, Any]:
+            return {
+                "name": path.name,
+                "kind": kind,
+                "path": str(path),
+                "relativePath": path.relative_to(run_dir).as_posix() if path.is_relative_to(run_dir) else path.name,
+                "size": path.stat().st_size,
+                "mtime": path.stat().st_mtime,
+            }
+
+        artifacts: list[dict[str, Any]] = []
+        if config_path.exists():
+            artifacts.append(item(config_path, "input-config"))
+        for support_name in ("ashare_execution.py", "ashare_trade_status.json"):
+            support_path = run_dir / support_name
+            if support_path.exists():
+                artifacts.append(item(support_path, "input-support"))
+        if results_dir.exists():
+            for path in sorted(child for child in results_dir.iterdir() if child.is_file()):
+                artifacts.append(item(path, "lean-output"))
+        return {
+            "schemaVersion": 1,
+            "runId": run_id,
+            "containerName": container_name,
+            "exitCode": exit_code,
+            "timedOut": timed_out,
+            "error": error,
+            "artifacts": artifacts,
+        }
+
     def run_backtest(
         self,
         run_id: str,
@@ -71,6 +113,24 @@ class LeanRunner:
         report_html = results_dir / "report.html"
         if output.exit_code == 0 and result_json.exists():
             render_report(result_json, report_html)
+        manifest_path = results_dir / "artifact-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                self._artifact_manifest(
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    results_dir=results_dir,
+                    config_path=config_path,
+                    exit_code=output.exit_code,
+                    timed_out=output.timed_out,
+                    error=output.error,
+                    container_name=container_name,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         return {
             "exit_code": output.exit_code,
@@ -81,6 +141,7 @@ class LeanRunner:
             "result_json_path": str(result_json) if result_json.exists() else None,
             "summary_json_path": str(summary_json) if summary_json.exists() else None,
             "report_html_path": str(report_html) if report_html.exists() else None,
+            "artifact_manifest_path": str(manifest_path),
             "statistics": extract_statistics(result_json, summary_json if summary_json.exists() else None)
             if result_json.exists()
             else {},

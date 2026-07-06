@@ -113,6 +113,11 @@ def result(run_id: str):
     return {"job": run, "result": result_record}
 
 
+@router.get("/{run_id}/results")
+def results(run_id: str):
+    return result(run_id)
+
+
 @router.post("/{run_id}/cancel")
 def cancel(run_id: str):
     try:

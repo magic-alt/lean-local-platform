@@ -247,7 +247,12 @@ def run_backtest_task(task_id: str, run_id: str):
             status=status,
             artifacts_json=[
                 path
-                for path in (output["result_json_path"], output["summary_json_path"], output["report_html_path"])
+                for path in (
+                    output["result_json_path"],
+                    output["summary_json_path"],
+                    output["report_html_path"],
+                    output.get("artifact_manifest_path"),
+                )
                 if path
             ],
             error=error,

@@ -34,6 +34,31 @@ def _stored_object(object_id: str | None) -> dict[str, Any] | None:
     return row_to_dict(row)
 
 
+def _stored_objects_for_run(run_id: str, result: dict[str, Any]) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select id, namespace, object_key, content_type, encoding, size, sha256,
+                   storage_mode, source_path, metadata_json, created_at, updated_at
+            from stored_objects
+            where namespace = ? and object_key like ?
+            order by object_key asc, updated_at desc
+            """,
+            ("backtest-results", f"{run_id}/%"),
+        ).fetchall()
+    items = rows_to_dicts(rows)
+    if items:
+        return items
+    return [
+        item
+        for item in (
+            _stored_object(result.get("raw_result_object_id")),
+            _stored_object(result.get("summary_object_id")),
+        )
+        if item is not None
+    ]
+
+
 def _backtest_report_id(run_id: str) -> str:
     return f"backtest:{run_id}"
 
@@ -47,14 +72,7 @@ def _run_id_from_report_id(report_id: str) -> str:
 
 def _backtest_report_from_rows(run: dict[str, Any], result: dict[str, Any] | None) -> dict[str, Any]:
     result = result or {}
-    stored_objects = [
-        item
-        for item in (
-            _stored_object(result.get("raw_result_object_id")),
-            _stored_object(result.get("summary_object_id")),
-        )
-        if item is not None
-    ]
+    stored_objects = _stored_objects_for_run(run["id"], result)
     return {
         "id": _backtest_report_id(run["id"]),
         "source": "backtest_run",

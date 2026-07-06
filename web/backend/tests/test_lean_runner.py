@@ -77,3 +77,44 @@ def test_base_config_adds_python_path_for_ashare_rules():
     config = base_config("job-1", {"ticker": "600519", "assetClass": "equity", "ashareRules": True})
 
     assert config["python-additional-paths"] == ["/Lean/Run"]
+
+
+def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monkeypatch):
+    import json
+    import app.runners.lean_runner as runner_module
+    from app.runners.docker_runner import DockerRunResult
+
+    monkeypatch.setattr(runner_module, "docker_command", lambda *args, **kwargs: ["docker", "run", "unit"])
+
+    class DummyDockerRunner:
+        def __init__(self, timeout_seconds):
+            self.timeout_seconds = timeout_seconds
+
+        def run(self, command, output_callback, container_name=None):
+            output_callback("unit docker output")
+            results_dir = tmp_path / "run" / "results"
+            (results_dir / "log.txt").write_text("lean log", encoding="utf-8")
+            return DockerRunResult(exit_code=1, error="unit failure")
+
+    monkeypatch.setattr(runner_module, "DockerRunner", DummyDockerRunner)
+
+    output = LeanRunner(timeout_seconds=10).run_backtest(
+        "job-1",
+        {
+            "ticker": "SPY",
+            "assetClass": "equity",
+            "market": "usa",
+            "start": "2024-01-01",
+            "end": "2024-01-31",
+        },
+        tmp_path / "run",
+        output_callback=lambda line: None,
+    )
+
+    manifest_path = output["artifact_manifest_path"]
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+
+    assert output["exit_code"] == 1
+    assert manifest["runId"] == "job-1"
+    assert manifest["exitCode"] == 1
+    assert {item["name"] for item in manifest["artifacts"]} >= {"config.json", "log.txt"}

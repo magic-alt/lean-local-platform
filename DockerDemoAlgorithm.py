@@ -49,20 +49,18 @@ class DockerDemoAlgorithm(QCAlgorithm):
         self.symbol = equity.symbol
         if self.market == "china":
             benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
-            if benchmark_ticker:
-                try:
-                    benchmark = self.add_equity(
-                        benchmark_ticker,
-                        Resolution.DAILY,
-                        self.get_parameter("benchmarkMarket", self.market).lower(),
-                        data_normalization_mode=DataNormalizationMode.RAW,
-                    )
-                    self.set_benchmark(benchmark.symbol)
-                except Exception as exc:
-                    self.debug(f"A-share benchmark unavailable: {benchmark_ticker} {exc}")
-                    self.set_benchmark(lambda time: 1)
-            else:
-                self.set_benchmark(lambda time: 1)
+            if not benchmark_ticker:
+                raise ValueError("A-share benchmarkSymbol is required; constant benchmark fallback is disabled.")
+            try:
+                benchmark = self.add_equity(
+                    benchmark_ticker,
+                    Resolution.DAILY,
+                    self.get_parameter("benchmarkMarket", self.market).lower(),
+                    data_normalization_mode=DataNormalizationMode.RAW,
+                )
+                self.set_benchmark(benchmark.symbol)
+            except Exception as exc:
+                raise ValueError(f"A-share benchmark unavailable: {benchmark_ticker}; backtest is blocked.") from exc
         else:
             self.set_benchmark(self.symbol)
         self.ashare_execution = None

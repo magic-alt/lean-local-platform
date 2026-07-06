@@ -29,6 +29,12 @@ def logs(task_id: str):
 @router.post("/{task_id}/cancel")
 def cancel(task_id: str):
     try:
+        task = get_task(task_id)
+        if task.get("kind") == "backtest" and task.get("related_id"):
+            from ..services.backtest_service import cancel_backtest
+
+            cancel_backtest(str(task["related_id"]))
+            return get_task(task_id)
         update_task(task_id, status="cancelled", error="Cancellation requested by user.")
         return get_task(task_id)
     except KeyError as exc:

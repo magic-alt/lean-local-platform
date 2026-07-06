@@ -27,6 +27,16 @@ def test_china_strategy_template_hard_fails_without_real_benchmark():
     assert "set_benchmark(lambda time: 1)" not in code
 
 
+def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
+    from pathlib import Path
+
+    code = Path(__file__).resolve().parents[3].joinpath("DockerDemoAlgorithm.py").read_text(encoding="utf-8")
+
+    assert "constant benchmark fallback is disabled" in code
+    assert "backtest is blocked" in code
+    assert "set_benchmark(lambda time: 1)" not in code
+
+
 def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
 
@@ -50,6 +60,13 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
         b'{"Net Profit":"1%"}',
         content_type="application/json",
         metadata={"job_id": "run-1", "kind": "lean-summary"},
+    )
+    order_events_object = put_bytes(
+        "backtest-results",
+        "run-1/artifacts/run-1-order-events.json",
+        b"[]",
+        content_type="application/json",
+        metadata={"job_id": "run-1", "kind": "lean-order-events"},
     )
     now = utc_now()
     with db_module.db() as connection:
@@ -110,7 +127,7 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
     item = next(report for report in payload if report["id"] == "backtest:run-1")
     assert item["source"] == "backtest_run"
     assert item["result"]["summary_metrics"]["Alpha"] == "0.1"
-    assert {stored["id"] for stored in item["storedObjects"]} == {raw_object["id"], summary_object["id"]}
+    assert {stored["id"] for stored in item["storedObjects"]} == {raw_object["id"], summary_object["id"], order_events_object["id"]}
 
     detail = client.get("/api/reports/run-1")
     assert detail.status_code == 200
