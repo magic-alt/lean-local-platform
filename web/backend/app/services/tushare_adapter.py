@@ -21,7 +21,11 @@ def _records(frame: Any) -> list[dict[str, Any]]:
 
 
 def _blank(value: Any) -> bool:
-    return value in (None, "") or (isinstance(value, float) and math.isnan(value))
+    if value in (None, "") or (isinstance(value, float) and math.isnan(value)):
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"nan", "nat", "none", "null"}:
+        return True
+    return False
 
 
 def _compact_date(value: str | None, field: str) -> str:
@@ -38,6 +42,13 @@ def _compact_date(value: str | None, field: str) -> str:
 
 def _optional_compact_date(value: str | None) -> str | None:
     return _compact_date(value, "date") if value else None
+
+
+def _first_non_blank(*values: Any) -> Any:
+    for value in values:
+        if not _blank(value):
+            return value
+    return None
 
 
 def _iso_date(value: Any) -> str | None:
@@ -98,6 +109,11 @@ def from_tushare_code(ts_code: str) -> str:
 
 def _status(value: Any) -> str:
     return {"L": "listed", "D": "delisted", "P": "pending"}.get(str(value or "L").upper(), "listed")
+
+
+def _is_st_name(value: Any) -> bool:
+    name = str(value or "").strip().upper().replace(" ", "")
+    return name.startswith(("ST", "*ST", "S*ST", "SST")) or "退" in name
 
 
 DAILY_BASIC_FACTORS: dict[str, tuple[str, float]] = {
@@ -179,6 +195,7 @@ class TushareAdapter:
                         "listed_date": _iso_date(item.get("list_date")),
                         "delisted_date": delisted_date,
                         "status": "delisted" if delisted_date else _status(item.get("list_status")),
+                        "is_st": _is_st_name(item.get("name")),
                         "industry": item.get("industry"),
                         "source": "tushare:stock_basic",
                     }
@@ -291,7 +308,7 @@ class TushareAdapter:
         end = _compact_date(end_date, "end_date")
         rows: list[dict[str, Any]] = []
         for item in _records(frame):
-            ex_date_raw = item.get("ex_date") or item.get("div_listdate") or item.get("record_date") or item.get("ann_date")
+            ex_date_raw = _first_non_blank(item.get("ex_date"), item.get("div_listdate"), item.get("record_date"), item.get("ann_date"))
             if not ex_date_raw:
                 continue
             compact_ex_date = _compact_date(str(ex_date_raw), "ex_date")

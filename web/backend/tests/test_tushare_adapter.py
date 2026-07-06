@@ -53,6 +53,53 @@ class DailyOnlyPro:
         raise RuntimeError("no permission")
 
 
+class StockBasicPro:
+    def stock_basic(self, **kwargs):
+        return FakeFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "symbol": "000001",
+                    "name": "平安银行",
+                    "industry": "Bank",
+                    "list_date": "19910403",
+                    "delist_date": "",
+                    "list_status": "L",
+                },
+                {
+                    "ts_code": "000002.SZ",
+                    "symbol": "000002",
+                    "name": "*ST测试",
+                    "industry": "Real Estate",
+                    "list_date": "19910129",
+                    "delist_date": "",
+                    "list_status": "L",
+                },
+                {
+                    "ts_code": "000003.SZ",
+                    "symbol": "000003",
+                    "name": "退市样本",
+                    "industry": "Other",
+                    "list_date": "19910114",
+                    "delist_date": "20200101",
+                    "list_status": "D",
+                },
+            ]
+        )
+
+
+def test_tushare_stock_basic_marks_st_and_delisted():
+    from app.services.tushare_adapter import TushareAdapter
+
+    rows = TushareAdapter(pro=StockBasicPro()).stock_basic(["L"])
+
+    by_symbol = {row["symbol"]: row for row in rows}
+    assert by_symbol["000001"]["is_st"] is False
+    assert by_symbol["000002"]["is_st"] is True
+    assert by_symbol["000003"]["status"] == "delisted"
+    assert by_symbol["000003"]["delisted_date"] == "2020-01-01"
+
+
 def test_tushare_daily_rows_degrades_when_only_pro_daily_is_allowed():
     from app.services.tushare_adapter import TushareAdapter
 
@@ -112,6 +159,16 @@ class ResearchPro(DailyOnlyPro):
     def dividend(self, **kwargs):
         return FakeFrame(
             [
+                {
+                    "ts_code": "600519.SH",
+                    "end_date": "20231231",
+                    "ann_date": "nan",
+                    "ex_date": "nan",
+                    "record_date": "nan",
+                    "div_listdate": "nan",
+                    "cash_div_tax": 10.0,
+                    "div_proc": "预案",
+                },
                 {
                     "ts_code": "600519.SH",
                     "end_date": "20231231",

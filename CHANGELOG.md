@@ -2,6 +2,16 @@
 
 本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
 
+## 2026-07-06 - 本次提交 - Import public A-share reference data
+
+- 新增 AKShare 公开参考数据导入脚本，写入退市证券、公司行动和停牌状态到 canonical MySQL 表。
+- 增加 Eastmoney `stock_tfp_em` 停牌 fallback，并修复毫秒时间戳日期解析，避免停牌公开源断连时丢失覆盖。
+- 补强 Tushare adapter：将 `nan`/`NaT` 视为空值，修复 dividend 空日期降级，并按证券名称推断 ST 标记。
+- 实际导入 AKShare 退市 363 条、核心样本公司行动 59 条、2026-07-03 停牌 14 条；ST 实时端点仍记录为公开源可用性缺口。
+- 验证 Parquet rebuild severity=ok，MySQL/DuckDB 行数一致，dataset/file 路径保持 `parquet/...` 逻辑路径。
+- 验证 API app profile 在 Redis 6380/API 8002 下启动，health、Reports list/detail/file、Paper API 固定成交+拒单场景均通过。
+- 增加公开参考数据导入和 Tushare 清洗的测试覆盖，后端全量 pytest 与前端 build 均通过。
+
 ## 2026-07-06 - 本次提交 - Stabilize Level 3 P1 paper and data paths
 
 - 统一 API/worker 的 Parquet volume 配置，新增容器可见 `LEAN_PARQUET_DIR=/workspace/parquet`，默认映射本地 `../Data/parquet`。
