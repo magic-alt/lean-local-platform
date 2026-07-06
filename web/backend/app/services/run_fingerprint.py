@@ -10,9 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import lean as lean_module
 from ..core.config import BACKEND_DIR, GIT_ROOT
 from ..db import db, rows_to_dicts, utc_now
+from ..lean_engine import data_paths
+from ..lean_engine.symbols import normalize_symbol, symbol_key
 
 
 def _json_hash(value: Any) -> str:
@@ -263,9 +264,9 @@ def _local_ashare_cache(parameters: dict[str, Any]) -> dict[str, Any]:
     adjust = parameters.get("adjust") or "raw"
 
     def files_for(symbol: str) -> dict[str, Any]:
-        normalized = lean_module.normalize_symbol(symbol, "china")
-        ticker = lean_module.symbol_key(normalized)
-        data_dir = lean_module.DATA_DIR / "equity" / "china"
+        normalized = normalize_symbol(symbol, "china")
+        ticker = symbol_key(normalized)
+        data_dir = data_paths.DATA_DIR / "equity" / "china"
         return {
             "symbol": normalized,
             "files": {

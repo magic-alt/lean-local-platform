@@ -7,7 +7,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-from ..lean import normalize_symbol, parse_date
+from ..lean_engine.symbols import normalize_symbol, parse_date
 from .ashare_repository import tradable_universe_as_of, universe_as_of, upsert_security, upsert_universe_membership
 
 

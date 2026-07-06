@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from ..core.errors import LeanWebError
-from ..lean import normalize_symbol
+from ..lean_engine.symbols import normalize_symbol
 from .ashare_repository import import_security_master, infer_exchange, upsert_trade_calendar
 
 

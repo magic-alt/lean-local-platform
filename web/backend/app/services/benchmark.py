@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from typing import Any
 
-from ..lean import LeanPlatformError
+from ..lean_engine.errors import LeanPlatformError
 from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
 from .data import record_data_asset

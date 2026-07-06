@@ -6,7 +6,9 @@ from typing import Any
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, utc_now
 from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
-from ..lean import LeanPlatformError, new_run_id, validate_backtest_parameters
+from ..lean_engine.config import validate_backtest_parameters
+from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.ids import new_run_id
 from ..repositories.backtest_repository import get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project

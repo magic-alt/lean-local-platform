@@ -7,7 +7,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
-from ..lean import parse_date
+from ..lean_engine.symbols import parse_date
 from .intraday import import_intraday_bars
 from .market_repository import upsert_instrument, upsert_market_daily_bars
 from .tqsdk_adapter import download_tqsdk_klines, exchange_from_tq_symbol, contract_code_from_tq_symbol

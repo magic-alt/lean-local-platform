@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
-from ..lean import stop_container
+from ..lean_engine.research import stop_container
 from ..services.projects import get_project
 from ..services.tasks import create_task
 from ..tasks.worker import start_research_task

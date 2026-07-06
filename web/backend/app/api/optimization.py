@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-from ..lean import LeanPlatformError, validate_backtest_parameters
+from ..lean_engine.config import validate_backtest_parameters
+from ..lean_engine.errors import LeanPlatformError
 from ..services.projects import get_project
 from ..services.tasks import create_task
 from ..tasks.worker import optimize_task

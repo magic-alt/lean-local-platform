@@ -5,12 +5,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, JOB_TIMEOUT_SECONDS
-from ..lean import (
-    base_config,
-    docker_command,
-    extract_statistics,
-    render_report,
-)
+from ..lean_engine.config import base_config
+from ..lean_engine.docker import docker_command
+from ..lean_engine.reports import render_report
+from ..lean_engine.results import extract_statistics
 from ..services.ashare_execution import write_ashare_execution_artifacts
 from .docker_runner import DockerRunner
 

@@ -5,14 +5,12 @@ from typing import Any
 from .celery_app import celery_app
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, utc_now
-from ..lean import (
-    LeanPlatformError,
-    extract_statistics,
-    new_run_id,
-    render_report,
-    run_detached_research,
-    run_docker_backtest,
-)
+from ..lean_engine.docker import run_docker_backtest
+from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.ids import new_run_id
+from ..lean_engine.reports import render_report
+from ..lean_engine.research import run_detached_research
+from ..lean_engine.results import extract_statistics
 from ..observability.metrics import BACKTEST_STATUS, TASK_STATUS
 from ..domain.backtest_job import CANCELLED
 from ..repositories.backtest_repository import get_backtest, update_backtest

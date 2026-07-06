@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.config import REPO_ROOT
-from ..lean import LeanPlatformError
+from ..lean_engine.errors import LeanPlatformError
 
 
 @dataclass

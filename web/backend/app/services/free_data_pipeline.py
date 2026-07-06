@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..lean import market_key, normalize_symbol
+from ..lean_engine.symbols import market_key, normalize_symbol
 from .ashare_multisource import compare_ashare_daily_sources
 from .data import fetch_and_import_symbol
 from .parquet_lake import export_market_daily_bars

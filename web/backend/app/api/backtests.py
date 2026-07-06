@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE
-from ..lean import extract_chart_data
+from ..lean_engine.results import extract_chart_data
 from ..repositories.backtest_repository import get_backtest
 from ..services.backtest_service import (
     backtest_status,

@@ -6,7 +6,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-from ..lean import LeanPlatformError
+from ..lean_engine.errors import LeanPlatformError
 from .market_repository import upsert_instrument, upsert_market_daily_bars, upsert_market_trade_status
 
 
@@ -467,7 +467,7 @@ def import_adjustment_factors(records: list[dict[str, Any]], source: str = "manu
         symbols.add(symbol)
     upsert_adjustment_factors(rows, source=source, batch_id=batch_id)
     factor_files = {}
-    from ..lean import write_equity_factor_file
+    from ..lean_engine.data_paths import write_equity_factor_file
 
     for symbol in sorted(symbols):
         factors = adjustment_factors(symbol)

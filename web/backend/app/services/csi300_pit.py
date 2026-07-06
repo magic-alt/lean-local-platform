@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, rows_to_dicts, utc_now
-from ..lean import normalize_symbol
+from ..lean_engine.symbols import normalize_symbol
 from .ashare_repository import infer_exchange, upsert_security, upsert_universe_membership
 
 

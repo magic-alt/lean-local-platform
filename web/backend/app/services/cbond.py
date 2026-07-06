@@ -6,7 +6,7 @@ from typing import Any
 
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, rows_to_dicts, utc_now
-from ..lean import normalize_symbol, parse_date
+from ..lean_engine.symbols import normalize_symbol, parse_date
 from .market_repository import upsert_instrument, upsert_market_daily_bars
 
 

@@ -5,7 +5,8 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.assets import asset_request
-from ..lean import LeanPlatformError, market_key, normalize_symbol, parse_date
+from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from .ashare_repository import is_tradeable
 from .ashare_multisource import quality_gate
 from .trading_config import ashare_trading_config

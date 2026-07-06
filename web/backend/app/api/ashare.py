@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from ..services import pit_data
 from ..core.errors import LeanWebError
-from ..lean import normalize_symbol, parse_date
+from ..lean_engine.symbols import normalize_symbol, parse_date
 from ..services.ashare_repository import (
     adjustment_factors,
     corporate_actions,

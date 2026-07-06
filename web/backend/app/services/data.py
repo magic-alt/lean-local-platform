@@ -5,7 +5,12 @@ from typing import Any
 
 from ..core.config import REPO_ROOT
 from ..db import db, json_dump, utc_now
-from ..lean import (
+from ..lean_engine.data_paths import list_local_symbols
+from ..lean_engine.data_writers import (
+    write_lean_crypto_daily_zip,
+    write_lean_daily_zip,
+)
+from ..lean_engine.providers import (
     fetch_akshare_rows,
     fetch_alpha_vantage_rows,
     fetch_binance_crypto_rows,
@@ -14,11 +19,10 @@ from ..lean import (
     fetch_stooq_rows,
     fetch_tonghuashun_rows,
     fetch_yahoo_rows,
-    list_local_symbols,
+)
+from ..lean_engine.symbols import (
     market_key,
     normalize_symbol,
-    write_lean_crypto_daily_zip,
-    write_lean_daily_zip,
 )
 from ..domain.assets import (
     asset_class_key,

@@ -1,0 +1,345 @@
+import { encodePath, request } from "./client";
+import type {
+  RunStatus,
+  DataAsset,
+  DataProvider,
+  MarketInfo,
+  AssetClassInfo,
+  LocalDataFile,
+  StrategyParameter,
+  StrategyTemplate,
+  AppSettings,
+  DependencyStatus,
+  DependencyHealth,
+  UniverseComponent,
+  Universe,
+  DatabaseHealth,
+  IndexMember,
+  IndexMembersResult,
+  Project,
+  ProjectFile,
+  Task,
+  BacktestRun,
+  BacktestStatus,
+  BacktestValidationGate,
+  BacktestValidation,
+  BacktestExperiment,
+  BacktestValidationResponse,
+  BacktestResult,
+  OptimizationRun,
+  ResearchSession,
+  ReportRecord,
+  ObjectStoreItem,
+  PaperSession,
+  PaperDailyReport,
+  ChartPoint,
+  ChartData,
+  DataQueryRow,
+  DataQueryResult,
+  FactorEvaluationResult,
+  CBondPoolItem,
+  CBondRiskItem,
+  FuturesMainItem
+} from "./types";
+
+export * from "./types";
+
+export const api = {
+  health: () => request<{ status: string; redis: boolean }>("/api/health"),
+  dependencyHealth: () => request<DependencyHealth>("/api/health/dependencies"),
+  databaseHealth: () => request<DatabaseHealth>("/api/health/database"),
+  settings: () => request<AppSettings>("/api/settings"),
+  updateSettings: (payload: Partial<AppSettings>) =>
+    request<AppSettings>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  strategyTemplates: () => request<StrategyTemplate[]>("/api/strategies/templates"),
+  assetClasses: () => request<AssetClassInfo[]>("/api/asset-classes"),
+  markets: () => request<MarketInfo[]>("/api/markets"),
+  djiaUniverse: () => request<Universe>("/api/universes/djia"),
+  indexMembersAsOf: (universeCode: string, asOfDate: string) =>
+    request<IndexMembersResult>(
+      `/api/pit/index-members/${encodeURIComponent(universeCode)}/as-of/${encodeURIComponent(asOfDate)}`
+    ),
+  projects: () => request<Project[]>("/api/projects"),
+  createProject: (payload: {
+    name: string;
+    language: "Python" | "CSharp";
+    algorithmClass?: string;
+    templateKey?: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    parameters?: Record<string, unknown>;
+  }) =>
+    request<Project>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  deleteProject: (id: string) =>
+    request<{ deleted: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  projectFiles: (id: string) => request<ProjectFile[]>(`/api/projects/${encodeURIComponent(id)}/files`),
+  readProjectFile: (id: string, path: string) =>
+    request<{ path: string; content: string }>(
+      `/api/projects/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`
+    ),
+  writeProjectFile: (id: string, path: string, content: string) =>
+    request<{ path: string; size: number; updated_at: string }>(`/api/projects/${encodeURIComponent(id)}/file`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content })
+    }),
+  symbols: (market = "usa", assetClass = "equity", venue?: string, resolution = "daily", dataType = "trade") =>
+    request<{ symbols: string[]; count: number }>(
+      `/api/symbols?market=${encodeURIComponent(market)}&assetClass=${encodeURIComponent(assetClass)}&venue=${encodeURIComponent(venue ?? "")}&resolution=${encodeURIComponent(resolution)}&dataType=${encodeURIComponent(dataType)}`
+    ),
+  searchSecurities: (market: string, keyword: string) =>
+    request<{ items: Array<{ symbol: string; market: string; name: string; hasLocalData: boolean }>; count: number }>(
+      `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}`
+    ),
+  dataAssets: () => request<DataAsset[]>("/api/data-assets"),
+  dataFiles: (assetClass?: string, venue?: string) =>
+    request<{ items: LocalDataFile[]; count: number }>(
+      `/api/data/files?assetClass=${encodeURIComponent(assetClass ?? "")}&venue=${encodeURIComponent(venue ?? "")}`
+    ),
+  queryData: (params: {
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    source?: string;
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return request<DataQueryResult>(`/api/data/query?${query.toString()}`);
+  },
+  dataProviders: () => request<DataProvider[]>("/api/data/providers"),
+  fetchData: (payload: {
+    symbol: string;
+    assetClass?: string;
+    market: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    provider: string;
+    apiKey?: string;
+    outputsize: "compact" | "full";
+    startDate?: string;
+    endDate?: string;
+    adjust?: string;
+    overwrite: boolean;
+  }) =>
+    request<DataAsset>("/api/data/fetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  fetchBatchData: (payload: {
+    symbols: string[];
+    assetClass?: string;
+    market: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    provider: string;
+    apiKey?: string;
+    outputsize: "compact" | "full";
+    startDate?: string;
+    endDate?: string;
+    adjust?: string;
+    overwrite: boolean;
+  }) =>
+    request<Task>("/api/data/fetch-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  importCsv: (formData: FormData) =>
+    request<DataAsset>("/api/data/import-csv", {
+      method: "POST",
+      body: formData
+    }),
+  fetchAlphaVantage: (payload: {
+    symbol: string;
+    apiKey?: string;
+    outputsize: "compact" | "full";
+    overwrite: boolean;
+  }) =>
+    request<DataAsset>("/api/data/fetch-alpha-vantage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  backtests: (filters?: { status?: string; projectId?: string; symbol?: string; fromDate?: string; toDate?: string }) => {
+    const query = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value) query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<BacktestRun[]>(`/api/backtests${suffix}`);
+  },
+  createBacktest: (payload: {
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    start: string;
+    end: string;
+    fast?: number;
+    slow?: number;
+    cash: number;
+    dockerImage: string;
+    projectId?: string;
+    parameters?: Record<string, unknown>;
+  }) =>
+    request<BacktestRun>("/api/backtests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  backtest: (id: string) => request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}`),
+  backtestStatus: (id: string) => request<BacktestStatus>(`/api/backtests/${encodeURIComponent(id)}/status`),
+  backtestResult: (id: string) =>
+    request<{ job: BacktestRun; result: BacktestResult }>(`/api/backtests/${encodeURIComponent(id)}/result`),
+  backtestValidation: (id: string) =>
+    request<BacktestValidationResponse>(`/api/backtests/${encodeURIComponent(id)}/validation`),
+  cancelBacktest: (id: string) =>
+    request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  logs: (id: string) =>
+    request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
+  chartData: (id: string) =>
+    request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data`),
+  tasks: () => request<Task[]>("/api/tasks"),
+  taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
+  cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  optimizations: () => request<OptimizationRun[]>("/api/optimize"),
+  createOptimization: (payload: {
+    projectId: string;
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    start: string;
+    end: string;
+    cash: number;
+    fastValues: number[];
+    slowValues: number[];
+    dockerImage: string;
+  }) =>
+    request<OptimizationRun>("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  researchSessions: () => request<ResearchSession[]>("/api/research"),
+  startResearch: (payload: { projectId: string; port: number }) =>
+    request<ResearchSession>("/api/research", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  stopResearch: (id: string) =>
+    request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/stop`, { method: "POST" }),
+  reports: () => request<ReportRecord[]>("/api/reports"),
+  createReport: (payload: { runId: string }) =>
+    request<ReportRecord>("/api/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  objectStoreItems: () => request<ObjectStoreItem[]>("/api/object-store"),
+  uploadObjectStoreItem: (key: string, formData: FormData) =>
+    request<ObjectStoreItem>(`/api/object-store/${encodePath(key)}`, {
+      method: "POST",
+      body: formData
+    }),
+  deleteObjectStoreItem: (key: string) =>
+    request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
+  paperSessions: () => request<PaperSession[]>("/api/paper"),
+  createPaperSession: (payload: {
+    name?: string;
+    projectId?: string;
+    symbol: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    cash?: number;
+    executionPolicy?: string;
+    allowSameDayClose?: boolean;
+    benchmarkSymbol?: string;
+    maxPositions?: number;
+    maxPositionWeight?: number;
+    minCash?: number;
+    blacklist?: string;
+    watchlist?: string;
+    observeOnlySymbols?: string;
+    allowStBuy?: boolean;
+    parameters?: Record<string, unknown>;
+  }) =>
+    request<PaperSession>("/api/paper", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
+  updatePaperSessionStatus: (id: string, status: string) =>
+    request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    }),
+  factorEngines: () => request<{ available: Record<string, boolean>; selected: string }>("/api/factors/engines"),
+  evaluateFactor: (payload: {
+    factorName: string;
+    universeCode: string;
+    startDate: string;
+    endDate: string;
+    forwardDays: number;
+    quantiles: number;
+    engine?: string;
+    persist?: boolean;
+  }) =>
+    request<FactorEvaluationResult>("/api/factors/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  factorEvaluations: (limit = 50) =>
+    request<{ items: Array<{ id: string; factor_name: string; universe_code: string; created_at: string; result?: FactorEvaluationResult }>; count: number }>(
+      `/api/factors/evaluations?limit=${encodeURIComponent(limit)}`
+    ),
+  cbondDoubleLow: (params: { date: string; maxDoubleLow: number; excludeCallRisk: boolean; limit?: number }) => {
+    const query = new URLSearchParams({
+      date: params.date,
+      maxDoubleLow: String(params.maxDoubleLow),
+      excludeCallRisk: String(params.excludeCallRisk),
+      limit: String(params.limit ?? 100)
+    });
+    return request<{ asOfDate: string; count: number; items: CBondPoolItem[] }>(`/api/cbond/double-low?${query.toString()}`);
+  },
+  cbondCallRisk: (date: string) =>
+    request<{ asOfDate: string; count: number; items: CBondRiskItem[] }>(`/api/cbond/call-risk?date=${encodeURIComponent(date)}`),
+  futuresAgriMain: (params: { date: string; products?: string }) => {
+    const query = new URLSearchParams({ date: params.date });
+    if (params.products) query.set("products", params.products);
+    return request<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>(`/api/futures/agri-main?${query.toString()}`);
+  }
+};
