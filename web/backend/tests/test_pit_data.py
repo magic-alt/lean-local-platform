@@ -105,3 +105,69 @@ def test_pit_api_maps_000300_to_csi300(tmp_path, monkeypatch):
     assert payload["universe"] == "CSI300"
     assert payload["requestedUniverse"] == "000300"
     assert [item["symbol"] for item in payload["items"]] == ["600519"]
+
+
+def test_csi300_pit_api_returns_gap_before_official_coverage_start(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.pit_data import import_index_members
+
+    import_index_members(
+        [
+            {
+                "universe_code": "CSI300",
+                "symbol": "600519",
+                "start_date": "2006-01-01",
+                "announce_date": "2005-12-15",
+                "effective_date": "2006-01-01",
+            }
+        ],
+        source="manual-unverified",
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/pit/index-members/000300/as-of/2006-02-01")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["universe"] == "CSI300"
+    assert payload["coverageStatus"] == "coverage_gap"
+    assert payload["coverageStart"] == "2017-12-08"
+    assert payload["count"] == 0
+    assert payload["items"] == []
+
+
+def test_ashare_universe_interfaces_return_gap_before_csi300_official_coverage(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.pit_data import import_index_members
+
+    import_index_members(
+        [
+            {
+                "universe_code": "CSI300",
+                "symbol": "600519",
+                "start_date": "2006-01-01",
+                "announce_date": "2005-12-15",
+                "effective_date": "2006-01-01",
+            }
+        ],
+        source="manual-unverified",
+    )
+
+    client = TestClient(app)
+    universe = client.get("/api/ashare/universe/CSI300", params={"date": "2006-02-01"})
+    tradable = client.get("/api/ashare/universe/CSI300/tradable", params={"date": "2006-02-01"})
+
+    assert universe.status_code == 200
+    assert tradable.status_code == 200
+    assert universe.json()["coverageStatus"] == "coverage_gap"
+    assert universe.json()["count"] == 0
+    assert tradable.json()["coverageStatus"] == "coverage_gap"
+    assert tradable.json()["count"] == 0

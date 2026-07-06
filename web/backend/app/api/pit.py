@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..services import pit_data
-from ..services.ashare_repository import universe_as_of
 
 router = APIRouter(prefix="/api/pit", tags=["pit-data"])
 
@@ -138,7 +137,6 @@ def import_index_members(request: IndexMemberImport):
 def index_members_as_of(universe_code: str, as_of_date: str):
     try:
         normalized = _index_code(universe_code)
-        items = universe_as_of(normalized, as_of_date)
-        return {"universe": normalized, "requestedUniverse": universe_code.upper(), "asOfDate": as_of_date, "items": items, "count": len(items)}
+        return pit_data.index_members_as_of_payload(normalized, as_of_date, requested_universe=universe_code)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

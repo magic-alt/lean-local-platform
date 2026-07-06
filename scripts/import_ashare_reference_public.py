@@ -314,7 +314,7 @@ def persist_reference_import_report(result: dict[str, Any]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import public A-share reference data into MySQL canonical tables.")
-    parser.add_argument("--symbols", default="600519,000001", help="Comma-separated symbols for per-symbol corporate actions.")
+    parser.add_argument("--symbols", default="600519,000001,300750", help="Comma-separated symbols for per-symbol corporate actions.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--as-of-date", default=date.today().isoformat())

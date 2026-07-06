@@ -4,6 +4,12 @@
 
 ## 2026-07-06 - 本次提交 - Close Level 3 P1 audit gaps
 
+- 补充 `baostock` 后端依赖，确保 AData/Baostock 多源导入路径可安装并有 canonical 落库回归覆盖。
+- 公开参考数据公司行动默认样本扩展到 `600519,000001,300750`。
+- PIT API 对 CSI300 官方覆盖起点前日期返回 `coverage_gap` 和 0 成员，避免用局部/手工数据伪造 2005-2017 历史。
+- 增加 Paper API 级 ST/停牌 fixture，验证生产接口能在存在日线 bars 时拒单并返回 `st_blocked`/`suspended`。
+- 真实 MySQL 验证 AData/Baostock 600519 小窗口落库：两源各 4 行，multi-source QA severity=ok，reportId=`1a99bd5f-1520-5929-8c4c-5013e2e2abc1`。
+- 真实 MySQL 验证 300750 公司行动导入：AKShare 写入 2 条 `corporate_actions`，reportId=`b4caf512-93f0-40f5-b7f4-a13a63db5a7d`。
 - 将 AKShare 公开参考数据导入错误持久化为 `ashare_reference_public_import` QA 报告，并在 reference coverage API 暴露 `warnings`/`referenceSources`，覆盖 `st_endpoint_unavailable`。
 - 补齐 Paper reports API 顶层 `pendingSignals`、`rejectedOrders`、`rejectReasons`、benchmark 与 QA gate alias，保持前端/API 字段统一。
 - 新增 `scripts/run_paper_replay_acceptance.py` 固定验收场景，创建同一 replay 中同时包含 fill 和 rejected 的 Paper session。

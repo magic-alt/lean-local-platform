@@ -8,7 +8,11 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean import normalize_symbol, parse_date
-from .ashare_repository import upsert_security, upsert_universe_membership
+from .ashare_repository import tradable_universe_as_of, universe_as_of, upsert_security, upsert_universe_membership
+
+
+CSI300_OFFICIAL_COVERAGE_START = "2017-12-08"
+INDEX_OFFICIAL_COVERAGE_STARTS = {"CSI300": CSI300_OFFICIAL_COVERAGE_START}
 
 
 def _date(value: Any, field: str) -> str:
@@ -42,6 +46,47 @@ def assert_pit_dates(record: dict[str, Any], as_of_date: str) -> None:
         value = record.get(field)
         if value and _date(value, field) > as_of:
             raise LeanWebError(f"PIT violation: {field}={value} is after as_of_date={as_of}.")
+
+
+def index_coverage_gap(index_code: str, as_of_date: str) -> dict[str, Any] | None:
+    code = str(index_code or "").strip().upper()
+    as_of = _date(as_of_date, "as_of_date")
+    coverage_start = INDEX_OFFICIAL_COVERAGE_STARTS.get(code)
+    if not coverage_start or as_of >= coverage_start:
+        return None
+    return {
+        "coverageStatus": "coverage_gap",
+        "coverageStart": coverage_start,
+        "missingHistoryBefore": coverage_start,
+        "isOfficialHistoryComplete": False,
+        "reason": f"{code} official PIT history before {coverage_start} has not been imported.",
+    }
+
+
+def index_members_as_of_payload(
+    universe_code: str,
+    as_of_date: str,
+    *,
+    requested_universe: str | None = None,
+    tradable: bool = False,
+    min_listed_days: int = 0,
+    exclude_st: bool = True,
+) -> dict[str, Any]:
+    code = str(universe_code or "").strip().upper()
+    requested = str(requested_universe or universe_code or "").strip().upper()
+    as_of = _date(as_of_date, "as_of_date")
+    gap = index_coverage_gap(code, as_of)
+    if gap:
+        return {"universe": code, "requestedUniverse": requested, "asOfDate": as_of, "items": [], "count": 0, **gap}
+    if tradable:
+        items = tradable_universe_as_of(code, as_of, min_listed_days=min_listed_days, exclude_st=exclude_st)
+    else:
+        items = universe_as_of(code, as_of)
+    payload = {"universe": code, "requestedUniverse": requested, "asOfDate": as_of, "items": items, "count": len(items)}
+    coverage_start = INDEX_OFFICIAL_COVERAGE_STARTS.get(code)
+    if coverage_start:
+        payload.update({"coverageStatus": "ok", "coverageStart": coverage_start, "isOfficialHistoryComplete": False})
+    return payload
 
 
 def import_financial_statement(

@@ -3,6 +3,7 @@ fastapi>=0.115,<1
 httpx2>=2,<3
 akshare>=1.17,<2
 adata>=2.9,<3
+baostock>=0.8,<1
 clickhouse-connect>=0.8,<1
 duckdb>=1.1,<2
 polars>=1.0,<2

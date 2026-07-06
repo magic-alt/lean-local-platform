@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services import pit_data
 from ..core.errors import LeanWebError
 from ..lean import normalize_symbol, parse_date
 from ..services.ashare_repository import (
@@ -13,10 +14,8 @@ from ..services.ashare_repository import (
     is_tradeable,
     list_import_batches,
     reference_data_coverage,
-    tradable_universe_as_of,
     trade_status_as_of,
     upsert_corporate_actions,
-    universe_as_of,
 )
 from ..services.tushare_adapter import import_tushare_stock_basic, import_tushare_trade_calendar
 
@@ -227,20 +226,22 @@ def ashare_reference_data_coverage(indexCode: str = "CSI300"):
 @router.get("/ashare/universe/{universe_code}")
 def ashare_universe(universe_code: str, date: str):
     as_of_date = _date(date)
-    items = universe_as_of(universe_code.upper(), as_of_date)
-    return {"universe": universe_code.upper(), "date": as_of_date, "items": items, "count": len(items)}
+    payload = pit_data.index_members_as_of_payload(universe_code.upper(), as_of_date, requested_universe=universe_code)
+    return {**payload, "date": as_of_date}
 
 
 @router.get("/ashare/universe/{universe_code}/tradable")
 def ashare_tradable_universe(universe_code: str, date: str, minListedDays: int = 0, excludeSt: bool = True):
     as_of_date = _date(date)
-    items = tradable_universe_as_of(
+    payload = pit_data.index_members_as_of_payload(
         universe_code.upper(),
         as_of_date,
+        requested_universe=universe_code,
+        tradable=True,
         min_listed_days=minListedDays,
         exclude_st=excludeSt,
     )
-    return {"universe": universe_code.upper(), "date": as_of_date, "items": items, "count": len(items)}
+    return {**payload, "date": as_of_date}
 
 
 @router.get("/ashare/securities/{symbol}/status")

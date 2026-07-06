@@ -41,7 +41,8 @@ class FakeAk:
         return FakeFrame([{"代码": "000003", "名称": "PT金田Ａ", "停牌时间": 1783296000000.0, "预计复牌时间": ""}])
 
     def stock_dividend_cninfo(self, symbol):
-        return FakeFrame([{"除权日": "2024-07-01", "派息比例": 30.0, "送股比例": 1.0, "转增比例": 2.0}])
+        dates = {"600519": "2024-07-01", "000001": "2024-06-28", "300750": "2024-06-20"}
+        return FakeFrame([{"除权日": dates[symbol], "派息比例": 30.0, "送股比例": 1.0, "转增比例": 2.0}])
 
 
 def test_public_reference_import_helpers_write_canonical_tables(tmp_path, monkeypatch):
@@ -71,7 +72,7 @@ def test_public_reference_import_helpers_write_canonical_tables(tmp_path, monkey
     assert errors == [{"source": "stock_zh_a_stop_em", "error": "primary stop source unavailable"}]
     import_trade_status(suspended, source="akshare:suspended")
 
-    actions, errors = fetch_dividend_records(fake, ["600519"], "2024-01-01", "2024-12-31")
+    actions, errors = fetch_dividend_records(fake, ["600519", "000001", "300750"], "2024-01-01", "2024-12-31")
     assert errors == []
     upsert_corporate_actions(actions, source="akshare:stock_dividend_cninfo")
 
@@ -79,6 +80,7 @@ def test_public_reference_import_helpers_write_canonical_tables(tmp_path, monkey
         security = connection.execute("select status, delisted_date, is_st from securities where symbol = '600001'").fetchone()
         suspended_row = connection.execute("select is_suspended, can_buy, can_sell from ashare_trade_status where symbol = '000003'").fetchone()
         action = connection.execute("select cash_dividend, stock_dividend from corporate_actions where symbol = '600519'").fetchone()
+        action_symbols = connection.execute("select distinct symbol from corporate_actions order by symbol").fetchall()
 
     assert security["status"] == "delisted"
     assert security["delisted_date"] == "2009-12-29"
@@ -88,3 +90,4 @@ def test_public_reference_import_helpers_write_canonical_tables(tmp_path, monkey
     assert suspended_row["can_sell"] == 0
     assert action["cash_dividend"] == 3.0
     assert round(action["stock_dividend"], 6) == 0.3
+    assert [row["symbol"] for row in action_symbols] == ["000001", "300750", "600519"]
