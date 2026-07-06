@@ -44,6 +44,9 @@ import {
   AssetClassInfo,
   BacktestResult,
   BacktestRun,
+  BacktestExperiment,
+  BacktestValidation,
+  BacktestValidationResponse,
   CBondPoolItem,
   CBondRiskItem,
   ChartData,
@@ -865,11 +868,187 @@ function BacktestsPage() {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function shortValue(value: unknown, max = 72) {
+  if (value == null || value === "") return "-";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function shortHash(value: unknown) {
+  const text = typeof value === "string" ? value : "";
+  return text.length > 16 ? `${text.slice(0, 12)}...` : shortValue(text);
+}
+
+function ValidationStatusTag({ validation }: { validation?: BacktestValidation | null }) {
+  if (!validation) return <Tag>unknown</Tag>;
+  const severity = String(validation.severity || (validation.passed === false ? "critical" : "ok"));
+  const color = validation.passed === false || severity === "critical" ? "red" : severity === "warning" ? "gold" : "green";
+  return <Tag color={color}>{validation.passed === false ? "failed" : severity}</Tag>;
+}
+
+function gateDetailSummary(details?: Record<string, unknown>) {
+  const item = asRecord(details);
+  const coverage = [
+    item.bar_count != null ? `bars ${item.bar_count}` : null,
+    item.market_bar_count != null ? `market bars ${item.market_bar_count}` : null,
+    item.status_count != null ? `status ${item.status_count}` : null
+  ].filter(Boolean);
+  if (coverage.length) return coverage.join(" / ");
+  if (item.symbol) {
+    const range = item.startDate && item.endDate ? ` ${item.startDate} -> ${item.endDate}` : "";
+    return `${item.symbol}${range}`;
+  }
+  if (item.rows != null) return `rows ${item.rows}`;
+  if (item.batchId || item.status) return [item.batchId ? `batch ${item.batchId}` : null, item.status ? `status ${item.status}` : null].filter(Boolean).join(" / ");
+  return shortValue(item, 120);
+}
+
+function ValueCell({ value }: { value: unknown }) {
+  const text = shortValue(value);
+  return text.endsWith("...") ? <Tooltip title={typeof value === "string" ? value : JSON.stringify(value)}>{text}</Tooltip> : <>{text}</>;
+}
+
+function KeyValueTable({ rows }: { rows: Array<{ key: string; value: unknown }> }) {
+  return (
+    <Table
+      size="small"
+      pagination={false}
+      rowKey="key"
+      dataSource={rows}
+      columns={[
+        { title: "Field", dataIndex: "key", width: 190 },
+        { title: "Value", dataIndex: "value", render: (value) => <ValueCell value={value} /> }
+      ]}
+    />
+  );
+}
+
+function BacktestTrustPanel({
+  validation,
+  experiment,
+  fingerprint
+}: {
+  validation?: BacktestValidation | null;
+  experiment?: BacktestExperiment | null;
+  fingerprint?: Record<string, unknown> | null;
+}) {
+  const scope = asRecord(validation?.scope);
+  const marketRules = asRecord(validation?.marketRules);
+  const feeModel = asRecord(marketRules.feeModel);
+  const slippageModel = asRecord(marketRules.slippageModel);
+  const validationData = asRecord(validation?.data);
+  const coverage = asRecord(validationData.coverage);
+  const benchmark = asRecord(validationData.benchmark);
+  const latestBatch = asRecord(validationData.latestImportBatch);
+  const gates = validation?.gates ?? [];
+  const strategy = asRecord(experiment?.strategy);
+  const parameters = asRecord(experiment?.parameters);
+  const experimentData = asRecord(experiment?.data);
+  const environment = asRecord(experiment?.environment);
+  const marketDailyBars = asRecord(experimentData.marketDailyBars);
+  const tradeStatus = asRecord(experimentData.tradeStatus);
+  const fp = asRecord(fingerprint);
+  if (!validation && !experiment && !fingerprint) {
+    return <Alert type="info" message="Validation metadata is not available for this run." />;
+  }
+  return (
+    <>
+      <div className="grid">
+        <Card><div className="metric-label">Validation</div><ValidationStatusTag validation={validation} /></Card>
+        <Card><Statistic title="Benchmark Rows" value={shortValue(benchmark.rows ?? fp.benchmark_rows)} /></Card>
+        <Card><Statistic title="Daily Bars" value={shortValue(marketDailyBars.row_count ?? fp.market_daily_bars_count ?? coverage.bar_count)} /></Card>
+        <Card><Statistic title="Trade Status" value={shortValue(tradeStatus.row_count ?? fp.trade_status_count ?? coverage.status_count)} /></Card>
+      </div>
+      <div className="two-column">
+        <Card title="A-Share Rules">
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Tag color={marketRules.enabled ? "blue" : "default"}>{marketRules.enabled ? "enabled" : "not required"}</Tag>
+            {Boolean(marketRules.tPlusOne) && <Tag>T+1</Tag>}
+            {Boolean(marketRules.suspendedBlocked) && <Tag>suspension blocked</Tag>}
+            {Boolean(marketRules.limitUpBuyBlocked) && <Tag>limit-up buy blocked</Tag>}
+            {Boolean(marketRules.limitDownSellBlocked) && <Tag>limit-down sell blocked</Tag>}
+            {Boolean(marketRules.benchmarkRequired) && <Tag>benchmark required</Tag>}
+          </Space>
+          <KeyValueTable
+            rows={[
+              { key: "lotSize", value: marketRules.lotSize },
+              { key: "executionPolicy", value: marketRules.executionPolicy },
+              { key: "commissionRate", value: feeModel.commissionRate },
+              { key: "minCommission", value: feeModel.minCommission },
+              { key: "stampTaxSell", value: feeModel.stampTaxSell },
+              { key: "transferFeeRate", value: feeModel.transferFeeRate },
+              { key: "slippageBps", value: slippageModel.slippageBps },
+              { key: "cashBuffer", value: marketRules.cashBuffer }
+            ]}
+          />
+        </Card>
+        <Card title="Data Gates">
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(row) => `${row.name}-${gateDetailSummary(row.details)}`}
+            dataSource={gates}
+            columns={[
+              { title: "Gate", dataIndex: "name", ellipsis: true },
+              { title: "Status", render: (_, gate) => <Tag color={gate.passed ? "green" : "red"}>{gate.passed ? "passed" : "failed"}</Tag> },
+              { title: "Severity", dataIndex: "severity" },
+              { title: "Details", render: (_, gate) => <span className="muted">{gateDetailSummary(gate.details)}</span> }
+            ]}
+          />
+        </Card>
+      </div>
+      <div className="two-column">
+        <Card title="Data Evidence">
+          <KeyValueTable
+            rows={[
+              { key: "symbol", value: scope.symbol },
+              { key: "period", value: `${shortValue(scope.start)} -> ${shortValue(scope.end)}` },
+              { key: "adjust", value: scope.adjust },
+              { key: "barCount", value: coverage.bar_count ?? marketDailyBars.row_count },
+              { key: "statusCount", value: coverage.status_count ?? tradeStatus.row_count },
+              { key: "benchmark", value: benchmark.symbol },
+              { key: "benchmarkRows", value: benchmark.rows },
+              { key: "importBatch", value: latestBatch.id },
+              { key: "importStatus", value: latestBatch.status }
+            ]}
+          />
+        </Card>
+        <Card title="Experiment Fingerprint">
+          <KeyValueTable
+            rows={[
+              { key: "parametersSha256", value: shortHash(parameters.sha256 ?? fp.parameters_sha256) },
+              { key: "strategySha256", value: shortHash(strategy.sha256 ?? fp.strategy_file_sha256) },
+              { key: "gitCommit", value: shortHash(strategy.gitCommit ?? fp.git_commit) },
+              { key: "gitDirty", value: strategy.gitDirty ?? fp.git_dirty },
+              { key: "dockerImage", value: environment.dockerImage ?? fp.docker_image },
+              { key: "dockerDigest", value: shortHash(environment.dockerImageDigest ?? fp.docker_image_digest) },
+              { key: "leanZipSha256", value: shortHash(experimentData.leanZipSha256 ?? fp.lean_zip_sha256) },
+              { key: "factorFileSha256", value: shortHash(experimentData.factorFileSha256 ?? fp.factor_file_sha256) },
+              { key: "dataBatchId", value: experimentData.batchId ?? fp.data_batch_id }
+            ]}
+          />
+        </Card>
+      </div>
+    </>
+  );
+}
+
 function RunDetailPage() {
   const { id } = useParams();
   const [run, setRun] = useState<BacktestRun>();
   const [chart, setChart] = useState<ChartData>();
   const [result, setResult] = useState<BacktestResult>();
+  const [trust, setTrust] = useState<BacktestValidationResponse>();
   const [logs, setLogs] = useState("");
   const active = run ? ["created", "queued", "running"].includes(run.status) : false;
   const reload = useCallback(async () => {
@@ -877,6 +1056,11 @@ function RunDetailPage() {
     const next = await api.backtest(id);
     setRun(next);
     setLogs((await api.logs(id)).logs);
+    try {
+      setTrust(await api.backtestValidation(id));
+    } catch {
+      setTrust(undefined);
+    }
     if (next.result_json_path) setChart(await api.chartData(id));
     if (next.status === "success" || next.status === "succeeded") {
       try {
@@ -900,6 +1084,9 @@ function RunDetailPage() {
     await reload();
   }
   if (!run) return <Alert type="info" message="Loading run..." />;
+  const validation = trust?.validation ?? run.validation ?? result?.performance?.validation;
+  const experiment = trust?.experiment ?? run.experiment ?? result?.performance?.experiment;
+  const fingerprint = trust?.fingerprint ?? run.fingerprint;
   return (
     <>
       <div className="toolbar">
@@ -950,6 +1137,11 @@ function RunDetailPage() {
                 />
               </Card>
             )
+          },
+          {
+            key: "validation",
+            label: "Validation",
+            children: <BacktestTrustPanel validation={validation} experiment={experiment} fingerprint={fingerprint} />
           },
           { key: "charts", label: "Charts", children: chart ? <BacktestCharts chartData={chart} /> : <Alert type="info" message="Charts are available after a successful run." /> },
           {
@@ -1457,7 +1649,22 @@ function ReportsPage() {
         </Form>
       </Card>
       <Card title="Reports" style={{ marginTop: 16 }}>
-        <Table<ReportRecord> rowKey="id" dataSource={reports.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Source", dataIndex: "source", render: (value) => value || "reports" }, { title: "Run", dataIndex: "run_id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "Result", render: (_, report) => report.result_json_path || report.raw_result_object_id ? "available" : "-" }, { title: "Objects", render: (_, report) => report.storedObjects?.length || 0 }, { title: "Open", render: (_, report) => report.report_path ? <a href={`/api/reports/${encodeURIComponent(report.id)}/file`} target="_blank">HTML</a> : "-" }]} />
+        <Table<ReportRecord>
+          rowKey="id"
+          dataSource={reports.data}
+          size="small"
+          columns={[
+            { title: "ID", dataIndex: "id", ellipsis: true },
+            { title: "Source", dataIndex: "source", render: (value) => value || "reports" },
+            { title: "Run", dataIndex: "run_id", ellipsis: true },
+            { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
+            { title: "Trust", render: (_, report) => <ValidationStatusTag validation={report.validation ?? report.result?.performance?.validation} /> },
+            { title: "Benchmark", render: (_, report) => shortValue(asRecord(asRecord(report.validation?.data).benchmark).symbol) },
+            { title: "Result", render: (_, report) => report.result_json_path || report.raw_result_object_id ? "available" : "-" },
+            { title: "Objects", render: (_, report) => report.storedObjects?.length || 0 },
+            { title: "Open", render: (_, report) => report.report_path ? <a href={`/api/reports/${encodeURIComponent(report.id)}/file`} target="_blank">HTML</a> : "-" }
+          ]}
+        />
       </Card>
     </>
   );

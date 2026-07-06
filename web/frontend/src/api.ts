@@ -243,6 +243,9 @@ export interface BacktestRun {
   finished_at?: string | null;
   duration_seconds?: number | null;
   artifacts?: string[];
+  fingerprint?: Record<string, unknown> | null;
+  validation?: BacktestValidation | null;
+  experiment?: BacktestExperiment | null;
 }
 
 export interface BacktestStatus {
@@ -256,6 +259,44 @@ export interface BacktestStatus {
   error?: string | null;
 }
 
+export interface BacktestValidationGate {
+  name: string;
+  passed: boolean;
+  severity: string;
+  details?: Record<string, unknown>;
+}
+
+export interface BacktestValidation {
+  schemaVersion?: number;
+  generatedAt?: string;
+  scope?: Record<string, unknown>;
+  marketRules?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+  gates?: BacktestValidationGate[];
+  passed?: boolean;
+  severity?: string;
+  [key: string]: unknown;
+}
+
+export interface BacktestExperiment {
+  schemaVersion?: number;
+  runId?: string;
+  createdAt?: string;
+  strategy?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  validation?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface BacktestValidationResponse {
+  job_id: string;
+  validation?: BacktestValidation | null;
+  experiment?: BacktestExperiment | null;
+  fingerprint?: Record<string, unknown> | null;
+}
+
 export interface BacktestResult {
   id: string;
   job_id: string;
@@ -266,6 +307,11 @@ export interface BacktestResult {
   trades: Array<Record<string, unknown>>;
   holdings: Array<Record<string, unknown>>;
   statistics: Record<string, string>;
+  performance?: {
+    validation?: BacktestValidation | null;
+    experiment?: BacktestExperiment | null;
+    [key: string]: unknown;
+  } | null;
   raw_result_path?: string | null;
   created_at: string;
 }
@@ -307,6 +353,10 @@ export interface ReportRecord {
   raw_result_object_id?: string | null;
   summary_object_id?: string | null;
   storedObjects?: Array<{ id: string; object_key: string; sha256: string; size: number }>;
+  result?: BacktestResult | null;
+  fingerprint?: Record<string, unknown> | null;
+  validation?: BacktestValidation | null;
+  experiment?: BacktestExperiment | null;
   error?: string | null;
   created_at: string;
 }
@@ -656,6 +706,8 @@ export const api = {
   backtestStatus: (id: string) => request<BacktestStatus>(`/api/backtests/${encodeURIComponent(id)}/status`),
   backtestResult: (id: string) =>
     request<{ job: BacktestRun; result: BacktestResult }>(`/api/backtests/${encodeURIComponent(id)}/result`),
+  backtestValidation: (id: string) =>
+    request<BacktestValidationResponse>(`/api/backtests/${encodeURIComponent(id)}/validation`),
   cancelBacktest: (id: string) =>
     request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   logs: (id: string) =>
