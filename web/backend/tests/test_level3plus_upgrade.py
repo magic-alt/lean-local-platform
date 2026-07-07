@@ -1,0 +1,174 @@
+import sys
+
+from fastapi.testclient import TestClient
+
+
+def configure_temp_db(tmp_path, monkeypatch):
+    import app.db as db_module
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(db_module, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(db_module, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(db_module, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(db_module, "RESEARCH_DIR", tmp_path / "research")
+    monkeypatch.setattr(db_module, "OBJECT_STORE_DIR", tmp_path / "object-store")
+    monkeypatch.setattr(db_module, "REPORTS_DIR", tmp_path / "reports")
+    db_module.init_db()
+    return db_module
+
+
+def seed_level3plus_data(db_module):
+    now = "2026-07-07T00:00:00+00:00"
+    symbols = ["600519", "000001"]
+    dates = ["2026-06-01", "2026-06-02"]
+    with db_module.db() as connection:
+        for symbol in symbols:
+            connection.execute(
+                """
+                insert into securities
+                    (symbol, name, exchange, market, listed_date, status, is_st, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (symbol, symbol, "SH" if symbol.startswith("6") else "SZ", "china", "2000-01-01", "listed", 0, now, now),
+            )
+            connection.execute(
+                """
+                insert into instruments
+                    (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange,
+                     venue, status, metadata_json, source, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"inst-{symbol}", symbol, symbol, symbol, "equity", "china", "SH" if symbol.startswith("6") else "SZ", "china", "active", "{}", "unit", now, now),
+            )
+            for index, trade_date in enumerate(dates):
+                close = 10 + index
+                connection.execute(
+                    """
+                    insert into ashare_daily_bars
+                        (symbol, trade_date, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (symbol, trade_date, close, close + 1, close - 1, close, 1000, 100000, "raw", "akshare", "batch", now),
+                )
+                connection.execute(
+                    """
+                    insert into market_daily_bars
+                        (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+                         open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (f"inst-{symbol}", symbol, "equity", "china", "china", trade_date, "daily", "trade", close, close + 1, close - 1, close, 1000, 100000, "raw", "akshare", "batch", now),
+                )
+                connection.execute(
+                    """
+                    insert into ashare_trade_status
+                        (symbol, trade_date, is_suspended, limit_up, limit_down, can_buy, can_sell, is_st, source, batch_id)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (symbol, trade_date, 0, close * 1.1, close * 0.9, 1, 1, 0, "akshare:unit", "batch"),
+                )
+                connection.execute(
+                    "insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id) values (?, ?, ?, ?, ?)",
+                    (symbol, trade_date, 1.0, "akshare", "batch"),
+                )
+        for trade_date in dates:
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+                     open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("index-000300", "000300", "equity", "china", "china", trade_date, "daily", "trade", 100, 101, 99, 100, 1000, 100000, "raw", "akshare", "batch", now),
+            )
+    return symbols
+
+
+def test_full_identifier_backfill_scans_all_tables(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    seed_level3plus_data(db_module)
+
+    from app.services.instrument_identity import identifier_coverage, identifiers_for_symbol, upsert_instrument_identifiers
+
+    result = upsert_instrument_identifiers(source="akshare", dry_run=False)
+    assert result["symbols"] >= 3
+    coverage = identifier_coverage()
+    assert coverage["coverageRatio"] == 1.0
+    assert coverage["missingReasons"] == {}
+    types = {item["identifier_type"] for item in identifiers_for_symbol("000300")["items"]}
+    assert {"raw_symbol", "exchange_symbol", "ts_code", "lean_symbol", "provider_symbol"} <= types
+
+
+def test_provider_availability_reports_credential_missing(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+
+    from app.services.provider_certification import provider_availability_report
+
+    payload = provider_availability_report(["tushare", "jqdata"], persist=True)
+    reasons = {item["provider"]: item["unavailableReason"] for item in payload["providers"]}
+    assert "credential_missing" in reasons["tushare"]
+    assert payload["count"] == 2
+
+
+def test_certified_universe_records_accepted_warning(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    symbols = seed_level3plus_data(db_module)
+
+    from app.services.instrument_identity import upsert_instrument_identifiers
+    from app.services.universe_certification import build_certified_universe, certified_symbols
+
+    upsert_instrument_identifiers(source="akshare", dry_run=False)
+    payload = build_certified_universe(
+        universe_code="A_SHARE_L3P_TEST",
+        source="akshare",
+        benchmark="000300",
+        start_date="2026-06-01",
+        end_date="2026-06-02",
+        target_size=2,
+        min_size=2,
+        candidates=symbols,
+        allow_warning_codes=["provider_secondary_missing"],
+    )
+    assert payload["status"] == "certified"
+    assert payload["symbolCount"] == 2
+    assert payload["acceptedWarnings"]
+    assert certified_symbols("A_SHARE_L3P_TEST") == sorted(symbols)
+
+
+def test_pipeline_and_alert_api(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.main import app
+    from app.services.alerts import emit_alert
+    from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run
+
+    run = start_pipeline_run(universe_code="A_SHARE_L3P_TEST", source="akshare", benchmark_symbol="000300")
+    record_pipeline_step(run["id"], "environment_check", status="ok", details={"ok": True})
+    finish_pipeline_run(run["id"], status="passed", severity="ok", decision="LEVEL3_PASS", summary={"ok": True}, warnings=[], errors=[], perf_start=run["perfStart"])
+    alert = emit_alert("benchmark_missing", severity="critical", source="unit", related_id=run["id"], details={"benchmark": "999999"})
+
+    client = TestClient(app)
+    assert client.get("/api/pipeline-runs").status_code == 200
+    assert client.get(f"/api/pipeline-runs/{run['id']}").json()["steps"][0]["step_name"] == "environment_check"
+    assert client.get("/api/alert-events").json()["items"][0]["id"] == alert["id"]
+    assert client.post(f"/api/alert-events/{alert['id']}/acknowledge").status_code == 200
+
+
+def test_retention_policy_dry_run_reports_freed_bytes(tmp_path, monkeypatch, capsys):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services.db_object_store import put_bytes
+    from scripts import cleanup_report_artifacts
+
+    item = put_bytes("debug-logs", "old.log", b"debug", metadata={"status": "ok"})
+    with db_module.db() as connection:
+        connection.execute("update stored_objects set updated_at = ? where id = ?", ("2000-01-01T00:00:00+00:00", item["id"]))
+    policy = tmp_path / "retention.yaml"
+    policy.write_text("protect_recent_days: 0\nclasses:\n  - name: debug_logs\n    namespaces: [debug-logs]\n    retain_days: 1\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["cleanup_report_artifacts.py", "--policy", str(policy), "--dry-run", "--json"])
+    assert cleanup_report_artifacts.main() == 0
+    payload = capsys.readouterr().out
+    assert '"wouldDelete": 1' in payload
+    assert '"freedBytes": 5' in payload

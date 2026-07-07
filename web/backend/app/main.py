@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import ashare, backtests, cbond, compare, data, factors, futures, health, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
+from .api import ashare, backtests, cbond, compare, data, factors, futures, health, level3plus, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
@@ -84,6 +84,7 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
 app.include_router(health.router)
 app.include_router(observability.router)
 app.include_router(universes.router)
+app.include_router(level3plus.router)
 app.include_router(settings.router)
 app.include_router(strategies.router)
 app.include_router(projects.router)

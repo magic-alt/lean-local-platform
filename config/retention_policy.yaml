@@ -1,0 +1,19 @@
+protect_recent_days: 7
+classes:
+  - name: critical_audit
+    namespaces: [level3-audit, level3plus-audit]
+    permanent: true
+  - name: successful_daily_pipeline
+    namespaces: [pipeline-artifacts]
+    statuses: [success, passed, ok]
+    retain_days: 365
+  - name: failed_run_artifacts
+    namespaces: [pipeline-artifacts, backtest-results]
+    statuses: [failed, critical]
+    retain_days: 180
+  - name: debug_logs
+    namespaces: [debug-logs, logs]
+    retain_days: 30
+  - name: reports
+    namespaces: [reports]
+    retain_days: 365
