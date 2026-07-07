@@ -464,8 +464,15 @@ export function ProjectWorkspacePage() {
   const loadProjectFile = useCallback(async (target: Project, path?: string) => {
     const tree = await api.projectFiles(target.id);
     setFiles(tree);
-    const nextFile = path ?? target.main_file;
+    const fileItems = tree.filter((item) => item.type === "file");
+    const requestedFile = path ?? target.main_file;
+    const nextFile = fileItems.some((item) => item.path === requestedFile) ? requestedFile : fileItems[0]?.path;
     setActiveFile(nextFile);
+    if (!nextFile) {
+      setContent("");
+      setDirty(false);
+      return;
+    }
     setContent((await api.readProjectFile(target.id, nextFile)).content);
     setDirty(false);
   }, []);
@@ -532,7 +539,7 @@ export function ProjectWorkspacePage() {
       {!project ? <Alert type="info" message="Create or select a project first." /> : (
         <Tabs items={[
           { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
-          { key: "code", label: "Code", children: <Card title={`${activeFile ?? project.main_file}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space><Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty} onClick={saveFile}>Save</Button></Card> },
+          { key: "code", label: "Code", children: <Card title={`${activeFile ?? "No file selected"}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space>{!activeFile && <Alert type="warning" showIcon message="No project files found." style={{ marginBottom: 12 }} />}<Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty || !activeFile} onClick={saveFile}>Save</Button></Card> },
           { key: "data", label: "Data", children: <MarketDataDownloader compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
           { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button></Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },

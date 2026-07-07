@@ -16,10 +16,25 @@ def _class_name(name: str) -> str:
     return "".join(part.capitalize() for part in parts) + "Algorithm"
 
 
+def _project_root(project: dict[str, Any]) -> Path:
+    stored_path = Path(project.get("project_path") or "")
+    if stored_path.exists():
+        return stored_path
+    return PROJECTS_DIR / str(project["id"])
+
+
+def _normalize_project(project: dict[str, Any] | None) -> dict[str, Any] | None:
+    if project is None:
+        return None
+    normalized = dict(project)
+    normalized["project_path"] = str(_project_root(normalized))
+    return normalized
+
+
 def get_project(project_id: str) -> dict[str, Any]:
     with db() as connection:
         row = connection.execute("select * from projects where id = ?", (project_id,)).fetchone()
-    project = row_to_dict(row)
+    project = _normalize_project(row_to_dict(row))
     if project is None:
         raise NotFoundError("Project not found.")
     return project
@@ -28,7 +43,7 @@ def get_project(project_id: str) -> dict[str, Any]:
 def list_projects() -> list[dict[str, Any]]:
     with db() as connection:
         rows = connection.execute("select * from projects order by updated_at desc").fetchall()
-    return rows_to_dicts(rows)
+    return [_normalize_project(project) or project for project in rows_to_dicts(rows)]
 
 
 def create_project(
@@ -129,13 +144,13 @@ def delete_project(project_id: str) -> dict[str, Any]:
         connection.execute("delete from optimization_runs where project_id = ?", (project_id,))
         connection.execute("delete from research_sessions where project_id = ?", (project_id,))
         connection.execute("delete from projects where id = ?", (project_id,))
-    _remove_path(project["project_path"])
+    _remove_path(str(_project_root(project)))
     return deleted
 
 
 def file_tree(project_id: str) -> list[dict[str, Any]]:
     project = get_project(project_id)
-    root = Path(project["project_path"])
+    root = _project_root(project)
     items = []
     for path in sorted(root.rglob("*")):
         if path.name.startswith("."):
@@ -147,7 +162,7 @@ def file_tree(project_id: str) -> list[dict[str, Any]]:
 
 def read_file(project_id: str, relative_path: str) -> dict[str, Any]:
     project = get_project(project_id)
-    target = ensure_child_path(Path(project["project_path"]), relative_path)
+    target = ensure_child_path(_project_root(project), relative_path)
     if not target.exists() or not target.is_file():
         raise NotFoundError("Project file not found.")
     return {"path": relative_path, "content": target.read_text(encoding="utf-8")}
@@ -155,7 +170,7 @@ def read_file(project_id: str, relative_path: str) -> dict[str, Any]:
 
 def write_file(project_id: str, relative_path: str, content: str) -> dict[str, Any]:
     project = get_project(project_id)
-    target = ensure_child_path(Path(project["project_path"]), relative_path)
+    target = ensure_child_path(_project_root(project), relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     now = utc_now()
@@ -171,7 +186,7 @@ def update_project(project_id: str, name: str | None = None, config_updates: dic
         config.update({key: value for key, value in config_updates.items() if value is not None})
     next_name = name or project["name"]
     now = utc_now()
-    project_path = Path(project["project_path"])
+    project_path = _project_root(project)
     (project_path / "project.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     with db() as connection:
         connection.execute(
