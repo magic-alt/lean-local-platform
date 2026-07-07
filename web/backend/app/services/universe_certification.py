@@ -10,7 +10,7 @@ from .ashare_multisource import compare_ashare_daily_sources_batch
 from .data_coverage import benchmark_coverage, symbol_coverage
 from .instrument_identity import INDEX_SYMBOLS, identifier_coverage
 from .provider_certification import add_warning_allowlist, warning_allowlist_status
-from .source_gate import require_source_allowed
+from .source_gate import require_source_allowed, resolve_effective_data_source, source_priority_for_window
 
 
 def _symbols(value: list[str] | None) -> list[str] | None:
@@ -103,7 +103,8 @@ def build_certified_universe(
 ) -> dict[str, Any]:
     now = utc_now()
     code = universe_code.strip().upper()
-    source_key = require_source_allowed(source)
+    source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
+    source_key = require_source_allowed(source_policy["effectiveSource"])
     target = max(1, int(target_size))
     minimum = max(1, int(min_size))
     allow_codes = sorted({item.strip() for item in (allow_warning_codes or []) if item.strip()})
@@ -112,7 +113,7 @@ def build_certified_universe(
     id_cov = identifier_coverage(selected)
     qa = compare_ashare_daily_sources_batch(
         symbols=selected,
-        sources=["akshare", "baostock", "adata"],
+        sources=source_priority_for_window(source=source, start_date=start_date, end_date=end_date),
         start_date=start_date,
         end_date=end_date,
         persist=True,
@@ -177,6 +178,7 @@ def build_certified_universe(
         "identifierCoverage": 1.0 if not certified else identifier_coverage(certified)["coverageRatio"],
         "allIdentifierCoverage": id_cov,
         "benchmark": benchmark_item,
+        "sourcePolicy": source_policy,
         **metrics,
         "symbols": symbol_items,
     }
@@ -278,6 +280,8 @@ def build_certified_universe(
         "severity": severity,
         "universeCode": code,
         "source": source_key,
+        "requestedSource": source_policy["requestedSource"],
+        "sourcePolicy": source_policy,
         "benchmark": benchmark,
         "symbolCount": len(certified),
         "candidateCount": len(selected),

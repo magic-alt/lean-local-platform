@@ -71,7 +71,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             resolution=str(parameters.get("resolution") or "daily"),
             data_type=str(parameters.get("dataType") or "trade"),
             adjust=adjust,
-            source=str(parameters.get("source") or "akshare"),
+            source=str(parameters.get("source") or "jqdata"),
         )
         if benchmark_symbol:
             symbols_to_gate.append(benchmark_symbol)

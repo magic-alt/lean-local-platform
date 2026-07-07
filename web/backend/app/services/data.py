@@ -37,7 +37,9 @@ from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
+from .source_gate import jqdata_entitlement, resolve_effective_data_source
 from .tushare_adapter import fetch_tushare_rows
+from .jqdata_adapter import fetch_jqdata_rows
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
@@ -98,7 +100,9 @@ DJIA_COMPONENTS = [
 
 PROVIDER_REQUIREMENTS: dict[str, dict[str, Any]] = {
     "binance": {"modules": [], "env": []},
+    "jqdata": {"modules": ["jqdatasdk"], "env": [["JQDATA_TOKEN"], ["JQDATA_USERNAME", "JQDATA_PASSWORD"]]},
     "tushare": {"modules": ["tushare"], "env": ["TUSHARE_TOKEN"]},
+    "rqdata": {"modules": ["rqdatac"], "env": ["RQDATA_USERNAME", "RQDATA_PASSWORD"]},
     "eastmoney": {"modules": [], "env": []},
     "sina": {"modules": ["akshare"], "env": []},
     "akshare": {"modules": ["akshare"], "env": []},
@@ -124,8 +128,8 @@ def markets() -> list[dict[str, Any]]:
             "key": "china",
             "name": "A Share",
             "currency": "CNY",
-            "defaultProvider": "tushare",
-            "providers": ["tushare", "akshare", "adata", "baostock", "eastmoney", "sina", "tonghuashun"],
+            "defaultProvider": "jqdata",
+            "providers": ["jqdata", "akshare", "tushare", "rqdata", "adata", "baostock", "eastmoney", "sina", "tonghuashun"],
         },
         {
             "key": "hongkong",
@@ -220,6 +224,16 @@ def data_providers() -> list[dict[str, Any]]:
             "notes": "Public spot kline endpoint for crypto OHLCV. Availability depends on region, symbol, and Binance limits.",
         },
         {
+            "key": "jqdata",
+            "name": "JQData",
+            "requiresApiKey": True,
+            "supportsBatch": True,
+            "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
+            "notes": f"Primary A-share daily data source for entitled windows. Account data range {jqdata_entitlement()['startDate']}..{jqdata_entitlement()['endDate']}; outside this window use AKShare.",
+        },
+        {
             "key": "tushare",
             "name": "TuShare Pro",
             "requiresApiKey": True,
@@ -258,6 +272,16 @@ def data_providers() -> list[dict[str, Any]]:
             "assetClasses": ["equity"],
             "venues": ["usa", "china", "hongkong"],
             "notes": "Requires the Python akshare package. Uses AKShare adapters for public US/CN/HK daily data.",
+        },
+        {
+            "key": "rqdata",
+            "name": "RQData",
+            "requiresApiKey": True,
+            "supportsBatch": False,
+            "markets": ["china"],
+            "assetClasses": ["equity"],
+            "venues": ["china"],
+            "notes": "Backup interface placeholder. Availability diagnostics are supported; live import requires a later adapter implementation.",
         },
         {
             "key": "adata",
@@ -335,12 +359,15 @@ def provider_availability(provider: str | None = None) -> dict[str, Any]:
             {"name": module, "available": importlib.util.find_spec(module) is not None}
             for module in requirements.get("modules", [])
         ]
-        env = [
-            {"name": name, "present": bool(os.environ.get(name))}
-            for name in requirements.get("env", [])
-        ]
+        env_options = requirements.get("env", [])
+        env_names = sorted({name for option in env_options for name in (option if isinstance(option, list) else [option])})
+        env = [{"name": name, "present": bool(os.environ.get(name))} for name in env_names]
         missing_modules = [module["name"] for module in modules if not module["available"]]
-        missing_env = [entry["name"] for entry in env if not entry["present"]]
+        env_configured = not env_options or any(
+            all(os.environ.get(name) for name in (option if isinstance(option, list) else [option]))
+            for option in env_options
+        )
+        missing_env = [] if env_configured else [entry["name"] for entry in env if not entry["present"]]
         available = not missing_modules and not missing_env
         reason = "ok" if available else ";".join(
             [*(f"missing_module:{name}" for name in missing_modules), *(f"missing_env:{name}" for name in missing_env)]
@@ -500,6 +527,10 @@ def fetch_provider_rows(
         if market != "china":
             raise ValueError("TuShare Pro only supports China A-share imports in this platform.")
         return fetch_tushare_rows(symbol, start_date, end_date, token=api_key, adjust=adjust)
+    if provider == "jqdata":
+        if market != "china":
+            raise ValueError("JQData only supports China A-share imports in this platform.")
+        return fetch_jqdata_rows(symbol, start_date, end_date, adjust=adjust)
     if provider == "eastmoney":
         return fetch_eastmoney_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
     if provider == "sina":
@@ -740,6 +771,9 @@ def fetch_and_import_symbol(
         market = market_key(market)
         venue = market
         symbol = normalize_symbol(symbol, market)
+        if market == "china":
+            source_policy = resolve_effective_data_source(provider, start_date=start_date, end_date=end_date)
+            provider = source_policy["effectiveSource"]
     else:
         request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
         market = request.venue

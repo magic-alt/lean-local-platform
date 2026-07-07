@@ -42,6 +42,7 @@ def test_import_ashare_daily_sample_orchestrates_import_compare_and_parquet(monk
     result = free_data_pipeline.import_ashare_daily_sample(
         symbols=["sh600519"],
         providers=["akshare", "baostock"],
+        primary_provider="akshare",
         start_date="2026-01-01",
         end_date="2026-01-05",
     )

@@ -68,7 +68,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run a one-command Level 3 shadow audit.")
     parser.add_argument("--symbols", required=True)
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--min-trading-days", type=int, default=10)

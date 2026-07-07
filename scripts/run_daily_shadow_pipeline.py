@@ -28,7 +28,7 @@ from app.services.lean_cache import ensure_ashare_lean_cache  # noqa: E402
 from app.services.parquet_lake import parquet_consistency_report, rebuild_all_market_parquet  # noqa: E402
 from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
-from app.services.source_gate import resolve_source_context  # noqa: E402
+from app.services.source_gate import resolve_effective_data_source, resolve_source_context, source_priority_for_window  # noqa: E402
 from app.services.universe_certification import certified_symbols, get_certified_universe  # noqa: E402
 
 
@@ -209,7 +209,7 @@ def main() -> int:
     parser.add_argument("--symbols")
     parser.add_argument("--universe-code")
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--since-last-run", action="store_true")
@@ -235,8 +235,11 @@ def main() -> int:
     window_start, window_end = _certification_window(args.universe_code)
     start_date = args.start_date or window_start
     end_date = args.end_date or window_end
+    source_policy = resolve_effective_data_source(args.source, start_date=start_date, end_date=end_date)
+    effective_source = source_policy["effectiveSource"]
+    qa_sources = source_priority_for_window(source=args.source, start_date=start_date, end_date=end_date)
     if args.dry_run:
-        payload = {"status": "planned", "symbols": symbols, "universeCode": args.universe_code, "benchmark": args.benchmark, "source": args.source, "startDate": start_date, "endDate": end_date}
+        payload = {"status": "planned", "symbols": symbols, "universeCode": args.universe_code, "benchmark": args.benchmark, "source": effective_source, "requestedSource": args.source, "sourcePolicy": source_policy, "startDate": start_date, "endDate": end_date}
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     if not symbols:
@@ -253,7 +256,7 @@ def main() -> int:
     errors: list[str] = []
     alerts: list[dict[str, Any]] = []
     init_db()
-    run = start_pipeline_run(universe_code=args.universe_code, source=args.source, benchmark_symbol=args.benchmark, artifact_dir=args.save_artifact_dir, run_id=args.pipeline_run_id)
+    run = start_pipeline_run(universe_code=args.universe_code, source=effective_source, benchmark_symbol=args.benchmark, artifact_dir=args.save_artifact_dir, run_id=args.pipeline_run_id)
     run_id = run["id"]
     run_perf = run["perfStart"]
 
@@ -287,8 +290,8 @@ def main() -> int:
         add_step("migration_check", "critical", {"error": str(exc)}, step_errors=["migration_mismatch"], started=started)
 
     started = time.perf_counter()
-    providers = provider_availability_report(["akshare", "baostock", "adata", "tushare", "jqdata", "rqdata"], start_date=start_date, end_date=end_date, persist=True)
-    provider_errors = ["provider_unavailable"] if any(item["provider"] == args.source and item["status"] == "unavailable" for item in providers["providers"]) else []
+    providers = provider_availability_report(["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"], start_date=start_date, end_date=end_date, persist=True)
+    provider_errors = ["provider_unavailable"] if any(item["provider"] == effective_source and item["status"] == "unavailable" for item in providers["providers"]) else []
     add_step("provider_availability", "critical" if provider_errors else providers["severity"], providers, step_errors=provider_errors, started=started)
     errors.extend(provider_errors)
 
@@ -307,14 +310,14 @@ def main() -> int:
         errors.extend(universe_errors)
 
     try:
-        source_context = resolve_source_context({"source": args.source}, asset_class="equity", market="china", venue="china")
-        add_step("source_gate", "ok", source_context)
+        source_context = resolve_source_context({"source": effective_source}, asset_class="equity", market="china", venue="china")
+        add_step("source_gate", "ok", {**source_context, "sourcePolicy": source_policy})
     except Exception as exc:
         errors.append(str(exc))
         add_step("source_gate", "critical", {"error": str(exc)}, step_errors=[str(exc)])
 
     started = time.perf_counter()
-    coverage = ashare_coverage(symbols=symbols, benchmark=args.benchmark, source=args.source, start_date=start_date, end_date=end_date)
+    coverage = ashare_coverage(symbols=symbols, benchmark=args.benchmark, source=effective_source, start_date=start_date, end_date=end_date)
     add_step("data_coverage", coverage["severity"], coverage, step_warnings=coverage.get("warnings") or [], step_errors=coverage.get("issues") or [], started=started)
     if coverage["severity"] == "critical":
         errors.extend(coverage.get("issues") or ["coverage_critical"])
@@ -322,13 +325,13 @@ def main() -> int:
         warnings.extend(coverage.get("warnings") or ["coverage_warning"])
 
     started = time.perf_counter()
-    bench = benchmark_coverage(args.benchmark, start_date=start_date, end_date=end_date, source=args.source)
+    bench = benchmark_coverage(args.benchmark, start_date=start_date, end_date=end_date, source=effective_source)
     add_step("benchmark_check", bench["severity"], bench, step_errors=bench.get("issues") or [], started=started)
     if bench["severity"] == "critical":
         errors.append("benchmark_missing")
 
     started = time.perf_counter()
-    qa = compare_ashare_daily_sources_batch(symbols=symbols, sources=["akshare", "adata", "baostock"], start_date=start_date, end_date=end_date, persist=True, persist_symbol_reports=True)
+    qa = compare_ashare_daily_sources_batch(symbols=symbols, sources=qa_sources, start_date=start_date, end_date=end_date, persist=True, persist_symbol_reports=True)
     qa_warnings = ["provider_secondary_missing"] if qa["severity"] == "warning" else []
     acceptance = warning_allowlist_status(qa_warnings, affected_symbols=symbols, scope={"universeCode": args.universe_code, "step": "multisource_qa"})
     qa_errors = []
@@ -344,7 +347,7 @@ def main() -> int:
     errors.extend(error for error in qa_errors if error not in errors)
 
     started = time.perf_counter()
-    parquet = rebuild_all_market_parquet(asset_class="equity", market="china", venue="china", resolution="daily", data_type="trade", adjust="raw", sources=[args.source], continue_on_error=True, persist_report=True)
+    parquet = rebuild_all_market_parquet(asset_class="equity", market="china", venue="china", resolution="daily", data_type="trade", adjust="raw", sources=[effective_source], continue_on_error=True, persist_report=True)
     parquet_status = parquet["consistencyReport"]["severity"]
     add_step("parquet_consistency", parquet_status, {"rebuiltCount": parquet["rebuiltCount"], "errorCount": parquet["errorCount"], "reportId": parquet["consistencyReport"].get("reportId")}, step_errors=["parquet_consistency_failed"] if parquet_status != "ok" or parquet["errorCount"] else [], started=started)
     if parquet_status != "ok" or parquet["errorCount"]:
@@ -354,14 +357,14 @@ def main() -> int:
     cache_items = {}
     for symbol in [*symbols, args.benchmark]:
         try:
-            cache_items[symbol] = ensure_ashare_lean_cache(symbol, source=args.source)
+            cache_items[symbol] = ensure_ashare_lean_cache(symbol, source=effective_source)
         except Exception as exc:
             errors.append(f"lean_cache:{symbol}:{exc}")
     cache_errors = [error for error in errors if error.startswith("lean_cache:")]
     add_step("lean_cache_check", "ok" if not cache_errors else "critical", cache_items, step_errors=cache_errors, started=started)
 
     started = time.perf_counter()
-    backtest = _backtest_smoke(args.api_url, symbols[0], args.benchmark, args.source, start_date, end_date, args.execution_policy)
+    backtest = _backtest_smoke(args.api_url, symbols[0], args.benchmark, effective_source, start_date, end_date, args.execution_policy)
     backtest_details = {
         "runId": backtest.get("runId"),
         "httpStatus": backtest.get("httpStatus"),
@@ -374,7 +377,7 @@ def main() -> int:
         errors.append("backtest_smoke_failed")
 
     started = time.perf_counter()
-    paper = _paper_replay(args.api_url, symbols, args.benchmark, args.source, start_date, end_date, args.execution_policy)
+    paper = _paper_replay(args.api_url, symbols, args.benchmark, effective_source, start_date, end_date, args.execution_policy)
     reject_rate = (float(paper.get("rejects") or 0) / max(1.0, float((paper.get("fills") or 0) + (paper.get("rejects") or 0))))
     paper_errors = []
     paper_warnings = []
@@ -435,7 +438,9 @@ def main() -> int:
         "tradingDays": paper.get("tradingDays"),
         "symbols": symbols,
         "benchmark": args.benchmark,
-        "source": args.source,
+        "source": effective_source,
+        "requestedSource": args.source,
+        "sourcePolicy": source_policy,
         "qaReports": {"batch": qa.get("reportId")},
         "parquetReports": {"consistency": parquet["consistencyReport"].get("reportId")},
         "backtestRunId": backtest.get("runId"),

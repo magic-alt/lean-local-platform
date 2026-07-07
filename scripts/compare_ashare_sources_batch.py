@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run batch A-share local multi-source QA and emit an acceptance report.")
     parser.add_argument("--symbols", help="Comma-separated A-share symbols.")
     parser.add_argument("--universe-code", help="Certified paper universe code.")
-    parser.add_argument("--sources", default="akshare,adata,baostock", help="Comma-separated stored source names.")
+    parser.add_argument("--sources", default="jqdata,akshare,tushare,rqdata,baostock,adata", help="Comma-separated stored source names.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--adjust", default="raw")

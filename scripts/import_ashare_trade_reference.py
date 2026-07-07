@@ -136,7 +136,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import or validate A-share trade reference coverage.")
     parser.add_argument("--symbols")
     parser.add_argument("--universe-code")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--infer-missing", action="store_true")

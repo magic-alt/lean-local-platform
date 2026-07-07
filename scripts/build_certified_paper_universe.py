@@ -23,7 +23,7 @@ def _csv(value: str | None) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build and persist a certified Level3+ A-share paper universe.")
     parser.add_argument("--universe-code", required=True)
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)

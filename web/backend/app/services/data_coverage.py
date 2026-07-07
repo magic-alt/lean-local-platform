@@ -6,7 +6,7 @@ from ..db import db, row_to_dict, rows_to_dicts
 from .ashare_multisource import quality_gate_range
 from .ashare_repository import data_coverage, reference_data_coverage
 from .data import provider_availability
-from .source_gate import normalize_source, source_certification
+from .source_gate import resolve_effective_data_source, source_certification
 
 
 def _row_count(sql: str, params: tuple[Any, ...]) -> dict[str, Any]:
@@ -23,7 +23,8 @@ def symbol_coverage(
     source: str | None = None,
     adjust: str = "raw",
 ) -> dict[str, Any]:
-    provider_source = normalize_source(source)
+    source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
+    provider_source = source_policy["effectiveSource"]
     bars = data_coverage(symbol, start_date, end_date, adjust, source=provider_source)
     status = _row_count(
         """
@@ -75,6 +76,7 @@ def symbol_coverage(
     return {
         "symbol": symbol,
         "source": provider_source,
+        "sourcePolicy": source_policy,
         "startDate": start_date,
         "endDate": end_date,
         "severity": severity,
@@ -98,7 +100,8 @@ def benchmark_coverage(
     source: str | None = None,
     adjust: str = "raw",
 ) -> dict[str, Any]:
-    provider_source = normalize_source(source)
+    source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
+    provider_source = source_policy["effectiveSource"]
     row = _row_count(
         """
         select count(distinct trade_date) as rows, min(trade_date) as start_date, max(trade_date) as end_date
@@ -114,6 +117,7 @@ def benchmark_coverage(
     return {
         "symbol": symbol,
         "source": provider_source,
+        "sourcePolicy": source_policy,
         "startDate": start_date,
         "endDate": end_date,
         "severity": "ok" if rows > 0 else "critical",
@@ -131,7 +135,8 @@ def ashare_coverage(
     end_date: str,
     source: str | None = None,
 ) -> dict[str, Any]:
-    provider_source = normalize_source(source)
+    source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
+    provider_source = source_policy["effectiveSource"]
     symbol_items = [symbol_coverage(symbol, start_date=start_date, end_date=end_date, source=provider_source) for symbol in symbols]
     benchmark_item = benchmark_coverage(benchmark, start_date=start_date, end_date=end_date, source=provider_source)
     reference = reference_data_coverage("CSI300")
@@ -150,6 +155,7 @@ def ashare_coverage(
     severity = "critical" if any(item["severity"] == "critical" for item in items) else ("warning" if reference.get("warnings") else "ok")
     return {
         "source": provider_source,
+        "sourcePolicy": source_policy,
         "symbols": symbol_items,
         "benchmark": benchmark_item,
         "reference": reference,

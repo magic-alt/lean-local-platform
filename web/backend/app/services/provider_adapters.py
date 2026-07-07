@@ -128,6 +128,27 @@ class TushareAdapter(ProviderAdapter):
         return [EndpointSupport(endpoint, endpoint in supported, None).as_dict() for endpoint in PROVIDER_ENDPOINTS]
 
 
+class JqDataAdapter(ProviderAdapter):
+    key = "jqdata"
+    production_certified = True
+
+    def supported_endpoints(self) -> list[dict[str, Any]]:
+        supported = {
+            "fetch_security_master",
+            "fetch_daily_bars",
+            "fetch_trade_calendar",
+            "fetch_adjustment_factors",
+            "fetch_st_status",
+            "fetch_suspend_status",
+            "fetch_index_daily",
+            "normalize",
+            "upsert",
+            "qa",
+            "provider_availability",
+        }
+        return [EndpointSupport(endpoint, endpoint in supported, None if endpoint in supported else "not_certified").as_dict() for endpoint in PROVIDER_ENDPOINTS]
+
+
 class DiagnosticStubAdapter(ProviderAdapter):
     def __init__(self, key: str, *, endpoints: set[str] | None = None) -> None:
         self.key = key
@@ -146,8 +167,10 @@ def adapter_for(provider: str) -> ProviderAdapter:
         return AkshareAdapter()
     if key == "tushare":
         return TushareAdapter()
+    if key == "jqdata":
+        return JqDataAdapter()
     if key in {"baostock", "adata"}:
         return DiagnosticStubAdapter(key, endpoints={"fetch_daily_bars", "normalize", "qa", "provider_availability"})
-    if key in {"jqdata", "rqdata"}:
+    if key in {"rqdata"}:
         return DiagnosticStubAdapter(key)
     return DiagnosticStubAdapter(key)

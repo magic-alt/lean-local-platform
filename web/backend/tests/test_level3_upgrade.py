@@ -22,9 +22,14 @@ def test_source_gate_rejects_research_source_by_default(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from app.main import app
-    from app.services.source_gate import require_source_allowed
+    from app.services.source_gate import require_source_allowed, resolve_effective_data_source
 
-    assert require_source_allowed(None) == "akshare"
+    assert require_source_allowed(None) == "jqdata"
+    assert require_source_allowed("akshare") == "akshare"
+    assert resolve_effective_data_source("jqdata", start_date="2025-04-01", end_date="2026-04-01")["effectiveSource"] == "jqdata"
+    fallback = resolve_effective_data_source("jqdata", start_date="2026-06-01", end_date="2026-06-30")
+    assert fallback["effectiveSource"] == "akshare"
+    assert fallback["fallbackReason"] == "jqdata_entitlement_window_exceeded"
     try:
         require_source_allowed("test")
     except ValueError as exc:

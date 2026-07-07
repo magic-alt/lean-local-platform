@@ -24,6 +24,7 @@ from app.services.data_coverage import benchmark_coverage  # noqa: E402
 from app.services.instrument_identity import identifier_coverage  # noqa: E402
 from app.services.parquet_lake import parquet_consistency_report  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
+from app.services.source_gate import resolve_effective_data_source, source_priority_for_window  # noqa: E402
 from app.services.universe_certification import certified_symbols, get_certified_universe  # noqa: E402
 
 from scripts.cleanup_report_artifacts import _load_policy, _policy_cleanup  # noqa: E402
@@ -88,7 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Level3+ A-share shadow paper audit.")
     parser.add_argument("--universe-code", required=True)
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--lookback-trading-days", type=int, default=60)
     parser.add_argument("--min-symbols", type=int, default=20)
     parser.add_argument("--max-symbols", type=int, default=50)
@@ -107,6 +108,9 @@ def main() -> int:
     end_date = certification.get("end_date") or certification.get("endDate")
     if not start_date or not end_date:
         start_date, end_date = _lookback_window(args.lookback_trading_days)
+    source_policy = resolve_effective_data_source(args.source, start_date=start_date, end_date=end_date)
+    effective_source = source_policy["effectiveSource"]
+    qa_sources = source_priority_for_window(source=args.source, start_date=start_date, end_date=end_date)
     checks: list[dict[str, Any]] = []
     p0: list[str] = []
     p1: list[str] = []
@@ -125,12 +129,12 @@ def main() -> int:
 
     full_identifier = identifier_coverage()
     universe_identifier = identifier_coverage(symbols)
-    provider = provider_availability_report(["akshare", "baostock", "adata", "tushare", "jqdata", "rqdata"], start_date=start_date, end_date=end_date, persist=True)
-    qa = compare_ashare_daily_sources_batch(symbols=symbols or ["000000"], sources=["akshare", "baostock", "adata"], start_date=start_date, end_date=end_date, persist=True, persist_symbol_reports=False) if symbols else {"severity": "critical", "criticalSymbols": [], "warningSymbols": [], "reportId": None}
+    provider = provider_availability_report(["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"], start_date=start_date, end_date=end_date, persist=True)
+    qa = compare_ashare_daily_sources_batch(symbols=symbols or ["000000"], sources=qa_sources, start_date=start_date, end_date=end_date, persist=True, persist_symbol_reports=False) if symbols else {"severity": "critical", "criticalSymbols": [], "warningSymbols": [], "reportId": None}
     warning_codes = ["provider_secondary_missing"] if qa.get("severity") == "warning" else []
     warnings = warning_allowlist_status(warning_codes, affected_symbols=symbols, scope={"universeCode": universe_code, "audit": "level3plus"})
-    parquet = parquet_consistency_report(asset_class="equity", market="china", venue="china", resolution="daily", data_type="trade", adjust="raw", sources=[args.source], persist=True)
-    benchmark = benchmark_coverage(args.benchmark, start_date=start_date, end_date=end_date, source=args.source)
+    parquet = parquet_consistency_report(asset_class="equity", market="china", venue="china", resolution="daily", data_type="trade", adjust="raw", sources=[effective_source], persist=True)
+    benchmark = benchmark_coverage(args.benchmark, start_date=start_date, end_date=end_date, source=effective_source)
     trade_reference = _trade_reference_summary(symbols, start_date, end_date)
     artifact = _latest_pipeline_artifact(universe_code)
     alert_probe = emit_alert("provider_unavailable", severity="info", source="level3plus_audit", related_id=universe_code, details={"probe": True}, dedupe_key=f"level3plus_audit_probe:{universe_code}")
@@ -143,7 +147,7 @@ def main() -> int:
     check("certified_universe_size", f"{args.min_symbols}-{args.max_symbols} certified symbols", args.min_symbols <= len(symbols) <= args.max_symbols, {"symbolCount": len(symbols), "symbols": symbols}, severity="P0")
     check("universe_identifier_coverage", "universe identifier coverage = 1.0", universe_identifier["coverageRatio"] == 1.0 and universe_identifier["missing"] == 0, universe_identifier, severity="P0")
     check("full_identifier_coverage", f"full identifier coverage >= {args.min_identifier_coverage}", full_identifier["coverageRatio"] >= args.min_identifier_coverage, full_identifier, severity="P1")
-    check("provider_availability", "provider diagnostics available and source not unavailable", not any(item["provider"] == args.source and item["status"] == "unavailable" for item in provider["providers"]), provider, severity="P1")
+    check("provider_availability", "provider diagnostics available and effective source not unavailable", not any(item["provider"] == effective_source and item["status"] == "unavailable" for item in provider["providers"]), provider, severity="P1")
     check("multi_source_qa", "multi-source QA critical = 0", len(qa.get("criticalSymbols") or []) == 0 and qa.get("severity") != "critical", qa, severity="P0")
     check("accepted_warnings", "accepted warning not expired", not warnings["expiredWarnings"] and (not args.fail_on_expired_warning or warnings["passed"]), warnings, severity="P1")
     check("parquet_consistency", "Parquet consistency severity=ok", parquet.get("severity") == "ok", parquet, severity="P1")
@@ -160,7 +164,9 @@ def main() -> int:
         "decision": decision,
         "status": "passed" if decision == "LEVEL3_PLUS_PASS" else ("candidate" if decision == "LEVEL3_PLUS_CANDIDATE" else "failed"),
         "universeCode": universe_code,
-        "source": args.source,
+        "source": effective_source,
+        "requestedSource": args.source,
+        "sourcePolicy": source_policy,
         "benchmark": args.benchmark,
         "startDate": start_date,
         "endDate": end_date,

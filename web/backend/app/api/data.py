@@ -92,7 +92,7 @@ class ParquetExportRequest(BaseModel):
     resolution: str = "daily"
     dataType: str = "trade"
     adjust: str = "raw"
-    providerSource: str = "akshare"
+    providerSource: str = "jqdata"
     allowResearchSource: bool = False
     startDate: str | None = None
     endDate: str | None = None
@@ -127,7 +127,7 @@ class ParquetConsistencyRequest(BaseModel):
 
 class AshareDailyCompareRequest(BaseModel):
     symbol: str
-    sources: list[str] = Field(default_factory=lambda: ["akshare", "adata", "baostock"])
+    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
     startDate: str | None = None
     endDate: str | None = None
     adjust: str = "raw"
@@ -147,9 +147,9 @@ class AshareDailySampleImportRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     startDate: str
     endDate: str
-    providers: list[str] = Field(default_factory=lambda: ["akshare", "baostock", "adata"])
+    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
     adjust: str = "raw"
-    primaryProvider: str = "akshare"
+    primaryProvider: str = "jqdata"
     exportParquet: bool = True
     compareSources: bool = True
     continueOnError: bool = True

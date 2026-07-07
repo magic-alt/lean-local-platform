@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ..db import db, row_to_dict, utc_now
 
 
-DEFAULT_PRODUCTION_SOURCE = "akshare"
-PRODUCTION_SOURCES = {"akshare"}
-RESEARCH_SOURCES = {"test", "unit", "manual", "baostock", "adata", "sina"}
+PRIMARY_DATA_SOURCE = "jqdata"
+SECONDARY_DATA_SOURCES = {"akshare"}
+BACKUP_DATA_SOURCE_PRIORITY = ["tushare", "rqdata", "baostock", "adata"]
+BACKUP_DATA_SOURCES = set(BACKUP_DATA_SOURCE_PRIORITY)
+DEFAULT_PRODUCTION_SOURCE = PRIMARY_DATA_SOURCE
+PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE, *SECONDARY_DATA_SOURCES}
+RESEARCH_SOURCES = {"test", "unit", "manual", "sina", *BACKUP_DATA_SOURCES}
+DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, "akshare", *BACKUP_DATA_SOURCE_PRIORITY]
+JQDATA_ENTITLEMENT_START = os.environ.get("JQDATA_DATA_RANGE_START", "2025-03-29")
+JQDATA_ENTITLEMENT_END = os.environ.get("JQDATA_DATA_RANGE_END", "2026-04-05")
 
 
 def normalize_source(source: str | None) -> str:
@@ -17,6 +25,87 @@ def normalize_source(source: str | None) -> str:
 
 def is_research_source(source: str | None) -> bool:
     return normalize_source(source) in RESEARCH_SOURCES
+
+
+def source_role(source: str | None) -> str:
+    normalized = normalize_source(source)
+    if normalized == PRIMARY_DATA_SOURCE:
+        return "primary"
+    if normalized in SECONDARY_DATA_SOURCES:
+        return "secondary"
+    if normalized in BACKUP_DATA_SOURCES:
+        return "backup"
+    if normalized in RESEARCH_SOURCES:
+        return "research"
+    return "unknown"
+
+
+def _date_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()[:10]
+    return text if text else None
+
+
+def jqdata_entitlement() -> dict[str, Any]:
+    return {
+        "provider": PRIMARY_DATA_SOURCE,
+        "startDate": JQDATA_ENTITLEMENT_START,
+        "endDate": JQDATA_ENTITLEMENT_END,
+        "fallbackProvider": "akshare",
+        "note": "JQData account data entitlement is limited to this date range; windows outside it use AKShare.",
+    }
+
+
+def jqdata_covers_window(start_date: str | None = None, end_date: str | None = None) -> bool:
+    start = _date_key(start_date)
+    end = _date_key(end_date)
+    if start and start < JQDATA_ENTITLEMENT_START:
+        return False
+    if end and end > JQDATA_ENTITLEMENT_END:
+        return False
+    return True
+
+
+def resolve_effective_data_source(
+    source: str | None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    requested = normalize_source(source)
+    effective = requested
+    reason = None
+    if requested == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
+        effective = "akshare"
+        reason = "jqdata_entitlement_window_exceeded"
+    return {
+        "requestedSource": requested,
+        "effectiveSource": effective,
+        "fallbackApplied": effective != requested,
+        "fallbackReason": reason,
+        "sourceRole": source_role(effective),
+        "requestedSourceRole": source_role(requested),
+        "startDate": _date_key(start_date),
+        "endDate": _date_key(end_date),
+        "jqdataEntitlement": jqdata_entitlement(),
+    }
+
+
+def source_priority_for_window(
+    *,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[str]:
+    policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
+    ordered = [policy["effectiveSource"], *DATA_SOURCE_PRIORITY]
+    result: list[str] = []
+    for item in ordered:
+        normalized = normalize_source(item)
+        if normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def require_source_allowed(source: str | None, *, allow_research_source: bool = False) -> str:
@@ -49,6 +138,8 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             dataset_version = f"{normalized}-{str(dataset_id)[:12]}"
         return {
             "source": normalized,
+            "sourceRole": source_role(normalized),
+            "sourcePriority": DATA_SOURCE_PRIORITY.index(normalized) + 1 if normalized in DATA_SOURCE_PRIORITY else None,
             "datasetVersion": dataset_version,
             "environment": item.get("environment") or ("production" if normalized in PRODUCTION_SOURCES else "research"),
             "isProduction": bool(item.get("is_production")),
@@ -64,6 +155,8 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
     production = normalized in PRODUCTION_SOURCES
     return {
         "source": normalized,
+        "sourceRole": source_role(normalized),
+        "sourcePriority": DATA_SOURCE_PRIORITY.index(normalized) + 1 if normalized in DATA_SOURCE_PRIORITY else None,
         "datasetVersion": normalized,
         "environment": "production" if production else "research",
         "isProduction": production,
@@ -101,6 +194,7 @@ def resolve_source_context(
         "allowResearchSource": allow,
         "requestedSource": requested,
         "isResearchSource": is_research_source(normalized),
+        "sourceRole": source_role(normalized),
     }
 
 

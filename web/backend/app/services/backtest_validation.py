@@ -85,7 +85,7 @@ def build_backtest_validation(
     start = str(parameters.get("start") or "")
     end = str(parameters.get("end") or "")
     adjust = str(parameters.get("adjust") or "raw")
-    source = str(parameters.get("source") or parameters.get("providerSource") or "akshare")
+    source = str(parameters.get("source") or parameters.get("providerSource") or "jqdata")
     result: dict[str, Any] = {
         "schemaVersion": P1_RULE_VERSION,
         "generatedAt": utc_now(),

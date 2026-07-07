@@ -25,7 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill canonical instrument identifier mappings.")
     parser.add_argument("--all", action="store_true", help="Scan all A-share instruments from local database tables.")
     parser.add_argument("--symbols", help="Optional comma-separated symbols. Defaults to all canonical A-share symbols.")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--batch-id")
     parser.add_argument("--min-coverage-ratio", type=float, default=1.0)
     parser.add_argument("--dry-run", action="store_true")

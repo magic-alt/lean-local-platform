@@ -8,7 +8,16 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .provider_adapters import adapter_for
-from .source_gate import PRODUCTION_SOURCES
+from .source_gate import (
+    BACKUP_DATA_SOURCES,
+    DATA_SOURCE_PRIORITY,
+    PRIMARY_DATA_SOURCE,
+    PRODUCTION_SOURCES,
+    SECONDARY_DATA_SOURCES,
+    jqdata_covers_window,
+    jqdata_entitlement,
+    source_role,
+)
 
 
 PROVIDER_MODULES = {
@@ -69,7 +78,7 @@ def provider_availability_report(
     end_date: str | None = None,
     persist: bool = False,
 ) -> dict[str, Any]:
-    selected = [item.strip().lower() for item in (providers or ["akshare", "baostock", "adata", "tushare", "jqdata", "rqdata"]) if item.strip()]
+    selected = [item.strip().lower() for item in (providers or DATA_SOURCE_PRIORITY) if item.strip()]
     checked_at = utc_now()
     items: list[dict[str, Any]] = []
     for provider in selected:
@@ -93,18 +102,24 @@ def provider_availability_report(
             unavailable_reasons.append("provider_returned_empty")
         elif provider not in PRODUCTION_SOURCES and coverage["rows"] == 0:
             unavailable_reasons.append("coverage_gap")
+        entitlement = jqdata_entitlement() if provider == PRIMARY_DATA_SOURCE else None
+        if provider == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
+            unavailable_reasons.append("entitlement_window_exceeded")
         installed = not missing_modules
         configured = not missing_credentials
         production_certified = provider in PRODUCTION_SOURCES and installed and configured
         status = "available" if not unavailable_reasons else ("degraded" if provider in PRODUCTION_SOURCES and installed else "unavailable")
         item = {
             "provider": provider,
+            "role": source_role(provider),
+            "priority": DATA_SOURCE_PRIORITY.index(provider) + 1 if provider in DATA_SOURCE_PRIORITY else None,
             "installed": installed,
             "configured": configured,
             "credentials": "not_required" if not credentials else ("present" if configured else "credential_missing"),
             "supportedEndpoints": supported_endpoints,
             "unavailableReason": ";".join(unavailable_reasons) if unavailable_reasons else None,
             "coverage": coverage,
+            "entitlement": entitlement,
             "productionCertified": production_certified,
             "status": status,
             "diagnostics": {
@@ -117,10 +132,22 @@ def provider_availability_report(
         items.append(item)
         if persist:
             record_provider_availability(item, checked_at=checked_at)
-    severity = "critical" if any(item["provider"] in PRODUCTION_SOURCES and item["status"] == "unavailable" for item in items) else (
-        "warning" if any(item["status"] != "available" for item in items) else "ok"
+    severity = "critical" if any(item["provider"] == PRIMARY_DATA_SOURCE and item["status"] == "unavailable" for item in items) else (
+        "warning" if any(item["provider"] in PRODUCTION_SOURCES and item["status"] != "available" for item in items) else (
+            "warning" if any(item["provider"] in {*SECONDARY_DATA_SOURCES, *BACKUP_DATA_SOURCES} and item["status"] == "unavailable" for item in items) else "ok"
+        )
     )
-    return {"checkedAt": checked_at, "providers": items, "items": items, "count": len(items), "severity": severity}
+    return {
+        "checkedAt": checked_at,
+        "primaryProvider": PRIMARY_DATA_SOURCE,
+        "secondaryProviders": sorted(SECONDARY_DATA_SOURCES),
+        "backupProviders": [item for item in DATA_SOURCE_PRIORITY if item in BACKUP_DATA_SOURCES],
+        "providerPriority": DATA_SOURCE_PRIORITY,
+        "providers": items,
+        "items": items,
+        "count": len(items),
+        "severity": severity,
+    }
 
 
 def record_provider_availability(item: dict[str, Any], *, checked_at: str | None = None) -> dict[str, Any]:

@@ -43,23 +43,24 @@ def seed_level3plus_data(db_module):
             )
             for index, trade_date in enumerate(dates):
                 close = 10 + index
-                connection.execute(
-                    """
-                    insert into ashare_daily_bars
-                        (symbol, trade_date, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (symbol, trade_date, close, close + 1, close - 1, close, 1000, 100000, "raw", "akshare", "batch", now),
-                )
-                connection.execute(
-                    """
-                    insert into market_daily_bars
-                        (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-                         open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (f"inst-{symbol}", symbol, "equity", "china", "china", trade_date, "daily", "trade", close, close + 1, close - 1, close, 1000, 100000, "raw", "akshare", "batch", now),
-                )
+                for source in ("jqdata", "akshare"):
+                    connection.execute(
+                        """
+                        insert into ashare_daily_bars
+                            (symbol, trade_date, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (symbol, trade_date, close, close + 1, close - 1, close, 1000, 100000, "raw", source, "batch", now),
+                    )
+                    connection.execute(
+                        """
+                        insert into market_daily_bars
+                            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+                             open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (f"inst-{symbol}", symbol, "equity", "china", "china", trade_date, "daily", "trade", close, close + 1, close - 1, close, 1000, 100000, "raw", source, "batch", now),
+                    )
                 connection.execute(
                     """
                     insert into ashare_trade_status
@@ -70,18 +71,19 @@ def seed_level3plus_data(db_module):
                 )
                 connection.execute(
                     "insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id) values (?, ?, ?, ?, ?)",
-                    (symbol, trade_date, 1.0, "akshare", "batch"),
+                    (symbol, trade_date, 1.0, "jqdata", "batch"),
                 )
         for trade_date in dates:
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-                     open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("index-000300", "000300", "equity", "china", "china", trade_date, "daily", "trade", 100, 101, 99, 100, 1000, 100000, "raw", "akshare", "batch", now),
-            )
+            for source in ("jqdata", "akshare"):
+                connection.execute(
+                    """
+                    insert into market_daily_bars
+                        (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+                         open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("index-000300", "000300", "equity", "china", "china", trade_date, "daily", "trade", 100, 101, 99, 100, 1000, 100000, "raw", source, "batch", now),
+                )
     return symbols
 
 
@@ -91,7 +93,7 @@ def test_full_identifier_backfill_scans_all_tables(tmp_path, monkeypatch):
 
     from app.services.instrument_identity import identifier_coverage, identifiers_for_symbol, upsert_instrument_identifiers
 
-    result = upsert_instrument_identifiers(source="akshare", dry_run=False)
+    result = upsert_instrument_identifiers(source="jqdata", dry_run=False)
     assert result["symbols"] >= 3
     coverage = identifier_coverage()
     assert coverage["coverageRatio"] == 1.0
@@ -109,6 +111,8 @@ def test_provider_availability_reports_credential_missing(tmp_path, monkeypatch)
     payload = provider_availability_report(["tushare", "jqdata"], persist=True)
     reasons = {item["provider"]: item["unavailableReason"] for item in payload["providers"]}
     assert "credential_missing" in reasons["tushare"]
+    assert payload["primaryProvider"] == "jqdata"
+    assert [item["role"] for item in payload["providers"] if item["provider"] == "jqdata"] == ["primary"]
     assert payload["count"] == 2
 
 
@@ -119,10 +123,10 @@ def test_certified_universe_records_accepted_warning(tmp_path, monkeypatch):
     from app.services.instrument_identity import upsert_instrument_identifiers
     from app.services.universe_certification import build_certified_universe, certified_symbols
 
-    upsert_instrument_identifiers(source="akshare", dry_run=False)
+    upsert_instrument_identifiers(source="jqdata", dry_run=False)
     payload = build_certified_universe(
         universe_code="A_SHARE_L3P_TEST",
-        source="akshare",
+        source="jqdata",
         benchmark="000300",
         start_date="2026-06-01",
         end_date="2026-06-02",
@@ -144,7 +148,7 @@ def test_pipeline_and_alert_api(tmp_path, monkeypatch):
     from app.services.alerts import emit_alert
     from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run
 
-    run = start_pipeline_run(universe_code="A_SHARE_L3P_TEST", source="akshare", benchmark_symbol="000300")
+    run = start_pipeline_run(universe_code="A_SHARE_L3P_TEST", source="jqdata", benchmark_symbol="000300")
     record_pipeline_step(run["id"], "environment_check", status="ok", details={"ok": True})
     finish_pipeline_run(run["id"], status="passed", severity="ok", decision="LEVEL3_PASS", summary={"ok": True}, warnings=[], errors=[], perf_start=run["perfStart"])
     alert = emit_alert("benchmark_missing", severity="critical", source="unit", related_id=run["id"], details={"benchmark": "999999"})

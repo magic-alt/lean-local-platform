@@ -213,7 +213,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
                     report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
                     detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
                     raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
-            source = str(parameters.get("source") or parameters.get("provider") or "akshare")
+            source = str(parameters.get("source") or parameters.get("provider") or "jqdata")
             adjust = str(parameters.get("adjust") or "raw")
             lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()

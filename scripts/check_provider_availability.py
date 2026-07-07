@@ -22,7 +22,7 @@ def _csv(value: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check A-share provider adapter availability and certification state.")
-    parser.add_argument("--providers", default="akshare,baostock,adata,tushare,jqdata,rqdata")
+    parser.add_argument("--providers", default="jqdata,akshare,tushare,rqdata,baostock,adata")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--persist", action="store_true")

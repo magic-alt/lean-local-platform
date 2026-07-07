@@ -127,7 +127,7 @@ def market_data_scope(parameters: dict[str, Any]) -> dict[str, Any]:
         "resolution": parameters.get("resolution") or "daily",
         "dataType": parameters.get("dataType") or "trade",
         "adjust": parameters.get("adjust") or "raw",
-        "source": parameters.get("source") or parameters.get("provider") or "akshare",
+        "source": parameters.get("source") or parameters.get("provider") or "jqdata",
         "start": parameters.get("start"),
         "end": parameters.get("end"),
     }
@@ -267,7 +267,7 @@ def _local_ashare_cache(parameters: dict[str, Any]) -> dict[str, Any]:
     raw_symbol = str(parameters.get("ticker") or parameters.get("symbol") or "").strip()
     if not raw_symbol:
         return {}
-    source = parameters.get("source") or parameters.get("provider") or "akshare"
+    source = parameters.get("source") or parameters.get("provider") or "jqdata"
     adjust = parameters.get("adjust") or "raw"
 
     def files_for(symbol: str) -> dict[str, Any]:

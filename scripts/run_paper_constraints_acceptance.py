@@ -226,7 +226,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Paper constraint acceptance scenarios.")
     parser.add_argument("--symbols", default="600519,000001,300750")
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="akshare")
+    parser.add_argument("--source", default="jqdata")
     parser.add_argument("--start-date", default="2026-06-01")
     parser.add_argument("--end-date", default="2026-06-30")
     parser.add_argument("--dry-run", action="store_true")

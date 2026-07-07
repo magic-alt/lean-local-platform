@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--resolution", default="daily")
     parser.add_argument("--data-type", default="trade")
     parser.add_argument("--adjust", default="raw")
-    parser.add_argument("--source", default="akshare", help="Provider/source already stored in market_daily_bars.")
+    parser.add_argument("--source", default="jqdata", help="Provider/source already stored in market_daily_bars.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     args = parser.parse_args()
