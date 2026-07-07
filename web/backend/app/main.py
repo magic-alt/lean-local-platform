@@ -1,10 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api import ashare, backtests, cbond, compare, data, factors, futures, health, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
+from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
 from .observability.metrics import metrics_middleware
 
@@ -33,6 +36,49 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+
+
+@app.exception_handler(LeanWebError)
+async def lean_web_error_handler(_request: Request, exc: LeanWebError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_payload(
+            str(exc),
+            error_code=exc.error_code,
+            category=exc.category,
+            retryable=exc.retryable,
+        ),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    message = exc.detail if isinstance(exc.detail, str) else "HTTP request failed."
+    code, category, retryable = http_error_code(exc.status_code)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_payload(
+            message,
+            error_code=code,
+            category=category,
+            retryable=retryable,
+            details=None if isinstance(exc.detail, str) else exc.detail,
+        ),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content=error_payload(
+            "Request validation failed.",
+            error_code="VALIDATION_ERROR",
+            category="validation",
+            retryable=False,
+            details=exc.errors(),
+        ),
+    )
 
 
 app.include_router(health.router)

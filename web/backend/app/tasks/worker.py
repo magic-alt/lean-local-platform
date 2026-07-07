@@ -287,6 +287,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
                     output["summary_json_path"],
                     output["report_html_path"],
                     output.get("artifact_manifest_path"),
+                    output.get("stdout_log_path"),
                 )
                 if path
             ],
@@ -451,6 +452,7 @@ def optimize_task(task_id: str, optimization_id: str):
                 "resultJson": output["result_json_path"],
                 "summaryJson": output.get("summary_json_path"),
                 "reportHtml": output.get("report_html_path"),
+                "stdoutLog": output.get("stdout_log_path"),
                 "exitCode": output["exit_code"],
                 "error": output.get("error"),
             }

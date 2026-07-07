@@ -20,6 +20,7 @@ class BacktestWorkspace:
     run_dir: Path
     results_dir: Path
     config_path: Path
+    stdout_path: Path
     command: list[str]
     container_name: str
     algorithm_container_path: str
@@ -135,17 +136,25 @@ class LeanRunner:
             run_dir=run_dir,
             results_dir=results_dir,
             config_path=config_path,
+            stdout_path=results_dir / "stdout.log",
             command=command,
             container_name=self.container_name_for(run_id),
             algorithm_container_path=algorithm_container_path,
         )
 
     def run(self, workspace: BacktestWorkspace, output_callback: Callable[[str], None]) -> DockerRunResult:
-        return DockerRunner(self.timeout_seconds).run(
-            workspace.command,
-            output_callback,
-            container_name=workspace.container_name,
-        )
+        workspace.stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        with workspace.stdout_path.open("a", encoding="utf-8") as stdout_file:
+            def tee_output(line: str) -> None:
+                stdout_file.write(line + "\n")
+                stdout_file.flush()
+                output_callback(line)
+
+            return DockerRunner(self.timeout_seconds).run(
+                workspace.command,
+                tee_output,
+                container_name=workspace.container_name,
+            )
 
     def collect(self, workspace: BacktestWorkspace) -> LeanArtifacts:
         return LeanArtifacts(
@@ -206,6 +215,7 @@ class LeanRunner:
             "summary_json_path": str(artifacts.summary_json) if artifacts.summary_json.exists() else None,
             "report_html_path": str(artifacts.report_html) if artifacts.report_html.exists() else None,
             "artifact_manifest_path": str(artifacts.manifest_path),
+            "stdout_log_path": str(execution.work_dir / "results" / "stdout.log"),
             "statistics": self.parse(artifacts),
             "error": execution.docker.error,
         }

@@ -19,6 +19,7 @@ web/runtime/runs/<run_id>/
   ashare_execution.py              # only when ashareRules=true
   ashare_trade_status.json         # only when ashareRules=true
   results/
+    stdout.log
     <run_id>.json
     <run_id>-summary.json
     <run_id>-order-events.json
@@ -30,7 +31,9 @@ web/runtime/runs/<run_id>/
     artifact-manifest.json
 ```
 
-`artifact-manifest.json` is written even when LEAN fails or times out, as long as the runner reaches manifest writing. It records run id, container name, exit code, timeout flag, error text, and every discovered input/output artifact.
+`stdout.log` is a per-run tee of Docker/LEAN console output. The same lines still go to the task log for live UI viewing.
+
+`artifact-manifest.json` is written even when LEAN fails or times out, as long as the runner reaches manifest writing. It records run id, container name, exit code, timeout flag, error text, and every discovered input/output artifact, including `stdout.log`.
 
 ## Docker Mounts
 
@@ -86,6 +89,7 @@ The strategy template or `DockerDemoAlgorithm.py` imports `AShareExecutionHelper
     "summary_json_path": str | None,
     "report_html_path": str | None,
     "artifact_manifest_path": str,
+    "stdout_log_path": str,
     "statistics": dict,
     "error": str | None,
 }
@@ -102,7 +106,7 @@ Current implementation reports errors as task/backtest `error` strings. Importan
 - Timeout: `timed_out=true`, container stop attempted, failed run.
 - Missing result JSON: failed run even if container exits.
 - A-share preflight failure: failed before Docker when data, QA gate, or benchmark is missing.
-- Cancellation: `cancel_backtest()` revokes Celery task when possible and stops the named container.
+- Cancellation: `cancel_backtest()` revokes Celery task when possible and stops the named container. `cancel_task()` extends this behavior to optimization child backtests, research sessions, reports, and generic Celery tasks.
 
 Future improvement: formalize error codes such as `DOCKER_NOT_FOUND`, `LEAN_TIMEOUT`, `RESULT_MISSING`, `DATA_QA_BLOCKED`, `BENCHMARK_MISSING`.
 
@@ -117,4 +121,3 @@ Future improvement: formalize error codes such as `DOCKER_NOT_FOUND`, `LEAN_TIME
 ```
 
 This makes parsed results reproducible and keeps LEAN raw outputs available through reports.
-

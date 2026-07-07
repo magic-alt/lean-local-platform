@@ -80,6 +80,7 @@ def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
     summary_json.write_text(json.dumps({"statistics": {"Sharpe Ratio": "1.0"}}), encoding="utf-8")
     (tmp_path / "job-1-order-events.json").write_text("[]", encoding="utf-8")
     (tmp_path / "job-1-log.txt").write_text("lean log", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text("docker stdout", encoding="utf-8")
     (tmp_path / "artifact-manifest.json").write_text("{}", encoding="utf-8")
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -108,6 +109,7 @@ def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
         "lean-summary",
         "lean-order-events",
         "lean-log",
+        "lean-stdout",
         "artifact-manifest",
         "lean-config",
     }
@@ -118,5 +120,6 @@ def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
         ).fetchall()
     keys = {row["object_key"] for row in db_module.rows_to_dicts(rows)}
     assert "job-1/artifacts/job-1-order-events.json" in keys
+    assert "job-1/artifacts/stdout.log" in keys
     assert "job-1/artifacts/artifact-manifest.json" in keys
     assert "job-1/artifacts/config.json" in keys

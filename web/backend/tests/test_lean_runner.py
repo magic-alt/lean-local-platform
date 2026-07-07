@@ -115,6 +115,8 @@ def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monk
     manifest = json.loads(open(manifest_path, encoding="utf-8").read())
 
     assert output["exit_code"] == 1
+    assert output["stdout_log_path"].endswith("stdout.log")
     assert manifest["runId"] == "job-1"
     assert manifest["exitCode"] == 1
-    assert {item["name"] for item in manifest["artifacts"]} >= {"config.json", "log.txt"}
+    assert {item["name"] for item in manifest["artifacts"]} >= {"config.json", "log.txt", "stdout.log"}
+    assert "unit docker output" in open(output["stdout_log_path"], encoding="utf-8").read()

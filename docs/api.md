@@ -5,9 +5,9 @@ The backend is FastAPI, mounted from `web/backend/app/main.py`. All routes are l
 ## Common Behavior
 
 - JSON request/response by default.
-- Expected domain errors generally return HTTP 400 with `detail`.
-- Missing resources return HTTP 404.
-- Redis/Celery dispatch failure returns HTTP 503.
+- Expected domain errors return structured JSON with `detail`, `message`, `error_code`, `category`, and `retryable`.
+- Missing resources return HTTP 404 with `error_code=NOT_FOUND`.
+- Redis/Celery dispatch failure returns HTTP 503 with `error_code=SERVICE_UNAVAILABLE` and `retryable=true`.
 - Some list endpoints return arrays directly; newer endpoints may return `{items, count, limit, offset}`.
 - Backtest logs currently return the latest tail, not a cursor-based stream.
 
@@ -90,7 +90,12 @@ GET    /api/tasks/{task_id}/logs
 POST   /api/tasks/{task_id}/cancel
 ```
 
-Backtest task cancellation delegates to `cancel_backtest()` when `kind=backtest`.
+Task cancellation is centralized in `services/tasks.py`.
+
+- `kind=backtest`: delegates to `cancel_backtest()`, revokes Celery when possible, and stops the named LEAN container.
+- `kind=optimization`: revokes the optimization task, cancels the optimization row, marks non-terminal child `backtest_runs` as `cancelled`, and stops child LEAN containers with known `container_name`.
+- `kind=research`: revokes the task and stops the recorded research container.
+- `kind=report` and data tasks: revoke the task when a Celery id exists and persist `cancelled`.
 
 ## Reports
 
@@ -215,12 +220,39 @@ GET    /api/object-store/{key}
 DELETE /api/object-store/{key}
 ```
 
-## Error Code Roadmap
+## Error Codes
 
-Current responses mostly use text. Recommended formal codes:
+Current API errors keep the historical `detail` field and add structured fields:
+
+```json
+{
+  "detail": "Task not found.",
+  "message": "Task not found.",
+  "error_code": "NOT_FOUND",
+  "category": "not_found",
+  "retryable": false
+}
+```
+
+Currently emitted generic codes:
 
 ```text
+BAD_REQUEST
+UNAUTHORIZED
+FORBIDDEN
+NOT_FOUND
+CONFLICT
 VALIDATION_ERROR
+RATE_LIMITED
+SERVICE_UNAVAILABLE
+INTERNAL_ERROR
+HTTP_ERROR
+LEAN_WEB_ERROR
+```
+
+Recommended domain-specific P1/P2 codes:
+
+```text
 DATA_MISSING
 DATA_QA_BLOCKED
 BENCHMARK_MISSING

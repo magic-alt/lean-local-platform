@@ -102,6 +102,7 @@ Strategy selection or project upload
   -> create web/runtime/runs/<run_id>
   -> write config.json and optional A-share helper files
   -> docker run quantconnect/lean
+  -> tee Docker/LEAN console output to results/stdout.log and task log
   -> write raw LEAN results
   -> write artifact-manifest.json
   -> parse result JSON and order events
@@ -127,6 +128,8 @@ Strategy selection or project upload
 - API routes should not grow Docker or filesystem orchestration logic; that belongs in services/runners.
 - Each run must have an isolated `web/runtime/runs/<run_id>` workspace.
 - Raw outputs must be preserved before and after parsing.
+- Task cancellation must go through the service layer so Celery revoke, LEAN container stop, child run status, and related task state stay consistent.
+- API errors must retain `detail` for compatibility and also expose `error_code`, `category`, and `retryable` for UI handling.
 - Every trusted backtest should carry `fingerprint`, `validation`, and `experiment` metadata.
 - Every trusted backtest should persist linked `strategy_versions`, `dataset_versions`, and `experiments` rows.
 - A-share backtests must use explicit benchmark data and must not fall back to constant benchmark curves.

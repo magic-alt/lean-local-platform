@@ -34,6 +34,8 @@ def _artifact_kind(path: Path) -> str:
         return "lean-order-events"
     if name.endswith("-log.txt") or name == "log.txt":
         return "lean-log"
+    if name == "stdout.log":
+        return "lean-stdout"
     if name.startswith("data-monitor-report-"):
         return "lean-data-monitor-report"
     if name.startswith("succeeded-data-requests-"):
@@ -65,6 +67,7 @@ def _artifact_paths(job_id: str, result_json: Path, summary_json: Path | None, r
         results_dir / f"{job_id}-order-events.json",
         results_dir / f"{job_id}-log.txt",
         results_dir / "log.txt",
+        results_dir / "stdout.log",
         results_dir / "report.html",
         results_dir / "artifact-manifest.json",
         work_dir / "config.json",
