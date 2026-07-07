@@ -85,6 +85,10 @@ import {
   templateDefaults
 } from "../utils/strategy";
 
+function metricTruthy(value: unknown) {
+  return value === true || String(value).toLowerCase() === "true";
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
   const runs = useAsyncData(api.backtests, []);
@@ -784,6 +788,15 @@ export function RunDetailPage() {
   const validation = trust?.validation ?? run.validation ?? result?.performance?.validation;
   const experiment = trust?.experiment ?? run.experiment ?? result?.performance?.experiment;
   const fingerprint = trust?.fingerprint ?? run.fingerprint;
+  const summaryMetrics = result?.summary_metrics ?? {};
+  const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? run.statistics?.["Sharpe Ratio"];
+  const sharpeWarning = metricTruthy(summaryMetrics["Short Window Unstable"]);
+  const metricCards = [
+    { title: "End Equity", value: run.statistics?.["End Equity"] },
+    { title: "Net Profit", value: run.statistics?.["Net Profit"] },
+    { title: "Sharpe", value: sharpeMetric, warning: sharpeWarning },
+    { title: "Drawdown", value: run.statistics?.["Drawdown"] },
+  ];
   return (
     <>
       <div className="toolbar">
@@ -795,7 +808,22 @@ export function RunDetailPage() {
         </Space>
       </div>
       {(run.error_message || run.error) && <Alert type="error" showIcon message={run.error_message ?? run.error} style={{ marginBottom: 16 }} />}
-      <div className="grid">{["End Equity", "Net Profit", "Sharpe Ratio", "Drawdown"].map((key) => <Card key={key}><Statistic title={key} value={run.statistics?.[key] ?? "N/A"} /></Card>)}</div>
+      {sharpeWarning && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Sharpe is marked unstable because the effective daily return sample is short."
+        />
+      )}
+      <div className="grid">
+        {metricCards.map((item) => (
+          <Card key={item.title}>
+            <Statistic title={item.title} value={shortValue(item.value ?? "N/A")} />
+            {item.warning && <Tag color="orange">short window</Tag>}
+          </Card>
+        ))}
+      </div>
       <Tabs
         items={[
           {

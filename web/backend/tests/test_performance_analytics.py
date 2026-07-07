@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import datetime, timezone
 
 import pytest
@@ -134,3 +135,64 @@ def test_parse_result_payload_replaces_constant_benchmark_from_cache(tmp_path, m
     assert parsed["charts"]["benchmark"][-1]["value"] == 104.0
     assert parsed["summary_metrics"]["Benchmark Return"] == pytest.approx(0.04)
     assert parsed["summary_metrics"]["Benchmark Metric Status"] == "benchmark_return_available_from_lean_data_cache"
+
+
+def test_performance_analytics_recomputes_sharpe_and_flags_short_window():
+    from app.analyzers.performance_analyzer import performance_analytics
+
+    chart_data = {
+        "series": {
+            "equity": [
+                {"time": "2024-01-02T04:00:00+00:00", "value": 100.0},
+                {"time": "2024-01-02T07:00:00+00:00", "value": 101.0},
+                {"time": "2024-01-03T07:00:00+00:00", "value": 103.0},
+                {"time": "2024-01-04T07:00:00+00:00", "value": 102.0},
+                {"time": "2024-01-05T07:00:00+00:00", "value": 106.0},
+            ],
+            "price": [
+                {"time": "2024-01-02T21:00:00+00:00", "value": 10.0},
+                {"time": "2024-01-03T21:00:00+00:00", "value": 10.2},
+                {"time": "2024-01-04T21:00:00+00:00", "value": 10.1},
+                {"time": "2024-01-05T21:00:00+00:00", "value": 10.5},
+            ],
+            "benchmark": [],
+        },
+        "seriesSources": {},
+    }
+    returns = [103 / 101 - 1.0, 102 / 103 - 1.0, 106 / 102 - 1.0]
+    mean = sum(returns) / len(returns)
+    volatility = math.sqrt(sum((value - mean) ** 2 for value in returns) / (len(returns) - 1))
+
+    performance = performance_analytics({"Sharpe Ratio": "24.827"}, chart_data, [], {})
+
+    assert performance["sharpe_recomputed_from_equity"] == pytest.approx(mean / volatility * math.sqrt(252))
+    assert performance["sharpe_recomputed_sample_count"] == 3
+    assert performance["sharpe_recomputed_date_points"] == 4
+    assert performance["sharpe_recomputed_calendar_source"] == "price_series"
+    assert performance["short_window_unstable"] is True
+    assert performance["sharpe_recompute_status"] == "computed_with_warnings"
+    assert "short_window_unstable" in performance["sharpe_metric_warnings"]
+    assert "lean_sharpe_diverges_from_equity_recompute" in performance["sharpe_metric_warnings"]
+
+
+def test_performance_analytics_handles_zero_volatility_without_misleading_sharpe():
+    from app.analyzers.performance_analyzer import performance_analytics
+
+    chart_data = {
+        "series": {
+            "equity": [
+                {"time": "2024-01-02T07:00:00+00:00", "value": 100.0},
+                {"time": "2024-01-03T07:00:00+00:00", "value": 101.0},
+                {"time": "2024-01-04T07:00:00+00:00", "value": 102.01},
+            ],
+            "price": [],
+            "benchmark": [],
+        },
+        "seriesSources": {},
+    }
+
+    performance = performance_analytics({"Sharpe Ratio": "1.0"}, chart_data, [], {})
+
+    assert performance["sharpe_recomputed_from_equity"] is None
+    assert performance["sharpe_recompute_status"] == "zero_return_volatility"
+    assert performance["sharpe_recomputed_sample_count"] == 2

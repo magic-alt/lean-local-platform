@@ -9,9 +9,14 @@ import { StatusTag } from "../components";
 import { useAsyncData } from "../hooks";
 
 
-function formatNumber(value: number | null | undefined, percent = false) {
-  if (value == null || !Number.isFinite(value)) return "-";
-  return percent ? `${(value * 100).toFixed(2)}%` : value.toFixed(3);
+function formatNumber(value: unknown, percent = false) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (value == null || value === "" || !Number.isFinite(number)) return "-";
+  return percent ? `${(number * 100).toFixed(2)}%` : number.toFixed(3);
+}
+
+function isTrue(value: unknown) {
+  return value === true || String(value).toLowerCase() === "true";
 }
 
 
@@ -88,7 +93,16 @@ export function ComparePage() {
                 { title: "Total Return", render: (_, item) => formatNumber(item.metrics.totalReturn, true) },
                 { title: "Annual", render: (_, item) => formatNumber(item.metrics.annualReturn, true) },
                 { title: "Drawdown", render: (_, item) => formatNumber(item.metrics.maxDrawdown, true) },
-                { title: "Sharpe", render: (_, item) => formatNumber(item.metrics.sharpeRatio) },
+                {
+                  title: "Sharpe",
+                  render: (_, item) => (
+                    <Space size={4}>
+                      <span>{formatNumber(item.metrics.sharpeRatio)}</span>
+                      {isTrue(item.metrics.shortWindowUnstable) && <Tag color="orange">short</Tag>}
+                    </Space>
+                  )
+                },
+                { title: "LEAN Sharpe", render: (_, item) => formatNumber(item.metrics.leanSharpeRatio) },
                 { title: "Calmar", render: (_, item) => formatNumber(item.metrics.calmarRatio) },
                 { title: "Orders", render: (_, item) => formatNumber(item.metrics.totalOrders) }
               ]}

@@ -30,6 +30,9 @@ SUMMARY_KEYS = [
     "Portfolio Turnover",
 ]
 
+SHARPE_ANNUALIZATION_FACTOR = 252
+SHORT_WINDOW_SHARPE_MIN_RETURNS = 60
+
 
 def _values(value: Any) -> list[Any]:
     if isinstance(value, dict):
@@ -181,6 +184,112 @@ def _return_by_time(series: list[dict[str, Any]]) -> dict[str, float]:
     return returns
 
 
+def _last_value_by_date(series: list[dict[str, Any]]) -> dict[str, float]:
+    values: dict[str, tuple[datetime, float]] = {}
+    for point in series:
+        time_value = _dt(point.get("time"))
+        value = _float(point.get("value"))
+        if time_value is None or value is None or value <= 0:
+            continue
+        key = time_value.date().isoformat()
+        current = values.get(key)
+        if current is None or time_value >= current[0]:
+            values[key] = (time_value, value)
+    return {key: item[1] for key, item in values.items()}
+
+
+def _calendar_dates(series: list[dict[str, Any]]) -> set[str]:
+    dates: set[str] = set()
+    for point in series:
+        time_value = _dt(point.get("time"))
+        value = _float(point.get("value"))
+        if time_value is not None and value is not None and value > 0:
+            dates.add(time_value.date().isoformat())
+    return dates
+
+
+def _daily_equity_returns(
+    equity_curve: list[dict[str, Any]],
+    chart_data: dict[str, Any],
+) -> tuple[list[float], str, int]:
+    equity_by_date = _last_value_by_date(equity_curve)
+    if not equity_by_date:
+        return [], "equity_curve_missing", 0
+    series = chart_data.get("series") or {}
+    calendar_source = "equity_curve"
+    calendar_dates = _calendar_dates(series.get("price") or [])
+    if calendar_dates:
+        calendar_source = "price_series"
+    else:
+        calendar_dates = _calendar_dates(series.get("benchmark") or [])
+        if calendar_dates:
+            calendar_source = "benchmark_series"
+    dates = sorted(equity_by_date)
+    if calendar_dates:
+        filtered_dates = [date for date in dates if date in calendar_dates]
+        if len(filtered_dates) >= 2:
+            dates = filtered_dates
+        else:
+            calendar_source = "equity_curve"
+    returns: list[float] = []
+    for previous_date, current_date in zip(dates, dates[1:]):
+        previous = equity_by_date[previous_date]
+        current = equity_by_date[current_date]
+        if previous > 0:
+            returns.append(current / previous - 1.0)
+    return returns, calendar_source, len(dates)
+
+
+def _sample_std(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _sharpe_quality(
+    statistics: dict[str, Any],
+    chart_data: dict[str, Any],
+    equity_curve: list[dict[str, Any]],
+) -> dict[str, Any]:
+    returns, calendar_source, date_points = _daily_equity_returns(equity_curve, chart_data)
+    lean_sharpe = _float(statistics.get("Sharpe Ratio"))
+    warnings: list[str] = []
+    result: dict[str, Any] = {
+        "lean_sharpe_ratio": lean_sharpe,
+        "sharpe_recomputed_from_equity": None,
+        "sharpe_recomputed_sample_count": len(returns),
+        "sharpe_recomputed_date_points": date_points,
+        "sharpe_recomputed_calendar_source": calendar_source,
+        "sharpe_recomputed_annualization_factor": SHARPE_ANNUALIZATION_FACTOR,
+        "sharpe_recomputed_mean_daily_return": None,
+        "sharpe_recomputed_daily_volatility": None,
+        "short_window_unstable": len(returns) < SHORT_WINDOW_SHARPE_MIN_RETURNS,
+        "sharpe_recompute_status": "insufficient_return_points",
+        "sharpe_metric_warnings": warnings,
+    }
+    if result["short_window_unstable"]:
+        warnings.append("short_window_unstable")
+    if len(returns) < 2:
+        return result
+    mean = sum(returns) / len(returns)
+    volatility = _sample_std(returns)
+    result["sharpe_recomputed_mean_daily_return"] = mean
+    result["sharpe_recomputed_daily_volatility"] = volatility
+    if volatility is None or volatility <= 1e-18:
+        result["sharpe_recompute_status"] = "zero_return_volatility"
+        return result
+    recomputed = mean / volatility * math.sqrt(SHARPE_ANNUALIZATION_FACTOR)
+    result["sharpe_recomputed_from_equity"] = recomputed
+    result["sharpe_recompute_status"] = "computed_from_equity_curve"
+    if lean_sharpe is not None and abs(lean_sharpe - recomputed) > max(1.0, abs(recomputed) * 0.5):
+        warnings.append("lean_sharpe_diverges_from_equity_recompute")
+    if warnings:
+        result["sharpe_recompute_status"] = "computed_with_warnings"
+    return result
+
+
 def _aligned_alpha_beta(
     equity_curve: list[dict[str, Any]],
     benchmark_series: list[dict[str, Any]],
@@ -210,6 +319,13 @@ def summary_with_benchmark_metrics(statistics: dict[str, Any], performance: dict
     summary["Benchmark Return"] = performance.get("benchmark_return")
     summary["Excess Return"] = performance.get("excess_return")
     summary["Benchmark Metric Status"] = metric_status
+    if performance.get("sharpe_recomputed_from_equity") is not None:
+        summary["Recomputed Sharpe"] = performance.get("sharpe_recomputed_from_equity")
+    summary["Sharpe Sample Count"] = performance.get("sharpe_recomputed_sample_count")
+    summary["Sharpe Metric Status"] = performance.get("sharpe_recompute_status")
+    summary["Short Window Unstable"] = performance.get("short_window_unstable")
+    if performance.get("sharpe_metric_warnings"):
+        summary["Sharpe Metric Warnings"] = ", ".join(performance.get("sharpe_metric_warnings") or [])
     if performance.get("computed_alpha") is not None:
         summary["Computed Alpha"] = performance.get("computed_alpha")
     if performance.get("computed_beta") is not None:
@@ -270,6 +386,7 @@ def performance_analytics(
         metric_status = alpha_beta["status"]
     elif benchmark_source == "lean_data_cache":
         metric_status = "benchmark_return_available_from_lean_data_cache"
+    sharpe_quality = _sharpe_quality(statistics, chart_data, equity_curve)
     return {
         "monthly_returns": _period_returns(equity_curve, "month"),
         "yearly_returns": _period_returns(equity_curve, "year"),
@@ -295,5 +412,6 @@ def performance_analytics(
         "benchmarkMetricStatus": metric_status,
         "benchmarkMetricPoints": alpha_beta["points"],
         "benchmarkSeriesSource": benchmark_source,
+        **sharpe_quality,
         "industry_exposure": _industry_exposure(filled),
     }

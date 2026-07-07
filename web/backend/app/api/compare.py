@@ -40,6 +40,16 @@ def _first_metric(source: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 def _metrics(run: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     summary = result.get("summary_metrics") or {}
     statistics = result.get("statistics") or run.get("statistics") or {}
@@ -47,11 +57,23 @@ def _metrics(run: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     source = {**statistics, **summary}
     strategy_return = performance.get("strategy_return")
     benchmark_return = performance.get("benchmark_return")
+    lean_sharpe = _float(_first_metric(source, "Sharpe Ratio"))
+    recomputed_sharpe = _float(performance.get("sharpe_recomputed_from_equity"))
+    if recomputed_sharpe is None:
+        recomputed_sharpe = _float(_first_metric(source, "Recomputed Sharpe"))
+    short_window = performance.get("short_window_unstable")
+    if short_window is None:
+        short_window = _first_metric(source, "Short Window Unstable")
     return {
         "totalReturn": _float(strategy_return) if strategy_return is not None else _float(_first_metric(source, "Net Profit", "Total Return")),
         "annualReturn": _float(_first_metric(source, "Compounding Annual Return", "Annual Return")),
         "maxDrawdown": abs(_float(_first_metric(source, "Drawdown", "Maximum Drawdown")) or 0),
-        "sharpeRatio": _float(_first_metric(source, "Sharpe Ratio")),
+        "sharpeRatio": recomputed_sharpe if recomputed_sharpe is not None else lean_sharpe,
+        "leanSharpeRatio": lean_sharpe,
+        "recomputedSharpeRatio": recomputed_sharpe,
+        "sharpeMetricStatus": performance.get("sharpe_recompute_status") or _first_metric(source, "Sharpe Metric Status"),
+        "shortWindowUnstable": _bool(short_window),
+        "sharpeSampleCount": _float(performance.get("sharpe_recomputed_sample_count") or _first_metric(source, "Sharpe Sample Count")),
         "sortinoRatio": _float(_first_metric(source, "Sortino Ratio")),
         "calmarRatio": _float(_first_metric(source, "Calmar Ratio")) or _float(performance.get("calmar")),
         "winRate": _float(_first_metric(source, "Win Rate")),

@@ -300,13 +300,13 @@ export interface BacktestValidationResponse {
 export interface BacktestResult {
   id: string;
   job_id: string;
-  summary_metrics: Record<string, string>;
+  summary_metrics: Record<string, unknown>;
   equity_curve: ChartPoint[];
   drawdown_curve: ChartPoint[];
   orders: Array<Record<string, unknown>>;
   trades: Array<Record<string, unknown>>;
   holdings: Array<Record<string, unknown>>;
-  statistics: Record<string, string>;
+  statistics: Record<string, unknown>;
   performance?: {
     validation?: BacktestValidation | null;
     experiment?: BacktestExperiment | null;
@@ -346,7 +346,7 @@ export interface BacktestCompareItem {
   createdAt?: string | null;
   finishedAt?: string | null;
   parameters: Record<string, unknown>;
-  metrics: Record<string, number | null>;
+  metrics: Record<string, number | string | boolean | null>;
   equityCurve?: ChartPoint[];
   drawdownCurve?: ChartPoint[];
   validation?: BacktestValidation | null;

@@ -140,7 +140,13 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
                     "lean:test",
                     str(tmp_path / run_id),
                     str(tmp_path / run_id / "result.json"),
-                    json_dump({"Sharpe Ratio": str(index), "Compounding Annual Return": f"{index * 10}%"}),
+                    json_dump(
+                        {
+                            "Sharpe Ratio": str(index),
+                            "Recomputed Sharpe": 3 - index,
+                            "Compounding Annual Return": f"{index * 10}%",
+                        }
+                    ),
                     json_dump({"passed": True, "severity": "ok", "gates": []}),
                     f"2026-07-05T00:0{index}:00+00:00",
                 ),
@@ -163,7 +169,16 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
                     json_dump([]),
                     json_dump([]),
                     json_dump({"Sharpe Ratio": str(index)}),
-                    json_dump({"strategy_return": 0.01 * index, "calmar": index}),
+                    json_dump(
+                        {
+                            "strategy_return": 0.01 * index,
+                            "calmar": index,
+                            "sharpe_recomputed_from_equity": 3 - index,
+                            "sharpe_recomputed_sample_count": 80,
+                            "short_window_unstable": False,
+                            "sharpe_recompute_status": "computed_from_equity_curve",
+                        }
+                    ),
                     str(tmp_path / run_id / "result.json"),
                     f"2026-07-05T00:1{index}:00+00:00",
                 ),
@@ -173,7 +188,10 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
     compare = client.post("/api/compare/backtests", json={"runIds": ["run-a", "run-b"]})
     assert compare.status_code == 200
     payload = compare.json()
-    assert payload["rankings"]["bySharpe"][0] == "run-b"
+    assert payload["rankings"]["bySharpe"][0] == "run-a"
+    assert payload["items"][0]["metrics"]["sharpeRatio"] == 2
+    assert payload["items"][0]["metrics"]["leanSharpeRatio"] == 1
+    assert payload["items"][0]["metrics"]["shortWindowUnstable"] is False
     assert payload["items"][0]["equityCurve"]
 
     markdown = client.get("/api/reports/backtest:run-a/export", params={"format": "markdown"})

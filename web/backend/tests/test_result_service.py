@@ -44,6 +44,9 @@ def test_parse_result_payload_extracts_core_sections(tmp_path):
 
     assert payload["summary_metrics"]["Net Profit"] == "12.3%"
     assert payload["statistics"]["Sharpe Ratio"] == "1.42"
+    assert payload["summary_metrics"]["Sharpe Sample Count"] == 1
+    assert payload["summary_metrics"]["Short Window Unstable"] is True
+    assert payload["performance"]["sharpe_recompute_status"] == "insufficient_return_points"
     assert len(payload["equity_curve"]) == 2
     assert len(payload["drawdown_curve"]) == 2
     assert payload["orders"][0]["symbol"] == "SPY"
