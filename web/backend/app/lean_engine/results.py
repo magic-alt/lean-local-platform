@@ -71,6 +71,11 @@ def read_lean_daily_price_series(
     return parse_lean_zip_price_series(request, start_date, end_date)
 
 
+def _has_moving_values(points: list[dict[str, Any]]) -> bool:
+    values = {round(float(point["value"]), 8) for point in points if point.get("value") not in (None, 0)}
+    return len(values) > 1
+
+
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -98,7 +103,9 @@ def _nearest_value(points: list[dict[str, Any]], time_value: str | None) -> floa
 def extract_chart_data(
     result_json: Path,
     symbol: str | None = None,
+    benchmark_symbol: str | None = None,
     market: str | None = None,
+    benchmark_market: str | None = None,
     start: str | None = None,
     end: str | None = None,
     asset_class: str | None = None,
@@ -143,6 +150,22 @@ def extract_chart_data(
         if inferred_symbol
         else []
     )
+    benchmark_series = point_series(benchmark, "Benchmark")
+    benchmark_source = "lean_result"
+    if benchmark_symbol and not _has_moving_values(benchmark_series):
+        cache_series = read_lean_daily_price_series(
+            benchmark_symbol,
+            benchmark_market or market,
+            start,
+            end,
+            asset_class=asset_class,
+            venue=benchmark_market or venue or market,
+            resolution=resolution,
+            data_type=data_type,
+        )
+        if _has_moving_values(cache_series):
+            benchmark_series = cache_series
+            benchmark_source = "lean_data_cache"
     equity_series = point_series(equity, "Equity")
     order_markers = [
         {
@@ -162,9 +185,10 @@ def extract_chart_data(
             "drawdown": point_series(drawdown, "Equity Drawdown"),
             "emaFast": point_series(ema, "Fast"),
             "emaSlow": point_series(ema, "Slow"),
-            "benchmark": point_series(benchmark, "Benchmark"),
+            "benchmark": benchmark_series,
             "price": price,
         },
+        "seriesSources": {"benchmark": benchmark_source},
         "orders": orders,
         "orderMarkers": order_markers,
     }

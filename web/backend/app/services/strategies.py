@@ -89,7 +89,8 @@ class {class_name}(QCAlgorithm):
                     self.get_parameter("benchmarkMarket", market).lower(),
                     data_normalization_mode=DataNormalizationMode.RAW,
                 )
-                self.set_benchmark(benchmark.symbol)
+                self.benchmark_security = benchmark
+                self.set_benchmark(lambda time: self.benchmark_security.price)
             except Exception as exc:
                 raise ValueError(f"A-share benchmark unavailable: {{benchmark_ticker}}; backtest is blocked.") from exc
         else:

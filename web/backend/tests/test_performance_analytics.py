@@ -68,3 +68,69 @@ def test_parse_result_payload_adds_performance_analytics(tmp_path):
     assert parsed["summary_metrics"]["Benchmark Return"] == pytest.approx(0.04)
     assert parsed["summary_metrics"]["Excess Return"] == pytest.approx(0.06)
     assert parsed["summary_metrics"]["Benchmark Metric Status"] == "insufficient_aligned_points_for_alpha_beta"
+
+
+def test_parse_result_payload_replaces_constant_benchmark_from_cache(tmp_path, monkeypatch):
+    import app.lean_engine.results as results_module
+    from app.services.result_service import parse_result_payload
+
+    result_path = tmp_path / "result.json"
+    payload = {
+        "statistics": {"Total Orders": "1"},
+        "charts": {
+            "Strategy Equity": {
+                "series": {
+                    "Equity": {
+                        "values": [
+                            [ts("2024-01-02T00:00:00"), 100000, 100000, 100000, 100000],
+                            [ts("2024-01-03T00:00:00"), 101000, 101000, 101000, 101000],
+                            [ts("2024-01-04T00:00:00"), 102000, 102000, 102000, 102000],
+                        ]
+                    }
+                }
+            },
+            "Benchmark": {
+                "series": {
+                    "Benchmark": {
+                        "values": [
+                            [ts("2024-01-02T00:00:00"), 3431.11],
+                            [ts("2024-01-03T00:00:00"), 3431.11],
+                            [ts("2024-01-04T00:00:00"), 3431.11],
+                        ]
+                    }
+                }
+            },
+        },
+        "orders": {},
+    }
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def fake_price_series(symbol, *args, **kwargs):
+        if symbol == "000300":
+            return [
+                {"time": "2024-01-02T00:00:00+00:00", "value": 100.0},
+                {"time": "2024-01-03T00:00:00+00:00", "value": 102.0},
+                {"time": "2024-01-04T00:00:00+00:00", "value": 104.0},
+            ]
+        return []
+
+    monkeypatch.setattr(results_module, "read_lean_daily_price_series", fake_price_series)
+
+    parsed = parse_result_payload(
+        result_path,
+        None,
+        {
+            "symbol": "600519",
+            "parameters": {
+                "market": "china",
+                "benchmarkMarket": "china",
+                "benchmarkSymbol": "000300",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+            },
+        },
+    )
+
+    assert parsed["charts"]["benchmark"][-1]["value"] == 104.0
+    assert parsed["summary_metrics"]["Benchmark Return"] == pytest.approx(0.04)
+    assert parsed["summary_metrics"]["Benchmark Metric Status"] == "benchmark_return_available_from_lean_data_cache"

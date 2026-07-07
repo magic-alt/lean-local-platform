@@ -12,8 +12,11 @@ def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
     import app.domain.assets as assets_module
     import app.lean as lean_module
+    import app.lean_engine.data_paths as data_paths_module
 
     data_dir = tmp_path / "Data"
+    sqlite_url = f"sqlite:///{tmp_path / 'test.sqlite3'}"
+    monkeypatch.setattr(db_module, "DATABASE_URL", sqlite_url)
     monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
     monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(db_module, "RUNS_DIR", tmp_path / "runs")
@@ -24,6 +27,8 @@ def configure_temp_platform(tmp_path, monkeypatch):
     monkeypatch.setattr(db_module, "REPORTS_DIR", tmp_path / "reports")
     monkeypatch.setattr(lean_module, "DATA_DIR", data_dir)
     monkeypatch.setattr(lean_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(data_paths_module, "DATA_DIR", data_dir)
+    monkeypatch.setattr(data_paths_module, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(assets_module, "DATA_DIR", data_dir)
     monkeypatch.setattr(assets_module, "REPO_ROOT", tmp_path)
     db_module.init_db()
@@ -542,6 +547,45 @@ def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatc
     assert zip_path.exists()
     assert zip_path.read_bytes() == original
     assert cache["files"]["daily"]["object_id"]
+
+
+def test_lean_cache_replaces_local_file_from_wrong_source(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services.data import import_ashare_research_data
+    from app.services.lean_cache import ensure_ashare_lean_cache
+
+    def zip_payload(path: Path) -> bytes:
+        with zipfile.ZipFile(path) as archive:
+            return archive.read(archive.namelist()[0])
+
+    zip_path = tmp_path / "Data" / "equity" / "china" / "daily" / "600519.zip"
+    akshare_payload = zip_payload(zip_path)
+    import_ashare_research_data(
+        symbol="600519",
+        provider="baostock",
+        market="china",
+        rows=[
+            {"date": "2024-01-02", "open": "9.00", "high": "9.10", "low": "8.90", "close": "9.00", "volume": "1"},
+        ],
+        source="baostock",
+        overwrite=True,
+        adjust="raw",
+        outputsize="",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date=None,
+        end_date=None,
+    )
+    assert zip_payload(zip_path) != akshare_payload
+
+    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+
+    assert zip_payload(zip_path) == akshare_payload
+    assert cache["source"] == "test"
+    assert cache["files"]["daily"]["sha256"]
 
 
 def test_ashare_execution_artifacts_include_status_payload(tmp_path, monkeypatch):

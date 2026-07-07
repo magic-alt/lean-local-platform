@@ -54,3 +54,21 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         ).fetchone()
     assert "0001_backtest_child_run_indexes" in revisions
     assert index_row is not None
+
+
+def test_mysql_index_parser_handles_leading_migration_comment():
+    import app.db as db_module
+
+    statement = """
+    -- description: Add indexes for optimization child backtest runs
+    create index if not exists idx_backtest_runs_task_created
+        on backtest_runs(task_id, created_at desc)
+    """
+
+    cleaned = db_module._strip_leading_sql_comments(statement)
+
+    assert cleaned.startswith("create index if not exists")
+    assert db_module._parse_create_index_if_not_exists(cleaned) == (
+        "idx_backtest_runs_task_created",
+        "backtest_runs",
+    )

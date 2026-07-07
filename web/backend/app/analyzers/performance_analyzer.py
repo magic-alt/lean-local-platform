@@ -161,7 +161,7 @@ def _trade_pairs(filled: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _latest_benchmark_return(series: list[dict[str, Any]]) -> float | None:
     values = [_float(point.get("value")) for point in series]
     values = [value for value in values if value is not None and value != 0]
-    if len(values) < 2:
+    if len(values) < 2 or len({round(value, 12) for value in values}) < 2:
         return None
     return values[-1] / values[0] - 1.0
 
@@ -263,10 +263,13 @@ def performance_analytics(
     benchmark_return = _latest_benchmark_return(chart_data["series"].get("benchmark") or [])
     alpha_beta = _aligned_alpha_beta(equity_curve, chart_data["series"].get("benchmark") or [])
     metric_status = "benchmark_return_available"
+    benchmark_source = (chart_data.get("seriesSources") or {}).get("benchmark")
     if benchmark_return is None:
         metric_status = "benchmark_curve_missing_or_insufficient_points"
     elif alpha_beta["status"] != "computed_from_aligned_chart_returns":
         metric_status = alpha_beta["status"]
+    elif benchmark_source == "lean_data_cache":
+        metric_status = "benchmark_return_available_from_lean_data_cache"
     return {
         "monthly_returns": _period_returns(equity_curve, "month"),
         "yearly_returns": _period_returns(equity_curve, "year"),
@@ -291,5 +294,6 @@ def performance_analytics(
         "computed_beta": alpha_beta["beta"],
         "benchmarkMetricStatus": metric_status,
         "benchmarkMetricPoints": alpha_beta["points"],
+        "benchmarkSeriesSource": benchmark_source,
         "industry_exposure": _industry_exposure(filled),
     }

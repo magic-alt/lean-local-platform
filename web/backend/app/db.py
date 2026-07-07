@@ -234,7 +234,7 @@ class MySQLConnection:
         )
 
     def execute(self, sql: str, parameters: Iterable[Any] | dict[str, Any] | None = None):
-        translated = _translate_mysql_sql(sql)
+        translated = _translate_mysql_sql(_strip_leading_sql_comments(sql))
         index_info = _parse_create_index_if_not_exists(translated)
         if index_info:
             index_name, table_name = index_info
@@ -254,8 +254,9 @@ class MySQLConnection:
 
     def executescript(self, script: str) -> None:
         for statement in _split_sql_script(script):
-            if statement.strip():
-                self.execute(statement)
+            cleaned = _strip_leading_sql_comments(statement)
+            if cleaned.strip():
+                self.execute(cleaned)
 
     def commit(self) -> None:
         self._connection.commit()
@@ -288,6 +289,13 @@ def _split_sql_script(script: str) -> list[str]:
     if tail:
         statements.append(tail)
     return statements
+
+
+def _strip_leading_sql_comments(sql: str) -> str:
+    lines = sql.strip().splitlines()
+    while lines and lines[0].strip().startswith("--"):
+        lines.pop(0)
+    return "\n".join(lines).strip()
 
 
 def _parse_create_index_if_not_exists(sql: str) -> tuple[str, str] | None:

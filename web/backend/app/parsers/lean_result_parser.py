@@ -26,7 +26,9 @@ def parse_result_payload(
     chart_data = extract_chart_data(
         result_json,
         symbol=run.get("symbol"),
+        benchmark_symbol=parameters.get("benchmarkSymbol"),
         market=parameters.get("market"),
+        benchmark_market=parameters.get("benchmarkMarket"),
         start=parameters.get("start"),
         end=parameters.get("end"),
         asset_class=parameters.get("assetClass"),

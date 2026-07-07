@@ -4,12 +4,12 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from ..db import db, rows_to_dicts
+from ..db import db, row_to_dict, rows_to_dicts
 from ..lean_engine import data_paths
 from ..lean_engine.data_writers import write_lean_daily_zip
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import normalize_symbol, symbol_key
-from .db_object_store import latest_object, put_file, restore_to_path
+from .db_object_store import put_file, restore_to_path
 
 
 LEAN_DATA_NAMESPACE = "lean-data-files"
@@ -158,11 +158,69 @@ def rebuild_ashare_lean_cache_from_db(
     return metadata
 
 
-def _restore_or_verify(path: Path, *, namespace: str, key: str) -> dict[str, Any] | None:
-    stored = latest_object(namespace, key)
+def _latest_matching_object(
+    namespace: str,
+    key: str,
+    *,
+    symbol: str,
+    source: str,
+    adjust: str,
+    kind: str | None,
+    market: str,
+) -> dict[str, Any] | None:
+    normalized_symbol = normalize_symbol(symbol, market)
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select *
+            from stored_objects
+            where namespace = ? and object_key = ?
+            order by updated_at desc, id desc
+            """,
+            (namespace, key),
+        ).fetchall()
+    for row in rows:
+        stored = row_to_dict(row) or {}
+        metadata = stored.get("metadata") or {}
+        stored_kind = metadata.get("kind")
+        if kind is None and stored_kind not in (None, "", "daily"):
+            continue
+        if kind is not None and stored_kind != kind:
+            continue
+        if metadata.get("symbol") != normalized_symbol:
+            continue
+        if metadata.get("source") != source:
+            continue
+        if (metadata.get("adjust") or "raw") != (adjust or "raw"):
+            continue
+        return stored
+    return None
+
+
+def _restore_or_verify(
+    path: Path,
+    *,
+    namespace: str,
+    key: str,
+    symbol: str,
+    source: str,
+    adjust: str,
+    market: str,
+    kind: str | None = None,
+) -> dict[str, Any] | None:
+    stored = _latest_matching_object(
+        namespace,
+        key,
+        symbol=symbol,
+        source=source,
+        adjust=adjust,
+        market=market,
+        kind=kind,
+    )
     if not stored:
         return None
     current_sha = _file_sha256(path) if path.exists() else None
+    restored = current_sha != stored.get("sha256")
     if current_sha != stored.get("sha256"):
         restore_to_path(stored["id"], path)
         current_sha = _file_sha256(path)
@@ -173,7 +231,8 @@ def _restore_or_verify(path: Path, *, namespace: str, key: str) -> dict[str, Any
         "sha256": stored.get("sha256"),
         "path": str(path),
         "object_key": key,
-        "restored": True,
+        "restored": restored,
+        "metadata": stored.get("metadata") or {},
     }
 
 
@@ -189,9 +248,35 @@ def ensure_ashare_lean_cache(
     factor_path = _lean_factor_path(symbol, market)
     map_path = _lean_map_path(symbol, market)
     restored = {
-        "daily": _restore_or_verify(zip_path, namespace=LEAN_DATA_NAMESPACE, key=_data_relative(zip_path)),
-        "factor": _restore_or_verify(factor_path, namespace=LEAN_DATA_NAMESPACE, key=_data_relative(factor_path)),
-        "map": _restore_or_verify(map_path, namespace=LEAN_DATA_NAMESPACE, key=_data_relative(map_path)),
+        "daily": _restore_or_verify(
+            zip_path,
+            namespace=LEAN_DATA_NAMESPACE,
+            key=_data_relative(zip_path),
+            symbol=symbol,
+            source=source,
+            adjust=adjust or "raw",
+            market=market,
+        ),
+        "factor": _restore_or_verify(
+            factor_path,
+            namespace=LEAN_DATA_NAMESPACE,
+            key=_data_relative(factor_path),
+            symbol=symbol,
+            source=source,
+            adjust=adjust or "raw",
+            market=market,
+            kind="factor",
+        ),
+        "map": _restore_or_verify(
+            map_path,
+            namespace=LEAN_DATA_NAMESPACE,
+            key=_data_relative(map_path),
+            symbol=symbol,
+            source=source,
+            adjust=adjust or "raw",
+            market=market,
+            kind="map",
+        ),
     }
     if all(restored.values()):
         return {"symbol": normalize_symbol(symbol, market), "source": source, "adjust": adjust, "files": restored}
