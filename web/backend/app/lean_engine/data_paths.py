@@ -71,7 +71,19 @@ def ensure_market_database(market: str) -> None:
 
     market_hours = DATA_DIR / "market-hours" / "market-hours-database.json"
     market_hours.parent.mkdir(parents=True, exist_ok=True)
-    data = {"entries": {}} if not market_hours.exists() else json.loads(market_hours.read_text(encoding="utf-8"))
+    data = {"entries": {}}
+    if market_hours.exists():
+        try:
+            content = market_hours.read_text(encoding="utf-8")
+            if content.strip():
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    data = parsed
+        except Exception:
+            backup = market_hours.with_suffix(".json.bak")
+            if market_hours.exists():
+                market_hours.replace(backup)
+            data = {"entries": {}}
     entries = data.setdefault("entries", {})
     entry_key = f"Equity-{market}-[*]"
     if entry_key not in entries:
