@@ -134,11 +134,19 @@ def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_rep
 
     result = parquet_lake.rebuild_all_market_parquet(asset_class="equity", market="china")
 
-    assert result["scopeCount"] == 2
-    assert result["rebuiltCount"] == 2
+    assert result["scopeCount"] == 1
+    assert result["rebuiltCount"] == 1
     assert result["consistencyReport"]["severity"] == "ok"
     saved = list_quality_reports()
     assert saved[0]["report_type"] == "parquet_consistency"
+
+    research_result = parquet_lake.rebuild_all_market_parquet(
+        asset_class="equity",
+        market="china",
+        sources=["akshare", "baostock"],
+        include_research_sources=True,
+    )
+    assert research_result["scopeCount"] == 2
     assert saved[0]["severity"] == "ok"
 
 

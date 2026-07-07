@@ -50,10 +50,10 @@ def import_sample_ashare(tmp_path, monkeypatch):
 
     asset = import_ashare_research_data(
         symbol="600519",
-        provider="test",
+        provider="akshare",
         market="china",
         rows=sample_ashare_rows(),
-        source="test",
+        source="akshare",
         overwrite=True,
         adjust="raw",
         outputsize="",
@@ -66,7 +66,7 @@ def import_sample_ashare(tmp_path, monkeypatch):
     )
     import_benchmark_rows(
         symbol="000300",
-        source="test",
+        source="akshare",
         rows=[
             {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
             {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
@@ -101,7 +101,7 @@ def test_incremental_ashare_import_rebuilds_lean_zip_from_full_database_history(
 
     import_ashare_research_data(
         symbol="600519",
-        provider="test",
+        provider="akshare",
         market="china",
         rows=[
             {
@@ -113,7 +113,7 @@ def test_incremental_ashare_import_rebuilds_lean_zip_from_full_database_history(
                 "volume": "130000",
             }
         ],
-        source="test",
+        source="akshare",
         overwrite=True,
         adjust="raw",
         outputsize="",
@@ -458,9 +458,9 @@ def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkey
         "start": "2024-01-02",
         "end": "2024-01-04",
         "adjust": "raw",
-        "source": "test",
+        "source": "akshare",
     }
-    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+    cache = ensure_ashare_lean_cache("600519", source="akshare", adjust="raw")
     fingerprint = build_run_fingerprint(
         run_id="run-1",
         parameters=parameters,
@@ -542,7 +542,7 @@ def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatc
     original = zip_path.read_bytes()
     zip_path.unlink()
 
-    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+    cache = ensure_ashare_lean_cache("600519", source="akshare", adjust="raw")
 
     assert zip_path.exists()
     assert zip_path.read_bytes() == original
@@ -581,10 +581,10 @@ def test_lean_cache_replaces_local_file_from_wrong_source(tmp_path, monkeypatch)
     )
     assert zip_payload(zip_path) != akshare_payload
 
-    cache = ensure_ashare_lean_cache("600519", source="test", adjust="raw")
+    cache = ensure_ashare_lean_cache("600519", source="akshare", adjust="raw")
 
     assert zip_payload(zip_path) == akshare_payload
-    assert cache["source"] == "test"
+    assert cache["source"] == "akshare"
     assert cache["files"]["daily"]["sha256"]
 
 

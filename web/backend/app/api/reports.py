@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
+from ..services.db_object_store import get_object, read_bytes
 from ..services.report_export import csv_report, json_report, markdown_report, pdf_report, report_payload
 from ..services.tasks import create_task
 from ..tasks.worker import generate_report_task
@@ -80,6 +81,12 @@ def _backtest_report_from_rows(run: dict[str, Any], result: dict[str, Any] | Non
         "task_id": run.get("task_id"),
         "run_id": run["id"],
         "status": run.get("status"),
+        "symbol": run.get("symbol"),
+        "parameters": run.get("parameters") or {},
+        "asset_class": run.get("asset_class"),
+        "venue": run.get("venue"),
+        "resolution": run.get("resolution"),
+        "data_type": run.get("data_type"),
         "report_path": run.get("report_html_path"),
         "result_json_path": run.get("result_json_path") or result.get("raw_result_path"),
         "summary_json_path": run.get("summary_json_path"),
@@ -93,6 +100,37 @@ def _backtest_report_from_rows(run: dict[str, Any], result: dict[str, Any] | Non
         "error": run.get("error") or run.get("error_message"),
         "created_at": run.get("created_at"),
         "finished_at": run.get("finished_at"),
+    }
+
+
+def _light_report(item: dict[str, Any]) -> dict[str, Any]:
+    result = item.get("result") or {}
+    parameters = item.get("parameters") or result.get("parameters") or {}
+    summary = result.get("summary_metrics") or item.get("summary_metrics") or {}
+    fingerprint = item.get("fingerprint") or {}
+    source = (
+        item.get("source")
+        if item.get("source") not in {"backtest_run", "reports"}
+        else parameters.get("source") or fingerprint.get("source") or (fingerprint.get("data") or {}).get("scope", {}).get("source")
+    )
+    run_id = item.get("run_id") or item.get("id")
+    return {
+        "id": item.get("id"),
+        "runId": run_id,
+        "run_id": run_id,
+        "type": "backtest" if item.get("source") == "backtest_run" else "report",
+        "source": source or item.get("source"),
+        "status": item.get("status"),
+        "symbol": item.get("symbol") or parameters.get("ticker") or parameters.get("symbol"),
+        "benchmark": parameters.get("benchmarkSymbol") or fingerprint.get("benchmark_symbol"),
+        "startDate": parameters.get("start"),
+        "endDate": parameters.get("end"),
+        "createdAt": item.get("created_at"),
+        "created_at": item.get("created_at"),
+        "summaryMetrics": summary,
+        "hasStoredObjects": bool(item.get("storedObjects") or item.get("raw_result_object_id") or item.get("summary_object_id")),
+        "hasFingerprint": bool(fingerprint),
+        "error": item.get("error"),
     }
 
 
@@ -116,6 +154,7 @@ def list_reports(
     source: str | None = None,
     status: str | None = None,
     runId: str | None = None,
+    detail: bool = False,
 ):
     bounded_limit = max(1, min(int(limit), 1000))
     bounded_offset = max(0, int(offset))
@@ -199,7 +238,8 @@ def list_reports(
             }
         backtests.append(_backtest_report_from_rows(item, result))
     items = sorted([*reports, *backtests], key=lambda item: item.get("created_at") or "", reverse=True)
-    sliced = items[bounded_offset : bounded_offset + bounded_limit]
+    output_items = items if detail else [_light_report(item) for item in items]
+    sliced = output_items[bounded_offset : bounded_offset + bounded_limit]
     if paged:
         return {"items": sliced, "count": report_count + backtest_count, "limit": bounded_limit, "offset": bounded_offset}
     return sliced
@@ -228,6 +268,34 @@ def detail(report_id: str):
     if item is None:
         raise HTTPException(status_code=404, detail="Report not found.")
     return item
+
+
+@router.get("/{report_id}/objects")
+def report_objects(report_id: str, limit: int = 100, offset: int = 0):
+    item = detail(report_id)
+    run_id = item.get("run_id") or _run_id_from_report_id(report_id)
+    objects = _stored_objects_for_run(run_id, item.get("result") or {})
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
+    sliced = objects[bounded_offset : bounded_offset + bounded_limit]
+    return {"items": sliced, "count": len(objects), "limit": bounded_limit, "offset": bounded_offset}
+
+
+@router.get("/{report_id}/objects/{object_id}")
+def report_object(report_id: str, object_id: str):
+    objects = report_objects(report_id, limit=1000, offset=0)["items"]
+    allowed = {item["id"] for item in objects}
+    if object_id not in allowed:
+        raise HTTPException(status_code=404, detail="Report object not found.")
+    item = get_object(object_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Report object not found.")
+    content = read_bytes(object_id)
+    return Response(
+        content=content,
+        media_type=item.get("content_type") or "application/octet-stream",
+        headers={"X-Object-SHA256": item.get("sha256") or "", "X-Object-Key": item.get("object_key") or ""},
+    )
 
 
 @router.get("/{report_id}/file")

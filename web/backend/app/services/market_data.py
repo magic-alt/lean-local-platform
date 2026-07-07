@@ -201,6 +201,7 @@ def query_bars(
     venue: str | None = None,
     resolution: str = "daily",
     data_type: str = "trade",
+    provider_source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 500,
@@ -219,6 +220,8 @@ def query_bars(
     ]
     if venue:
         predicates.append(f"venue = {_literal(venue)}")
+    if provider_source:
+        predicates.append(f"source = {_literal(provider_source)}")
     if start_date:
         predicates.append(f"timestamp >= toDateTime64({_literal(start_date + ' 00:00:00')}, 3, 'UTC')")
     if end_date:
@@ -269,6 +272,7 @@ def query_database_bars(
     venue: str | None = None,
     resolution: str = "daily",
     data_type: str = "trade",
+    provider_source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 500,
@@ -282,6 +286,9 @@ def query_database_bars(
     if venue_key:
         predicates.append("venue = ?")
         params.append(venue_key)
+    if provider_source:
+        predicates.append("source = ?")
+        params.append(provider_source)
     if start_date:
         predicates.append("trade_date >= ?")
         params.append(start_date)
@@ -315,6 +322,9 @@ def query_database_bars(
     if not items and asset_class_key == "equity" and venue_key == "china" and resolution_key == "daily" and data_type_key == "trade":
         fallback_predicates = ["symbol = ?"]
         fallback_params: list[Any] = [_sqlite_symbol(symbol, "china")]
+        if provider_source:
+            fallback_predicates.append("source = ?")
+            fallback_params.append(provider_source)
         if start_date:
             fallback_predicates.append("trade_date >= ?")
             fallback_params.append(start_date)

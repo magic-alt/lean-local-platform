@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
@@ -36,7 +38,7 @@ def import_rows():
         provider="unit",
         market="china",
         rows=rows,
-        source="unit",
+        source="akshare",
         overwrite=True,
         adjust="raw",
         outputsize="",
@@ -63,7 +65,7 @@ def import_rows_for_symbol(symbol: str):
         provider="unit",
         market="china",
         rows=rows,
-        source="unit",
+        source="akshare",
         overwrite=True,
         adjust="raw",
         outputsize="",
@@ -103,7 +105,7 @@ def import_benchmark_rows():
                     close,
                     1000000,
                     "raw",
-                    "unit",
+                    "akshare",
                     "now",
                 ),
             )
@@ -158,13 +160,35 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     assert report["cumulativeReturn"] is not None
     assert report["excessReturn"] is not None
     assert len(report["fingerprint"]) == 64
-    assert report["dataSourceStatus"]["benchmark"]["source"] == "unit"
+    assert report["dataSourceStatus"]["benchmark"]["source"] == "akshare"
     assert report["positionWeights"][0]["symbol"] == "600519"
     assert report["schemaVersion"] == 1
     assert reports[-1]["schemaVersion"] == 1
     assert reports[-1]["tradeDate"] == "2024-01-04"
     assert reports[-1]["executionPolicy"] == "next_open"
     assert reports[-1]["positionWeights"][0]["symbol"] == "600519"
+
+
+def test_paper_session_rejects_same_close_without_explicit_allow(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows()
+
+    from app.services.paper import create_session
+
+    with pytest.raises(ValueError, match="same_close"):
+        create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "executionPolicy": "same_close"})
+
+    session = create_session(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "executionPolicy": "same_close",
+            "allowSameDayClose": True,
+        }
+    )
+
+    assert session["parameters"]["executionPolicy"] == "same_close"
 
 
 def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_status(tmp_path, monkeypatch):

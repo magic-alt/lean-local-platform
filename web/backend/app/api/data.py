@@ -30,13 +30,16 @@ from ..services.data import (
     record_data_asset,
     symbols_for_asset,
 )
+from ..services.data_coverage import ashare_coverage, benchmark_coverage, symbol_coverage
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
 from ..services.parquet_lake import export_market_daily_bars, list_datasets, parquet_consistency_report, query_duckdb_bars, rebuild_all_market_parquet
 from ..services.ashare_multisource import compare_ashare_daily_sources, compare_ashare_daily_sources_batch, list_quality_reports
 from ..services.free_data_pipeline import import_ashare_daily_sample
 from ..services.intraday import import_intraday_bars
+from ..services.instrument_identity import identifier_coverage, identifiers_for_symbol
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
+from ..services.source_gate import require_source_allowed, source_certification
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -90,6 +93,7 @@ class ParquetExportRequest(BaseModel):
     dataType: str = "trade"
     adjust: str = "raw"
     providerSource: str = "akshare"
+    allowResearchSource: bool = False
     startDate: str | None = None
     endDate: str | None = None
 
@@ -102,6 +106,7 @@ class ParquetRebuildRequest(BaseModel):
     dataType: str | None = None
     adjust: str | None = None
     sources: list[str] | None = None
+    includeResearchSources: bool = False
     startDate: str | None = None
     endDate: str | None = None
     continueOnError: bool = True
@@ -116,6 +121,7 @@ class ParquetConsistencyRequest(BaseModel):
     dataType: str | None = None
     adjust: str | None = None
     sources: list[str] | None = None
+    includeResearchSources: bool = False
     persist: bool = True
 
 
@@ -256,6 +262,7 @@ def query_data(
     dataType: str = "trade",
     source: str = "clickhouse",
     providerSource: str | None = None,
+    allowResearchSource: bool = False,
     adjust: str = "raw",
     startDate: str | None = None,
     endDate: str | None = None,
@@ -263,6 +270,7 @@ def query_data(
 ):
     try:
         query_source = source.strip().lower()
+        provider_source = require_source_allowed(providerSource, allow_research_source=allowResearchSource)
         if query_source in {"duckdb", "parquet"}:
             return query_duckdb_bars(
                 asset_class=assetClass,
@@ -271,23 +279,27 @@ def query_data(
                 venue=venue,
                 resolution=resolution,
                 data_type=dataType,
-                provider_source=providerSource or "akshare",
+                provider_source=provider_source,
                 adjust=adjust or "raw",
                 start_date=startDate,
                 end_date=endDate,
                 limit=limit,
             )
         query = query_database_bars if query_source in {"mysql", "database", "local", "sqlite", "local_sqlite"} else query_bars
-        return query(
+        payload = query(
             asset_class=assetClass,
             symbol=symbol,
             venue=venue or market,
             resolution=resolution,
             data_type=dataType,
+            provider_source=provider_source,
             start_date=startDate,
             end_date=endDate,
             limit=limit,
         )
+        payload["providerSource"] = provider_source
+        payload["sourceCertification"] = source_certification(provider_source, asset_class=assetClass, market=market or venue or "china", venue=venue or market)
+        return payload
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -295,6 +307,7 @@ def query_data(
 @router.post("/data/parquet/export")
 def export_parquet_data(request: ParquetExportRequest):
     try:
+        provider_source = require_source_allowed(request.providerSource, allow_research_source=request.allowResearchSource)
         return export_market_daily_bars(
             asset_class=request.assetClass,
             market=request.market,
@@ -302,7 +315,7 @@ def export_parquet_data(request: ParquetExportRequest):
             resolution=request.resolution,
             data_type=request.dataType,
             adjust=request.adjust,
-            source=request.providerSource,
+            source=provider_source,
             start_date=request.startDate,
             end_date=request.endDate,
         )
@@ -318,6 +331,7 @@ def parquet_datasets():
 @router.post("/data/parquet/rebuild")
 def rebuild_parquet_data(request: ParquetRebuildRequest):
     try:
+        sources = [require_source_allowed(source, allow_research_source=request.includeResearchSources) for source in request.sources] if request.sources else None
         return rebuild_all_market_parquet(
             asset_class=request.assetClass,
             market=request.market,
@@ -325,7 +339,8 @@ def rebuild_parquet_data(request: ParquetRebuildRequest):
             resolution=request.resolution,
             data_type=request.dataType,
             adjust=request.adjust,
-            sources=request.sources,
+            sources=sources,
+            include_research_sources=request.includeResearchSources,
             start_date=request.startDate,
             end_date=request.endDate,
             continue_on_error=request.continueOnError,
@@ -338,6 +353,7 @@ def rebuild_parquet_data(request: ParquetRebuildRequest):
 @router.post("/data/parquet/consistency")
 def parquet_consistency(request: ParquetConsistencyRequest):
     try:
+        sources = [require_source_allowed(source, allow_research_source=request.includeResearchSources) for source in request.sources] if request.sources else None
         return parquet_consistency_report(
             asset_class=request.assetClass,
             market=request.market,
@@ -345,7 +361,8 @@ def parquet_consistency(request: ParquetConsistencyRequest):
             resolution=request.resolution,
             data_type=request.dataType,
             adjust=request.adjust,
-            sources=request.sources,
+            sources=sources,
+            include_research_sources=request.includeResearchSources,
             persist=request.persist,
         )
     except Exception as exc:
@@ -392,6 +409,49 @@ def compare_ashare_daily_data_batch(request: AshareDailyCompareBatchRequest):
 @router.get("/data/quality/reports")
 def data_quality_reports(limit: int = 100):
     return {"items": list_quality_reports(limit=limit)}
+
+
+@router.get("/data/coverage/ashare")
+def data_coverage_ashare(
+    symbols: str,
+    benchmark: str = "000300",
+    source: str | None = None,
+    startDate: str = "2026-06-01",
+    endDate: str = "2026-06-30",
+):
+    selected = [item.strip() for item in symbols.split(",") if item.strip()]
+    return ashare_coverage(symbols=selected, benchmark=benchmark, source=source, start_date=startDate, end_date=endDate)
+
+
+@router.get("/data/coverage/symbol/{symbol}")
+def data_coverage_symbol(
+    symbol: str,
+    source: str | None = None,
+    startDate: str = "2026-06-01",
+    endDate: str = "2026-06-30",
+):
+    return symbol_coverage(symbol, source=source, start_date=startDate, end_date=endDate)
+
+
+@router.get("/data/coverage/benchmark/{symbol}")
+def data_coverage_benchmark(
+    symbol: str,
+    source: str | None = None,
+    startDate: str = "2026-06-01",
+    endDate: str = "2026-06-30",
+):
+    return benchmark_coverage(symbol, source=source, start_date=startDate, end_date=endDate)
+
+
+@router.get("/data/identifiers/coverage")
+def data_identifier_coverage(symbols: str | None = None):
+    selected = [item.strip() for item in (symbols or "").split(",") if item.strip()] or None
+    return identifier_coverage(selected)
+
+
+@router.get("/data/identifiers/{symbol}")
+def data_identifiers(symbol: str):
+    return identifiers_for_symbol(symbol)
 
 
 @router.post("/data/free/ashare/daily/import-sample")

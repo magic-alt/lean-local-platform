@@ -137,8 +137,32 @@ def snapshots(session_id: str):
 
 
 @router.get("/{session_id}/reports")
-def reports(session_id: str):
-    return paper_service.list_daily_reports(session_id)
+def reports(session_id: str, light: bool = False, limit: int = 500, offset: int = 0, paged: bool = False):
+    items = paper_service.list_daily_reports(session_id)
+    if light:
+        items = [
+            {
+                "id": item.get("id"),
+                "sessionId": item.get("session_id") or item.get("sessionId"),
+                "tradeDate": item.get("tradeDate") or item.get("trade_date"),
+                "executionPolicy": item.get("executionPolicy"),
+                "nav": item.get("nav") or item.get("NAV"),
+                "benchmarkSymbol": item.get("benchmarkSymbol"),
+                "benchmarkReturn": item.get("benchmarkReturn"),
+                "qaGateStatus": item.get("qaGateStatus"),
+                "warnings": item.get("warnings") or [],
+                "rejectReasons": item.get("rejectReasons") or [],
+                "hasFingerprint": bool(item.get("fingerprint")),
+                "createdAt": item.get("created_at") or item.get("createdAt"),
+            }
+            for item in items
+        ]
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
+    sliced = items[bounded_offset : bounded_offset + bounded_limit]
+    if paged or light:
+        return {"items": sliced, "count": len(items), "limit": bounded_limit, "offset": bounded_offset}
+    return sliced
 
 
 @router.get("/{session_id}/reports/{trade_date}")

@@ -85,6 +85,7 @@ def build_backtest_validation(
     start = str(parameters.get("start") or "")
     end = str(parameters.get("end") or "")
     adjust = str(parameters.get("adjust") or "raw")
+    source = str(parameters.get("source") or parameters.get("providerSource") or "akshare")
     result: dict[str, Any] = {
         "schemaVersion": P1_RULE_VERSION,
         "generatedAt": utc_now(),
@@ -98,6 +99,7 @@ def build_backtest_validation(
             "start": start,
             "end": end,
             "adjust": adjust,
+            "source": source,
         },
         "marketRules": {
             "schemaVersion": P1_RULE_VERSION,
@@ -112,14 +114,23 @@ def build_backtest_validation(
     if not _is_china_equity(parameters):
         return result
 
-    coverage = data_coverage(symbol, start, end, adjust)
-    batch = latest_batch_for_symbol(symbol) or {}
+    coverage = data_coverage(symbol, start, end, adjust, source=source)
+    batch = latest_batch_for_symbol(symbol, source=source) or {}
     qa_report = batch.get("qa_report") or {}
     benchmark = _benchmark_snapshot(parameters, fingerprint)
     symbols_to_gate = [symbol]
     if benchmark.get("symbol") and benchmark["symbol"] != symbol:
         symbols_to_gate.append(benchmark["symbol"])
     quality_gates = [quality_gate_range(item, start, end) for item in symbols_to_gate if item]
+    from .data_coverage import ashare_coverage
+
+    coverage_summary = ashare_coverage(
+        symbols=[symbol],
+        benchmark=benchmark.get("symbol") or str(parameters.get("benchmarkSymbol") or "000300"),
+        start_date=start,
+        end_date=end,
+        source=source,
+    )
     bar_count = max(_int_value(coverage.get("bar_count")), _int_value(coverage.get("market_bar_count")))
     status_count = _int_value(coverage.get("status_count"))
     coverage_passed = bar_count > 0 and status_count >= bar_count
@@ -164,6 +175,7 @@ def build_backtest_validation(
                 },
                 "benchmark": benchmark,
                 "qualityGates": quality_gates,
+                "coverageSummary": coverage_summary,
             },
             "gates": gates,
             "passed": passed,

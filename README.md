@@ -347,6 +347,41 @@ docker compose --profile app up -d --build
 LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker
 ```
 
+Level 3 shadow 验收入口：
+
+```bash
+web/backend/.venv/bin/python scripts/db_migrate.py --status --json
+web/backend/.venv/bin/python scripts/import_instrument_identifiers.py \
+  --symbols 600519,000001,300750,000300 \
+  --source akshare \
+  --json
+web/backend/.venv/bin/python scripts/run_daily_shadow_pipeline.py \
+  --symbols 600519,000001,300750 \
+  --benchmark 000300 \
+  --source akshare \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-30 \
+  --min-trading-days 10 \
+  --json
+web/backend/.venv/bin/python scripts/run_paper_constraints_acceptance.py \
+  --symbols 600519,000001,300750 \
+  --benchmark 000300 \
+  --source akshare \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-30 \
+  --json
+web/backend/.venv/bin/python scripts/run_level3_shadow_audit.py \
+  --symbols 600519,000001,300750 \
+  --benchmark 000300 \
+  --source akshare \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-30 \
+  --min-trading-days 10 \
+  --json
+```
+
+这些命令只针对 A 股日线小范围影子 Paper Replay，不连接真实券商、不发真实订单。默认生产 source 为 `akshare`；`test`、`baostock`、`adata` 等研究源必须显式传入 `allowResearchSource=true` 才能用于研究查询，不能进入生产 backtest/Paper 默认链路。
+
 本地开发仍可只用下面的手动 API/worker/frontend 启动方式。
 
 安装：

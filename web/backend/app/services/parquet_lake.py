@@ -7,6 +7,7 @@ from typing import Any
 
 from ..core.config import PARQUET_COMPRESSION, PARQUET_DIR
 from ..db import db, json_dump, rows_to_dicts, utc_now
+from .source_gate import PRODUCTION_SOURCES, require_source_allowed, source_certification
 
 try:  # pragma: no cover - exercised when dependency is installed.
     import duckdb
@@ -254,6 +255,7 @@ def _available_scopes(
     data_type: str | None = None,
     adjust: str | None = None,
     sources: list[str] | None = None,
+    include_research_sources: bool = False,
 ) -> list[dict[str, str]]:
     predicates: list[str] = []
     params: list[Any] = []
@@ -270,10 +272,14 @@ def _available_scopes(
             predicates.append(f"{column} = ?")
             params.append(_clean(value))
     if sources:
-        normalized = [_clean(source) for source in sources if source.strip()]
+        normalized = [require_source_allowed(source, allow_research_source=include_research_sources) for source in sources if source.strip()]
         if normalized:
             predicates.append(f"source in ({', '.join('?' for _ in normalized)})")
             params.extend(normalized)
+    elif not include_research_sources:
+        normalized = sorted(PRODUCTION_SOURCES)
+        predicates.append(f"source in ({', '.join('?' for _ in normalized)})")
+        params.extend(normalized)
     where = f"where {' and '.join(predicates)}" if predicates else ""
     with db() as connection:
         rows = connection.execute(
@@ -324,14 +330,22 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
     first_date = min((str(row["trade_date"]) for row in rows), default=None)
     last_date = max((str(row["trade_date"]) for row in rows), default=None)
     root_path = _logical_parquet_path(root)
+    certification = source_certification(
+        scope["source"],
+        asset_class=scope["asset_class"],
+        market=scope["market"],
+        venue=scope["venue"],
+    )
     with db() as connection:
         connection.execute(
             """
             insert into parquet_datasets
                 (id, dataset_key, asset_class, market, venue, resolution, data_type, adjust, source,
                  root_path, schema_version, start_date, end_date, row_count, file_count,
+                 dataset_version, environment, is_production, is_certified, certified_at, certified_by,
+                 coverage_start, coverage_end, qa_status, qa_report_id,
                  metadata_json, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(dataset_key) do update set
                 asset_class = excluded.asset_class,
                 market = excluded.market,
@@ -346,6 +360,16 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 end_date = excluded.end_date,
                 row_count = excluded.row_count,
                 file_count = excluded.file_count,
+                dataset_version = excluded.dataset_version,
+                environment = excluded.environment,
+                is_production = excluded.is_production,
+                is_certified = excluded.is_certified,
+                certified_at = excluded.certified_at,
+                certified_by = excluded.certified_by,
+                coverage_start = excluded.coverage_start,
+                coverage_end = excluded.coverage_end,
+                qa_status = excluded.qa_status,
+                qa_report_id = excluded.qa_report_id,
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at
             """,
@@ -365,6 +389,16 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 last_date,
                 len(rows),
                 len(files),
+                certification.get("datasetVersion") or key,
+                certification.get("environment"),
+                1 if certification.get("isProduction") else 0,
+                1 if certification.get("isCertified") else 0,
+                certification.get("certifiedAt"),
+                certification.get("certifiedBy"),
+                first_date,
+                last_date,
+                certification.get("qaStatus"),
+                certification.get("qaReportId"),
                 json_dump(metadata),
                 now,
                 now,
@@ -504,9 +538,10 @@ def parquet_consistency_report(
     data_type: str | None = None,
     adjust: str | None = None,
     sources: list[str] | None = None,
+    include_research_sources: bool = False,
     persist: bool = True,
 ) -> dict[str, Any]:
-    normalized_sources = [_clean(source) for source in sources or [] if source.strip()]
+    normalized_sources = [require_source_allowed(source, allow_research_source=include_research_sources) for source in sources or [] if source.strip()]
     with db() as connection:
         predicates: list[str] = []
         params: list[Any] = []
@@ -525,6 +560,8 @@ def parquet_consistency_report(
         if normalized_sources:
             predicates.append(f"source in ({', '.join('?' for _ in normalized_sources)})")
             params.extend(normalized_sources)
+        elif not include_research_sources:
+            predicates.append("is_production = 1 and is_certified = 1")
         where = f"where {' and '.join(predicates)}" if predicates else ""
         rows = connection.execute(
             f"""
@@ -638,6 +675,7 @@ def rebuild_all_market_parquet(
     data_type: str | None = None,
     adjust: str | None = None,
     sources: list[str] | None = None,
+    include_research_sources: bool = False,
     start_date: str | None = None,
     end_date: str | None = None,
     continue_on_error: bool = True,
@@ -651,6 +689,7 @@ def rebuild_all_market_parquet(
         data_type=data_type,
         adjust=adjust,
         sources=sources,
+        include_research_sources=include_research_sources,
     )
     rebuilt: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -669,6 +708,7 @@ def rebuild_all_market_parquet(
         data_type=data_type,
         adjust=adjust,
         sources=sources,
+        include_research_sources=include_research_sources,
         persist=persist_report,
     )
     return {
@@ -731,6 +771,7 @@ def query_duckdb_bars(
 ) -> dict[str, Any]:
     if duckdb is None:
         return {"enabled": False, "source": "duckdb", "items": [], "count": 0, "error": "duckdb is not installed"}
+    provider_source = require_source_allowed(provider_source, allow_research_source=False)
     scope = _normalize_scope(asset_class, market or venue or "china", venue, resolution, data_type, adjust, provider_source)
     dataset, files = _dataset_files(scope)
     if not dataset or not files:

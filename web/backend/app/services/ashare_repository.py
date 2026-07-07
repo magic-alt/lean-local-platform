@@ -768,33 +768,41 @@ def is_tradeable(symbol: str, trade_date: str, side: str) -> tuple[bool, str]:
     return True, "ok"
 
 
-def latest_batch_for_symbol(symbol: str) -> dict[str, Any] | None:
+def latest_batch_for_symbol(symbol: str, source: str | None = None) -> dict[str, Any] | None:
+    source_clause = "and d.source = ?" if source else ""
+    params: list[Any] = [symbol]
+    if source:
+        params.append(source)
     with db() as connection:
         row = connection.execute(
-            """
+            f"""
             select b.* from data_import_batches b
             join ashare_daily_bars d on d.batch_id = b.id
             where d.symbol = ?
+              {source_clause}
             order by b.started_at desc
             limit 1
             """,
-            (symbol,),
+            params,
         ).fetchone()
     return row_to_dict(row)
 
 
-def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw") -> dict[str, Any]:
+def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw", source: str | None = None) -> dict[str, Any]:
+    source_clause = "and source = ?" if source else ""
+    source_params: list[Any] = [source] if source else []
     with db() as connection:
         row = connection.execute(
-            """
+            f"""
             select count(*) as raw_count,
                    count(distinct trade_date) as count,
                    min(trade_date) as first_date,
                    max(trade_date) as last_date
             from ashare_daily_bars
             where symbol = ? and adjust = ? and trade_date >= ? and trade_date <= ?
+              {source_clause}
             """,
-            (symbol, adjust, start, end),
+            (symbol, adjust, start, end, *source_params),
         ).fetchone()
         status_row = connection.execute(
             """
@@ -804,14 +812,15 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw") -> dic
             (symbol, start, end),
         ).fetchone()
         market_row = connection.execute(
-            """
+            f"""
             select count(distinct trade_date) as count, min(trade_date) as first_date, max(trade_date) as last_date
             from market_daily_bars
             where symbol = ? and asset_class = 'equity' and market = 'china'
               and resolution = 'daily' and data_type = 'trade' and adjust = ?
               and trade_date >= ? and trade_date <= ?
+              {source_clause}
             """,
-            (symbol, adjust, start, end),
+            (symbol, adjust, start, end, *source_params),
         ).fetchone()
     return {
         "bar_count": row["count"] if row else 0,
@@ -961,14 +970,15 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
     }
 
 
-def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw") -> None:
+def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw", source: str | None = None) -> None:
     if not get_security(symbol):
         raise LeanWebError(f"A-share security master is missing for {symbol}. Import or register the security first.")
     trade_dates = trade_dates_between("china", start, end)
-    coverage = data_coverage(symbol, start, end, adjust)
+    coverage = data_coverage(symbol, start, end, adjust, source=source)
     bar_count = max(int(coverage["bar_count"] or 0), int(coverage["market_bar_count"] or 0))
     if bar_count <= 0:
-        raise LeanWebError(f"A-share daily bars are missing for {symbol} in {start} -> {end}.")
+        suffix = f" source={source}" if source else ""
+        raise LeanWebError(f"A-share daily bars are missing for {symbol} in {start} -> {end}{suffix}.")
     expected_dates = len(trade_dates) if trade_dates else bar_count
     if bar_count < expected_dates:
         raise LeanWebError(
@@ -977,7 +987,7 @@ def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw") 
         )
     if coverage["status_count"] < bar_count:
         raise LeanWebError(f"A-share trade status is incomplete for {symbol} in {start} -> {end}.")
-    batch = latest_batch_for_symbol(symbol)
+    batch = latest_batch_for_symbol(symbol, source=source)
     if not batch:
         raise LeanWebError(f"A-share import batch is missing for {symbol}.")
     qa_report = batch.get("qa_report") or {}
@@ -996,13 +1006,14 @@ def assert_benchmark_ready(
     resolution: str = "daily",
     data_type: str = "trade",
     adjust: str = "raw",
+    source: str | None = None,
 ) -> None:
     benchmark = str(symbol or "").strip().upper()
     if not benchmark:
         raise LeanPlatformError("benchmark_missing: A-share benchmarkSymbol is required.")
     with db() as connection:
         row = connection.execute(
-            """
+            f"""
             select count(distinct trade_date) as row_count,
                    min(trade_date) as first_date,
                    max(trade_date) as last_date
@@ -1010,6 +1021,7 @@ def assert_benchmark_ready(
             where symbol = ? and asset_class = ? and market = ? and venue = ?
               and resolution = ? and data_type = ? and adjust = ?
               and trade_date between ? and ?
+              {"and source = ?" if source else ""}
             """,
             (
                 benchmark,
@@ -1021,6 +1033,7 @@ def assert_benchmark_ready(
                 adjust or "raw",
                 start,
                 end,
+                *([source] if source else []),
             ),
         ).fetchone()
     benchmark_row = dict(row) if row else {}

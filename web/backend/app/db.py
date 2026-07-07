@@ -3,6 +3,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
@@ -235,6 +236,13 @@ class MySQLConnection:
 
     def execute(self, sql: str, parameters: Iterable[Any] | dict[str, Any] | None = None):
         translated = _translate_mysql_sql(_strip_leading_sql_comments(sql))
+        add_column_info = _parse_alter_table_add_column(translated)
+        if add_column_info:
+            table_name, column_name = add_column_info
+            with self._connection.cursor() as cursor:
+                cursor.execute("show columns from `%s` like %%s" % table_name, (column_name,))
+                if cursor.fetchone():
+                    return cursor
         index_info = _parse_create_index_if_not_exists(translated)
         if index_info:
             index_name, table_name = index_info
@@ -242,7 +250,12 @@ class MySQLConnection:
                 cursor.execute("show index from `%s` where Key_name = %%s" % table_name, (index_name,))
                 if cursor.fetchone():
                     return cursor
-            translated = re.sub(r"\bcreate\s+index\s+if\s+not\s+exists\b", "create index", translated, flags=re.IGNORECASE)
+            translated = re.sub(
+                r"\bcreate\s+(unique\s+)?index\s+if\s+not\s+exists\b",
+                lambda match: f"create {match.group(1) or ''}index",
+                translated,
+                flags=re.IGNORECASE,
+            )
         cursor = self._connection.cursor()
         cursor.execute(translated, parameters)
         return cursor
@@ -299,7 +312,18 @@ def _strip_leading_sql_comments(sql: str) -> str:
 
 
 def _parse_create_index_if_not_exists(sql: str) -> tuple[str, str] | None:
-    match = re.match(r"\s*create\s+index\s+if\s+not\s+exists\s+`?([A-Za-z0-9_]+)`?\s+on\s+`?([A-Za-z0-9_]+)`?", sql, flags=re.IGNORECASE)
+    match = re.match(r"\s*create\s+(?:unique\s+)?index\s+if\s+not\s+exists\s+`?([A-Za-z0-9_]+)`?\s+on\s+`?([A-Za-z0-9_]+)`?", sql, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _parse_alter_table_add_column(sql: str) -> tuple[str, str] | None:
+    match = re.match(
+        r"\s*alter\s+table\s+`?([A-Za-z0-9_]+)`?\s+add\s+column\s+`?([A-Za-z0-9_]+)`?",
+        sql,
+        flags=re.IGNORECASE,
+    )
     if not match:
         return None
     return match.group(1), match.group(2)
@@ -1487,7 +1511,17 @@ def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def json_dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def relative_path(path: Path | str | None) -> str | None:

@@ -2,6 +2,19 @@
 
 本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
 
+## 2026-07-07 - 本次提交 - Add Level 3 shadow pass pipeline
+
+- 新增生产数据源门禁：A 股日线 backtest、Paper、Data API、Parquet/DuckDB 查询默认只允许 certified production source，`source=test/baostock/adata` 需显式 `allowResearchSource=true` 才可进入研究查询。
+- 新增 dataset/source certification 元数据迁移，`parquet_datasets`、`dataset_versions` 和 run fingerprint 记录 source、dataset version、certification 与 QA report。
+- 新增 `instrument_identifiers` 回填服务和 `scripts/import_instrument_identifiers.py`，从 canonical securities/instruments/market bars 生成 raw、exchange、ts_code、LEAN ticker、provider symbol 映射。
+- 新增数据覆盖 API：`/api/data/coverage/ashare`、`/api/data/coverage/symbol/{symbol}`、`/api/data/coverage/benchmark/{symbol}`，并把 coverage summary 写入 Paper daily report。
+- 新增 `scripts/run_daily_shadow_pipeline.py`，串联环境检查、source gate、coverage、QA、Parquet consistency、LEAN cache restore、backtest smoke、Paper replay 和 Reports API。
+- 新增 `scripts/run_paper_constraints_acceptance.py`，覆盖 blacklisted、observe_only、st_blocked、max_positions、cash_floor、not_in_watchlist、qa_failed、benchmark missing 和 same_close 默认禁止。
+- 新增 `scripts/run_level3_shadow_audit.py`，固化 Level 3 shadow 本地审计，输出 `LEVEL3_PASS`、`LEVEL3_CANDIDATE` 或 `LEVEL3_FAIL`。
+- Reports API 默认返回轻量列表，detail/object 通过独立 API 读取；新增 `scripts/cleanup_report_artifacts.py` 支持 dry-run artifact retention 检查。
+- 自研 migration runner 增加 checksum、execution time、status/verify 命令，新增 `scripts/db_migrate.py`。
+- 后端全量测试通过：`107 passed, 1 skipped`。
+
 ## 2026-07-06 - 本次提交 - Close Level 3 P1 audit gaps
 
 - 补充 `baostock` 后端依赖，确保 AData/Baostock 多源导入路径可安装并有 canonical 落库回归覆盖。

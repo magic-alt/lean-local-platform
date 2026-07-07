@@ -9,6 +9,8 @@ from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from .ashare_repository import is_tradeable
 from .ashare_multisource import quality_gate
+from .data_coverage import ashare_coverage
+from .source_gate import apply_source_context, resolve_source_context
 from .trading_config import ashare_trading_config
 
 
@@ -103,6 +105,7 @@ def _daily_report_api_item(item: dict[str, Any]) -> dict[str, Any]:
         "rejectionReasons",
         "positionWeights",
         "dataSourceStatus",
+        "coverageSummary",
         "warnings",
         "fingerprint",
         "signals",
@@ -182,7 +185,16 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         "cash": cash,
     }
     if request.asset_class == "equity" and request.venue == "china":
+        source_context = resolve_source_context(
+            {**clean, **parameters},
+            allow_research_source=bool(parameters.get("allowResearchSource")),
+            asset_class=request.asset_class,
+            market="china",
+            venue=request.venue,
+        )
+        clean = apply_source_context(clean, source_context)
         clean.update(ashare_trading_config(clean, parameters))
+    clean["executionPolicy"] = _validate_execution_policy_parameters(clean)
     with db() as connection:
         connection.execute(
             """
@@ -222,45 +234,61 @@ def update_session_status(session_id: str, status: str) -> dict[str, Any]:
     return get_session(session_id) or {}
 
 
-def _ashare_bar(symbol: str, trade_date: str) -> dict[str, Any] | None:
+def _ashare_bar(symbol: str, trade_date: str, source: str | None = None) -> dict[str, Any] | None:
+    source_clause = "and source = ?" if source else ""
+    params: list[Any] = [symbol, trade_date]
+    if source:
+        params.append(source)
     with db() as connection:
         row = connection.execute(
-            """
+            f"""
             select * from ashare_daily_bars
             where symbol = ? and trade_date = ? and adjust = 'raw'
+              {source_clause}
             order by source desc
             limit 1
             """,
-            (symbol, trade_date),
+            params,
         ).fetchone()
     return row_to_dict(row)
 
 
-def _market_bar(symbol: str, trade_date: str, *, asset_class: str = "equity", market: str = "china") -> dict[str, Any] | None:
+def _market_bar(symbol: str, trade_date: str, *, asset_class: str = "equity", market: str = "china", source: str | None = None) -> dict[str, Any] | None:
+    source_clause = "and source = ?" if source else ""
+    params: list[Any] = [symbol, trade_date, asset_class, market]
+    if source:
+        params.append(source)
     with db() as connection:
         row = connection.execute(
-            """
+            f"""
             select * from market_daily_bars
             where symbol = ? and trade_date = ? and asset_class = ? and market = ?
               and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
+              {source_clause}
             order by source desc
             limit 1
             """,
-            (symbol, trade_date, asset_class, market),
+            params,
         ).fetchone()
     return row_to_dict(row)
 
 
-def _latest_ashare_bars(symbol: str, trade_date: str, limit: int) -> list[dict[str, Any]]:
+def _latest_ashare_bars(symbol: str, trade_date: str, limit: int, source: str | None = None) -> list[dict[str, Any]]:
+    source_clause = "and source = ?" if source else ""
+    params: list[Any] = [symbol, trade_date]
+    if source:
+        params.append(source)
+    params.append(limit)
     with db() as connection:
         rows = connection.execute(
-            """
+            f"""
             select * from ashare_daily_bars
             where symbol = ? and trade_date <= ? and adjust = 'raw'
+              {source_clause}
             order by trade_date desc
             limit ?
             """,
-            (symbol, trade_date, limit),
+            params,
         ).fetchall()
     return list(reversed(rows_to_dicts(rows)))
 
@@ -332,7 +360,7 @@ def generate_daily_signal_for_symbol(session_id: str, symbol: str, trade_date: s
     slow = int(parameters.get("slow") or parameters.get("parameters", {}).get("slow") or 20)
     if fast >= slow:
         slow = fast + 1
-    bars = _latest_ashare_bars(symbol, date_value, slow)
+    bars = _latest_ashare_bars(symbol, date_value, slow, source=parameters.get("source"))
     if len(bars) < slow:
         return create_signal(
             session_id,
@@ -464,9 +492,8 @@ def _parameter_bool(parameters: dict[str, Any], key: str, default: bool = False)
     return bool(value)
 
 
-def _execution_policy(session: dict[str, Any]) -> str:
-    parameters = _session_parameters(session)
-    policy = str(parameters.get("executionPolicy") or parameters.get("execution_policy") or "next_open").strip().lower()
+def _normalize_execution_policy(policy: str | None) -> str:
+    value = str(policy or "next_open").strip().lower()
     aliases = {
         "nextopen": "next_open",
         "next-close": "next_close",
@@ -476,12 +503,22 @@ def _execution_policy(session: dict[str, Any]) -> str:
         "sameclose": "same_close",
         "same-day-close": "same_close",
     }
-    policy = aliases.get(policy, policy)
-    if policy not in {"next_open", "next_close", "next_vwap", "same_close"}:
+    value = aliases.get(value, value)
+    if value not in {"next_open", "next_close", "next_vwap", "same_close"}:
         raise ValueError("executionPolicy must be next_open, next_close, next_vwap, or same_close.")
-    if policy == "same_close" and not bool(parameters.get("allowSameDayClose")):
+    return value
+
+
+def _validate_execution_policy_parameters(parameters: dict[str, Any]) -> str:
+    policy = _normalize_execution_policy(parameters.get("executionPolicy") or parameters.get("execution_policy"))
+    if policy == "same_close" and not _parameter_bool(parameters, "allowSameDayClose", False):
         raise ValueError("same_close executionPolicy is disabled unless allowSameDayClose is true.")
     return policy
+
+
+def _execution_policy(session: dict[str, Any]) -> str:
+    parameters = _session_parameters(session)
+    return _validate_execution_policy_parameters(parameters)
 
 
 def _next_trade_date(symbol: str, trade_date: str) -> str | None:
@@ -537,8 +574,8 @@ def _open_signals_due(session: dict[str, Any], execution_date: str, policy: str)
     return due
 
 
-def _execution_bar(symbol: str, execution_date: str) -> dict[str, Any] | None:
-    return _ashare_bar(symbol, execution_date)
+def _execution_bar(session: dict[str, Any], symbol: str, execution_date: str) -> dict[str, Any] | None:
+    return _ashare_bar(symbol, execution_date, source=(_session_parameters(session).get("source")))
 
 
 def _execution_price(bar: dict[str, Any], policy: str) -> float:
@@ -743,7 +780,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
             orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", reason))
             _update_signal(signal["id"], "rejected")
             continue
-        bar = _execution_bar(signal["symbol"], date_value)
+        bar = _execution_bar(session, signal["symbol"], date_value)
         if not bar:
             orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", "bar_missing"))
             _update_signal(signal["id"], "rejected")
@@ -916,13 +953,14 @@ def _position_weights(positions: list[dict[str, Any]], equity: float) -> list[di
 
 
 def _data_source_status(session: dict[str, Any], trade_date: str, benchmark_symbol: str | None) -> dict[str, Any]:
+    source = _session_parameters(session).get("source")
     symbols = []
     for symbol in _session_symbols(session):
-        bar = _market_bar(symbol, trade_date, asset_class=session.get("asset_class") or "equity", market=session.get("venue") or "china") or _ashare_bar(symbol, trade_date)
+        bar = _market_bar(symbol, trade_date, asset_class=session.get("asset_class") or "equity", market=session.get("venue") or "china", source=source) or _ashare_bar(symbol, trade_date, source=source)
         symbols.append({"symbol": symbol, "available": bar is not None, "source": (bar or {}).get("source")})
     benchmark_bar = None
     if benchmark_symbol:
-        benchmark_bar = _market_bar(benchmark_symbol, trade_date, asset_class="equity", market="china") or _ashare_bar(benchmark_symbol, trade_date)
+        benchmark_bar = _market_bar(benchmark_symbol, trade_date, asset_class="equity", market="china", source=source) or _ashare_bar(benchmark_symbol, trade_date, source=source)
     return {
         "symbols": symbols,
         "benchmark": {
@@ -982,6 +1020,13 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         "items": qa_items,
     }
     data_source_status = _data_source_status(session, date_value, snapshot.get("benchmark_symbol"))
+    coverage_summary = ashare_coverage(
+        symbols=_session_symbols(session),
+        benchmark=snapshot.get("benchmark_symbol") or _session_parameters(session).get("benchmarkSymbol") or "000300",
+        start_date=date_value,
+        end_date=date_value,
+        source=_session_parameters(session).get("source"),
+    )
     warnings = []
     if benchmark.get("symbol") and not benchmark.get("close"):
         warnings.append("benchmark_missing")
@@ -990,6 +1035,8 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         warnings.append(f"benchmark_source_missing:{benchmark['symbol']}")
     if qa["severity"] != "ok":
         warnings.append(f"qa_{qa['severity']}")
+    if coverage_summary["severity"] == "warning":
+        warnings.extend(coverage_summary.get("warnings") or ["coverage_warning"])
     fingerprint = _paper_report_fingerprint(
         {
             "session_id": session_id,
@@ -1042,6 +1089,7 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         "benchmark": benchmark,
         "qa": qa,
         "dataSourceStatus": data_source_status,
+        "coverageSummary": coverage_summary,
         "warnings": warnings,
         "fingerprint": fingerprint,
         "generatedAt": utc_now(),
@@ -1096,9 +1144,10 @@ def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:
         raise KeyError("Paper session not found.")
     date_value = parse_date(trade_date).isoformat()
     positions = list_positions(session_id)
+    source = _session_parameters(session).get("source")
     market_value = 0.0
     for position in positions:
-        bar = _ashare_bar(position["symbol"], date_value)
+        bar = _ashare_bar(position["symbol"], date_value, source=source)
         price = float((bar or {}).get("close") or position.get("market_price") or position.get("average_price") or 0)
         value = float(position["quantity"]) * price
         market_value += value
@@ -1113,7 +1162,7 @@ def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:
     benchmark_close = None
     benchmark_return = None
     if benchmark_symbol:
-        benchmark_bar = _market_bar(benchmark_symbol, date_value, asset_class="equity", market="china") or _ashare_bar(benchmark_symbol, date_value)
+        benchmark_bar = _market_bar(benchmark_symbol, date_value, asset_class="equity", market="china", source=source) or _ashare_bar(benchmark_symbol, date_value, source=source)
         if benchmark_bar:
             benchmark_close = float(benchmark_bar["close"])
             with db() as connection:

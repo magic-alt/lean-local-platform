@@ -14,6 +14,7 @@ from ..core.config import BACKEND_DIR, GIT_ROOT
 from ..db import db, rows_to_dicts, utc_now
 from ..lean_engine import data_paths
 from ..lean_engine.symbols import normalize_symbol, symbol_key
+from .source_gate import source_certification
 
 
 def _json_hash(value: Any) -> str:
@@ -151,6 +152,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 from market_daily_bars
                 where symbol = ? and asset_class = ? and market = ? and venue = ?
                   and resolution = ? and data_type = ? and adjust = ?
+                  and source = ?
                   and trade_date between ? and ?
                 """,
                 (
@@ -161,6 +163,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     str(scope["resolution"]).lower(),
                     str(scope["dataType"]).lower(),
                     scope["adjust"],
+                    scope["source"],
                     scope["start"],
                     scope["end"],
                 ),
@@ -185,6 +188,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     from market_daily_bars
                     where symbol = ? and asset_class = ? and market = ? and venue = ?
                       and resolution = ? and data_type = ? and adjust = ?
+                      and source = ?
                       and trade_date between ? and ?
                     """,
                     (
@@ -195,6 +199,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                         str(scope["resolution"]).lower(),
                         str(scope["dataType"]).lower(),
                         scope["adjust"],
+                        scope["source"],
                         scope["start"],
                         scope["end"],
                     ),
@@ -208,6 +213,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     join parquet_datasets d on d.id = f.dataset_id
                     where d.asset_class = ? and d.market = ? and d.venue = ?
                       and d.resolution = ? and d.data_type = ? and d.adjust = ?
+                      and d.source = ?
                     order by f.file_path
                     """,
                     (
@@ -217,6 +223,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                         str(scope["resolution"]).lower(),
                         str(scope["dataType"]).lower(),
                         scope["adjust"],
+                        scope["source"],
                     ),
                 ).fetchall()
             )
@@ -305,6 +312,12 @@ def build_run_fingerprint(
     created_at = utc_now()
     git = git_state()
     data = data_fingerprint(parameters)
+    certification = source_certification(
+        (data.get("scope") or {}).get("source"),
+        asset_class=str((data.get("scope") or {}).get("assetClass") or "equity"),
+        market=str((data.get("scope") or {}).get("market") or "china"),
+        venue=str((data.get("scope") or {}).get("venue") or "china"),
+    )
     docker = docker_image_digest(docker_image)
     if lean_cache is None:
         lean_cache = _local_ashare_cache(parameters)
@@ -336,6 +349,12 @@ def build_run_fingerprint(
         "configFileHash": _file_hash(config_path),
         "config_file_sha256": _file_hash(config_path),
         "data": data,
+        "source": certification.get("source"),
+        "datasetVersion": certification.get("datasetVersion"),
+        "datasetCertification": certification,
+        "dataset_version": certification.get("datasetVersion"),
+        "dataset_is_certified": certification.get("isCertified"),
+        "dataset_qa_report_id": certification.get("qaReportId"),
         "data_batch_id": market_daily.get("last_batch_id"),
         "market_daily_bars_count": market_daily.get("row_count"),
         "trade_status_count": trade_status.get("row_count"),

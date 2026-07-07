@@ -146,13 +146,25 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
     assert reports.status_code == 200
     payload = reports.json()
     item = next(report for report in payload if report["id"] == "backtest:run-1")
-    assert item["source"] == "backtest_run"
-    assert item["result"]["summary_metrics"]["Alpha"] == "0.1"
-    assert {stored["id"] for stored in item["storedObjects"]} == {raw_object["id"], summary_object["id"], order_events_object["id"]}
+    assert item["type"] == "backtest"
+    assert item["hasStoredObjects"] is True
+    assert item["summaryMetrics"]["Alpha"] == "0.1"
+    assert "result" not in item
+    assert "storedObjects" not in item
+
+    full_reports = client.get("/api/reports", params={"detail": True})
+    assert full_reports.status_code == 200
+    full_item = next(report for report in full_reports.json() if report["id"] == "backtest:run-1")
+    assert full_item["result"]["summary_metrics"]["Alpha"] == "0.1"
+    assert {stored["id"] for stored in full_item["storedObjects"]} == {raw_object["id"], summary_object["id"], order_events_object["id"]}
 
     detail = client.get("/api/reports/run-1")
     assert detail.status_code == 200
     assert detail.json()["raw_result_object_id"] == raw_object["id"]
+
+    objects = client.get("/api/reports/backtest:run-1/objects")
+    assert objects.status_code == 200
+    assert {stored["id"] for stored in objects.json()["items"]} == {raw_object["id"], summary_object["id"], order_events_object["id"]}
 
     html = client.get("/api/reports/backtest:run-1/file")
     assert html.status_code == 200
