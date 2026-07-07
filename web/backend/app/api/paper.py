@@ -1,7 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..services import paper as paper_service
 
@@ -9,6 +9,8 @@ router = APIRouter(prefix="/api/paper", tags=["paper"])
 
 
 class PaperSessionCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str | None = None
     projectId: str | None = None
     symbol: str

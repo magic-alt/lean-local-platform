@@ -619,7 +619,7 @@ def _portfolio_constraint_rejection(
 def _target_percent_rejection(session: dict[str, Any], signal: dict[str, Any]) -> str | None:
     cap = _parameter_float(_session_parameters(session), "maxPositionWeight", "max_position_weight", "singleStockMaxWeight")
     requested = float(signal.get("target_percent") or 1.0)
-    if cap is not None and requested > cap:
+    if cap is not None and requested - cap > 1e-12:
         return "max_position_weight"
     return None
 
@@ -726,11 +726,9 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
     if not session:
         raise KeyError("Paper session not found.")
     date_value = parse_date(trade_date).isoformat()
-    if auto_signal:
-        for symbol in _session_symbols(session):
-            if not _signals_for_date_symbol(session_id, date_value, symbol):
-                generate_daily_signal_for_symbol(session_id, symbol, date_value)
     policy = _execution_policy(session)
+    # Daily Paper Replay executes previously generated signals first. New auto
+    # signals are today's close decisions and are eligible from the next session.
     signals = _open_signals_due(session, date_value, policy)
     orders = []
     for signal in signals:
@@ -801,6 +799,10 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         _apply_fill(session, signal["symbol"], side, quantity, price, fee, date_value)
         orders.append(_record_order(session_id, signal, side, quantity, date_value, price, price, fee, "filled"))
         _update_signal(signal["id"], "filled")
+    if auto_signal:
+        for symbol in _session_symbols(session):
+            if not _signals_for_date_symbol(session_id, date_value, symbol):
+                generate_daily_signal_for_symbol(session_id, symbol, date_value)
     snapshot = create_snapshot(session_id, date_value)
     report = create_daily_report(session_id, date_value)
     return {"date": date_value, "executionPolicy": policy, "signals": signals, "orders": orders, "snapshot": snapshot, "report": report}

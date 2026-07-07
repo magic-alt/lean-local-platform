@@ -29,6 +29,7 @@ def import_rows():
         {"date": "2024-01-02", "open": "10", "high": "10.5", "low": "9.8", "close": "10", "volume": "100000"},
         {"date": "2024-01-03", "open": "10.1", "high": "10.6", "low": "10.0", "close": "10.2", "volume": "100000"},
         {"date": "2024-01-04", "open": "10.2", "high": "10.8", "low": "10.1", "close": "10.4", "volume": "100000"},
+        {"date": "2024-01-05", "open": "10.4", "high": "10.9", "low": "10.3", "close": "10.6", "volume": "100000"},
     ]
     return import_ashare_research_data(
         symbol="600519",
@@ -55,6 +56,7 @@ def import_rows_for_symbol(symbol: str):
         {"date": "2024-01-02", "open": "10", "high": "10.5", "low": "9.8", "close": "10", "volume": "100000"},
         {"date": "2024-01-03", "open": "10.1", "high": "10.6", "low": "10.0", "close": "10.2", "volume": "100000"},
         {"date": "2024-01-04", "open": "10.2", "high": "10.8", "low": "10.1", "close": "10.4", "volume": "100000"},
+        {"date": "2024-01-05", "open": "10.4", "high": "10.9", "low": "10.3", "close": "10.6", "volume": "100000"},
     ]
     return import_ashare_research_data(
         symbol=symbol,
@@ -78,7 +80,7 @@ def import_benchmark_rows():
     import app.db as db_module
 
     with db_module.db() as connection:
-        for trade_date, close in (("2024-01-03", 100.0), ("2024-01-04", 101.0)):
+        for trade_date, close in (("2024-01-03", 100.0), ("2024-01-04", 101.0), ("2024-01-05", 102.0)):
             connection.execute(
                 """
                 insert into market_daily_bars
@@ -213,6 +215,11 @@ def test_paper_constraints_cap_weight_and_block_st_buy(tmp_path, monkeypatch):
     assert capped_order["status"] == "rejected"
     assert capped_order["reason"] == "max_position_weight"
 
+    exact_cap = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000, "maxPositionWeight": 0.1})
+    create_signal(exact_cap["id"], trade_date="2024-01-03", side="buy", target_percent=0.1)
+    exact_cap_order = match_daily_orders(exact_cap["id"], "2024-01-04", auto_signal=False)["orders"][0]
+    assert exact_cap_order["status"] == "filled"
+
     import_trade_status(
         [
             {
@@ -259,6 +266,38 @@ def test_paper_multi_symbol_session_fills_then_rejects_max_positions(tmp_path, m
     assert orders[1]["status"] == "rejected"
     assert orders[1]["reason"] == "max_positions"
     assert [position["symbol"] for position in list_positions(session["id"])] == ["600519"]
+
+
+def test_paper_replay_auto_signal_executes_before_generating_next_signal(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows_for_symbol("600519")
+    import_benchmark_rows()
+
+    from app.services.paper import create_session, run_replay
+
+    session = create_session(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "benchmarkSymbol": "000300",
+            "executionPolicy": "next_open",
+            "fast": 1,
+            "slow": 2,
+            "maxPositionWeight": 0.4,
+            "signalTargetPercent": 0.4,
+        }
+    )
+
+    result = run_replay(session["id"], "2024-01-02", "2024-01-05", auto_signal=True)
+    orders = [order for day in result["days"] for order in day["orders"]]
+    signals = [signal for report in result["reports"] for signal in report["signals"]]
+
+    assert [order["status"] for order in orders] == ["filled"]
+    assert {order.get("reason") for order in orders if order.get("reason")} == set()
+    assert sum(1 for signal in signals if signal["side"] == "buy") == 1
+    assert result["positions"][0]["symbol"] == "600519"
 
 
 def test_paper_replay_acceptance_has_fill_rejections_and_canonical_report_fields(tmp_path, monkeypatch):
@@ -412,3 +451,34 @@ def test_paper_api_blocks_st_and_suspended_fixture_with_daily_bars(tmp_path, mon
     assert run_response.status_code == 200
     reasons = {order["symbol"]: order["reason"] for order in run_response.json()["orders"]}
     assert reasons == {"600519": "st_blocked", "000001": "suspended"}
+
+
+def test_paper_api_preserves_strategy_extra_parameters(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/paper",
+        json={
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "maxPositionWeight": 0.03,
+            "signalTargetPercent": 0.03,
+            "fast": 3,
+            "slow": 5,
+            "strategy": "ema_cross",
+        },
+    )
+
+    assert response.status_code == 200
+    parameters = response.json()["parameters"]
+    assert parameters["signalTargetPercent"] == 0.03
+    assert parameters["fast"] == 3
+    assert parameters["slow"] == 5
+    assert parameters["strategy"] == "ema_cross"
