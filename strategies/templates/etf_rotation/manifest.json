@@ -1,0 +1,27 @@
+{
+  "key": "etf_rotation",
+  "name": "ETF Momentum Rotation",
+  "description": "Rotate into the strongest ETF by rolling momentum.",
+  "parameters": [
+    {
+      "key": "symbols",
+      "label": "ETF Symbols",
+      "type": "text",
+      "default": "SPY,QQQ,IWM"
+    },
+    {
+      "key": "lookback",
+      "label": "Momentum Lookback",
+      "type": "number",
+      "default": 63,
+      "min": 2
+    },
+    {
+      "key": "rebalanceDays",
+      "label": "Rebalance Days",
+      "type": "number",
+      "default": 21,
+      "min": 1
+    }
+  ]
+}

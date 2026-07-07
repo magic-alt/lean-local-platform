@@ -5,7 +5,6 @@ from typing import Any
 from .celery_app import celery_app
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, utc_now
-from ..lean_engine.docker import run_docker_backtest
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.ids import new_run_id
 from ..lean_engine.reports import render_report
@@ -333,29 +332,119 @@ def optimize_task(task_id: str, optimization_id: str):
         candidates = parameter_combinations(base_parameters, parameter_grid)
         grid_keys = list(parameter_grid)
         append_log(task_id, f"Optimization expanded to {len(candidates)} candidate(s): {', '.join(grid_keys)}")
+        strategy_path = Path(project["project_path"]) / project["main_file"]
+        runner = LeanRunner(timeout_seconds=int(get_settings().get("jobTimeoutSeconds") or 7200))
         for index, child_params in enumerate(candidates, start=1):
             overrides = {key: child_params.get(key) for key in grid_keys}
+            child_params = {
+                **child_params,
+                "optimizationId": optimization_id,
+                "optimizationCandidateIndex": index,
+                "optimizationOverrides": overrides,
+            }
             run_id = (
                 new_run_id(child_params["ticker"], child_params["start"], child_params["end"])
                 + "-"
                 + candidate_suffix(index, overrides)
             )
+            run_dir = RUNS_DIR / run_id
+            now = utc_now()
+            with db() as connection:
+                connection.execute(
+                    """
+                    insert into backtest_runs
+                        (id, task_id, project_id, symbol, asset_class, venue, resolution, data_type,
+                         parameters_json, status, docker_image, name, work_dir, results_dir, created_at, queued_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        task_id,
+                        task.get("project_id"),
+                        child_params["ticker"],
+                        child_params.get("assetClass", "equity"),
+                        child_params.get("venue") or child_params.get("market"),
+                        child_params.get("resolution", "daily"),
+                        child_params.get("dataType", "trade"),
+                        json_dump(child_params),
+                        "queued",
+                        child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                        f"Optimization {optimization_id} candidate {index}",
+                        str(run_dir),
+                        str(run_dir / "results"),
+                        now,
+                        now,
+                    ),
+                )
             append_log(task_id, f"Running candidate {index}/{len(candidates)} {overrides}")
-            output = run_docker_backtest(
+            update_backtest(run_id, status="running", started_at=utc_now(), work_dir=str(run_dir), results_dir=str(run_dir / "results"))
+            output = runner.run_backtest(
                 run_id,
                 child_params,
-                child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                RUNS_DIR / run_id,
-                lambda line: append_log(task_id, line),
-                algorithm_path=Path(project["project_path"]) / project["main_file"],
+                run_dir=run_dir,
+                output_callback=lambda line: append_log(task_id, line),
+                docker_image=child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                algorithm_path=strategy_path,
                 algorithm_class=project["algorithm_class"],
                 language=project["language"],
                 project_dir=Path(project["project_path"]),
             )
+            status = "success" if output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out") else "failed"
+            error = None if status == "success" else output.get("error") or "Optimization candidate failed or did not produce result JSON."
+            finished_at = utc_now()
+            fingerprint = build_run_fingerprint(
+                run_id=run_id,
+                parameters=child_params,
+                docker_image=child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+                lean_cache={},
+                strategy_path=strategy_path,
+                config_path=run_dir / "config.json",
+            )
+            validation = build_backtest_validation(child_params, fingerprint)
+            experiment = build_experiment_record(
+                run_id=run_id,
+                parameters=child_params,
+                fingerprint=fingerprint,
+                project_id=task.get("project_id"),
+                strategy_path=str(strategy_path),
+                validation=validation,
+            )
+            update_backtest(
+                run_id,
+                status=status,
+                result_json_path=output["result_json_path"],
+                summary_json_path=output["summary_json_path"],
+                report_html_path=output["report_html_path"],
+                statistics_json=output["statistics"],
+                exit_code=output["exit_code"],
+                error=error,
+                error_message=error,
+                container_name=output.get("container_name"),
+                work_dir=output.get("work_dir"),
+                results_dir=output.get("results_dir"),
+                finished_at=finished_at,
+                fingerprint_json=fingerprint,
+                validation_json=validation,
+                experiment_json=experiment,
+            )
+            record_experiment_versions(
+                run_id=run_id,
+                project_id=task.get("project_id"),
+                fingerprint=fingerprint,
+                validation=validation,
+                experiment=experiment,
+            )
+            if status == "success" and output["result_json_path"]:
+                persist_result(
+                    run_id,
+                    Path(output["result_json_path"]),
+                    Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
+                    get_backtest(run_id) or {},
+                )
             candidate_result = {
                 "runId": run_id,
                 "index": index,
-                "status": "success" if output["exit_code"] == 0 and output["result_json_path"] else "failed",
+                "status": status,
                 "parameters": child_params,
                 "overrides": overrides,
                 "statistics": output["statistics"],
@@ -367,7 +456,7 @@ def optimize_task(task_id: str, optimization_id: str):
             }
             results.append(candidate_result)
             if candidate_result["status"] != "success":
-                raise LeanPlatformError(f"Candidate {index} {overrides} did not produce a result JSON.")
+                raise LeanPlatformError(f"Candidate {index} {overrides} failed: {error}")
         best = best_candidate(results)
         _update_table(
             "optimization_runs",

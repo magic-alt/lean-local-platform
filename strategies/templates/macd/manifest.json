@@ -1,0 +1,28 @@
+{
+  "key": "macd",
+  "name": "MACD Trend",
+  "description": "Buy on positive MACD histogram, exit on negative histogram.",
+  "parameters": [
+    {
+      "key": "fast",
+      "label": "Fast",
+      "type": "number",
+      "default": 12,
+      "min": 1
+    },
+    {
+      "key": "slow",
+      "label": "Slow",
+      "type": "number",
+      "default": 26,
+      "min": 1
+    },
+    {
+      "key": "signal",
+      "label": "Signal",
+      "type": "number",
+      "default": 9,
+      "min": 1
+    }
+  ]
+}

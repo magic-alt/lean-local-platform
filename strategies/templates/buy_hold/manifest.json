@@ -1,0 +1,6 @@
+{
+  "key": "buy_hold",
+  "name": "Buy & Hold",
+  "description": "Invest once after the first bar and hold.",
+  "parameters": []
+}

@@ -1423,6 +1423,9 @@ def init_db() -> None:
         _add_column(connection, "object_store_items", "stored_object_id", "text")
         _add_column(connection, "paper_portfolio_snapshots", "benchmark_symbol", "text")
         _add_column(connection, "paper_portfolio_snapshots", "benchmark_close", "real")
+        from .migrations.runner import run_migrations
+
+        run_migrations(connection, utc_now)
         _add_column(connection, "paper_portfolio_snapshots", "benchmark_return", "real")
         _add_column(connection, "universe_membership", "announce_date", "text")
         _add_column(connection, "universe_membership", "effective_date", "text")

@@ -53,6 +53,7 @@ def test_strategy_templates_include_p1_standard_set():
     } <= set(templates)
     assert templates["donchian_breakout"]["parameters"][0]["key"] == "lookback"
     assert templates["etf_rotation"]["parameters"][0]["key"] == "symbols"
+    assert templates["sma_cross"]["template_path"].replace("\\", "/").endswith("strategies/templates/sma_cross")
     assert "max(self.highs" in render_python_template("DonchianAlgorithm", "donchian_breakout")
     assert "self.rotation_symbols" in render_python_template("RotationAlgorithm", "etf_rotation")
 

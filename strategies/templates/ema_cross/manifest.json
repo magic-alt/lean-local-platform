@@ -1,0 +1,21 @@
+{
+  "key": "ema_cross",
+  "name": "EMA Cross",
+  "description": "Buy when fast EMA is above slow EMA; liquidate when it crosses below.",
+  "parameters": [
+    {
+      "key": "fast",
+      "label": "Fast EMA",
+      "type": "number",
+      "default": 10,
+      "min": 1
+    },
+    {
+      "key": "slow",
+      "label": "Slow EMA",
+      "type": "number",
+      "default": 30,
+      "min": 1
+    }
+  ]
+}

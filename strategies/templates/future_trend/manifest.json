@@ -1,0 +1,35 @@
+{
+  "key": "future_trend",
+  "name": "Futures Trend",
+  "description": "Continuous futures trend-following template with fractional exposure.",
+  "parameters": [
+    {
+      "key": "fast",
+      "label": "Fast EMA",
+      "type": "number",
+      "default": 5,
+      "min": 1
+    },
+    {
+      "key": "slow",
+      "label": "Slow EMA",
+      "type": "number",
+      "default": 20,
+      "min": 1
+    },
+    {
+      "key": "target",
+      "label": "Target Exposure",
+      "type": "number",
+      "default": 0.2,
+      "min": 0
+    },
+    {
+      "key": "contractWindowDays",
+      "label": "Contract Window",
+      "type": "number",
+      "default": 180,
+      "min": 1
+    }
+  ]
+}

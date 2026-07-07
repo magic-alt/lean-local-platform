@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,7 +11,35 @@ from ..lean_engine.docker import docker_command
 from ..lean_engine.reports import render_report
 from ..lean_engine.results import extract_statistics
 from ..services.ashare_execution import write_ashare_execution_artifacts
-from .docker_runner import DockerRunner
+from .docker_runner import DockerRunResult, DockerRunner
+
+
+@dataclass(frozen=True)
+class BacktestWorkspace:
+    run_id: str
+    run_dir: Path
+    results_dir: Path
+    config_path: Path
+    command: list[str]
+    container_name: str
+    algorithm_container_path: str
+
+
+@dataclass(frozen=True)
+class LeanArtifacts:
+    result_json: Path
+    summary_json: Path
+    report_html: Path
+    manifest_path: Path
+
+
+@dataclass(frozen=True)
+class LeanExecutionResult:
+    docker: DockerRunResult
+    artifacts: LeanArtifacts
+    container_name: str
+    work_dir: Path
+    results_dir: Path
 
 
 class LeanRunner:
@@ -63,18 +92,17 @@ class LeanRunner:
             "artifacts": artifacts,
         }
 
-    def run_backtest(
+    def prepare(
         self,
         run_id: str,
         parameters: dict[str, Any],
         run_dir: Path,
-        output_callback: Callable[[str], None],
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         algorithm_path: Path = ALGORITHM_PATH,
         algorithm_class: str = "DockerDemoAlgorithm",
         language: str = "Python",
         project_dir: Path | None = None,
-    ) -> dict[str, Any]:
+    ) -> BacktestWorkspace:
         results_dir = run_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         write_ashare_execution_artifacts(run_dir, parameters)
@@ -93,7 +121,6 @@ class LeanRunner:
             ),
             encoding="utf-8",
         )
-
         command = docker_command(
             config_path,
             results_dir,
@@ -103,26 +130,49 @@ class LeanRunner:
             project_dir=project_dir,
             support_dir=run_dir if parameters.get("ashareRules") else None,
         )
-        container_name = self.container_name_for(run_id)
-        output = DockerRunner(self.timeout_seconds).run(command, output_callback, container_name=container_name)
+        return BacktestWorkspace(
+            run_id=run_id,
+            run_dir=run_dir,
+            results_dir=results_dir,
+            config_path=config_path,
+            command=command,
+            container_name=self.container_name_for(run_id),
+            algorithm_container_path=algorithm_container_path,
+        )
 
-        result_json = results_dir / f"{run_id}.json"
-        summary_json = results_dir / f"{run_id}-summary.json"
-        report_html = results_dir / "report.html"
-        if output.exit_code == 0 and result_json.exists():
-            render_report(result_json, report_html)
-        manifest_path = results_dir / "artifact-manifest.json"
-        manifest_path.write_text(
+    def run(self, workspace: BacktestWorkspace, output_callback: Callable[[str], None]) -> DockerRunResult:
+        return DockerRunner(self.timeout_seconds).run(
+            workspace.command,
+            output_callback,
+            container_name=workspace.container_name,
+        )
+
+    def collect(self, workspace: BacktestWorkspace) -> LeanArtifacts:
+        return LeanArtifacts(
+            result_json=workspace.results_dir / f"{workspace.run_id}.json",
+            summary_json=workspace.results_dir / f"{workspace.run_id}-summary.json",
+            report_html=workspace.results_dir / "report.html",
+            manifest_path=workspace.results_dir / "artifact-manifest.json",
+        )
+
+    def parse(self, artifacts: LeanArtifacts) -> dict[str, Any]:
+        if not artifacts.result_json.exists():
+            return {}
+        summary = artifacts.summary_json if artifacts.summary_json.exists() else None
+        return extract_statistics(artifacts.result_json, summary)
+
+    def archive(self, workspace: BacktestWorkspace, docker_output: DockerRunResult, artifacts: LeanArtifacts) -> None:
+        artifacts.manifest_path.write_text(
             json.dumps(
                 self._artifact_manifest(
-                    run_id=run_id,
-                    run_dir=run_dir,
-                    results_dir=results_dir,
-                    config_path=config_path,
-                    exit_code=output.exit_code,
-                    timed_out=output.timed_out,
-                    error=output.error,
-                    container_name=container_name,
+                    run_id=workspace.run_id,
+                    run_dir=workspace.run_dir,
+                    results_dir=workspace.results_dir,
+                    config_path=workspace.config_path,
+                    exit_code=docker_output.exit_code,
+                    timed_out=docker_output.timed_out,
+                    error=docker_output.error,
+                    container_name=workspace.container_name,
                 ),
                 ensure_ascii=False,
                 indent=2,
@@ -130,18 +180,56 @@ class LeanRunner:
             encoding="utf-8",
         )
 
+    def execute(self, workspace: BacktestWorkspace, output_callback: Callable[[str], None]) -> LeanExecutionResult:
+        docker_output = self.run(workspace, output_callback)
+        artifacts = self.collect(workspace)
+        if docker_output.exit_code == 0 and artifacts.result_json.exists():
+            render_report(artifacts.result_json, artifacts.report_html)
+        self.archive(workspace, docker_output, artifacts)
+        return LeanExecutionResult(
+            docker=docker_output,
+            artifacts=artifacts,
+            container_name=workspace.container_name,
+            work_dir=workspace.run_dir,
+            results_dir=workspace.results_dir,
+        )
+
+    def result_payload(self, execution: LeanExecutionResult) -> dict[str, Any]:
+        artifacts = execution.artifacts
         return {
-            "exit_code": output.exit_code,
-            "timed_out": output.timed_out,
-            "container_name": container_name,
-            "work_dir": str(run_dir),
-            "results_dir": str(results_dir),
-            "result_json_path": str(result_json) if result_json.exists() else None,
-            "summary_json_path": str(summary_json) if summary_json.exists() else None,
-            "report_html_path": str(report_html) if report_html.exists() else None,
-            "artifact_manifest_path": str(manifest_path),
-            "statistics": extract_statistics(result_json, summary_json if summary_json.exists() else None)
-            if result_json.exists()
-            else {},
-            "error": output.error,
+            "exit_code": execution.docker.exit_code,
+            "timed_out": execution.docker.timed_out,
+            "container_name": execution.container_name,
+            "work_dir": str(execution.work_dir),
+            "results_dir": str(execution.results_dir),
+            "result_json_path": str(artifacts.result_json) if artifacts.result_json.exists() else None,
+            "summary_json_path": str(artifacts.summary_json) if artifacts.summary_json.exists() else None,
+            "report_html_path": str(artifacts.report_html) if artifacts.report_html.exists() else None,
+            "artifact_manifest_path": str(artifacts.manifest_path),
+            "statistics": self.parse(artifacts),
+            "error": execution.docker.error,
         }
+
+    def run_backtest(
+        self,
+        run_id: str,
+        parameters: dict[str, Any],
+        run_dir: Path,
+        output_callback: Callable[[str], None],
+        docker_image: str = DEFAULT_DOCKER_IMAGE,
+        algorithm_path: Path = ALGORITHM_PATH,
+        algorithm_class: str = "DockerDemoAlgorithm",
+        language: str = "Python",
+        project_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        workspace = self.prepare(
+            run_id,
+            parameters,
+            run_dir,
+            docker_image=docker_image,
+            algorithm_path=algorithm_path,
+            algorithm_class=algorithm_class,
+            language=language,
+            project_dir=project_dir,
+        )
+        return self.result_payload(self.execute(workspace, output_callback))

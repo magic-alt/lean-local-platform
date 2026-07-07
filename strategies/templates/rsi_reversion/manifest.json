@@ -1,0 +1,28 @@
+{
+  "key": "rsi_reversion",
+  "name": "RSI Mean Reversion",
+  "description": "Buy oversold RSI and exit when RSI recovers.",
+  "parameters": [
+    {
+      "key": "period",
+      "label": "RSI Period",
+      "type": "number",
+      "default": 14,
+      "min": 1
+    },
+    {
+      "key": "buyBelow",
+      "label": "Buy Below",
+      "type": "number",
+      "default": 30,
+      "min": 1
+    },
+    {
+      "key": "sellAbove",
+      "label": "Sell Above",
+      "type": "number",
+      "default": 55,
+      "min": 1
+    }
+  ]
+}

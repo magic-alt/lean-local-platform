@@ -1,0 +1,21 @@
+{
+  "key": "crypto_momentum",
+  "name": "Crypto Momentum",
+  "description": "Momentum template for 24/7 crypto pairs using ROC.",
+  "parameters": [
+    {
+      "key": "lookback",
+      "label": "ROC Lookback",
+      "type": "number",
+      "default": 20,
+      "min": 1
+    },
+    {
+      "key": "threshold",
+      "label": "Threshold",
+      "type": "number",
+      "default": 0,
+      "min": -100
+    }
+  ]
+}

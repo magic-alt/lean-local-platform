@@ -190,6 +190,102 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
     assert pdf_response.content.startswith(b"%PDF-1.4")
 
 
+def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    import json
+    import app.services.projects as projects_module
+    import app.services.tasks as tasks_module
+    import app.tasks.worker as worker_module
+    from app.db import json_dump
+    from app.services.projects import create_project
+    from app.services.tasks import create_task
+
+    monkeypatch.setattr(projects_module, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(tasks_module, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(worker_module, "RUNS_DIR", tmp_path / "runs")
+
+    class DummyLeanRunner:
+        def __init__(self, timeout_seconds):
+            self.timeout_seconds = timeout_seconds
+
+        def run_backtest(self, run_id, parameters, run_dir, output_callback, **kwargs):
+            results_dir = run_dir / "results"
+            results_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "config.json").write_text(json.dumps({"parameters": parameters}), encoding="utf-8")
+            result_json = results_dir / f"{run_id}.json"
+            result_json.write_text(
+                json.dumps(
+                    {
+                        "statistics": {"Sharpe Ratio": str(parameters["fast"])},
+                        "charts": {
+                            "Strategy Equity": {
+                                "series": {
+                                    "Equity": {"values": [[0, 100000], [86400, 101000]]},
+                                    "Return": {"values": [[0, 0], [86400, 0.01]]},
+                                }
+                            },
+                            "Drawdown": {"series": {"Equity Drawdown": {"values": [[0, 0], [86400, -0.01]]}}},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_html = results_dir / "report.html"
+            report_html.write_text("<html></html>", encoding="utf-8")
+            return {
+                "exit_code": 0,
+                "timed_out": False,
+                "container_name": f"lean-{run_id}"[:60],
+                "work_dir": str(run_dir),
+                "results_dir": str(results_dir),
+                "result_json_path": str(result_json),
+                "summary_json_path": None,
+                "report_html_path": str(report_html),
+                "artifact_manifest_path": str(results_dir / "artifact-manifest.json"),
+                "statistics": {"Sharpe Ratio": str(parameters["fast"])},
+                "error": None,
+            }
+
+    monkeypatch.setattr(worker_module, "LeanRunner", DummyLeanRunner)
+    project = create_project("Optimization Unit", template_key="ema_cross")
+    parameters = {
+        "ticker": "SPY",
+        "assetClass": "equity",
+        "market": "usa",
+        "venue": "usa",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": "2020-01-01",
+        "end": "2020-12-31",
+        "cash": 100000,
+        "dockerImage": "lean:test",
+        "parameterGrid": {"fast": [5, 10]},
+        "parameterSchema": [],
+    }
+    task = create_task("optimization", "Optimize SPY", parameters, project["id"], "opt-1")
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into optimization_runs
+                (id, task_id, project_id, status, parameters_json, results_dir, created_at)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("opt-1", task["id"], project["id"], "queued", json_dump(parameters), str(tmp_path / "runs" / "optimization-opt-1"), "2026-07-07T00:00:00+00:00"),
+        )
+
+    worker_module.optimize_task.run(task["id"], "opt-1")
+
+    with db_module.db() as connection:
+        child_runs = connection.execute("select * from backtest_runs where task_id = ? order by created_at", (task["id"],)).fetchall()
+        result_count = connection.execute("select count(*) as count from backtest_results").fetchone()["count"]
+        optimization = connection.execute("select * from optimization_runs where id = ?", ("opt-1",)).fetchone()
+    assert len(child_runs) == 2
+    assert {row["status"] for row in child_runs} == {"success"}
+    assert result_count == 2
+    assert json.loads(optimization["result_json"])["candidateCount"] == 2
+
+
 def test_data_assets_are_retained_and_marked_superseded(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

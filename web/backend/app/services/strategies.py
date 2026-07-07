@@ -1,4 +1,11 @@
+import json
+from pathlib import Path
 from typing import Any
+
+from ..core.config import PLATFORM_DIR
+
+
+TEMPLATE_DIR = PLATFORM_DIR / "strategies" / "templates"
 
 
 COMMON_HEADER = '''from AlgorithmImports import *
@@ -414,18 +421,45 @@ COMMON_FOOTER = '''
 '''
 
 
+def _file_templates() -> dict[str, dict[str, Any]]:
+    templates: dict[str, dict[str, Any]] = {}
+    if not TEMPLATE_DIR.exists():
+        return templates
+    for manifest_path in sorted(TEMPLATE_DIR.glob("*/manifest.json")):
+        body_path = manifest_path.parent / "body.py"
+        if not body_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid strategy template manifest: {manifest_path}") from exc
+        key = str(manifest.get("key") or manifest_path.parent.name)
+        templates[key] = {
+            **manifest,
+            "key": key,
+            "body": body_path.read_text(encoding="utf-8"),
+            "template_path": str(manifest_path.parent),
+        }
+    return templates
+
+
+def _templates() -> dict[str, dict[str, Any]]:
+    return {**TEMPLATES, **_file_templates()}
+
+
 def list_templates() -> list[dict[str, Any]]:
     return [
         {key: value for key, value in template.items() if key != "body"}
-        for template in TEMPLATES.values()
+        for template in _templates().values()
     ]
 
 
 def get_template(template_key: str | None) -> dict[str, Any]:
     key = template_key or "ema_cross"
-    if key not in TEMPLATES:
+    templates = _templates()
+    if key not in templates:
         raise ValueError(f"Unknown strategy template: {template_key}")
-    return TEMPLATES[key]
+    return templates[key]
 
 
 def render_python_template(class_name: str, template_key: str | None = None) -> str:

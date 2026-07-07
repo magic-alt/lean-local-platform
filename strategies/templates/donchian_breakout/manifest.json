@@ -1,0 +1,21 @@
+{
+  "key": "donchian_breakout",
+  "name": "Donchian Breakout",
+  "description": "Trend-following breakout using rolling high and low channels.",
+  "parameters": [
+    {
+      "key": "lookback",
+      "label": "Lookback",
+      "type": "number",
+      "default": 20,
+      "min": 2
+    },
+    {
+      "key": "exitLookback",
+      "label": "Exit Lookback",
+      "type": "number",
+      "default": 10,
+      "min": 2
+    }
+  ]
+}

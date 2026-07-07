@@ -1,0 +1,21 @@
+{
+  "key": "sma_cross",
+  "name": "SMA Cross",
+  "description": "Simple moving average cross-over strategy.",
+  "parameters": [
+    {
+      "key": "fast",
+      "label": "Fast SMA",
+      "type": "number",
+      "default": 20,
+      "min": 1
+    },
+    {
+      "key": "slow",
+      "label": "Slow SMA",
+      "type": "number",
+      "default": 60,
+      "min": 1
+    }
+  ]
+}

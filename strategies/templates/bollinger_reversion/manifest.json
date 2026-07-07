@@ -1,0 +1,21 @@
+{
+  "key": "bollinger_reversion",
+  "name": "Bollinger Reversion",
+  "description": "Mean reversion template using rolling close bands.",
+  "parameters": [
+    {
+      "key": "period",
+      "label": "Period",
+      "type": "number",
+      "default": 20,
+      "min": 2
+    },
+    {
+      "key": "deviation",
+      "label": "Deviation",
+      "type": "number",
+      "default": 2.0,
+      "min": 0.1
+    }
+  ]
+}
