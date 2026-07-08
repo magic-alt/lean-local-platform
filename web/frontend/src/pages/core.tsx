@@ -557,8 +557,6 @@ export function DataPage() {
   const [csvForm] = Form.useForm();
   const [queryForm] = Form.useForm();
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
-  const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
-  const csvAssetInfo = assetClasses.data.find((item) => item.key === csvAssetClass);
   const querySymbol = Form.useWatch("symbol", queryForm) || defaultBarPreviewValues.symbol;
   const chartOption = useMemo(() => candlestickOption(queryResult?.items ?? [], querySymbol), [queryResult?.items, querySymbol]);
 
@@ -572,22 +570,18 @@ export function DataPage() {
     const file = values.file?.fileList?.[0]?.originFileObj;
     if (!file) return message.error("Choose a CSV file");
     const formData = new FormData();
-    const columns = {
-      dateCol: "timestamp",
-      openCol: "open",
-      highCol: "high",
-      lowCol: "low",
-      closeCol: "close",
-      volumeCol: "volume"
-    };
     formData.append("symbol", values.symbol ?? "");
     formData.append("assetClass", values.assetClass ?? "equity");
     formData.append("market", values.market ?? "usa");
-    formData.append("overwrite", String(Boolean(values.overwrite)));
+    formData.append("venue", "");
     formData.append("dataType", "trade");
-    Object.entries(columns).forEach(([key, value]) => {
-      formData.append(key, values[key] || value);
-    });
+    formData.append("overwrite", "false");
+    formData.append("dateCol", "timestamp");
+    formData.append("openCol", "open");
+    formData.append("highCol", "high");
+    formData.append("lowCol", "low");
+    formData.append("closeCol", "close");
+    formData.append("volumeCol", "volume");
     formData.append("file", file);
     await api.importCsv(formData);
     message.success("CSV imported");
@@ -649,16 +643,14 @@ export function DataPage() {
         )}
       </Card>
       <Card title="Import CSV" style={{ marginTop: 16 }}>
-        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa" }}>
-          <div className="field-grid six">
+        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa" }}>
+          <div className="field-grid three">
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-            <Form.Item><span>Column mapping uses defaults: timestamp, open, high, low, close, volume</span></Form.Item>
           </div>
           <Space wrap>
             <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
-            <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite existing</Checkbox></Form.Item>
             <Button type="primary" htmlType="submit">Import</Button>
           </Space>
         </Form>
