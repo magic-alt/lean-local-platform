@@ -269,12 +269,31 @@ def query_data(
     limit: int = 500,
 ):
     try:
+        asset_class = assetClass.strip().lower()
+        query_market = market.strip().lower() if market else None
+        query_venue = venue.strip().lower() if venue else None
         query_source = source.strip().lower()
         provider_source = require_source_allowed(providerSource, allow_research_source=allowResearchSource)
+
+        def resolve_symbol(raw: str) -> str:
+            raw_value = raw.strip()
+            if not raw_value:
+                return raw_value
+            if asset_class == "equity":
+                for hint in [query_venue, query_market]:
+                    if hint:
+                        return normalize_symbol(raw_value, hint)
+                if raw_value.startswith(("SH", "SZ", "SS", "BJ", "sh", "sz", "ss", "bj")) or "." in raw_value:
+                    return normalize_symbol(raw_value, "china")
+                if raw_value.replace(".", "").isdigit() and len(raw_value) == 6:
+                    return normalize_symbol(raw_value, "china")
+            return raw_value.strip().upper()
+
+        resolved_symbol = resolve_symbol(symbol)
         if query_source in {"duckdb", "parquet"}:
             return query_duckdb_bars(
-                asset_class=assetClass,
-                symbol=symbol,
+                asset_class=asset_class,
+                symbol=resolved_symbol,
                 market=market,
                 venue=venue,
                 resolution=resolution,
@@ -287,9 +306,10 @@ def query_data(
             )
         query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
         payload = query(
-            asset_class=assetClass,
-            symbol=symbol,
-            venue=venue or market,
+            asset_class=asset_class,
+            symbol=resolved_symbol,
+            market=query_market,
+            venue=query_venue,
             resolution=resolution,
             data_type=dataType,
             provider_source=provider_source,
@@ -297,6 +317,13 @@ def query_data(
             end_date=endDate,
             limit=limit,
         )
+        payload["query"] = {
+            "symbolInput": symbol,
+            "symbol": resolved_symbol,
+            "assetClass": asset_class,
+            "market": query_market,
+            "venue": query_venue,
+        }
         payload["providerSource"] = provider_source
         payload["sourceCertification"] = source_certification(provider_source, asset_class=assetClass, market=market or venue or "china", venue=venue or market)
         return payload

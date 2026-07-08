@@ -48,14 +48,22 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     )
     is_china_equity = parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china"
     if is_china_equity:
-        source_context = resolve_source_context(
-            parameters,
-            allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
-            asset_class=str(parameters.get("assetClass") or "equity"),
-            market=str(parameters.get("market") or "china"),
-            venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+        explicit_source = (
+            request_data.get("source")
+            or request_data.get("providerSource")
+            or request_data.get("provider")
+            or request_data.get("parameters", {}).get("source")
         )
-        parameters = apply_source_context(parameters, source_context)
+        if explicit_source is not None:
+            source_context = resolve_source_context(
+                parameters,
+                source=str(explicit_source),
+                allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
+                asset_class=str(parameters.get("assetClass") or "equity"),
+                market=str(parameters.get("market") or "china"),
+                venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+            )
+            parameters = apply_source_context(parameters, source_context)
         adjust = str(parameters.get("adjust") or "raw")
         assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust, source=parameters.get("source"))
         parameters = merge_ashare_trading_config(parameters, request_data)
@@ -71,7 +79,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             resolution=str(parameters.get("resolution") or "daily"),
             data_type=str(parameters.get("dataType") or "trade"),
             adjust=adjust,
-            source=str(parameters.get("source") or "jqdata"),
+            source=parameters.get("source"),
         )
         if benchmark_symbol:
             symbols_to_gate.append(benchmark_symbol)

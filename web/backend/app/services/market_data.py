@@ -15,6 +15,7 @@ from ..core.config import (
     CLICKHOUSE_PORT,
     CLICKHOUSE_USERNAME,
 )
+from ..lean_engine.symbols import market_key, normalize_symbol
 from ..observability.metrics import set_dependency_status
 
 try:
@@ -39,6 +40,52 @@ BAR_COLUMNS = [
     "volume",
     "imported_at",
 ]
+
+
+def _normalize_query_market(asset_class: str, market: str | None, venue: str | None) -> str | None:
+    if asset_class != "equity":
+        return market or venue
+    resolved = market or venue
+    if not resolved:
+        return None
+    if resolved.strip().lower() in {"china", "usa", "hk", "hongkong"}:
+        return market_key(resolved)
+    return market_key(resolved)
+
+
+def _looks_like_china_equity_symbol(value: str) -> bool:
+    upper = value.strip().upper().replace("_", ".")
+    if upper.startswith(("SH", "SZ", "SS", "BJ")):
+        return True
+    if upper.startswith(("SH.", "SZ.", "SS.", "BJ.")):
+        return True
+    if "." in upper:
+        base, suffix = upper.rsplit(".", 1)
+        if suffix in {"SH", "SZ", "SS", "BJ"}:
+            return True
+    return upper.isdigit() and len(upper) == 6
+
+
+def _normalize_query_symbol(symbol: str, asset_class: str, market: str | None, venue: str | None) -> str:
+    value = str(symbol).strip()
+    if not value:
+        raise ValueError("symbol is required")
+    if asset_class != "equity":
+        return value.upper()
+
+    query_market = _normalize_query_market(asset_class, market, venue)
+    if query_market == "china":
+        return normalize_symbol(value, query_market)
+
+    if query_market == "hongkong":
+        return normalize_symbol(value, query_market)
+
+    if query_market is None:
+        if _looks_like_china_equity_symbol(value):
+            return normalize_symbol(value, "china")
+        return value.upper()
+
+    return value.upper()
 
 
 def _identifier(value: str) -> str:
@@ -157,7 +204,13 @@ def mirror_rows(metadata: dict[str, Any], rows: list[dict[str, str]]) -> dict[st
     ensure_schema()
     imported_at = datetime.now(timezone.utc)
     asset_class = str(metadata.get("asset_class") or metadata.get("assetClass") or "equity")
-    symbol = str(metadata["symbol"]).upper()
+    normalized_symbol = _normalize_query_symbol(
+        metadata["symbol"],
+        str(metadata.get("asset_class") or metadata.get("assetClass") or "equity").strip().lower(),
+        str(metadata.get("market") or "").strip().lower() or None,
+        str(metadata.get("venue") or "").strip().lower() or None,
+    )
+    symbol = normalized_symbol
     venue = str(metadata.get("venue") or metadata.get("market") or "usa")
     resolution = str(metadata.get("resolution") or "daily")
     data_type = str(metadata.get("data_type") or metadata.get("dataType") or "trade")
@@ -198,6 +251,7 @@ def query_bars(
     *,
     asset_class: str = "equity",
     symbol: str,
+    market: str | None = None,
     venue: str | None = None,
     resolution: str = "daily",
     data_type: str = "trade",
@@ -212,14 +266,18 @@ def query_bars(
     if not health["ok"]:
         return {"enabled": False, "items": [], "count": 0, "error": health["detail"]}
     ensure_schema()
+    asset_class_key = asset_class.strip().lower()
+    venue_key = str(market or venue or "").strip().lower() or None
+    normalized_symbol = _normalize_query_symbol(symbol, asset_class_key, market, venue_key)
+
     predicates = [
-        f"asset_class = {_literal(asset_class)}",
-        f"symbol = {_literal(symbol.upper())}",
+        f"asset_class = {_literal(asset_class_key)}",
+        f"symbol = {_literal(normalized_symbol)}",
         f"resolution = {_literal(resolution)}",
         f"data_type = {_literal(data_type)}",
     ]
-    if venue:
-        predicates.append(f"venue = {_literal(venue)}")
+    if venue_key:
+        predicates.append(f"venue = {_literal(venue_key)}")
     if provider_source:
         predicates.append(f"source = {_literal(provider_source)}")
     if start_date:
@@ -255,20 +313,11 @@ def _bounded_limit(limit: int) -> int:
     return max(1, min(int(limit), 5000))
 
 
-def _sqlite_symbol(symbol: str, venue: str | None = None) -> str:
-    value = symbol.strip().upper()
-    if venue and venue.lower() == "china":
-        if value.startswith(("SH", "SZ", "BJ")):
-            return value[2:]
-        if "." in value:
-            return value.split(".", 1)[0]
-    return value
-
-
 def query_database_bars(
     *,
     asset_class: str = "equity",
     symbol: str,
+    market: str | None = None,
     venue: str | None = None,
     resolution: str = "daily",
     data_type: str = "trade",
@@ -278,11 +327,12 @@ def query_database_bars(
     limit: int = 500,
 ) -> dict[str, Any]:
     asset_class_key = asset_class.strip().lower()
-    venue_key = (venue or "").strip().lower()
+    venue_key = (venue or market or "").strip().lower()
+    normalized_symbol = _normalize_query_symbol(symbol, asset_class_key, None, venue_key)
     resolution_key = resolution.strip().lower()
     data_type_key = data_type.strip().lower()
     predicates = ["asset_class = ?", "symbol = ?", "resolution = ?", "data_type = ?"]
-    params: list[Any] = [asset_class_key, _sqlite_symbol(symbol, "china") if asset_class_key == "equity" and venue_key == "china" else symbol.upper(), resolution_key, data_type_key]
+    params: list[Any] = [asset_class_key, normalized_symbol, resolution_key, data_type_key]
     if venue_key:
         predicates.append("venue = ?")
         params.append(venue_key)
@@ -319,44 +369,4 @@ def query_database_bars(
         }
         for row in rows
     ]
-    if not items and asset_class_key == "equity" and venue_key == "china" and resolution_key == "daily" and data_type_key == "trade":
-        fallback_predicates = ["symbol = ?"]
-        fallback_params: list[Any] = [_sqlite_symbol(symbol, "china")]
-        if provider_source:
-            fallback_predicates.append("source = ?")
-            fallback_params.append(provider_source)
-        if start_date:
-            fallback_predicates.append("trade_date >= ?")
-            fallback_params.append(start_date)
-        if end_date:
-            fallback_predicates.append("trade_date <= ?")
-            fallback_params.append(end_date)
-        fallback_params.append(_bounded_limit(limit))
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select trade_date, open, high, low, close, volume, source
-                from ashare_daily_bars
-                where {" and ".join(fallback_predicates)}
-                order by trade_date asc, source asc
-                limit ?
-                """,
-                fallback_params,
-            ).fetchall()
-        items = [
-            {
-                "timestamp": row["trade_date"],
-                "open": row["open"],
-                "high": row["high"],
-                "low": row["low"],
-                "close": row["close"],
-                "volume": row["volume"],
-                "source": row["source"],
-            }
-            for row in rows
-        ]
     return {"enabled": True, "source": "database", "items": items, "count": len(items)}
-
-
-def query_sqlite_bars(**kwargs: Any) -> dict[str, Any]:
-    return query_database_bars(**kwargs)

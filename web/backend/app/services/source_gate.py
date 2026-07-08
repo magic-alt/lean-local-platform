@@ -67,6 +67,28 @@ def jqdata_covers_window(start_date: str | None = None, end_date: str | None = N
     return True
 
 
+def resolve_source_chain(
+    source: str | None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[str]:
+    requested = normalize_source(source)
+    requested_effective = requested
+    if requested == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
+        requested_effective = "akshare"
+
+    chain: list[str] = [requested_effective]
+    for item in DATA_SOURCE_PRIORITY:
+        normalized = normalize_source(item)
+        if normalized not in chain:
+            chain.append(normalized)
+    if requested != requested_effective and requested in chain:
+        # requested source is temporarily out-of-window; prefer the effective source.
+        chain = [requested_effective, requested, *[item for item in chain if item not in {requested_effective, requested}]]
+    return chain
+
+
 def resolve_effective_data_source(
     source: str | None,
     *,
@@ -79,6 +101,7 @@ def resolve_effective_data_source(
     if requested == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
         effective = "akshare"
         reason = "jqdata_entitlement_window_exceeded"
+    chain = resolve_source_chain(source, start_date=start_date, end_date=end_date)
     return {
         "requestedSource": requested,
         "effectiveSource": effective,
@@ -86,6 +109,7 @@ def resolve_effective_data_source(
         "fallbackReason": reason,
         "sourceRole": source_role(effective),
         "requestedSourceRole": source_role(requested),
+        "sourceChain": chain,
         "startDate": _date_key(start_date),
         "endDate": _date_key(end_date),
         "jqdataEntitlement": jqdata_entitlement(),
@@ -98,14 +122,11 @@ def source_priority_for_window(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[str]:
-    policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
-    ordered = [policy["effectiveSource"], *DATA_SOURCE_PRIORITY]
-    result: list[str] = []
-    for item in ordered:
-        normalized = normalize_source(item)
-        if normalized not in result:
-            result.append(normalized)
-    return result
+    return resolve_source_chain(
+        source,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 def require_source_allowed(source: str | None, *, allow_research_source: bool = False) -> str:

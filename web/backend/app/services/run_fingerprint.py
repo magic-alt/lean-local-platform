@@ -119,6 +119,7 @@ def docker_image_digest(image: str | None) -> dict[str, Any]:
 
 
 def market_data_scope(parameters: dict[str, Any]) -> dict[str, Any]:
+    source = parameters.get("source") or parameters.get("provider")
     return {
         "symbol": str(parameters.get("ticker") or parameters.get("symbol") or "").upper(),
         "assetClass": parameters.get("assetClass") or "equity",
@@ -127,7 +128,7 @@ def market_data_scope(parameters: dict[str, Any]) -> dict[str, Any]:
         "resolution": parameters.get("resolution") or "daily",
         "dataType": parameters.get("dataType") or "trade",
         "adjust": parameters.get("adjust") or "raw",
-        "source": parameters.get("source") or parameters.get("provider") or "jqdata",
+        "source": source,
         "start": parameters.get("start"),
         "end": parameters.get("end"),
     }
@@ -141,9 +142,11 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
     benchmark: dict[str, Any] = {}
     parquet_files: list[dict[str, Any]] = []
     if symbol:
+        source_clause = "and source = ?" if scope["source"] else ""
+        source_params = [scope["source"]] if scope["source"] else []
         with db() as connection:
             data_row = connection.execute(
-                """
+                f"""
                 select count(*) as row_count,
                        min(trade_date) as first_date,
                        max(trade_date) as last_date,
@@ -152,7 +155,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 from market_daily_bars
                 where symbol = ? and asset_class = ? and market = ? and venue = ?
                   and resolution = ? and data_type = ? and adjust = ?
-                  and source = ?
+                  {source_clause}
                   and trade_date between ? and ?
                 """,
                 (
@@ -163,7 +166,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     str(scope["resolution"]).lower(),
                     str(scope["dataType"]).lower(),
                     scope["adjust"],
-                    scope["source"],
+                    *source_params,
                     scope["start"],
                     scope["end"],
                 ),
@@ -181,14 +184,14 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
             if benchmark_symbol:
                 benchmark_row = connection.execute(
-                    """
+                    f"""
                     select count(*) as row_count,
                            min(trade_date) as first_date,
                            max(trade_date) as last_date
                     from market_daily_bars
                     where symbol = ? and asset_class = ? and market = ? and venue = ?
                       and resolution = ? and data_type = ? and adjust = ?
-                      and source = ?
+                      {source_clause}
                       and trade_date between ? and ?
                     """,
                     (
@@ -199,7 +202,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                         str(scope["resolution"]).lower(),
                         str(scope["dataType"]).lower(),
                         scope["adjust"],
-                        scope["source"],
+                        *source_params,
                         scope["start"],
                         scope["end"],
                     ),
@@ -207,13 +210,13 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 benchmark = {"symbol": benchmark_symbol, **(dict(benchmark_row) if benchmark_row else {})}
             parquet_files = rows_to_dicts(
                 connection.execute(
-                    """
+                    f"""
                     select f.dataset_id, f.file_path, f.row_count, f.sha256, f.first_timestamp, f.last_timestamp
                     from parquet_files f
                     join parquet_datasets d on d.id = f.dataset_id
                     where d.asset_class = ? and d.market = ? and d.venue = ?
                       and d.resolution = ? and d.data_type = ? and d.adjust = ?
-                      and d.source = ?
+                      {source_clause.replace('source = ?', 'd.source = ?')}
                     order by f.file_path
                     """,
                     (
@@ -223,7 +226,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                         str(scope["resolution"]).lower(),
                         str(scope["dataType"]).lower(),
                         scope["adjust"],
-                        scope["source"],
+                        *source_params,
                     ),
                 ).fetchall()
             )

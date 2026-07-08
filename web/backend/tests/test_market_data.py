@@ -16,23 +16,65 @@ def configure_temp_db(tmp_path, monkeypatch):
     return db_module
 
 
-def test_query_database_bars_reads_local_ashare_table(tmp_path, monkeypatch):
+def test_query_database_bars_reads_local_market_daily_table(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
     with db_module.db() as connection:
         connection.execute(
             """
-            insert into ashare_daily_bars
-                (symbol, trade_date, open, high, low, close, volume, source, batch_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            insert into instruments
+                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("000001", "2026-07-03", 10.29, 10.40, 10.18, 10.29, 86332664, "akshare", "batch-1", "now"),
+            (
+                "inst-000001",
+                "000001",
+                "000001",
+                "平安银行",
+                "equity",
+                "china",
+                "SZ",
+                "china",
+                "active",
+                "{}",
+                "unit",
+                "now",
+                "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-000001",
+                "000001",
+                "equity",
+                "china",
+                "china",
+                "2026-07-03",
+                "daily",
+                "trade",
+                10.29,
+                10.40,
+                10.18,
+                10.29,
+                86332664,
+                100000,
+                "raw",
+                "akshare",
+                "batch-1",
+                "now",
+            ),
         )
 
-    from app.services.market_data import query_sqlite_bars
+    from app.services.market_data import query_database_bars
 
-    result = query_sqlite_bars(
+    result = query_database_bars(
         asset_class="equity",
         symbol="SZ000001",
+        market="china",
         venue="china",
         resolution="daily",
         data_type="trade",
@@ -57,11 +99,52 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
     with db_module.db() as connection:
         connection.execute(
             """
-            insert into ashare_daily_bars
-                (symbol, trade_date, open, high, low, close, volume, source, batch_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            insert into instruments
+                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("600519", "2026-07-03", 1450.0, 1470.0, 1440.0, 1460.0, 1000, "akshare", "batch-1", "now"),
+            (
+                "inst-600519",
+                "600519",
+                "600519",
+                "贵州茅台",
+                "equity",
+                "china",
+                "SH",
+                "china",
+                "active",
+                "{}",
+                "unit",
+                "now",
+                "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-600519",
+                "600519",
+                "equity",
+                "china",
+                "china",
+                "2026-07-03",
+                "daily",
+                "trade",
+                1450.0,
+                1470.0,
+                1440.0,
+                1460.0,
+                1000,
+                100000,
+                "raw",
+                "akshare",
+                "batch-1",
+                "now",
+            ),
         )
 
     from app.main import app

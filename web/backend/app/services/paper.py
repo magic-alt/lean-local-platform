@@ -185,14 +185,22 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         "cash": cash,
     }
     if request.asset_class == "equity" and request.venue == "china":
-        source_context = resolve_source_context(
-            {**clean, **parameters},
-            allow_research_source=bool(parameters.get("allowResearchSource")),
-            asset_class=request.asset_class,
-            market="china",
-            venue=request.venue,
+        explicit_source = (
+            parameters.get("source")
+            or parameters.get("providerSource")
+            or parameters.get("provider")
+            or parameters.get("parameters", {}).get("source")
         )
-        clean = apply_source_context(clean, source_context)
+        if explicit_source is not None:
+            source_context = resolve_source_context(
+                {**clean, **parameters},
+                source=str(explicit_source),
+                allow_research_source=bool(parameters.get("allowResearchSource")),
+                asset_class=request.asset_class,
+                market="china",
+                venue=request.venue,
+            )
+            clean = apply_source_context(clean, source_context)
         clean.update(ashare_trading_config(clean, parameters))
     clean["executionPolicy"] = _validate_execution_policy_parameters(clean)
     with db() as connection:

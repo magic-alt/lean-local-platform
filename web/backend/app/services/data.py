@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
-from .source_gate import jqdata_entitlement, resolve_effective_data_source
+from .source_gate import jqdata_entitlement, resolve_effective_data_source, source_priority_for_window
 from .tushare_adapter import fetch_tushare_rows
 from .jqdata_adapter import fetch_jqdata_rows
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
@@ -614,6 +615,39 @@ def _repair_ohlc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return repaired
 
 
+def _format_source_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return attempts
+
+
+def _build_source_attempt(
+    source: str,
+    status: str,
+    *,
+    rows: int = 0,
+    error: str | None = None,
+    duration_ms: float | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "source": source,
+        "status": status,
+        "rows": rows,
+    }
+    if error is not None:
+        record["error"] = error
+    if duration_ms is not None:
+        record["durationMs"] = round(duration_ms, 2)
+    return record
+
+
+def _provider_chain_for_window(requested: str, start_date: str | None, end_date: str | None) -> list[str]:
+    policy = resolve_effective_data_source(requested, start_date=start_date, end_date=end_date)
+    return source_priority_for_window(
+        source=policy["requestedSource"],
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
 def import_ashare_research_data(
     *,
     symbol: str,
@@ -767,34 +801,93 @@ def fetch_and_import_symbol(
     asset_class = asset_class_key(asset_class)
     resolution = resolution_key(resolution)
     data_type = data_type_key(data_type)
+    source_attempts: list[dict[str, Any]] = []
     if asset_class == "equity":
         market = market_key(market)
         venue = market
         symbol = normalize_symbol(symbol, market)
         if market == "china":
             source_policy = resolve_effective_data_source(provider, start_date=start_date, end_date=end_date)
-            provider = source_policy["effectiveSource"]
+            source_chain = _provider_chain_for_window(provider, start_date=start_date, end_date=end_date)
+            provider_error: Exception | None = None
+            selected_provider: str | None = None
+            selected_rows: list[dict[str, Any]] | None = None
+            for source in source_chain:
+                t0 = time.perf_counter()
+                try:
+                    candidate_rows = fetch_provider_rows(
+                        source,
+                        symbol,
+                        market=market,
+                        asset_class=asset_class,
+                        venue=venue,
+                        resolution=resolution,
+                        api_key=api_key,
+                        outputsize=outputsize,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust=adjust,
+                    )
+                    elapsed = (time.perf_counter() - t0) * 1000
+                    if candidate_rows:
+                        source_attempts.append(_build_source_attempt(source, "success", rows=len(candidate_rows), duration_ms=elapsed))
+                        selected_provider = source
+                        selected_rows = candidate_rows
+                        break
+                    source_attempts.append(_build_source_attempt(source, "empty", rows=0, duration_ms=elapsed))
+                except Exception as exc:  # noqa: BLE001 - provider fetch can fail for different reasons
+                    elapsed = (time.perf_counter() - t0) * 1000
+                    source_error = str(exc)
+                    provider_error = exc
+                    source_attempts.append(
+                        _build_source_attempt(
+                            source,
+                            "failed",
+                            rows=0,
+                            error=source_error,
+                            duration_ms=elapsed,
+                        )
+                    )
+            if selected_rows is None:
+                raise ValueError(
+                    "No active source returned data for A-share symbol; attempted: "
+                    + ", ".join(
+                        f"{item['source']}:{item['status']}" for item in source_attempts
+                    )
+                ) from provider_error
+            rows = selected_rows
+            provider = selected_provider or source_attempts[0]["source"]
     else:
         request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
         market = request.venue
         venue = request.venue
         symbol = request.symbol
-    rows = fetch_provider_rows(
-        provider,
-        symbol,
-        market=market,
-        asset_class=asset_class,
-        venue=venue,
-        resolution=resolution,
-        api_key=api_key,
-        outputsize=outputsize,
-        start_date=start_date,
-        end_date=end_date,
-        adjust=adjust,
-    )
+        rows = fetch_provider_rows(
+            provider,
+            symbol,
+            market=market,
+            asset_class=asset_class,
+            venue=venue,
+            resolution=resolution,
+            api_key=api_key,
+            outputsize=outputsize,
+            start_date=start_date,
+            end_date=end_date,
+            adjust=adjust,
+        )
+    if asset_class == "equity" and market == "china":
+        source_attempts = _format_source_attempts(source_attempts) if source_attempts else [
+            _build_source_attempt(provider, "success", rows=len(rows), duration_ms=0.0)
+        ]
+        source_policy = resolve_effective_data_source(provider, start_date=start_date, end_date=end_date)
+        source_policy["attemptedSources"] = [item["source"] for item in source_attempts]
+        source_policy["sourceAttempts"] = source_attempts
+        source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
+    else:
+        source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
     if asset_class == "equity" and market == "china":
-        return import_ashare_research_data(
+        result = import_ashare_research_data(
             symbol=symbol,
             provider=provider,
             market=market,
@@ -812,6 +905,9 @@ def fetch_and_import_symbol(
             allow_missing_trade_dates=allow_missing_trade_dates,
             repair_ohlc_errors=repair_ohlc_errors,
         )
+        result["sourcePolicy"] = source_policy
+        result["sourceAttempts"] = source_attempts
+        return result
     if asset_class == "crypto":
         metadata = write_lean_crypto_daily_zip(symbol, rows, source, overwrite=overwrite, venue=venue or market, data_type=data_type)
     else:

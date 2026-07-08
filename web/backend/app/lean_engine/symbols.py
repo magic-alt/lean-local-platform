@@ -69,19 +69,60 @@ def symbol_key(symbol: str) -> str:
 
 def normalize_symbol(symbol: str, market: str | None = None) -> str:
     key = market_key(market)
-    value = symbol_key(symbol).upper().replace("_", ".")
-    if key == "usa":
+    if key in {"usa", "crypto", "crypto_future", "future"}:
+        value = symbol.strip().upper().replace("_", ".")
         return value.replace("-", ".")
+
     if key == "china":
-        value = value.replace("SH", "").replace("SZ", "").replace("BJ", "").replace(".", "")
-        if not value.isdigit() or len(value) != 6:
+        value = symbol.strip().upper().replace("_", ".")
+        normalized = _normalize_china_symbol(value)
+        if not (normalized.isdigit() or normalized.startswith(("SH", "SZ", "SS", "BJ", "HK"))):
+            raise LeanPlatformError("A-share symbols must be in a recognized format, e.g. 600519 or SH600519.")
+        if normalized.startswith(("SH", "SZ", "SS", "BJ", "HK")):
+            return normalized
+        if normalized.isdigit() and len(normalized) != 6:
             raise LeanPlatformError("A-share symbols must be 6 digits, e.g. 600519 or 000001.")
-        return value
+        if not normalized.isdigit():
+            raise LeanPlatformError("A-share symbols must be 6 digits, e.g. 600519 or 000001.")
+        return normalized
+
     if key == "hongkong":
+        value = symbol.strip().upper().replace("_", "")
         value = value.replace("HK", "").replace(".", "")
         if not value.isdigit():
             raise LeanPlatformError("Hong Kong symbols must be numeric, e.g. 00700.")
+        if len(value) > 5:
+            raise LeanPlatformError("Hong Kong symbols must be 5 digits max, e.g. 00700.")
         return value.zfill(5)
+
+    return symbol.strip().upper()
+
+
+def _normalize_china_symbol(value: str) -> str:
+    value = value.upper()
+    if value.startswith(("SH.", "SZ.", "SS.", "BJ.")):
+        stripped = value[3:]
+        if stripped.isdigit() and len(stripped) in {5, 6}:
+            return stripped
+        raise LeanPlatformError(f"Invalid A-share symbol: {value!r}")
+    if value.startswith("SH") or value.startswith("SZ") or value.startswith("SS") or value.startswith("BJ"):
+        stripped = value[2:]
+        if stripped.isdigit() and len(stripped) in {5, 6}:
+            return stripped
+        raise LeanPlatformError(f"Invalid A-share symbol: {value!r}")
+    if "." in value:
+        base, suffix = value.rsplit(".", 1)
+        suffix = suffix.upper()
+        if suffix in {"T", "KS", "KQ", "TW", "TWO"} and base.isdigit() and 4 <= len(base) <= 6:
+            return f"{base}.{suffix}"
+        if suffix in {"HK"} and base.isdigit() and 1 <= len(base) <= 5:
+            return f"HK{base.zfill(5)}"
+        if suffix in {"SH", "SZ", "SS", "BJ"} and base.isdigit() and len(base) == 6:
+            return base
+        if base.upper() in {"SH", "SZ", "SS", "BJ"} and suffix.isdigit():
+            return suffix
+        if suffix.isdigit():
+            raise LeanPlatformError(f"Invalid A-share suffix format: {value!r}")
     return value
 
 

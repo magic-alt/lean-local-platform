@@ -7,6 +7,7 @@ from typing import Any
 
 from ..core.config import PARQUET_COMPRESSION, PARQUET_DIR
 from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..lean_engine.symbols import normalize_symbol
 from .source_gate import PRODUCTION_SOURCES, require_source_allowed, source_certification
 
 try:  # pragma: no cover - exercised when dependency is installed.
@@ -123,13 +124,17 @@ def _normalize_scope(
 
 
 def _query_symbol(symbol: str, scope: dict[str, str]) -> str:
-    value = symbol.strip().upper()
-    if scope["asset_class"] == "equity" and scope["market"] == "china":
-        if value.startswith(("SH", "SZ", "BJ")):
-            return value[2:]
-        if "." in value:
-            return value.split(".", 1)[0]
-    return value
+    value = symbol.strip()
+    if not value:
+        return value
+    if scope["asset_class"] == "equity":
+        if scope["market"] == "china":
+            return normalize_symbol(value, "china")
+        if scope["market"] == "hongkong":
+            return normalize_symbol(value, "hongkong")
+        if value.startswith(("SH", "SZ", "SS", "BJ")):
+            return normalize_symbol(value, "china")
+    return value.strip().upper()
 
 
 def _dataset_root(scope: dict[str, str]) -> Path:
