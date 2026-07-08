@@ -64,7 +64,6 @@ import type {
   ResearchSession,
   StrategyTemplate,
   Task,
-  Universe
 } from "../api";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
@@ -140,8 +139,7 @@ function MarketDataDownloader({
   forcedMarket,
   forcedVenue,
   forcedResolution,
-  forcedDataType,
-  hidePresetSymbols = false
+  forcedDataType
 }: {
   compact?: boolean;
   forcedAssetClass?: string;
@@ -149,15 +147,12 @@ function MarketDataDownloader({
   forcedVenue?: string;
   forcedResolution?: string;
   forcedDataType?: string;
-  hidePresetSymbols?: boolean;
 }) {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
-  const universe = useAsyncData<Universe>(api.djiaUniverse, { key: "djia", name: "Dow Jones Industrial Average", asOf: "", source: "", components: [] });
   const [symbolsText, setSymbolsText] = useState("");
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
-  const [localSymbols, setLocalSymbols] = useState<string[]>([]);
   const [form] = Form.useForm();
   const selectedAssetClass = forcedAssetClass ?? (Form.useWatch("assetClass", form) || "equity");
   const selectedMarket = forcedMarket ?? (Form.useWatch("market", form) || "usa");
@@ -176,9 +171,6 @@ function MarketDataDownloader({
   }, [assetClasses.data, forcedAssetClass, forcedDataType, forcedMarket, forcedResolution, forcedVenue, form, selectedAssetClass, selectedMarket]);
 
   useEffect(() => {
-    api.symbols(selectedMarket, selectedAssetClass, selectedVenue, selectedResolution, selectedDataType)
-      .then((result) => setLocalSymbols(result.symbols))
-      .catch((error) => message.error((error as Error).message));
     const market = markets.data.find((item) => item.key === selectedMarket);
     const compatible = providers.data.filter((provider) => (
       provider.assetClasses?.includes(selectedAssetClass) ||
@@ -225,8 +217,6 @@ function MarketDataDownloader({
     provider.assetClasses?.includes(selectedAssetClass) ||
     (selectedAssetClass === "equity" && provider.markets.includes(selectedMarket))
   ));
-  const djiaReady = selectedAssetClass === "equity" && selectedMarket === "usa";
-  const localRows = localSymbols.map((symbol) => ({ symbol, hasLocalData: true }));
   const venueOptions = selectedAssetInfo?.venues.map((venue) => ({ value: venue, label: venue })) ?? [];
   const resolutionOptions = ["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }));
   const dataTypeOptions = (selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }));
@@ -300,33 +290,12 @@ function MarketDataDownloader({
         </Space.Compact>
       </Form>
       <Space wrap style={{ marginBottom: 12 }}>
-        {!hidePresetSymbols && djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.filter((item) => item.hasLocalData).map((item) => item.symbol))}>Use Ready DJIA</Button>}
-        {!hidePresetSymbols && djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.map((item) => item.symbol))}>Use All DJIA</Button>}
-        {!hidePresetSymbols && <Button onClick={() => setSelectedSymbols(localSymbols.slice(0, 20))}>Use Local Sample</Button>}
         <Button onClick={() => setSelectedSymbols([])}>Clear</Button>
         {selectedSymbols.map((symbol) => <Tag key={symbol} closable onClose={() => setSelectedSymbols(selectedSymbols.filter((item) => item !== symbol))}>{symbol}</Tag>)}
       </Space>
       {selectedAssetClass !== "equity" && selectedProvider !== "binance" && (
         <Alert style={{ marginBottom: 12 }} type="warning" showIcon message="This asset class currently uses local LEAN files or CSV import unless Binance crypto daily is selected." />
       )}
-      <Table
-        rowKey="symbol"
-        size="small"
-        dataSource={djiaReady && !compact ? universe.data.components : localRows}
-        loading={universe.loading}
-        pagination={compact ? { pageSize: 8 } : { pageSize: 10 }}
-        rowSelection={{
-          selectedRowKeys: selectedSymbols,
-          onChange: (keys) => setSelectedSymbols(keys.map(String))
-        }}
-        columns={[
-          { title: "Symbol", dataIndex: "symbol", width: 100 },
-          { title: "Name", dataIndex: "name", ellipsis: true, render: (value) => value ?? "-" },
-          { title: "Asset", render: () => selectedAssetClass },
-          { title: "Venue", render: () => selectedAssetClass === "equity" ? selectedMarket : selectedVenue },
-          { title: "Local", dataIndex: "hasLocalData", width: 90, render: (value: boolean) => <Tag color={value ? "success" : "warning"}>{value ? "ready" : "missing"}</Tag> }
-        ]}
-      />
       <Alert
         style={{ marginTop: 12 }}
         type="info"
@@ -680,7 +649,7 @@ export function DataPage() {
         )}
       </Card>
       <Card title="Import CSV" style={{ marginTop: 16 }}>
-        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
+        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa" }}>
           <div className="field-grid six">
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
@@ -694,7 +663,7 @@ export function DataPage() {
           </Space>
         </Form>
       </Card>
-      <MarketDataDownloader hidePresetSymbols />
+      <MarketDataDownloader />
     </>
   );
 }
