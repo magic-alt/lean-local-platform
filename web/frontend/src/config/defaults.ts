@@ -21,7 +21,7 @@ export const defaultSettings: AppSettings = {
 };
 
 export const defaultBarPreviewValues = {
-  source: "database",
+  source: "clickhouse",
   assetClass: "equity",
   symbol: "000001",
   market: "china",

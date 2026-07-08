@@ -37,7 +37,8 @@ export const BACKTEST_CASES = {
     end: "2024-12-31",
     cash: 100000,
     benchmarkSymbol: "000300",
-    source: "jqdata",
+    source: "tushare",
+    sourceLabel: "TuShare Pro",
     fast: 20,
     slow: 50
   },

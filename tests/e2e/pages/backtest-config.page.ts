@@ -18,6 +18,7 @@ export interface BacktestFormValues {
   feeModel?: string;
   slippageModel?: string;
   source?: string;
+  sourceLabel?: string;
   fast?: number;
   slow?: number;
 }
@@ -47,7 +48,13 @@ export class BacktestConfigPage extends BasePage {
     await this.page.getByTestId("backtest-benchmark-input").fill(values.benchmarkSymbol);
     if (values.feeModel) await this.selectByTestId("backtest-fee-model-select", values.feeModel);
     if (values.slippageModel) await this.selectByTestId("backtest-slippage-model-select", values.slippageModel);
-    await this.fillByLabel("Data Source", values.source ?? "");
+    if (values.source) {
+      if (values.market === "china") {
+        await this.selectByTestId("backtest-source-select", values.sourceLabel ?? values.source);
+      } else {
+        await this.fillByLabel("Data Source", values.source);
+      }
+    }
     if (values.fast !== undefined) {
       const fast = this.page.getByLabel(/fast/i);
       if (await fast.count()) await fast.fill(String(values.fast));

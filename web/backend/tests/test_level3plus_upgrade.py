@@ -113,7 +113,7 @@ def test_provider_availability_reports_credential_missing(tmp_path, monkeypatch)
     assert "credential_missing" in reasons["tushare"]
     assert payload["primaryProvider"] == "tushare"
     assert [item["role"] for item in payload["providers"] if item["provider"] == "tushare"] == ["primary"]
-    assert [item["role"] for item in payload["providers"] if item["provider"] == "jqdata"] == ["secondary"]
+    assert [item["role"] for item in payload["providers"] if item["provider"] == "jqdata"] == ["commercial"]
     assert payload["count"] == 2
 
 

@@ -99,7 +99,7 @@ def markets() -> list[dict[str, Any]]:
             "name": "US Equity",
             "currency": "USD",
             "defaultProvider": "yfinance",
-            "providers": ["yfinance", "yahoo", "stooq", "alpha_vantage", "finnhub", "longbridge", "akshare", "sina"],
+            "providers": ["yfinance", "yahoo", "stooq", "akshare", "sina"],
         },
         {
             "key": "china",
@@ -113,7 +113,7 @@ def markets() -> list[dict[str, Any]]:
             "name": "Hong Kong",
             "currency": "HKD",
             "defaultProvider": "akshare",
-            "providers": ["akshare", "sina", "eastmoney", "longbridge", "yfinance"],
+            "providers": ["akshare", "sina", "eastmoney", "yfinance"],
         },
     ]
 

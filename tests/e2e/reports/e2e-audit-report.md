@@ -67,7 +67,7 @@ Added/updated:
 | 03 | strategy management | project create, workspace, code editor persistence | `E2E_MA_Cross_Test` | project opens after refresh | Pass |
 | 04 | config validation | project/symbol/date/cash validation | invalid/missing fields | clear validation errors | Pass |
 | 05 | SPY MA cross | full Web -> API -> Docker/LEAN -> result chain | SPY 2020 daily | completed + metrics/charts/logs/history | Pass |
-| 06 | A-share ETF | China ETF daily run | 510300 2024 daily, jqdata fixture | completed + market/source preserved | Pass |
+| 06 | A-share ETF | China ETF daily run | 510300 2024 daily, tushare fixture | completed + market/source preserved | Pass |
 | 07 | invalid symbol | failure path and history | `INVALID_SYMBOL_E2E` | failed, clear error, no white screen | Pass |
 | 08 | history/export | search/status/market filters, report export | success + failed runs | history visible, exports non-empty | Pass |
 | 09a | API 500 resilience | friendly error state | mocked `/api/backtests` 500 | no white screen | Pass |
@@ -97,7 +97,7 @@ Final command: `cd web/frontend && npm run test:e2e` -> 11 passed, 0 failed, 0 s
 | Field | Value |
 | --- | --- |
 | Status | success |
-| Data source | jqdata E2E fixture |
+| Data source | tushare E2E fixture |
 | Data exists | yes, 262 daily rows for 510300 and 000300, 2024-01-01 to 2024-12-31 |
 | Backtest ID | `510300-20240101-20241231-20260708231703` |
 | Final equity | 56514.77 |

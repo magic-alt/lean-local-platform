@@ -24,6 +24,11 @@ export interface DataProvider {
   markets: string[];
   assetClasses?: string[];
   venues?: string[];
+  capabilities?: string[];
+  productionCertified?: boolean;
+  commercial?: boolean;
+  enabledByDefault?: boolean;
+  disabledByDefault?: boolean;
   notes: string;
 }
 

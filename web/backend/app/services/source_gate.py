@@ -8,32 +8,57 @@ from ..db import db, row_to_dict, utc_now
 
 PRIMARY_DATA_SOURCE = "tushare"
 JQDATA_DATA_SOURCE = "jqdata"
-SECONDARY_DATA_SOURCES = {JQDATA_DATA_SOURCE, "akshare"}
-BACKUP_DATA_SOURCE_PRIORITY = [
-    "efinance",
-    "tencent",
-    "tickflow",
-    "pytdx",
+FREE_SUPPLEMENTAL_DATA_SOURCE_PRIORITY = [
+    "akshare",
     "baostock",
     "adata",
     "eastmoney",
     "sina",
+    "efinance",
+    "tencent",
     "tonghuashun",
     "yfinance",
+]
+OPTIONAL_CONNECTOR_DATA_SOURCE_PRIORITY = [
+    "pytdx",
+]
+COMMERCIAL_DATA_SOURCE_PRIORITY = [
+    JQDATA_DATA_SOURCE,
     "rqdata",
+    "tickflow",
+    "longbridge",
+    "finnhub",
+    "alpha_vantage",
+]
+SECONDARY_DATA_SOURCES = set(FREE_SUPPLEMENTAL_DATA_SOURCE_PRIORITY)
+COMMERCIAL_DATA_SOURCES = set(COMMERCIAL_DATA_SOURCE_PRIORITY)
+OPTIONAL_CONNECTOR_DATA_SOURCES = set(OPTIONAL_CONNECTOR_DATA_SOURCE_PRIORITY)
+BACKUP_DATA_SOURCE_PRIORITY = [
+    *FREE_SUPPLEMENTAL_DATA_SOURCE_PRIORITY,
+    *OPTIONAL_CONNECTOR_DATA_SOURCE_PRIORITY,
+    *COMMERCIAL_DATA_SOURCE_PRIORITY,
 ]
 BACKUP_DATA_SOURCES = set(BACKUP_DATA_SOURCE_PRIORITY)
 DEFAULT_PRODUCTION_SOURCE = PRIMARY_DATA_SOURCE
 PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE, *SECONDARY_DATA_SOURCES}
-RESEARCH_SOURCES = {"test", "unit", "manual", *BACKUP_DATA_SOURCES}
-DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, JQDATA_DATA_SOURCE, "akshare", *BACKUP_DATA_SOURCE_PRIORITY]
+RESEARCH_SOURCES = {"test", "unit", "manual", *OPTIONAL_CONNECTOR_DATA_SOURCES, *COMMERCIAL_DATA_SOURCES}
+DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, *FREE_SUPPLEMENTAL_DATA_SOURCE_PRIORITY]
 JQDATA_ENTITLEMENT_START = os.environ.get("JQDATA_DATA_RANGE_START", "2025-03-29")
 JQDATA_ENTITLEMENT_END = os.environ.get("JQDATA_DATA_RANGE_END", "2026-04-05")
+SOURCE_ALIASES = {
+    "tushare_pro": PRIMARY_DATA_SOURCE,
+    "tushare-pro": PRIMARY_DATA_SOURCE,
+    "tushare pro": PRIMARY_DATA_SOURCE,
+    "tu_share": PRIMARY_DATA_SOURCE,
+    "tu-share": PRIMARY_DATA_SOURCE,
+    "alphavantage": "alpha_vantage",
+    "alpha-vantage": "alpha_vantage",
+}
 
 
 def normalize_source(source: str | None) -> str:
     value = (source or DEFAULT_PRODUCTION_SOURCE).strip().lower()
-    return value or DEFAULT_PRODUCTION_SOURCE
+    return SOURCE_ALIASES.get(value, value) or DEFAULT_PRODUCTION_SOURCE
 
 
 def is_research_source(source: str | None) -> bool:
@@ -45,8 +70,10 @@ def source_role(source: str | None) -> str:
     if normalized == PRIMARY_DATA_SOURCE:
         return "primary"
     if normalized in SECONDARY_DATA_SOURCES:
-        return "secondary"
-    if normalized in BACKUP_DATA_SOURCES:
+        return "supplemental"
+    if normalized in COMMERCIAL_DATA_SOURCES:
+        return "commercial"
+    if normalized in OPTIONAL_CONNECTOR_DATA_SOURCES:
         return "backup"
     if normalized in RESEARCH_SOURCES:
         return "research"
@@ -148,6 +175,10 @@ def require_source_allowed(source: str | None, *, allow_research_source: bool = 
         return normalized
     if allow_research_source:
         return normalized
+    if normalized in COMMERCIAL_DATA_SOURCES:
+        raise ValueError(
+            f"source_disabled_by_default:{normalized}; commercial sources require explicit allowResearchSource=true"
+        )
     raise ValueError(f"source_not_certified:{normalized}; set allowResearchSource=true for research/test sources")
 
 

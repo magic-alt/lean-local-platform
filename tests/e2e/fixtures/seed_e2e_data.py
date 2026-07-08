@@ -27,7 +27,7 @@ from app.services.ashare_repository import (  # noqa: E402
 from app.services.lean_cache import rebuild_ashare_lean_cache_from_db  # noqa: E402
 
 
-SOURCE = "jqdata"
+SOURCE = "tushare"
 ASHARE_BATCH_ID = "e2e-ashare-510300-2024"
 
 

@@ -43,6 +43,8 @@ class ProviderSpec:
     credentials: tuple[CredentialOption, ...] = ()
     supports_batch: bool = True
     production_certified: bool = False
+    commercial: bool = False
+    enabled_by_default: bool = True
     capabilities: tuple[str, ...] = ("fetch_daily_bars", "provider_availability")
     notes: str = ""
     optional_fetch: bool = False
@@ -58,13 +60,16 @@ class ProviderSpec:
             "venues": list(self.venues or self.markets),
             "capabilities": list(self.capabilities),
             "productionCertified": self.production_certified,
+            "commercial": self.commercial,
+            "enabledByDefault": self.enabled_by_default,
+            "disabledByDefault": not self.enabled_by_default,
             "notes": self.notes,
         }
 
 
 A_SHARE_PROVIDER_PRIORITY = list(DATA_SOURCE_PRIORITY)
-US_PROVIDER_PRIORITY = ["yfinance", "yahoo", "stooq", "alpha_vantage", "finnhub", "longbridge", "akshare", "sina"]
-HK_PROVIDER_PRIORITY = ["akshare", "sina", "eastmoney", "longbridge", "yfinance"]
+US_PROVIDER_PRIORITY = ["yfinance", "yahoo", "stooq", "akshare", "sina"]
+HK_PROVIDER_PRIORITY = ["akshare", "sina", "eastmoney", "yfinance"]
 
 
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
@@ -77,7 +82,9 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("jqdatasdk",),
         credentials=(["JQDATA_TOKEN"], ["JQDATA_USERNAME", "JQDATA_PASSWORD"]),
         production_certified=True,
-        notes="Secondary professional A-share source inside the configured JQData entitlement window.",
+        commercial=True,
+        enabled_by_default=False,
+        notes="Optional commercial A-share source. It is diagnosed but not enabled in the default Web/provider chain.",
     ),
     "akshare": ProviderSpec(
         key="akshare",
@@ -116,6 +123,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("tushare",),
         credentials=(["TUSHARE_TOKEN"],),
         production_certified=True,
+        commercial=True,
+        enabled_by_default=True,
         capabilities=(
             "fetch_security_master",
             "fetch_daily_bars",
@@ -141,6 +150,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("tickflow",),
         credentials=(["TICKFLOW_API_KEY"],),
         capabilities=("provider_availability",),
+        commercial=True,
+        enabled_by_default=False,
         optional_fetch=True,
         notes="Optional DSA-compatible provider. Availability is diagnosed; daily import adapter is not enabled yet.",
     ),
@@ -152,6 +163,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         venues=("china",),
         modules=("pytdx",),
         capabilities=("provider_availability",),
+        enabled_by_default=False,
         optional_fetch=True,
         notes="Optional TongDaXin connector. Availability is diagnosed; live fetch is intentionally not used in Level3+ pipeline.",
     ),
@@ -231,6 +243,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         markets=("usa",),
         venues=("usa",),
         credentials=(["ALPHAVANTAGE_API_KEY"],),
+        commercial=True,
+        enabled_by_default=False,
         notes="US daily data API; rate limits and key entitlement apply.",
     ),
     "finnhub": ProviderSpec(
@@ -242,6 +256,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("finnhub",),
         credentials=(["FINNHUB_API_KEY"],),
         capabilities=("provider_availability",),
+        commercial=True,
+        enabled_by_default=False,
         optional_fetch=True,
         notes="Optional US data provider. Availability is diagnosed; import adapter is not enabled yet.",
     ),
@@ -254,6 +270,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("longbridge",),
         credentials=(["LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"], ["LONGBRIDGE_OAUTH_CLIENT_ID"]),
         capabilities=("provider_availability",),
+        commercial=True,
+        enabled_by_default=False,
         optional_fetch=True,
         notes="Optional US/HK source. Availability is diagnosed; no broker/trading capability is used.",
     ),
@@ -276,6 +294,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         modules=("rqdatac",),
         credentials=(["RQDATA_USERNAME", "RQDATA_PASSWORD"],),
         capabilities=("provider_availability",),
+        commercial=True,
+        enabled_by_default=False,
         optional_fetch=True,
         notes="Backup interface placeholder for future professional data supplementation.",
     ),
@@ -304,10 +324,20 @@ def _normalize_provider(provider: str | None) -> str:
         "automatic": "auto",
         "database": "auto",
         "local": "auto",
+        "tushare_pro": "tushare",
+        "tushare-pro": "tushare",
+        "tushare pro": "tushare",
+        "tu_share": "tushare",
+        "tu-share": "tushare",
         "alphavantage": "alpha_vantage",
         "alpha-vantage": "alpha_vantage",
     }
     return aliases.get(value, value)
+
+
+def _enabled_by_default(provider: str) -> bool:
+    spec = PROVIDER_SPECS.get(provider)
+    return bool(spec and spec.enabled_by_default)
 
 
 def _compact_date(value: str | None, fallback: str) -> str:
@@ -512,12 +542,11 @@ def provider_chain(
                 continue
             if item not in default_chain:
                 default_chain.append(item)
-        if requested == "jqdata" and not jqdata_covers_window(start_date, end_date):
-            default_chain = [item for item in default_chain if item != "jqdata"]
-        if requested != "auto" and strict:
+        default_chain = [item for item in default_chain if _enabled_by_default(item)]
+        if requested != "auto":
             if requested == "jqdata" and not jqdata_covers_window(start_date, end_date):
-                return []
-            return [requested]
+                return [] if strict else default_chain
+            return [requested] if strict else [requested, *[item for item in default_chain if item != requested]]
         return default_chain
     if market_value == "hongkong":
         chain = HK_PROVIDER_PRIORITY
@@ -526,7 +555,7 @@ def provider_chain(
     if requested != "auto":
         ordered = [requested, *[item for item in chain if item != requested]]
         return [requested] if strict else ordered
-    return list(chain)
+    return [item for item in chain if _enabled_by_default(item)]
 
 
 def source_policy(

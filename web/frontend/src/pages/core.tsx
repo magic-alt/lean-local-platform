@@ -87,6 +87,31 @@ import {
 
 const CRYPTO_DEMO_SYMBOLS = ["BTCUSDT", "ETHUSDT"] as const;
 
+const A_SHARE_BACKTEST_SOURCE_OPTIONS = [
+  { value: "tushare", label: "TuShare Pro" },
+  { value: "akshare", label: "AKShare" },
+  { value: "baostock", label: "Baostock" },
+  { value: "adata", label: "AData" },
+  { value: "eastmoney", label: "EastMoney" },
+  { value: "sina", label: "Sina Finance" },
+  { value: "efinance", label: "Efinance" },
+  { value: "tencent", label: "Tencent" },
+  { value: "tonghuashun", label: "TongHuaShun" },
+  { value: "yfinance", label: "YFinance" }
+];
+
+function defaultBacktestSource(nextMarket: string) {
+  return nextMarket === "china" ? "tushare" : "";
+}
+
+function providerSelectLabel(provider: DataProvider) {
+  if (provider.disabledByDefault || provider.enabledByDefault === false) {
+    return `${provider.name} (disabled)`;
+  }
+  if (provider.key === "tushare") return "TuShare Pro (default)";
+  return provider.name;
+}
+
 function metricTruthy(value: unknown) {
   return value === true || String(value).toLowerCase() === "true";
 }
@@ -279,7 +304,13 @@ function MarketDataDownloader({
             <Select disabled={Boolean(forcedDataType)} options={dataTypeOptions} />
           </Form.Item>
           <Form.Item name="provider" label="Provider">
-            <Select options={marketProviders.map((provider) => ({ value: provider.key, label: provider.name }))} />
+            <Select
+              options={marketProviders.map((provider) => ({
+                value: provider.key,
+                label: providerSelectLabel(provider),
+                disabled: provider.disabledByDefault || provider.enabledByDefault === false
+              }))}
+            />
           </Form.Item>
           <Form.Item name="adjust" label="Adjust">
             <Select options={[{ value: "", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} />
@@ -625,8 +656,9 @@ export function DataPage() {
             <Select
               style={{ width: 170 }}
               options={[
-                { value: "database", label: "MySQL Database" },
-                { value: "clickhouse", label: "ClickHouse" }
+                { value: "clickhouse", label: "ClickHouse" },
+                { value: "database", label: "Local MySQL" },
+                { value: "duckdb", label: "DuckDB Parquet" }
               ]}
             />
           </Form.Item>
@@ -774,16 +806,16 @@ export function BacktestsPage() {
             benchmarkSymbol: settings.data.defaultMarket === "china" ? "000300" : "SPY",
             feeModel: "default",
             slippageModel: "default",
-            source: settings.data.defaultMarket === "china" ? "jqdata" : "",
+            source: defaultBacktestSource(settings.data.defaultMarket),
             dockerImage: settings.data.dockerImage,
             parameters: templateDefaults(selectedTemplate)
           }}
         >
           <div className="field-grid six">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const next = { assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: nextMarket === "china" ? "000300" : "SPY", source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
             <Form.Item name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
             <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY"); form.setFieldValue("source", value === "china" ? "jqdata" : ""); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY"); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
@@ -823,7 +855,13 @@ export function BacktestsPage() {
             <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input data-testid="backtest-benchmark-input" /></Form.Item>
             <Form.Item name="feeModel" label="Fee Model"><Select data-testid="backtest-fee-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Fees" }]} /></Form.Item>
             <Form.Item name="slippageModel" label="Slippage Model"><Select data-testid="backtest-slippage-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
-            <Form.Item name="source" label="Data Source"><Input placeholder="jqdata for A-share" /></Form.Item>
+            <Form.Item name="source" label="Data Source">
+              {market === "china" ? (
+                <Select data-testid="backtest-source-select" virtual={false} showSearch optionFilterProp="label" options={A_SHARE_BACKTEST_SOURCE_OPTIONS} />
+              ) : (
+                <Input data-testid="backtest-source-input" placeholder="optional provider source" />
+              )}
+            </Form.Item>
             <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
             {strategyFields(selectedTemplate)}
           </div>

@@ -22,14 +22,24 @@ def test_source_gate_rejects_research_source_by_default(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from app.main import app
-    from app.services.source_gate import require_source_allowed, resolve_effective_data_source
+    from app.services.source_gate import DATA_SOURCE_PRIORITY, require_source_allowed, resolve_effective_data_source
 
     assert require_source_allowed(None) == "tushare"
+    assert require_source_allowed("tushare pro") == "tushare"
     assert require_source_allowed("akshare") == "akshare"
-    assert resolve_effective_data_source("jqdata", start_date="2025-04-01", end_date="2026-04-01")["effectiveSource"] == "jqdata"
+    assert "jqdata" not in DATA_SOURCE_PRIORITY
+    jqdata_policy = resolve_effective_data_source("jqdata", start_date="2025-04-01", end_date="2026-04-01")
+    assert jqdata_policy["effectiveSource"] == "jqdata"
+    assert jqdata_policy["sourceRole"] == "commercial"
     fallback = resolve_effective_data_source("jqdata", start_date="2026-06-01", end_date="2026-06-30")
     assert fallback["effectiveSource"] == "tushare"
     assert fallback["fallbackReason"] == "jqdata_entitlement_window_exceeded"
+    try:
+        require_source_allowed("jqdata")
+    except ValueError as exc:
+        assert "source_disabled_by_default:jqdata" in str(exc)
+    else:
+        raise AssertionError("commercial sources should be rejected by default")
     try:
         require_source_allowed("test")
     except ValueError as exc:
