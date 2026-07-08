@@ -111,6 +111,17 @@ export function P2ResearchPage() {
   const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
   const [pitMembers, setPitMembers] = useState<IndexMembersResult>();
 
+  const databaseDetail = databaseHealth.data.detail;
+  const databaseDetailRecord = typeof databaseDetail === "object" && databaseDetail !== null && !Array.isArray(databaseDetail)
+    ? databaseDetail
+    : {};
+  const databaseCounts = databaseDetailRecord.counts ?? {};
+  const databaseEngine = databaseDetailRecord.engine || "unknown engine";
+  const databaseName = databaseDetailRecord.database || "unknown database";
+  const databaseHost = databaseDetailRecord.host;
+  const databasePort = databaseDetailRecord.port;
+  const missingTables = databaseDetailRecord.missingTables ?? [];
+
   async function evaluate(values: {
     factorName: string;
     universeCode: string;
@@ -165,11 +176,12 @@ export function P2ResearchPage() {
                 <Card title="Database" style={{ marginTop: 16 }}>
                   <Space wrap>
                     <Tag color={databaseHealth.data.ok ? "success" : "error"}>{databaseHealth.data.ok ? "ready" : "not ready"}</Tag>
-                    <Tag>{databaseHealth.data.detail.engine || "unknown engine"}</Tag>
-                    <Tag>{databaseHealth.data.detail.database || "unknown database"}</Tag>
-                    {databaseHealth.data.detail.host && <Tag>{databaseHealth.data.detail.host}:{databaseHealth.data.detail.port}</Tag>}
-                    {databaseHealth.data.detail.missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
+                    <Tag>{databaseEngine}</Tag>
+                    <Tag>{databaseName}</Tag>
+                    {databaseHost && <Tag>{databaseHost}:{databasePort}</Tag>}
+                    {missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
                   </Space>
+                  {databaseDetailRecord.error && <Alert style={{ marginTop: 12 }} type="warning" showIcon message={String(databaseDetailRecord.error)} />}
                 </Card>
                 <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
                   <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>

@@ -69,34 +69,62 @@ def _database_objects(connection) -> set[str]:
 
 def check_database() -> dict[str, Any]:
     expected_tables = ["instruments", "market_daily_bars", "ashare_daily_bars", "universe_membership", "index_membership_pit", "stored_objects"]
-    with db() as connection:
-        tables = _database_objects(connection)
-        missing = [table for table in expected_tables if table not in tables]
-        counts: dict[str, int] = {}
-        for table in expected_tables:
-            if table in tables:
-                counts[table] = int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"])
-        csi300_count = 0
-        if "universe_membership" in tables:
-            csi300_count = int(
-                connection.execute(
-                    """
-                    select count(*) as count
-                    from universe_membership
-                    where universe_code = 'CSI300'
-                    """
-                ).fetchone()["count"]
-            )
-    descriptor = database_descriptor()
-    core_ok = not missing and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
-    ok = bool(core_ok)
-    detail = {
-        **descriptor,
-        "missingTables": missing,
-        "counts": counts,
-        "csi300MembershipRows": csi300_count,
+    fallback = {
+        "missingTables": expected_tables,
+        "counts": {},
+        "csi300MembershipRows": 0,
     }
-    return {"service": "database", "ok": ok, "detail": detail}
+    try:
+        descriptor = database_descriptor()
+    except Exception as exc:
+        return {
+            "service": "database",
+            "ok": False,
+            "detail": {
+                **fallback,
+                "engine": "unknown",
+                "error": str(exc),
+            },
+        }
+
+    try:
+        with db() as connection:
+            tables = _database_objects(connection)
+            missing = [table for table in expected_tables if table not in tables]
+            counts: dict[str, int] = {}
+            for table in expected_tables:
+                if table in tables:
+                    counts[table] = int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"])
+            csi300_count = 0
+            if "universe_membership" in tables:
+                csi300_count = int(
+                    connection.execute(
+                        """
+                        select count(*) as count
+                        from universe_membership
+                        where universe_code = 'CSI300'
+                        """
+                    ).fetchone()["count"]
+                )
+        core_ok = not missing and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
+        ok = bool(core_ok)
+        detail = {
+            **descriptor,
+            "missingTables": missing,
+            "counts": counts,
+            "csi300MembershipRows": csi300_count,
+        }
+        return {"service": "database", "ok": ok, "detail": detail}
+    except Exception as exc:
+        return {
+            "service": "database",
+            "ok": False,
+            "detail": {
+                **fallback,
+                **descriptor,
+                "error": str(exc),
+            },
+        }
 
 
 def dependency_health() -> dict[str, Any]:
