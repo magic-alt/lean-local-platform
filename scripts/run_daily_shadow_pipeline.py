@@ -290,7 +290,12 @@ def main() -> int:
         add_step("migration_check", "critical", {"error": str(exc)}, step_errors=["migration_mismatch"], started=started)
 
     started = time.perf_counter()
-    providers = provider_availability_report(["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"], start_date=start_date, end_date=end_date, persist=True)
+    providers = provider_availability_report(
+        ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"],
+        start_date=start_date,
+        end_date=end_date,
+        persist=True,
+    )
     provider_errors = ["provider_unavailable"] if any(item["provider"] == effective_source and item["status"] == "unavailable" for item in providers["providers"]) else []
     add_step("provider_availability", "critical" if provider_errors else providers["severity"], providers, step_errors=provider_errors, started=started)
     errors.extend(provider_errors)

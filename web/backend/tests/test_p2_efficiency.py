@@ -26,7 +26,24 @@ def test_provider_availability_reports_missing_env_without_network(monkeypatch):
     assert result["networkChecked"] is False
     assert result["count"] == 1
     assert result["items"][0]["available"] is False
-    assert result["items"][0]["reason"] == "missing_env:ALPHAVANTAGE_API_KEY"
+    assert "credential_missing" in result["items"][0]["reason"]
+
+
+def test_provider_manager_exposes_dsa_style_sources_and_jqdata_window_fallback():
+    from app.services.data_provider_manager import DATA_PROVIDER_MANAGER
+
+    providers = {item["key"] for item in DATA_PROVIDER_MANAGER.providers()}
+    assert {"efinance", "tencent", "pytdx", "yfinance", "tickflow", "longbridge", "finnhub"} <= providers
+
+    chain = DATA_PROVIDER_MANAGER.chain(
+        "jqdata",
+        market="china",
+        asset_class="equity",
+        start_date="2026-06-01",
+        end_date="2026-06-30",
+    )
+    assert chain[0] == "akshare"
+    assert "jqdata" not in chain
 
 
 def test_stored_objects_api_supports_namespace_pagination(tmp_path, monkeypatch):

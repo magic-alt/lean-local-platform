@@ -128,7 +128,7 @@ class ParquetConsistencyRequest(BaseModel):
 
 class AshareDailyCompareRequest(BaseModel):
     symbol: str
-    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
+    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
     startDate: str | None = None
     endDate: str | None = None
     adjust: str = "raw"
@@ -148,7 +148,7 @@ class AshareDailySampleImportRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     startDate: str
     endDate: str
-    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
+    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
     adjust: str = "raw"
     primaryProvider: str = "jqdata"
     exportParquet: bool = True
@@ -346,9 +346,9 @@ def query_data(
         for candidate in provider_chain():
             current = query_one(candidate)
             attempts.append({"source": candidate or "any", "status": "success" if current.get("count", 0) else "empty", "rows": current.get("count", 0)})
+            payload = current
+            selected_provider = candidate
             if current.get("count", 0) or strict_provider:
-                payload = current
-                selected_provider = candidate
                 break
         if payload is None:
             payload = query_one(provider_source)

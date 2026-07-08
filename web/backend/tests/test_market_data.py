@@ -170,3 +170,80 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
     assert payload["count"] == 1
     assert payload["items"][0]["timestamp"] == "2026-07-03"
     assert payload["items"][0]["close"] == 1460.0
+
+
+def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into instruments
+                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-600519",
+                "600519",
+                "600519",
+                "贵州茅台",
+                "equity",
+                "china",
+                "SH",
+                "china",
+                "active",
+                "{}",
+                "unit",
+                "now",
+                "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-600519",
+                "600519",
+                "equity",
+                "china",
+                "china",
+                "2026-06-03",
+                "daily",
+                "trade",
+                1450.0,
+                1470.0,
+                1440.0,
+                1460.0,
+                1000,
+                100000,
+                "raw",
+                "akshare",
+                "batch-1",
+                "now",
+            ),
+        )
+
+    from app.main import app
+
+    response = TestClient(app).get(
+        "/api/data/query",
+        params={
+            "source": "database",
+            "assetClass": "equity",
+            "symbol": "SH600519",
+            "market": "china",
+            "venue": "china",
+            "startDate": "2026-06-01",
+            "endDate": "2026-06-30",
+            "providerSource": "auto",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["providerMode"] == "auto"
+    assert payload["providerSource"] == "akshare"
+    assert payload["count"] == 1
+    assert payload["sourceAttempts"][0]["source"] == "akshare"

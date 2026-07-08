@@ -129,7 +129,12 @@ def main() -> int:
 
     full_identifier = identifier_coverage()
     universe_identifier = identifier_coverage(symbols)
-    provider = provider_availability_report(["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"], start_date=start_date, end_date=end_date, persist=True)
+    provider = provider_availability_report(
+        ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"],
+        start_date=start_date,
+        end_date=end_date,
+        persist=True,
+    )
     qa = compare_ashare_daily_sources_batch(symbols=symbols or ["000000"], sources=qa_sources, start_date=start_date, end_date=end_date, persist=True, persist_symbol_reports=False) if symbols else {"severity": "critical", "criticalSymbols": [], "warningSymbols": [], "reportId": None}
     warning_codes = ["provider_secondary_missing"] if qa.get("severity") == "warning" else []
     warnings = warning_allowlist_status(warning_codes, affected_symbols=symbols, scope={"universeCode": universe_code, "audit": "level3plus"})

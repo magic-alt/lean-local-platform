@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
 from .data_provider_manager import DATA_PROVIDER_MANAGER, provider_requirements
 from .source_gate import jqdata_entitlement
+from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
     finish_import_batch,
@@ -374,6 +376,15 @@ def fetch_provider_rows(
                 raise ValueError("Binance import currently writes LEAN crypto daily bars only; use local sample data for intraday.")
             return fetch_binance_crypto_rows(request.symbol, start=start_date, end=end_date, interval="1d")
         raise ValueError(f"Unsupported crypto data provider: {provider}")
+    provider_key = str(provider or "").strip().lower()
+    if provider_key == "adata":
+        if market_key(market) != "china":
+            raise ValueError("AData only supports China A-share imports in this platform.")
+        return fetch_adata_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
+    if provider_key == "baostock":
+        if market_key(market) != "china":
+            raise ValueError("Baostock only supports China A-share imports in this platform.")
+        return fetch_baostock_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
     return DATA_PROVIDER_MANAGER.fetch_provider_rows(
         provider,
         symbol,
@@ -628,21 +639,66 @@ def fetch_and_import_symbol(
         market = market_key(market)
         venue = market
         symbol = normalize_symbol(symbol, market)
-        fallback_result = DATA_PROVIDER_MANAGER.fetch_daily_with_fallback(
-            symbol=symbol,
-            provider=provider,
-            market=market,
-            asset_class=asset_class,
-            api_key=api_key,
-            outputsize=outputsize,
-            start_date=start_date,
-            end_date=end_date,
-            adjust=adjust,
-        )
-        rows = fallback_result["rows"]
-        provider = fallback_result["provider"]
-        source_attempts = fallback_result["attempts"]
-        source_policy = fallback_result["policy"]
+        source_policy = {
+            "requestedSource": provider,
+            "sourceChain": DATA_PROVIDER_MANAGER.chain(
+                provider,
+                market=market,
+                asset_class=asset_class,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+        }
+        provider_error: Exception | None = None
+        selected_provider: str | None = None
+        selected_rows: list[dict[str, Any]] | None = None
+        for source in source_policy["sourceChain"]:
+            t0 = time.perf_counter()
+            availability = DATA_PROVIDER_MANAGER.availability([source], start_date=start_date, end_date=end_date)[0]
+            if not availability.get("available"):
+                source_attempts.append(
+                    _build_source_attempt(
+                        source,
+                        "skipped",
+                        rows=0,
+                        error=availability.get("unavailableReason") or availability.get("reason"),
+                        duration_ms=(time.perf_counter() - t0) * 1000,
+                    )
+                )
+                continue
+            try:
+                candidate_rows = fetch_provider_rows(
+                    source,
+                    symbol,
+                    market=market,
+                    asset_class=asset_class,
+                    venue=venue,
+                    resolution=resolution,
+                    api_key=api_key,
+                    outputsize=outputsize,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                )
+                if candidate_rows:
+                    selected_provider = source
+                    selected_rows = candidate_rows
+                    source_attempts.append(_build_source_attempt(source, "success", rows=len(candidate_rows), duration_ms=(time.perf_counter() - t0) * 1000))
+                    break
+                source_attempts.append(_build_source_attempt(source, "empty", rows=0, duration_ms=(time.perf_counter() - t0) * 1000))
+            except Exception as exc:  # noqa: BLE001
+                provider_error = exc
+                source_attempts.append(_build_source_attempt(source, "failed", rows=0, error=str(exc), duration_ms=(time.perf_counter() - t0) * 1000))
+        if selected_rows is None:
+            raise ValueError(
+                "No active source returned data; attempted: "
+                + ", ".join(f"{item['source']}:{item['status']}" for item in source_attempts)
+            ) from provider_error
+        rows = selected_rows
+        provider = selected_provider or provider
+        source_policy["effectiveSource"] = provider
+        source_policy["fallbackApplied"] = provider != source_policy["requestedSource"]
+        source_policy["fallbackReason"] = "provider_fallback" if source_policy["fallbackApplied"] else None
     else:
         request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
         market = request.venue

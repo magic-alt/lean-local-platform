@@ -79,7 +79,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the A-share daily Paper pipeline: reference data, QA, Parquet, benchmark check, Paper Replay, report summary.")
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--symbols", default="600519,000001")
-    parser.add_argument("--qa-sources", default="jqdata,akshare,tushare,rqdata,baostock,adata")
+    parser.add_argument("--qa-sources", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata")
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
