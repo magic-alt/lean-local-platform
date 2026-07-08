@@ -1,9 +1,11 @@
 from typing import Any
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..services import pit_data
+from ..services.tushare_adapter import TushareAdapter
 
 router = APIRouter(prefix="/api/pit", tags=["pit-data"])
 
@@ -14,6 +16,31 @@ INDEX_CODE_ALIASES = {
     "CSI_300": "CSI300",
     "CSI-300": "CSI300",
     "沪深300": "CSI300",
+    "000905": "CSI500",
+    "CSI500": "CSI500",
+    "CSI_500": "CSI500",
+    "CSI-500": "CSI500",
+    "中证500": "CSI500",
+    "000852": "CSI1000",
+    "CSI1000": "CSI1000",
+    "CSI_1000": "CSI1000",
+    "CSI-1000": "CSI1000",
+    "中证1000": "CSI1000",
+    "000016": "SSE50",
+    "SSE50": "SSE50",
+    "上证50": "SSE50",
+    "000688": "STAR50",
+    "STAR50": "STAR50",
+    "STAR_50": "STAR50",
+    "科创50": "STAR50",
+}
+
+TUSHARE_INDEX_CODES = {
+    "CSI300": "000300.SH",
+    "CSI500": "000905.SH",
+    "CSI1000": "000852.SH",
+    "SSE50": "000016.SH",
+    "STAR50": "000688.SH",
 }
 
 
@@ -138,5 +165,44 @@ def index_members_as_of(universe_code: str, as_of_date: str):
     try:
         normalized = _index_code(universe_code)
         return pit_data.index_members_as_of_payload(normalized, as_of_date, requested_universe=universe_code)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/index-members/{universe_code}/as-of/{as_of_date}/tushare")
+def index_members_tushare_as_of(universe_code: str, as_of_date: str, lookbackDays: int = 45):
+    try:
+        normalized = _index_code(universe_code)
+        tushare_code = TUSHARE_INDEX_CODES.get(normalized, universe_code)
+        end_date = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+        start_date = end_date - timedelta(days=max(1, min(365, lookbackDays)))
+        rows = TushareAdapter().index_weight_rows(tushare_code, start_date.isoformat(), end_date.isoformat())
+        eligible = [row for row in rows if row["trade_date"] <= as_of_date]
+        if not eligible:
+            payload = pit_data.index_members_as_of_payload(normalized, as_of_date, requested_universe=universe_code)
+            payload.update({"source": "tushare:index_weight", "fetchedDate": None, "imported": {"count": 0}})
+            return payload
+        latest_date = max(row["trade_date"] for row in eligible)
+        records = [
+            {
+                "universe_code": normalized,
+                "symbol": row["symbol"],
+                "name": None,
+                "start_date": latest_date,
+                "end_date": None,
+                "announce_date": latest_date,
+                "effective_date": latest_date,
+                "listed_date": None,
+                "industry": None,
+                "weight": row.get("weight"),
+                "source": "tushare:index_weight",
+            }
+            for row in eligible
+            if row["trade_date"] == latest_date
+        ]
+        imported = pit_data.import_index_members(records, source="tushare:index_weight")
+        payload = pit_data.index_members_as_of_payload(normalized, as_of_date, requested_universe=universe_code)
+        payload.update({"source": "tushare:index_weight", "fetchedDate": latest_date, "imported": imported})
+        return payload
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

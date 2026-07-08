@@ -98,7 +98,17 @@ function detailText(detail: string | Record<string, unknown>) {
   return typeof detail === "string" ? detail : JSON.stringify(detail);
 }
 
-export function P2ResearchPage() {
+const A_SHARE_INDEX_OPTIONS = [
+  { value: "CSI300", label: "沪深300 / CSI300" },
+  { value: "CSI500", label: "中证500 / CSI500" },
+  { value: "CSI1000", label: "中证1000 / CSI1000" },
+  { value: "SSE50", label: "上证50 / SSE50" },
+  { value: "STAR50", label: "科创50 / STAR50" }
+];
+
+export function ResearchPage() {
+  const projects = useAsyncData(api.projects, []);
+  const sessions = useAsyncData(api.researchSessions, []);
   const engines = useAsyncData(api.factorEngines, { available: { python: true }, selected: "python" });
   const evaluations = useAsyncData(api.factorEvaluations, { items: [], count: 0 });
   const databaseHealth = useAsyncData<DatabaseHealth>(api.databaseHealth, {
@@ -155,17 +165,64 @@ export function P2ResearchPage() {
   }
 
   async function queryPit(values: { universeCode: string; asOfDate: string }) {
-    setPitMembers(await api.indexMembersAsOf(values.universeCode, values.asOfDate));
+    try {
+      const result = await api.indexMembersFromTushareAsOf(values.universeCode, values.asOfDate);
+      setPitMembers(result);
+      message.success(`TuShare Pro index members loaded${result.fetchedDate ? `: ${result.fetchedDate}` : ""}`);
+    } catch (error) {
+      message.warning(`TuShare Pro query failed; showing local PIT data. ${(error as Error).message}`);
+      setPitMembers(await api.indexMembersAsOf(values.universeCode, values.asOfDate));
+    }
+  }
+
+  async function startResearchSession(values: { projectId: string; port: number }) {
+    await api.startResearch(values);
+    message.success("Research task queued");
+    sessions.reload();
   }
 
   return (
     <>
       <div className="toolbar">
-        <h1 className="page-title">A-Share Research</h1>
-        <Button icon={<ReloadOutlined />} onClick={() => { engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
+        <h1 className="page-title">Research</h1>
+        <Button icon={<ReloadOutlined />} onClick={() => { sessions.reload(); engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
       </div>
       <Tabs
         items={[
+          {
+            key: "sessions",
+            label: "Research Sessions",
+            children: (
+              <>
+                <Card title="Start Research">
+                  <Form layout="vertical" onFinish={startResearchSession} initialValues={{ port: 8888 }}>
+                    <div className="field-grid">
+                      <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+                        <Select placeholder="Project" options={projects.data.map((p) => ({ value: p.id, label: p.name }))} />
+                      </Form.Item>
+                      <Form.Item name="port" label="Port">
+                        <InputNumber min={1024} max={65535} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </div>
+                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit">Start</Button>
+                  </Form>
+                </Card>
+                <Card title="Sessions" style={{ marginTop: 16 }}>
+                  <Table<ResearchSession>
+                    rowKey="id"
+                    dataSource={sessions.data}
+                    size="small"
+                    columns={[
+                      { title: "ID", dataIndex: "id", ellipsis: true },
+                      { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> },
+                      { title: "URL", render: (_, session) => session.url ? <a href={session.url} target="_blank">{session.url}</a> : "-" },
+                      { title: "Action", render: (_, session) => <Button size="small" onClick={() => api.stopResearch(session.id).then(sessions.reload)}>Stop</Button> }
+                    ]}
+                  />
+                </Card>
+              </>
+            )
+          },
           {
             key: "pit",
             label: "CSI300 PIT",
@@ -191,7 +248,9 @@ export function P2ResearchPage() {
                 </Card>
                 <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
                   <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>
-                    <Form.Item name="universeCode" rules={[{ required: true }]}><Input style={{ width: 140 }} /></Form.Item>
+                    <Form.Item name="universeCode" rules={[{ required: true }]}>
+                      <Select style={{ width: 220 }} options={A_SHARE_INDEX_OPTIONS} />
+                    </Form.Item>
                     <Form.Item name="asOfDate" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Button type="primary" htmlType="submit">Query</Button>
                   </Form>
@@ -199,7 +258,7 @@ export function P2ResearchPage() {
                     style={{ marginTop: 12 }}
                     type="info"
                     showIcon
-                    message="Current CSI300 PIT coverage starts at 2017-12-08. Dates before that should return 0 until 2005-2017 official history is imported."
+                    message="Default query source is TuShare Pro index_weight. Results are saved into the local PIT table, then displayed from local storage. If TuShare is unavailable, existing local PIT data is shown."
                   />
                 </Card>
                 <div className="grid" style={{ marginTop: 16 }}>

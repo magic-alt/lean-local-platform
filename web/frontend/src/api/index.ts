@@ -65,6 +65,10 @@ export const api = {
     request<IndexMembersResult>(
       `/api/pit/index-members/${encodeURIComponent(universeCode)}/as-of/${encodeURIComponent(asOfDate)}`
     ),
+  indexMembersFromTushareAsOf: (universeCode: string, asOfDate: string) =>
+    request<IndexMembersResult & { source?: string; fetchedDate?: string; imported?: Record<string, unknown> }>(
+      `/api/pit/index-members/${encodeURIComponent(universeCode)}/as-of/${encodeURIComponent(asOfDate)}/tushare`
+    ),
   projects: () => request<Project[]>("/api/projects"),
   createProject: (payload: {
     name: string;
@@ -103,6 +107,10 @@ export const api = {
   searchSecurities: (market: string, keyword: string) =>
     request<{ items: Array<{ symbol: string; market: string; name: string; hasLocalData: boolean }>; count: number }>(
       `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}`
+    ),
+  dataIdentifiers: (symbol: string) =>
+    request<{ symbol: string; items: Array<Record<string, unknown>>; count: number }>(
+      `/api/data/identifiers/${encodeURIComponent(symbol)}`
     ),
   dataAssets: () => request<DataAsset[]>("/api/data-assets"),
   dataFiles: (assetClass?: string, venue?: string) =>
@@ -239,6 +247,7 @@ export const api = {
   tasks: () => request<Task[]>("/api/tasks"),
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   optimizations: () => request<OptimizationRun[]>("/api/optimize"),
   createOptimization: (payload: {
     projectId: string;

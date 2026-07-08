@@ -2,7 +2,6 @@ import { Button, Layout, Menu, Result, Space, Tag } from "antd";
 import {
   AppstoreOutlined,
   CodeOutlined,
-  BarChartOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -13,18 +12,15 @@ import {
   SlidersOutlined,
   UnorderedListOutlined
 } from "@ant-design/icons";
-import { HashRouter, Link, Route, Routes } from "react-router-dom";
+import { HashRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { useMemo } from "react";
 
 import {
   BacktestsPage,
-  ComparePage,
   Dashboard,
   DataPage,
   MonitoringPage,
-  ObjectStorePage,
   OptimizationPage,
-  P2ResearchPage,
   PaperPage,
   ProjectsPage,
   ProjectWorkspacePage,
@@ -44,13 +40,10 @@ function AppShell() {
     { key: "/projects", icon: <FolderOpenOutlined />, label: <Link to="/projects">Projects</Link> },
     { key: "/data", icon: <DatabaseOutlined />, label: <Link to="/data">Data</Link> },
     { key: "/backtests", icon: <PlayCircleOutlined />, label: <Link to="/backtests">Backtests</Link> },
-    { key: "/compare", icon: <BarChartOutlined />, label: <Link to="/compare">Compare</Link> },
     { key: "/optimization", icon: <SlidersOutlined />, label: <Link to="/optimization">Optimization</Link> },
     { key: "/paper", icon: <ExperimentOutlined />, label: <Link to="/paper">Paper</Link> },
     { key: "/research", icon: <ExperimentOutlined />, label: <Link to="/research">Research</Link> },
-    { key: "/ashare-research", icon: <DatabaseOutlined />, label: <Link to="/ashare-research">A-Share Research</Link> },
     { key: "/reports", icon: <FileTextOutlined />, label: <Link to="/reports">Reports</Link> },
-    { key: "/object-store", icon: <DatabaseOutlined />, label: <Link to="/object-store">Object Store</Link> },
     { key: "/tasks", icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
     { key: "/monitoring", icon: <DashboardOutlined />, label: <Link to="/monitoring">Monitoring</Link> },
     { key: "/settings", icon: <SettingOutlined />, label: <Link to="/settings">Settings</Link> }
@@ -68,14 +61,13 @@ function AppShell() {
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/backtests" element={<BacktestsPage />} />
-            <Route path="/compare" element={<ComparePage />} />
+            <Route path="/compare" element={<Navigate to="/optimization" replace />} />
             <Route path="/runs/:id" element={<RunDetailPage />} />
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/paper" element={<PaperPage />} />
             <Route path="/research" element={<ResearchPage />} />
-            <Route path="/ashare-research" element={<P2ResearchPage />} />
+            <Route path="/ashare-research" element={<Navigate to="/research" replace />} />
             <Route path="/reports" element={<ReportsPage />} />
-            <Route path="/object-store" element={<ObjectStorePage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/monitoring" element={<MonitoringPage />} />
             <Route path="/settings" element={<SettingsPage />} />

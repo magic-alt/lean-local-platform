@@ -107,6 +107,39 @@ def test_pit_api_maps_000300_to_csi300(tmp_path, monkeypatch):
     assert [item["symbol"] for item in payload["items"]] == ["600519"]
 
 
+def test_pit_tushare_endpoint_imports_csi1000_members(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    import app.api.pit as pit_api
+    from app.main import app
+
+    class FakeTushareAdapter:
+        def index_weight_rows(self, index_code, start_date, end_date):
+            assert index_code == "000852.SH"
+            assert start_date == "2023-12-18"
+            assert end_date == "2024-02-01"
+            return [
+                {"universe_code": "000852", "symbol": "600519", "trade_date": "2024-01-31", "weight": 1.2},
+                {"universe_code": "000852", "symbol": "000001", "trade_date": "2024-02-01", "weight": 2.3},
+            ]
+
+    monkeypatch.setattr(pit_api, "TushareAdapter", FakeTushareAdapter)
+
+    client = TestClient(app)
+    response = client.get("/api/pit/index-members/CSI1000/as-of/2024-02-01/tushare")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["universe"] == "CSI1000"
+    assert payload["source"] == "tushare:index_weight"
+    assert payload["fetchedDate"] == "2024-02-01"
+    assert payload["count"] == 1
+    assert payload["items"][0]["symbol"] == "000001"
+    assert payload["items"][0]["weight"] == 2.3
+
+
 def test_csi300_pit_api_returns_gap_before_official_coverage_start(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

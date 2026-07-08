@@ -39,7 +39,7 @@ function compareChart(result?: BacktestCompareResult, key: "equityCurve" | "draw
 }
 
 
-export function ComparePage() {
+export function CompareRunsPanel() {
   const runs = useAsyncData(() => api.backtests({ status: "success" }), []);
   const [result, setResult] = useState<BacktestCompareResult>();
   const [loading, setLoading] = useState(false);
@@ -66,11 +66,7 @@ export function ComparePage() {
 
   return (
     <>
-      <div className="toolbar">
-        <h1 className="page-title">Strategy Compare</h1>
-        <Button icon={<ReloadOutlined />} onClick={runs.reload}>Refresh Runs</Button>
-      </div>
-      <Card title="Compare Runs">
+      <Card title="Compare Runs" extra={<Button icon={<ReloadOutlined />} onClick={runs.reload}>Refresh Runs</Button>}>
         <Form form={form} layout="vertical" onFinish={submit}>
           <Form.Item name="runIds" label="Backtest Runs" rules={[{ required: true }]}>
             <Select mode="multiple" options={runOptions} loading={runs.loading} placeholder="Select 2-20 successful runs" />

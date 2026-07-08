@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from ..services.tasks import cancel_task, get_task, list_tasks, task_logs
+from ..services.tasks import cancel_task, delete_task, get_task, list_tasks, task_logs
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -30,5 +30,13 @@ def logs(task_id: str):
 def cancel(task_id: str):
     try:
         return cancel_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found.") from exc
+
+
+@router.delete("/{task_id}")
+def delete(task_id: str):
+    try:
+        return delete_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Task not found.") from exc

@@ -62,10 +62,10 @@ import type {
   Project,
   ProjectFile,
   ReportRecord,
-  ResearchSession,
   StrategyTemplate,
   Task,
 } from "../api";
+import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
@@ -225,6 +225,7 @@ function MarketDataDownloader({
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const [symbolsText, setSymbolsText] = useState(defaultSymbolText(defaultBarPreviewValues.assetClass, defaultBarPreviewValues.market));
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
+  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const [form] = Form.useForm();
@@ -274,29 +275,73 @@ function MarketDataDownloader({
     return symbols;
   }
 
+  async function loadSecurityInfo(symbol: string) {
+    try {
+      const [search, identifiers] = await Promise.all([
+        api.searchSecurities(selectedMarket, symbol),
+        api.dataIdentifiers(symbol).catch(() => ({ symbol, items: [], count: 0 }))
+      ]);
+      const matched = search.items.find((item) => item.symbol === symbol) ?? search.items[0];
+      setSecurityInfo({
+        symbol,
+        name: matched?.name ?? symbol,
+        market: matched?.market ?? selectedMarket,
+        hasLocalData: matched?.hasLocalData,
+        identifierCount: identifiers.count,
+        source: identifiers.items[0]?.source ? String(identifiers.items[0].source) : undefined
+      });
+    } catch {
+      setSecurityInfo({ symbol, name: symbol, market: selectedMarket });
+    }
+  }
+
+  async function queryLocalBars(values: any, symbol: string) {
+    return api.queryData({
+      source: "database",
+      symbol,
+      assetClass: selectedAssetClass,
+      market: selectedMarket,
+      venue: selectedVenue,
+      resolution: selectedResolution,
+      dataType: selectedDataType,
+      adjust: values.adjust,
+      startDate: values.startDate,
+      endDate: values.endDate,
+      limit: values.limit ?? defaultBarPreviewValues.limit
+    });
+  }
+
   async function previewMarketData(values: any) {
     const [symbol] = selectedSymbols();
     if (!symbol) return;
     setQueryLoading(true);
     try {
-      const result = await api.queryData({
-        source: values.source,
-        providerSource: values.provider,
-        providerMode: "strict",
-        symbol,
-        assetClass: selectedAssetClass,
-        market: selectedMarket,
-        venue: selectedVenue,
-        resolution: selectedResolution,
-        dataType: selectedDataType,
-        adjust: values.adjust,
-        startDate: values.startDate,
-        endDate: values.endDate,
-        limit: values.limit ?? defaultBarPreviewValues.limit
-      });
+      await loadSecurityInfo(symbol);
+      let result = await queryLocalBars(values, symbol);
+      if (result.enabled && result.items.length === 0 && selectedMarket === "china" && values.provider === "tushare") {
+        message.info(`No local MySQL bars for ${symbol}; fetching from TuShare Pro and saving locally.`);
+        await api.fetchData({
+          symbol,
+          assetClass: selectedAssetClass,
+          market: selectedMarket,
+          venue: selectedVenue,
+          resolution: selectedResolution,
+          dataType: selectedDataType,
+          provider: "tushare",
+          apiKey: values.apiKey,
+          outputsize: values.outputsize,
+          startDate: values.startDate,
+          endDate: values.endDate,
+          adjust: values.adjust,
+          overwrite: Boolean(values.overwrite)
+        });
+        result = await queryLocalBars(values, symbol);
+      }
       setQueryResult(result);
       if (!result.enabled) {
         message.warning(result.error ?? "Selected local data store is unavailable.");
+      } else if (result.items.length === 0) {
+        message.warning(`No local MySQL bars found for ${symbol}.`);
       }
     } catch (error) {
       message.error((error as Error).message);
@@ -440,6 +485,18 @@ function MarketDataDownloader({
           <Button data-testid="market-data-fetch-button" type="primary" icon={<CloudDownloadOutlined />} htmlType="submit" loading={fetchLoading}>Download</Button>
         </Space.Compact>
       </Form>
+      {securityInfo && (
+        <Card size="small" title="Company Info" style={{ marginBottom: 12 }}>
+          <Space wrap>
+            <Tag color="blue">{securityInfo.symbol}</Tag>
+            <Tag>{securityInfo.name}</Tag>
+            <Tag>{securityInfo.market}</Tag>
+            <Tag color={securityInfo.hasLocalData ? "success" : "warning"}>{securityInfo.hasLocalData ? "local data" : "local data pending"}</Tag>
+            {securityInfo.identifierCount !== undefined && <Tag>{securityInfo.identifierCount} identifiers</Tag>}
+            {securityInfo.source && <Tag>{securityInfo.source}</Tag>}
+          </Space>
+        </Card>
+      )}
       {queryResult && !queryResult.enabled && <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={queryResult.error ?? "Selected data source is unavailable."} />}
       {queryResult?.enabled && queryResult.message && <Alert style={{ marginBottom: 12 }} type="info" showIcon message={queryResult.message} />}
       {queryResult?.enabled && queryResult.items.length === 0 && <Alert style={{ marginBottom: 12 }} type="info" showIcon message="No local bars matched the selected filters. Use Download to fetch and save data locally." />}
@@ -1178,72 +1235,60 @@ export function OptimizationPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Optimization</h1><Button icon={<ReloadOutlined />} onClick={optimizations.reload}>Refresh</Button></div>
-      <Card title="Parameter Grid">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2024-12-31", cash: 300000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
-          <div className="field-grid">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
-            <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-            <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol"><Input /></Form.Item>
-            <Form.Item name="start" label="Start"><DateStringPicker /></Form.Item>
-            <Form.Item name="end" label="End"><DateStringPicker /></Form.Item>
-            <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="maxCandidates" label="Max Candidates"><InputNumber min={1} max={200} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
-          </div>
-          <div className="field-grid">
-            {(selectedTemplate?.parameters ?? []).map((parameter) => (
-              <Form.Item key={parameter.key} name={["parameterGrid", parameter.key]} label={`${parameter.label} Grid`}>
-                <Input placeholder={String(parameter.default ?? "")} />
-              </Form.Item>
-            ))}
-          </div>
-          <Form.Item name="parameterGridJson" label="Custom Parameter Grid JSON">
-            <Input.TextArea rows={3} placeholder='{"period":[10,20,30],"threshold":[0.1,0.2]}' />
-          </Form.Item>
-          <Form.Item name="parametersJson" label="Fixed Parameters JSON">
-            <Input.TextArea rows={3} placeholder='{"benchmarkSymbol":"SPY"}' />
-          </Form.Item>
-          <Button type="primary" icon={<SlidersOutlined />} htmlType="submit">Queue Optimization</Button>
-        </Form>
-      </Card>
-      <Card title="Optimization Runs" style={{ marginTop: 16 }}>
-        <Table<OptimizationRun> rowKey="id" dataSource={optimizations.data} size="small" columns={[
-          { title: "ID", dataIndex: "id", ellipsis: true },
-          { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
-          { title: "Candidates", render: (_, run) => run.result?.candidateCount ?? run.result?.candidates?.length ?? "-" },
-          { title: "Best", render: (_, run) => shortValue(bestCandidate(run)?.overrides ?? "-") },
-          { title: "Created", dataIndex: "created_at" }
-        ]} />
-      </Card>
-    </>
-  );
-}
-
-export function ResearchPage() {
-  const projects = useAsyncData(api.projects, []);
-  const sessions = useAsyncData(api.researchSessions, []);
-  async function submit(values: any) {
-    await api.startResearch(values);
-    message.success("Research task queued");
-    sessions.reload();
-  }
-  return (
-    <>
-      <div className="toolbar"><h1 className="page-title">Research</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
-      <Card title="Start Research">
-        <Form layout="inline" onFinish={submit} initialValues={{ port: 8888 }}>
-          <Form.Item name="projectId" rules={[{ required: true }]}><Select style={{ width: 240 }} placeholder="Project" options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
-          <Form.Item name="port"><InputNumber min={1024} max={65535} /></Form.Item>
-          <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit">Start</Button>
-        </Form>
-      </Card>
-      <Card title="Sessions" style={{ marginTop: 16 }}>
-        <Table<ResearchSession> rowKey="id" dataSource={sessions.data} size="small" columns={[{ title: "ID", dataIndex: "id", ellipsis: true }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "URL", render: (_, session) => session.url ? <a href={session.url} target="_blank">{session.url}</a> : "-" }, { title: "Action", render: (_, session) => <Button size="small" onClick={() => api.stopResearch(session.id).then(sessions.reload)}>Stop</Button> }]} />
-      </Card>
+      <Tabs
+        items={[
+          {
+            key: "grid",
+            label: "Parameter Grid",
+            children: (
+              <>
+                <Card title="Parameter Grid">
+                  <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2024-12-31", cash: 300000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
+                    <div className="field-grid">
+                      <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
+                      <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+                      <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+                      <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+                      <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+                      <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+                      <Form.Item name="symbol" label="Symbol"><Input /></Form.Item>
+                      <Form.Item name="start" label="Start"><DateStringPicker /></Form.Item>
+                      <Form.Item name="end" label="End"><DateStringPicker /></Form.Item>
+                      <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="maxCandidates" label="Max Candidates"><InputNumber min={1} max={200} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
+                    </div>
+                    <div className="field-grid">
+                      {(selectedTemplate?.parameters ?? []).map((parameter) => (
+                        <Form.Item key={parameter.key} name={["parameterGrid", parameter.key]} label={`${parameter.label} Grid`}>
+                          <Input placeholder={String(parameter.default ?? "")} />
+                        </Form.Item>
+                      ))}
+                    </div>
+                    <Form.Item name="parameterGridJson" label="Custom Parameter Grid JSON">
+                      <Input.TextArea rows={3} placeholder='{"period":[10,20,30],"threshold":[0.1,0.2]}' />
+                    </Form.Item>
+                    <Form.Item name="parametersJson" label="Fixed Parameters JSON">
+                      <Input.TextArea rows={3} placeholder='{"benchmarkSymbol":"SPY"}' />
+                    </Form.Item>
+                    <Button type="primary" icon={<SlidersOutlined />} htmlType="submit">Queue Optimization</Button>
+                  </Form>
+                </Card>
+                <Card title="Optimization Runs" style={{ marginTop: 16 }}>
+                  <Table<OptimizationRun> rowKey="id" dataSource={optimizations.data} size="small" columns={[
+                    { title: "ID", dataIndex: "id", ellipsis: true },
+                    { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
+                    { title: "Candidates", render: (_, run) => run.result?.candidateCount ?? run.result?.candidates?.length ?? "-" },
+                    { title: "Best", render: (_, run) => shortValue(bestCandidate(run)?.overrides ?? "-") },
+                    { title: "Created", dataIndex: "created_at" }
+                  ]} />
+                </Card>
+              </>
+            )
+          },
+          { key: "compare", label: "Compare Runs", children: <CompareRunsPanel /> }
+        ]}
+      />
     </>
   );
 }

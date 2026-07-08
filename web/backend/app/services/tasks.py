@@ -175,3 +175,19 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         finished_at=utc_now(),
     )
     return get_task(task_id)
+
+
+def delete_task(task_id: str) -> dict[str, Any]:
+    task = get_task(task_id)
+    if not is_terminal(task.get("status")):
+        task = cancel_task(task_id)
+
+    log_path = task.get("log_path")
+    with db() as connection:
+        connection.execute("delete from tasks where id = ?", (task_id,))
+    if log_path:
+        try:
+            Path(str(log_path)).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"deleted": True, "id": task_id}

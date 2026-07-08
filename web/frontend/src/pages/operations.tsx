@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Statistic,
@@ -14,7 +15,6 @@ import {
   Tabs,
   Tag,
   Tooltip,
-  Upload,
   message
 } from "antd";
 import {
@@ -54,7 +54,6 @@ import type {
   IndexMember,
   IndexMembersResult,
   MarketInfo,
-  ObjectStoreItem,
   OptimizationRun,
   PaperDailyReport,
   PaperSession,
@@ -258,36 +257,6 @@ export function ReportsPage() {
   );
 }
 
-export function ObjectStorePage() {
-  const items = useAsyncData(api.objectStoreItems, []);
-  const [form] = Form.useForm();
-  async function submit(values: any) {
-    const file = values.file?.fileList?.[0]?.originFileObj;
-    if (!file) return message.error("Choose a file");
-    const formData = new FormData();
-    formData.append("file", file);
-    await api.uploadObjectStoreItem(values.key, formData);
-    message.success("Uploaded");
-    form.resetFields();
-    items.reload();
-  }
-  return (
-    <>
-      <div className="toolbar"><h1 className="page-title">Object Store</h1><Button icon={<ReloadOutlined />} onClick={items.reload}>Refresh</Button></div>
-      <Card title="Upload">
-        <Form form={form} layout="inline" onFinish={submit}>
-          <Form.Item name="key" rules={[{ required: true }]}><Input placeholder="models/model.json" /></Form.Item>
-          <Form.Item name="file" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose</Button></Upload></Form.Item>
-          <Button type="primary" htmlType="submit">Upload</Button>
-        </Form>
-      </Card>
-      <Card title="Items" style={{ marginTop: 16 }}>
-        <Table<ObjectStoreItem> rowKey="key" dataSource={items.data} size="small" columns={[{ title: "Key", dataIndex: "key" }, { title: "Size", dataIndex: "size" }, { title: "Updated", dataIndex: "updated_at" }, { title: "Actions", render: (_, item) => <Space><a href={`/api/object-store/${item.key}`} target="_blank">Download</a><a onClick={() => api.deleteObjectStoreItem(item.key).then(items.reload)}>Delete</a></Space> }]} />
-      </Card>
-    </>
-  );
-}
-
 export function TasksPage() {
   const tasks = useAsyncData(api.tasks, []);
   const [selected, setSelected] = useState<Task>();
@@ -296,11 +265,36 @@ export function TasksPage() {
     setSelected(task);
     setLogs((await api.taskLogs(task.id)).logs);
   }
+  async function remove(task: Task) {
+    await api.deleteTask(task.id);
+    message.success("Task deleted");
+    if (selected?.id === task.id) {
+      setSelected(undefined);
+      setLogs("");
+    }
+    tasks.reload();
+  }
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Tasks</h1><Button icon={<ReloadOutlined />} onClick={tasks.reload}>Refresh</Button></div>
       <Card title="Queue">
-        <Table<Task> rowKey="id" dataSource={tasks.data} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> }, { title: "Created", dataIndex: "created_at" }, { title: "Open", render: (_, task) => <a onClick={() => open(task)}>Logs</a> }]} />
+        <Table<Task> rowKey="id" dataSource={tasks.data} size="small" columns={[
+          { title: "Kind", dataIndex: "kind" },
+          { title: "Title", dataIndex: "title" },
+          { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
+          { title: "Created", dataIndex: "created_at" },
+          {
+            title: "Actions",
+            render: (_, task) => (
+              <Space>
+                <a onClick={() => open(task)}>Logs</a>
+                <Popconfirm title="Delete task?" okText="Delete" okButtonProps={{ danger: true }} onConfirm={() => remove(task)}>
+                  <Button size="small" danger>Delete</Button>
+                </Popconfirm>
+              </Space>
+            )
+          }
+        ]} />
       </Card>
       {selected && <Card title={`${selected.kind} / ${selected.id}`} style={{ marginTop: 16 }}><pre className="log-view">{logs}</pre></Card>}
     </>

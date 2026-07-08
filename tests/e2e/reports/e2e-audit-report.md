@@ -32,17 +32,14 @@ Generated: 2026-07-08 23:17 CST
 | Data Library | `/data` | symbols/providers/import/query data APIs | Covered | navigation/render |
 | Backtests | `/backtests` | configure/run/filter backtests, `/api/backtests` | Covered | form validation, run submit, history filters |
 | Run Detail | `/runs/:id` | status/logs/result/chart/report APIs | Covered | metrics, logs, charts, records, refresh persistence |
-| Compare | `/compare` | compare runs | Covered | navigation/render |
-| Optimization | `/optimization` | optimization form/list | Covered | navigation/render |
+| Optimization | `/optimization` | optimization form/list plus compare runs | Covered | navigation/render; `/compare` redirects here |
 | Paper | `/paper` | paper/replay controls | Covered | navigation/render |
-| Research | `/research` | research helpers | Covered | navigation/render |
-| A-Share Research | `/ashare-research` | factor/research workflows | Covered | navigation/render |
+| Research | `/research` | research sessions plus A-share factor/PIT/cbond/futures workflows | Covered | navigation/render; `/ashare-research` redirects here |
 | Reports | `/reports` | list/export reports, `/api/reports` | Covered | report listing plus JSON/CSV/HTML/PDF export via API |
-| Object Store | `/object-store` | stored object listing | Covered | navigation/render |
 | Tasks | `/tasks` | task list/log status | Covered | navigation/render |
 | Monitoring | `/monitoring` | dependency health, Docker/LEAN/data/results checks | Covered | checks API, Docker, LEAN image, runner, data dir, results dir |
 | Settings | `/settings` | app settings | Covered | navigation/render |
-| 404 | `*` | friendly missing route result | Covered | `/missing-e2e-route` |
+| 404 | `*` | friendly missing route result | Covered | `/missing-e2e-route`, removed `/object-store` |
 
 ## 3. Automation Files
 

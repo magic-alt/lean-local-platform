@@ -42,12 +42,8 @@ export class BacktestConfigPage extends BasePage {
     await this.selectByTestId("backtest-resolution-select", values.resolution);
     await this.selectByTestId("backtest-data-type-select", values.dataType);
     await this.page.getByTestId("backtest-symbol-input").locator("input").fill(values.symbol);
-    const startInput = this.page.getByTestId("backtest-start-input").locator("input");
-    await startInput.fill(values.start);
-    await startInput.press("Enter");
-    const endInput = this.page.getByTestId("backtest-end-input").locator("input");
-    await endInput.fill(values.end);
-    await endInput.press("Enter");
+    await this.fillDate("backtest-start-input", values.start);
+    await this.fillDate("backtest-end-input", values.end);
     await this.page.getByTestId("backtest-cash-input").fill(String(values.cash));
     await this.page.getByTestId("backtest-benchmark-input").fill(values.benchmarkSymbol);
     if (values.feeModel) await this.selectByTestId("backtest-fee-model-select", values.feeModel);
@@ -67,6 +63,19 @@ export class BacktestConfigPage extends BasePage {
       const slow = this.page.getByLabel(/slow/i);
       if (await slow.count()) await slow.fill(String(values.slow));
     }
+  }
+
+  private async dateInput(testId: string) {
+    const control = this.page.getByTestId(testId);
+    const nestedInput = control.locator("input").first();
+    return await nestedInput.count() ? nestedInput : control;
+  }
+
+  private async fillDate(testId: string, value: string) {
+    const input = await this.dateInput(testId);
+    await input.fill(value);
+    await input.evaluate((element: HTMLInputElement) => element.blur());
+    await expect(input).toHaveValue(value);
   }
 
   async runAndCaptureId(): Promise<string> {

@@ -19,13 +19,10 @@ export class DashboardPage extends BasePage {
       "Projects",
       "Data",
       "Backtests",
-      "Compare",
       "Optimization",
       "Paper",
       "Research",
-      "A-Share Research",
       "Reports",
-      "Object Store",
       "Tasks",
       "Monitoring",
       "Settings"

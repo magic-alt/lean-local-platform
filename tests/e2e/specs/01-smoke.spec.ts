@@ -15,13 +15,10 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
       ["Projects", "Projects"],
       ["Data", "Data Library"],
       ["Backtests", "Backtests"],
-      ["Compare", "Strategy Compare"],
       ["Optimization", "Optimization"],
       ["Paper", "Paper Replay"],
       ["Research", "Research"],
-      ["A-Share Research", "A-Share Research"],
       ["Reports", "Reports"],
-      ["Object Store", "Object Store"],
       ["Tasks", "Tasks"],
       ["Monitoring", "Monitoring"],
       ["Settings", "Settings"]
@@ -34,6 +31,16 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
       await page.reload();
       await dashboard.expectHeading(heading);
     }
+
+    await page.goto("/#/ashare-research");
+    await dashboard.expectHeading("Research");
+
+    await page.goto("/#/compare");
+    await dashboard.expectHeading("Optimization");
+    await expect(page.getByRole("tab", { name: "Compare Runs" })).toBeVisible();
+
+    await page.goto("/#/object-store");
+    await expect(page.getByText("Page Not Found")).toBeVisible();
 
     await page.goto("/#/missing-e2e-route");
     await expect(page.getByText("Page Not Found")).toBeVisible();

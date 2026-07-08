@@ -137,3 +137,29 @@ def test_cancel_task_revokes_optimization_and_child_backtests(tmp_path, monkeypa
     assert optimization["status"] == "cancelled"
     assert child["status"] == "cancelled"
     assert "Cancellation requested by user." in task_logs(task["id"])
+
+
+def test_delete_task_removes_terminal_task_and_log(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    import app.services.tasks as tasks_module
+    from app.services.tasks import create_task, delete_task, get_task
+
+    monkeypatch.setattr(tasks_module, "RUNS_DIR", tmp_path / "runs")
+    task = create_task("data_fetch", "Fetch data", {"symbols": ["000001"]}, status="success")
+    log_path = tmp_path / "runs" / "task-logs" / f"{task['id']}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("done\n", encoding="utf-8")
+
+    result = delete_task(task["id"])
+
+    assert result == {"deleted": True, "id": task["id"]}
+    assert not log_path.exists()
+    with db_module.db() as connection:
+        assert connection.execute("select count(*) as count from tasks where id = ?", (task["id"],)).fetchone()["count"] == 0
+    try:
+        get_task(task["id"])
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("deleted task should not be loadable")
