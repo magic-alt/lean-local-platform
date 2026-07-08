@@ -117,6 +117,10 @@ export const api = {
     resolution?: string;
     dataType?: string;
     source?: string;
+    providerSource?: string;
+    providerMode?: string;
+    allowResearchSource?: boolean;
+    adjust?: string;
     startDate?: string;
     endDate?: string;
     limit?: number;

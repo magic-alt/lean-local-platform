@@ -46,9 +46,9 @@ def _symbol_key(symbol):
 class AShareFeeModel(FeeModel):
     def __init__(self, algorithm):
         self.currency = "CNY"
-        self.commission_rate = _float_parameter(algorithm, "commissionRate", 0.0003)
-        self.min_commission = _float_parameter(algorithm, "minCommission", 5.0)
-        self.stamp_tax_sell = _float_parameter(algorithm, "stampTaxSell", 0.001)
+        self.commission_rate = _float_parameter(algorithm, "commissionRate", 0.0001)
+        self.min_commission = _float_parameter(algorithm, "minCommission", 0.0)
+        self.stamp_tax_sell = _float_parameter(algorithm, "stampTaxSell", 0.0005)
         self.transfer_fee_rate = _float_parameter(algorithm, "transferFeeRate", 0.00001)
 
     def GetOrderFee(self, parameters):
@@ -157,7 +157,7 @@ class AShareExecutionHelper:
             return float(self.algorithm.portfolio.total_portfolio_value) - self.min_cash_buffer
 
     def _buy_fee_buffer(self, trade_value):
-        commission = max(trade_value * _float_parameter(self.algorithm, "commissionRate", 0.0003), _float_parameter(self.algorithm, "minCommission", 5.0))
+        commission = max(trade_value * _float_parameter(self.algorithm, "commissionRate", 0.0001), _float_parameter(self.algorithm, "minCommission", 0.0))
         transfer = trade_value * _float_parameter(self.algorithm, "transferFeeRate", 0.00001)
         slippage = trade_value * _float_parameter(self.algorithm, "slippageBps", 5.0) / 10000.0
         return commission + transfer + slippage

@@ -67,6 +67,7 @@ import type {
   Universe
 } from "../api";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
+import { DateStringPicker } from "../components/DateStringPicker";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -191,7 +192,7 @@ export function P2ResearchPage() {
                 <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
                   <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>
                     <Form.Item name="universeCode" rules={[{ required: true }]}><Input style={{ width: 140 }} /></Form.Item>
-                    <Form.Item name="asOfDate" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Form.Item name="asOfDate" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Button type="primary" htmlType="submit">Query</Button>
                   </Form>
                   <Alert
@@ -238,8 +239,8 @@ export function P2ResearchPage() {
                     <div className="field-grid six">
                       <Form.Item name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
                       <Form.Item name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item>
-                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
+                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                       <Form.Item name="forwardDays" label="Forward Days"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
                       <Form.Item name="quantiles" label="Quantiles"><InputNumber min={2} max={20} style={{ width: "100%" }} /></Form.Item>
                       <Form.Item name="engine" label="Engine">
@@ -302,7 +303,7 @@ export function P2ResearchPage() {
               <>
                 <Card title="Double-Low Pool">
                   <Form layout="inline" onFinish={queryCbond} initialValues={{ date: "2024-01-03", maxDoubleLow: 130, excludeCallRisk: true }}>
-                    <Form.Item name="date" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Form.Item name="maxDoubleLow"><InputNumber min={0} /></Form.Item>
                     <Form.Item name="excludeCallRisk" valuePropName="checked"><Checkbox>Exclude Call Risk</Checkbox></Form.Item>
                     <Button type="primary" htmlType="submit">Query</Button>
@@ -349,7 +350,7 @@ export function P2ResearchPage() {
               <>
                 <Card title="Agricultural Main Contracts">
                   <Form layout="inline" onFinish={queryFutures} initialValues={{ date: "2024-01-03", products: "A,M,Y,P,C,CS,JD,LH,SR,CF,RM,OI,AP,CJ,PK" }}>
-                    <Form.Item name="date" rules={[{ required: true }]}><Input type="date" /></Form.Item>
+                    <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Form.Item name="products"><Input style={{ width: 360 }} /></Form.Item>
                     <Button type="primary" htmlType="submit">Query</Button>
                   </Form>

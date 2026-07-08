@@ -2,15 +2,15 @@ import type { AppSettings } from "../api";
 
 export const defaultSettings: AppSettings = {
   defaultAssetClass: "equity",
-  defaultMarket: "usa",
-  defaultVenue: "usa",
+  defaultMarket: "china",
+  defaultVenue: "china",
   defaultResolution: "daily",
   defaultDataType: "trade",
-  defaultProvider: "yahoo",
+  defaultProvider: "tushare",
   defaultAdjust: "",
   defaultStrategyTemplate: "ema_cross",
-  defaultCash: 100000,
-  defaultStart: "2018-01-01",
+  defaultCash: 300000,
+  defaultStart: "2024-01-01",
   defaultEnd: "2024-12-31",
   dockerImage: "quantconnect/lean:latest",
   researchImage: "quantconnect/research:latest",
@@ -21,12 +21,17 @@ export const defaultSettings: AppSettings = {
 };
 
 export const defaultBarPreviewValues = {
-  source: "clickhouse",
+  source: "database",
   assetClass: "equity",
   symbol: "000001",
   market: "china",
   venue: "china",
   resolution: "daily",
   dataType: "trade",
+  providerSource: "tushare",
+  providerMode: "strict",
+  adjust: "raw",
+  startDate: "2024-01-01",
+  endDate: "2024-12-31",
   limit: 200
 };

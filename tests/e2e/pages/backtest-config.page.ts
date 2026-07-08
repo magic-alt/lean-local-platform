@@ -42,8 +42,12 @@ export class BacktestConfigPage extends BasePage {
     await this.selectByTestId("backtest-resolution-select", values.resolution);
     await this.selectByTestId("backtest-data-type-select", values.dataType);
     await this.page.getByTestId("backtest-symbol-input").locator("input").fill(values.symbol);
-    await this.page.getByTestId("backtest-start-input").fill(values.start);
-    await this.page.getByTestId("backtest-end-input").fill(values.end);
+    const startInput = this.page.getByTestId("backtest-start-input").locator("input");
+    await startInput.fill(values.start);
+    await startInput.press("Enter");
+    const endInput = this.page.getByTestId("backtest-end-input").locator("input");
+    await endInput.fill(values.end);
+    await endInput.press("Enter");
     await this.page.getByTestId("backtest-cash-input").fill(String(values.cash));
     await this.page.getByTestId("backtest-benchmark-input").fill(values.benchmarkSymbol);
     if (values.feeModel) await this.selectByTestId("backtest-fee-model-select", values.feeModel);

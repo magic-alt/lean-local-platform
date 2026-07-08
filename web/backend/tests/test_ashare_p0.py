@@ -48,31 +48,34 @@ def import_sample_ashare(tmp_path, monkeypatch):
     from app.services.benchmark import import_benchmark_rows
     from app.services.data import import_ashare_research_data
 
-    asset = import_ashare_research_data(
-        symbol="600519",
-        provider="akshare",
-        market="china",
-        rows=sample_ashare_rows(),
-        source="akshare",
-        overwrite=True,
-        adjust="raw",
-        outputsize="",
-        asset_class="equity",
-        venue="china",
-        resolution="daily",
-        data_type="trade",
-        start_date=None,
-        end_date=None,
-    )
-    import_benchmark_rows(
-        symbol="000300",
-        source="akshare",
-        rows=[
-            {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
-            {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
-            {"date": "2024-01-04", "open": "3518", "high": "3530", "low": "3510", "close": "3522", "volume": "1200"},
-        ],
-    )
+    asset = {}
+    for source in ("akshare", "tushare"):
+        asset = import_ashare_research_data(
+            symbol="600519",
+            provider=source,
+            market="china",
+            rows=sample_ashare_rows(),
+            source=source,
+            overwrite=True,
+            adjust="raw",
+            outputsize="",
+            asset_class="equity",
+            venue="china",
+            resolution="daily",
+            data_type="trade",
+            start_date=None,
+            end_date=None,
+        )
+    for source in ("akshare", "tushare"):
+        import_benchmark_rows(
+            symbol="000300",
+            source=source,
+            rows=[
+                {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
+                {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
+                {"date": "2024-01-04", "open": "3518", "high": "3530", "low": "3510", "close": "3522", "volume": "1200"},
+            ],
+        )
     return asset
 
 
@@ -219,7 +222,9 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["validation"]["passed"] is True
     assert job["validation"]["marketRules"]["tPlusOne"] is True
     assert job["validation"]["marketRules"]["limitUpBuyBlocked"] is True
-    assert job["validation"]["marketRules"]["feeModel"]["stampTaxSell"] == 0.001
+    assert job["validation"]["marketRules"]["feeModel"]["commissionRate"] == 0.0001
+    assert job["validation"]["marketRules"]["feeModel"]["minCommission"] == 0.0
+    assert job["validation"]["marketRules"]["feeModel"]["stampTaxSell"] == 0.0005
     assert job["validation"]["data"]["coverage"]["bar_count"] == 3
     assert job["validation"]["data"]["coverage"]["status_count"] == 3
     assert job["validation"]["data"]["benchmark"]["symbol"] == "000300"

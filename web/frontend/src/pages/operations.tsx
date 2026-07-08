@@ -67,6 +67,7 @@ import type {
   Universe
 } from "../api";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
+import { DateStringPicker } from "../components/DateStringPicker";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -140,7 +141,7 @@ export function PaperPage() {
       <div className="toolbar"><h1 className="page-title">Paper Replay</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
       <Alert style={{ marginBottom: 16 }} type="info" showIcon message="Paper Replay is a local simulated session registry. It does not connect to brokers or place real orders." />
       <Card title="Create Paper Session">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", resolution: "daily", dataType: "trade", cash: 100000, executionPolicy: "next_open", benchmarkSymbol: "000300", maxPositions: 10, maxPositionWeight: 0.2, minCash: 0, allowStBuy: false }}>
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", cash: 300000, executionPolicy: "next_open", benchmarkSymbol: "000300", maxPositions: 10, maxPositionWeight: 0.2, minCash: 0, allowStBuy: false }}>
           <div className="field-grid six">
             <Form.Item name="name" label="Name"><Input placeholder="BTCUSDT paper replay" /></Form.Item>
             <Form.Item name="projectId" label="Project"><Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
@@ -397,11 +398,11 @@ export function SettingsPage() {
             <Form.Item name="defaultVenue" label="Default Venue"><Select options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="defaultResolution" label="Default Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="defaultDataType" label="Default Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="defaultProvider" label="Default Provider"><Select options={providers.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="defaultProvider" label="Default Provider"><Select options={providers.data.map((item) => ({ value: item.key, label: item.disabledByDefault || item.enabledByDefault === false ? `${item.name} (disabled)` : item.name, disabled: item.disabledByDefault || item.enabledByDefault === false }))} /></Form.Item>
             <Form.Item name="defaultAdjust" label="Default Adjust"><Select options={[{ value: "", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} /></Form.Item>
             <Form.Item name="defaultStrategyTemplate" label="Default Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="defaultStart" label="Default Start"><Input type="date" /></Form.Item>
-            <Form.Item name="defaultEnd" label="Default End"><Input type="date" /></Form.Item>
+            <Form.Item name="defaultStart" label="Default Start"><DateStringPicker /></Form.Item>
+            <Form.Item name="defaultEnd" label="Default End"><DateStringPicker /></Form.Item>
             <Form.Item name="defaultCash" label="Default Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="chartPointLimit" label="Chart Point Limit"><InputNumber min={1000} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="maxConcurrentJobs" label="Max Concurrent Jobs"><InputNumber min={1} max={8} style={{ width: "100%" }} /></Form.Item>

@@ -600,12 +600,19 @@ def _execution_price(bar: dict[str, Any], policy: str) -> float:
     return float(bar["close"])
 
 
+def _float_parameter(parameters: dict[str, Any], key: str, default: float) -> float:
+    value = parameters.get(key)
+    if value in (None, ""):
+        return default
+    return float(value)
+
+
 def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
-    commission = max(value * float(parameters.get("commissionRate") or 0.0003), float(parameters.get("minCommission") or 5.0)) if value else 0
-    stamp_tax = value * float(parameters.get("stampTaxSell") or 0.001) if side == "sell" else 0
-    transfer = value * float(parameters.get("transferFeeRate") or 0.00001)
+    commission = max(value * _float_parameter(parameters, "commissionRate", 0.0001), _float_parameter(parameters, "minCommission", 0.0)) if value else 0
+    stamp_tax = value * _float_parameter(parameters, "stampTaxSell", 0.0005) if side == "sell" else 0
+    transfer = value * _float_parameter(parameters, "transferFeeRate", 0.00001)
     return commission + stamp_tax + transfer
 
 
