@@ -10,6 +10,7 @@ LEAN_WEB_PORT="${LEAN_WEB_PORT:-8000}"
 VITE_HOST="${VITE_HOST:-127.0.0.1}"
 VITE_PORT="${VITE_PORT:-5173}"
 LEAN_DATABASE_URL="${LEAN_DATABASE_URL:-mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market}"
+LEAN_OPEN_WEB="${LEAN_OPEN_WEB:-1}"
 
 BACKEND_VENV_PY="${BACKEND_DIR}/.venv/bin/python"
 BACKEND_LOG="/tmp/lean_backend_single_${LEAN_WEB_PORT}.log"
@@ -44,6 +45,26 @@ wait_for_port() {
 
   log "${label} 在 ${timeout}s 内未就绪"
   return 1
+}
+
+open_frontend_in_browser() {
+  if [[ "${LEAN_OPEN_WEB}" != "1" ]]; then
+    return 0
+  fi
+
+  local frontend_url="http://${VITE_HOST}:${VITE_PORT}"
+  if command -v open >/dev/null 2>&1; then
+    log "尝试打开浏览器：${frontend_url}"
+    (open "${frontend_url}" >/dev/null 2>&1 &) || log "open 命令执行失败，已跳过自动打开"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    log "尝试打开浏览器：${frontend_url}"
+    (xdg-open "${frontend_url}" >/dev/null 2>&1 &) || log "xdg-open 命令执行失败，已跳过自动打开"
+  elif command -v start >/dev/null 2>&1; then
+    log "尝试打开浏览器：${frontend_url}"
+    (start "${frontend_url}" >/dev/null 2>&1 &) || log "start 命令执行失败，已跳过自动打开"
+  else
+    log "未检测到可用的浏览器打开命令（open/xdg-open/start），请手动打开 ${frontend_url}"
+  fi
 }
 
 cleanup_previous_instances() {
@@ -125,5 +146,6 @@ log "前端日志: ${FRONTEND_LOG}"
 log "后端PID: ${BACKEND_PID}"
 log "前端PID: ${FRONTEND_PID}"
 log "访问地址: http://${VITE_HOST}:${VITE_PORT}"
+open_frontend_in_browser
 
 wait

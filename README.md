@@ -418,6 +418,7 @@ scripts/start_web_single_instance.sh
 - 等待端口就绪并打印：
   - `GET /api/health`
   - `GET /api/health/dependencies`
+- 启动成功后自动打开前端页面（默认 `http://127.0.0.1:5173`，可通过 `LEAN_OPEN_WEB=0` 关闭）
 
 启动 Celery worker：
 
