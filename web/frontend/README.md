@@ -12,6 +12,12 @@ npm run dev
 
 Vite proxies `/api` to `http://127.0.0.1:8000`.
 
+For stable environment behavior, use the default pair:
+- Backend API: `127.0.0.1:8000`
+- Frontend UI: `127.0.0.1:5173`
+
+Frontend runs with strict port binding (`--port 5173 --strictPort`) and will fail fast if 5173 is already occupied instead of falling back to 5174/5175.
+
 Use another backend port:
 
 ```bash
