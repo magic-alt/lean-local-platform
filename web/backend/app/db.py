@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -10,7 +11,6 @@ from urllib.parse import unquote, urlparse
 
 from .core.config import (
     DATABASE_URL,
-    DB_PATH,
     OBJECT_STORE_DIR,
     PROJECTS_DIR,
     REPORTS_DIR,
@@ -72,6 +72,9 @@ JSON_COLUMNS = {
 
 
 MYSQL_SCHEMES = {"mysql", "mysql+pymysql"}
+SQLITE_SCHEMES = {"sqlite", "sqlite+pysqlite"}
+SQLITE_TEST_BACKEND_ENABLED = os.environ.get("LEAN_ALLOW_SQLITE_TEST_DB", "").lower() in {"1", "true", "yes", "on"}
+DB_PATH: Path | None = None
 LONG_TEXT_COLUMNS = {
     "metadata_json",
     "config_json",
@@ -194,7 +197,23 @@ def database_backend() -> str:
     scheme = urlparse(DATABASE_URL).scheme.lower()
     if scheme in MYSQL_SCHEMES:
         return "mysql"
-    return "sqlite"
+    if scheme in SQLITE_SCHEMES and SQLITE_TEST_BACKEND_ENABLED:
+        return "sqlite"
+    if scheme in SQLITE_SCHEMES:
+        raise RuntimeError(
+            "SQLite is disabled for runtime database use. Configure LEAN_DATABASE_URL with mysql+pymysql; "
+            "use DuckDB only through the Parquet research layer."
+        )
+    raise RuntimeError(f"Unsupported database backend: {scheme or 'empty'}")
+
+
+def _sqlite_db_path() -> Path:
+    parsed = urlparse(DATABASE_URL)
+    if parsed.scheme.lower() in SQLITE_SCHEMES and parsed.path:
+        return Path(unquote(parsed.path)).expanduser()
+    if DB_PATH is not None:
+        return DB_PATH
+    raise RuntimeError("SQLite test backend requires an explicit sqlite:/// path.")
 
 
 def database_descriptor() -> dict[str, Any]:
@@ -207,7 +226,7 @@ def database_descriptor() -> dict[str, Any]:
             "database": (parsed.path or "/lean_platform").lstrip("/"),
             "user": unquote(parsed.username or "lean"),
         }
-    return {"engine": "sqlite", "path": str(DB_PATH), "url": f"sqlite:///{DB_PATH}"}
+    return {"engine": "sqlite", "mode": "test_only", "path": str(_sqlite_db_path())}
 
 
 def utc_now() -> str:
@@ -413,7 +432,7 @@ def connect() -> sqlite3.Connection | MySQLConnection:
     init_storage()
     if database_backend() == "mysql":
         return MySQLConnection()
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(_sqlite_db_path())
     connection.row_factory = sqlite3.Row
     return connection
 

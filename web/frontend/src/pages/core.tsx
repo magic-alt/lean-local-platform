@@ -85,6 +85,8 @@ import {
   templateDefaults
 } from "../utils/strategy";
 
+const CRYPTO_DEMO_SYMBOLS = ["BTCUSDT", "ETHUSDT"] as const;
+
 function metricTruthy(value: unknown) {
   return value === true || String(value).toLowerCase() === "true";
 }
@@ -511,7 +513,7 @@ export function ProjectWorkspacePage() {
   const projectRuns = runs.data.filter((run) => run.project_id === project?.id);
   const projectTasks = tasks.data.filter((task) => task.project_id === project?.id);
   const backtestInitial = {
-    symbol: symbols[0] ?? (market === "china" ? "600519" : market === "hongkong" ? "00700" : "AAPL"),
+    symbol: symbols[0] ?? (assetClass === "crypto" ? "BTCUSDT" : market === "china" ? "600519" : market === "hongkong" ? "00700" : "AAPL"),
     start: "2018-01-01",
     end: "2024-12-31",
     cash: 100000,
@@ -523,6 +525,35 @@ export function ProjectWorkspacePage() {
     dataType,
     parameters: templateDefaults(template)
   };
+
+  async function runCryptoDemoBacktest(symbol: string) {
+    if (!project || assetClass !== "crypto") {
+      message.info("Select a crypto project first to run BTC/ETH demo.");
+      return;
+    }
+    if (!symbols.includes(symbol)) {
+      message.warning("Please fetch symbol data in the Data tab first (Binance BTCUSDT/ETHUSDT).");
+      return;
+    }
+    await api.createBacktest({
+      ...backtestInitial,
+      symbol,
+      projectId: project.id,
+      assetClass,
+      market,
+      venue,
+      resolution,
+      dataType,
+      parameters: backtestInitial.parameters,
+    });
+    message.success(`Backtest queued: ${symbol}`);
+    runs.reload();
+  }
+
+  async function runCryptoDemoSuite() {
+    await Promise.all(CRYPTO_DEMO_SYMBOLS.map(runCryptoDemoBacktest));
+    runs.reload();
+  }
 
   return (
     <>
@@ -541,7 +572,7 @@ export function ProjectWorkspacePage() {
           { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
           { key: "code", label: "Code", children: <Card title={`${activeFile ?? "No file selected"}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space>{!activeFile && <Alert type="warning" showIcon message="No project files found." style={{ marginBottom: 12 }} />}<Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty || !activeFile} onClick={saveFile}>Save</Button></Card> },
           { key: "data", label: "Data", children: <MarketDataDownloader compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
-          { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button></Form></Card> },
+          { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
           { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }
         ]} />

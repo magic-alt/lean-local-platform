@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import date
@@ -14,7 +15,7 @@ BACKEND_DIR = ROOT / "web" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.db import DB_PATH, db, init_db  # noqa: E402
+from app.db import database_descriptor, db, init_db  # noqa: E402
 from app.lean import LeanPlatformError, normalize_symbol  # noqa: E402
 from app.services.ashare_repository import universe_as_of  # noqa: E402
 from app.services.data import fetch_and_import_symbol  # noqa: E402
@@ -159,7 +160,7 @@ def main() -> int:
     if args.limit > 0:
         selected = selected[: args.limit]
 
-    print(f"database={DB_PATH}")
+    print(f"database={json.dumps(database_descriptor(), ensure_ascii=False)}")
     print(
         f"csi300_members={len(members)} membership_as_of={membership_as_of} "
         f"selected={len(selected)} start={args.start} end={args.end} adjust={args.adjust}"

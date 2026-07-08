@@ -6,13 +6,20 @@ adata>=2.9,<3
 baostock>=0.8,<1
 clickhouse-connect>=0.8,<1
 duckdb>=1.1,<2
+efinance>=0.5,<1
+finnhub-python>=2,<3
 jqdatasdk>=1.9,<2
+longbridge==0.2.74; platform_system == "Linux" and python_version < "3.12"
+longbridge>=4.0.5,<5; platform_system != "Linux" or python_version >= "3.12"
 polars>=1.0,<2
 prometheus-client>=0.21,<1
+pytdx>=1.72,<2
 pypdf>=6,<7
 pymysql>=1.1,<2
 pytest>=8,<9
 python-multipart>=0.0.20,<1
 redis>=5,<6
+tickflow>=0.1,<1
 tushare>=1.4,<2
 uvicorn[standard]>=0.34,<1
+yfinance>=0.2,<1

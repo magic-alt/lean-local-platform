@@ -60,19 +60,34 @@ npm install
 npm run dev
 ```
 
-If the API is not on port `8000`, set the proxy target:
-
-```bash
-VITE_API_PROXY_TARGET=http://127.0.0.1:8001 npm run dev
-```
-
 Open:
 
 ```text
 http://127.0.0.1:5173
 ```
 
-If port `8000` is already in use, either stop the old process or run the API on another port and set `VITE_API_PROXY_TARGET` for frontend development.
+Do not allow the frontend to auto-fallback to another port.
+
+```bash
+# strict bind required: backend must be available on 127.0.0.1:8000 first
+pkill -f "uvicorn app.main:app --reload --host 127.0.0.1 --port 8000" || true
+pkill -f "vite --host 127.0.0.1 --port 5173 --strictPort" || true
+```
+
+Then start:
+
+```bash
+cd /Users/kaermax/lean-platform/web/backend
+source .venv/bin/activate
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```bash
+cd /Users/kaermax/lean-platform/web/frontend
+npm run dev
+```
+
+If port `8000` is already in use, stop the old process and restart the backend on `127.0.0.1:8000` to keep frontend/API pairing consistent.
 
 ## Production-Style Local Build
 

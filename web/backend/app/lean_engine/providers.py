@@ -7,7 +7,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.error import URLError
 
@@ -179,33 +179,55 @@ def fetch_binance_crypto_rows(
     if interval not in {"1d", "1h", "1m"}:
         raise LeanPlatformError("Binance crypto interval must be 1d, 1h, or 1m.")
     ticker = canonical_symbol(symbol, "crypto")
-    params: dict[str, str | int] = {"symbol": ticker, "interval": interval, "limit": 1000}
-    if start:
-        params["startTime"] = int(datetime.combine(parse_date(start), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
-    if end:
-        params["endTime"] = int(datetime.combine(parse_date(end), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
-    url = "https://api.binance.com/api/v3/klines?" + urllib.parse.urlencode(params)
-    text = download_text(url)
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LeanPlatformError("Binance did not return JSON kline data.") from exc
-    if isinstance(payload, dict) and payload.get("code"):
-        raise LeanPlatformError(f"Binance error for {ticker}: {payload.get('msg') or payload}")
-    rows = []
-    for item in payload:
-        if not isinstance(item, list) or len(item) < 6:
-            continue
-        rows.append(
-            {
-                "date": datetime.fromtimestamp(int(item[0]) / 1000, tz=timezone.utc).date().isoformat(),
-                "open": str(item[1]),
-                "high": str(item[2]),
-                "low": str(item[3]),
-                "close": str(item[4]),
-                "volume": str(item[5]),
-            }
-        )
+    interval_ms = {"1m": 60_000, "1h": 3_600_000, "1d": 86_400_000}[interval]
+    start_dt = parse_date(start) if start else None
+    end_dt = parse_date(end) if end else None
+    start_ms = int(datetime.combine(start_dt, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000) if start_dt else None
+    end_ms = (
+        int(datetime.combine(end_dt + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000) - 1
+        if end_dt
+        else None
+    )
+    cursor_ms: int | None = start_ms
+    rows: list[dict[str, str]] = []
+    while True:
+        params: dict[str, str | int] = {"symbol": ticker, "interval": interval, "limit": 1000}
+        if cursor_ms is not None:
+            params["startTime"] = cursor_ms
+        if end_ms is not None:
+            params["endTime"] = end_ms
+        url = "https://api.binance.com/api/v3/klines?" + urllib.parse.urlencode(params)
+        text = download_text(url)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise LeanPlatformError("Binance did not return JSON kline data.") from exc
+        if isinstance(payload, dict) and payload.get("code"):
+            raise LeanPlatformError(f"Binance error for {ticker}: {payload.get('msg') or payload}")
+        if not isinstance(payload, list):
+            raise LeanPlatformError(f"Binance returned malformed kline payload for {ticker}.")
+        batch: list[dict[str, str]] = []
+        for item in payload:
+            if not isinstance(item, list) or len(item) < 6:
+                continue
+            batch.append(
+                {
+                    "date": datetime.fromtimestamp(int(item[0]) / 1000, tz=timezone.utc).date().isoformat(),
+                    "open": str(item[1]),
+                    "high": str(item[2]),
+                    "low": str(item[3]),
+                    "close": str(item[4]),
+                    "volume": str(item[5]),
+                }
+            )
+        rows.extend(batch)
+        if len(payload) < 1000:
+            break
+        if end_ms is not None and cursor_ms is not None and cursor_ms > end_ms:
+            break
+        last_open = int(payload[-1][0])
+        cursor_ms = last_open + interval_ms
+    rows.sort(key=lambda item: item["date"])
     if not rows:
         raise LeanPlatformError(f"No Binance rows found for {ticker}.")
     return rows

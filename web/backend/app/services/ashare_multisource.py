@@ -6,7 +6,7 @@ from typing import Any
 from ..db import db, json_dump, rows_to_dicts, utc_now
 
 
-DEFAULT_SOURCES = ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"]
+DEFAULT_SOURCES = ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"]
 REPORT_NAMESPACE = uuid.UUID("d30cc089-890e-46f6-9e1f-d8874c30c773")
 
 

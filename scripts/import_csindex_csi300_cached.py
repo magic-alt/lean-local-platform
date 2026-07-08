@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.db import DB_PATH, db, init_db  # noqa: E402
+from app.db import database_descriptor, db, init_db  # noqa: E402
 from app.services.csi300_pit import (  # noqa: E402
     build_membership_intervals,
     content_hash,
@@ -372,7 +372,7 @@ def main() -> int:
         _write_manifest(Path(args.manifest_out), source_records=source_records, initial_members=initial_members)
 
     counts = Counter(event["action_type"] for event in events)
-    print(f"database={DB_PATH}")
+    print(f"database={json.dumps(database_descriptor(), ensure_ascii=False)}")
     print(
         f"coverage_start={COVERAGE_START} source={SOURCE} sources={len(source_records)} "
         f"events={len(events)} add={counts['add']} delete={counts['delete']} "

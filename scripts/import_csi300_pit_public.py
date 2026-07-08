@@ -16,7 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.errors import LeanWebError  # noqa: E402
-from app.db import DB_PATH, init_db  # noqa: E402
+from app.db import database_descriptor, init_db  # noqa: E402
 from app.services.csi300_pit import (  # noqa: E402
     DEFAULT_SOURCE,
     build_membership_intervals,
@@ -288,7 +288,7 @@ def main() -> int:
             replace=args.replace_universe,
         )
 
-    print(f"database={DB_PATH}")
+    print(f"database={json.dumps(database_descriptor(), ensure_ascii=False)}")
     print(
         f"batch_id={batch_id} index_code={index_code} sources={len(manifest.get('sources') or [])} "
         f"events={len(events)} intervals={len(built['intervals'])} dry_run={args.dry_run}"

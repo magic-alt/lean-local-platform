@@ -12,11 +12,13 @@ npm run dev
 
 Vite proxies `/api` to `http://127.0.0.1:8000`.
 
-Use another backend port:
+For stable environment behavior, use the default pair:
+- Backend API: `127.0.0.1:8000`
+- Frontend UI: `127.0.0.1:5173`
 
-```bash
-VITE_API_PROXY_TARGET=http://127.0.0.1:8001 npm run dev
-```
+Frontend runs with strict port binding (`--port 5173 --strictPort`) and will fail fast if 5173 is already occupied instead of falling back to 5174/5175.
+
+For consistency, keep the backend on `127.0.0.1:8000` while running the frontend.
 
 Build static assets for FastAPI to serve:
 

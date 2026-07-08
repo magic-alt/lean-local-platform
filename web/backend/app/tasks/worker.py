@@ -57,7 +57,7 @@ def fetch_data_batch_task(task_id: str):
     task = get_task(task_id)
     parameters = task["parameters"]
     symbols = parameters.get("symbols") or []
-    provider = parameters.get("provider") or "stooq"
+    provider = parameters.get("provider") or "auto"
     asset_class = parameters.get("assetClass") or "equity"
     market = parameters.get("market") or "usa"
     venue = parameters.get("venue") or None

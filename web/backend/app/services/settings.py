@@ -10,7 +10,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "defaultVenue": "usa",
     "defaultResolution": "daily",
     "defaultDataType": "trade",
-    "defaultProvider": "yahoo",
+    "defaultProvider": "auto",
     "defaultAdjust": "",
     "defaultStrategyTemplate": "ema_cross",
     "defaultCash": 100000,

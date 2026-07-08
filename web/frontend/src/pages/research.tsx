@@ -166,7 +166,7 @@ export function P2ResearchPage() {
                   <Space wrap>
                     <Tag color={databaseHealth.data.ok ? "success" : "error"}>{databaseHealth.data.ok ? "ready" : "not ready"}</Tag>
                     <Tag>{databaseHealth.data.detail.engine || "unknown engine"}</Tag>
-                    <Tag>{databaseHealth.data.detail.database || databaseHealth.data.detail.path || "unknown database"}</Tag>
+                    <Tag>{databaseHealth.data.detail.database || "unknown database"}</Tag>
                     {databaseHealth.data.detail.host && <Tag>{databaseHealth.data.detail.host}:{databaseHealth.data.detail.port}</Tag>}
                     {databaseHealth.data.detail.missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
                   </Space>

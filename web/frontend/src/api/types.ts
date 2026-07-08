@@ -133,8 +133,6 @@ export interface DatabaseHealth {
     port?: number;
     database?: string;
     user?: string;
-    path?: string;
-    exists?: boolean;
     missingTables: string[];
     counts: Record<string, number>;
     csi300MembershipRows: number;

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import importlib.util
-import os
 import uuid
 from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
-from .provider_adapters import adapter_for
+from .data_provider_manager import provider_availability_item, provider_requirements
 from .source_gate import (
     BACKUP_DATA_SOURCES,
     DATA_SOURCE_PRIORITY,
@@ -20,19 +18,9 @@ from .source_gate import (
 )
 
 
-PROVIDER_MODULES = {
-    "akshare": ["akshare"],
-    "baostock": ["baostock"],
-    "adata": ["adata"],
-    "tushare": ["tushare"],
-    "jqdata": ["jqdatasdk"],
-    "rqdata": ["rqdatac"],
-}
-PROVIDER_CREDENTIALS = {
-    "tushare": [["TUSHARE_TOKEN"]],
-    "jqdata": [["JQDATA_TOKEN"], ["JQDATA_USERNAME", "JQDATA_PASSWORD"]],
-    "rqdata": [["RQDATA_USERNAME", "RQDATA_PASSWORD"]],
-}
+_PROVIDER_REQUIREMENTS = provider_requirements()
+PROVIDER_MODULES = {key: value.get("modules", []) for key, value in _PROVIDER_REQUIREMENTS.items()}
+PROVIDER_CREDENTIALS = {key: value.get("env", []) for key, value in _PROVIDER_REQUIREMENTS.items()}
 
 
 def _utc_date(days: int) -> str:
@@ -82,31 +70,21 @@ def provider_availability_report(
     checked_at = utc_now()
     items: list[dict[str, Any]] = []
     for provider in selected:
-        modules = PROVIDER_MODULES.get(provider, [])
-        credentials = PROVIDER_CREDENTIALS.get(provider, [])
-        module_status = [{"name": module, "available": importlib.util.find_spec(module) is not None} for module in modules]
-        credential_names = sorted({name for option in credentials for name in option})
-        credential_status = [{"name": name, "present": bool(os.environ.get(name))} for name in credential_names]
-        missing_modules = [item["name"] for item in module_status if not item["available"]]
-        configured_credentials = not credentials or any(all(os.environ.get(name) for name in option) for option in credentials)
-        missing_credentials = [] if configured_credentials else credential_names
+        availability = provider_availability_item(provider, start_date=start_date, end_date=end_date)
         coverage = _source_coverage(provider, start_date, end_date)
-        adapter = adapter_for(provider)
-        supported_endpoints = adapter.supported_endpoints()
         unavailable_reasons: list[str] = []
-        if missing_modules:
-            unavailable_reasons.append("dependency_missing:" + ",".join(missing_modules))
-        if missing_credentials:
-            unavailable_reasons.append("credential_missing:" + ",".join(missing_credentials))
+        if availability.get("unavailableReason"):
+            unavailable_reasons.extend(str(availability["unavailableReason"]).split(";"))
         if provider in PRODUCTION_SOURCES and coverage["rows"] == 0:
             unavailable_reasons.append("provider_returned_empty")
         elif provider not in PRODUCTION_SOURCES and coverage["rows"] == 0:
             unavailable_reasons.append("coverage_gap")
         entitlement = jqdata_entitlement() if provider == PRIMARY_DATA_SOURCE else None
         if provider == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
-            unavailable_reasons.append("entitlement_window_exceeded")
-        installed = not missing_modules
-        configured = not missing_credentials
+            if "entitlement_window_exceeded" not in unavailable_reasons:
+                unavailable_reasons.append("entitlement_window_exceeded")
+        installed = bool(availability.get("installed"))
+        configured = bool(availability.get("configured"))
         production_certified = provider in PRODUCTION_SOURCES and installed and configured
         status = "available" if not unavailable_reasons else ("degraded" if provider in PRODUCTION_SOURCES and installed else "unavailable")
         item = {
@@ -115,19 +93,14 @@ def provider_availability_report(
             "priority": DATA_SOURCE_PRIORITY.index(provider) + 1 if provider in DATA_SOURCE_PRIORITY else None,
             "installed": installed,
             "configured": configured,
-            "credentials": "not_required" if not credentials else ("present" if configured else "credential_missing"),
-            "supportedEndpoints": supported_endpoints,
+            "credentials": availability.get("credentials") or ("present" if configured else "credential_missing"),
+            "supportedEndpoints": availability.get("supportedEndpoints") or [],
             "unavailableReason": ";".join(unavailable_reasons) if unavailable_reasons else None,
             "coverage": coverage,
             "entitlement": entitlement,
             "productionCertified": production_certified,
             "status": status,
-            "diagnostics": {
-                "modules": module_status,
-                "credentials": credential_status,
-                "networkChecked": False,
-                "networkStatus": "not_run",
-            },
+            "diagnostics": availability.get("diagnostics") or {},
         }
         items.append(item)
         if persist:

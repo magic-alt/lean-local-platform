@@ -83,7 +83,6 @@ Important backend variables:
 ```text
 LEAN_DATABASE_URL
 DATABASE_URL
-LEAN_WEB_DB_PATH
 REDIS_URL
 LEAN_DATA_DIR
 LEAN_HOST_DATA_DIR
@@ -105,7 +104,7 @@ Default database URL is MySQL:
 mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 ```
 
-Tests usually monkeypatch SQLite URLs.
+DuckDB is used only as a query engine over Parquet exports under `LEAN_PARQUET_DIR`; it is not a runtime metadata database.
 
 ## Docker Socket
 

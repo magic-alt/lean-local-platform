@@ -12,13 +12,11 @@ COMMON_HEADER = '''from AlgorithmImports import *
 from datetime import datetime
 import math
 
-try:
-    from ashare_execution import AShareExecutionHelper, apply_ashare_models
-except Exception:
-    AShareExecutionHelper = None
+AShareExecutionHelper = None
 
-    def apply_ashare_models(algorithm, security):
-        return None
+
+def _fallback_ashare_models(algorithm, security):
+    return None
 
 
 def parameter_value(algorithm, key, default):
@@ -79,6 +77,12 @@ class {class_name}(QCAlgorithm):
             security = self.add_equity(ticker, self.resolution, market, data_normalization_mode=DataNormalizationMode.RAW)
             self.symbol = security.symbol
         if market == "china":
+            try:
+                from ashare_execution import AShareExecutionHelper, apply_ashare_models
+            except Exception:
+                AShareExecutionHelper = None
+                apply_ashare_models = _fallback_ashare_models
+
             benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
             if not benchmark_ticker:
                 raise ValueError("A-share benchmarkSymbol is required; constant benchmark fallback is disabled.")

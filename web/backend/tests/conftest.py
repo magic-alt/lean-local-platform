@@ -16,4 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 def use_sqlite_test_backend(tmp_path, monkeypatch):
     import app.db as db_module
 
-    monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite:///{tmp_path / 'test.sqlite3'}")
+    db_path = tmp_path / "test.sqlite3"
+    monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(db_module, "SQLITE_TEST_BACKEND_ENABLED", True)

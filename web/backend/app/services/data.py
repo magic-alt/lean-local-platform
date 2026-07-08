@@ -1,5 +1,3 @@
-import importlib.util
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -12,14 +10,7 @@ from ..lean_engine.data_writers import (
     write_lean_daily_zip,
 )
 from ..lean_engine.providers import (
-    fetch_akshare_rows,
-    fetch_alpha_vantage_rows,
     fetch_binance_crypto_rows,
-    fetch_eastmoney_rows,
-    fetch_sina_rows,
-    fetch_stooq_rows,
-    fetch_tonghuashun_rows,
-    fetch_yahoo_rows,
 )
 from ..lean_engine.symbols import (
     market_key,
@@ -38,9 +29,8 @@ from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
-from .source_gate import jqdata_entitlement, resolve_effective_data_source, source_priority_for_window
-from .tushare_adapter import fetch_tushare_rows
-from .jqdata_adapter import fetch_jqdata_rows
+from .data_provider_manager import DATA_PROVIDER_MANAGER, provider_requirements
+from .source_gate import jqdata_entitlement
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
@@ -99,21 +89,7 @@ DJIA_COMPONENTS = [
 ]
 
 
-PROVIDER_REQUIREMENTS: dict[str, dict[str, Any]] = {
-    "binance": {"modules": [], "env": []},
-    "jqdata": {"modules": ["jqdatasdk"], "env": [["JQDATA_TOKEN"], ["JQDATA_USERNAME", "JQDATA_PASSWORD"]]},
-    "tushare": {"modules": ["tushare"], "env": ["TUSHARE_TOKEN"]},
-    "rqdata": {"modules": ["rqdatac"], "env": ["RQDATA_USERNAME", "RQDATA_PASSWORD"]},
-    "eastmoney": {"modules": [], "env": []},
-    "sina": {"modules": ["akshare"], "env": []},
-    "akshare": {"modules": ["akshare"], "env": []},
-    "adata": {"modules": ["adata"], "env": []},
-    "baostock": {"modules": ["baostock"], "env": []},
-    "tonghuashun": {"modules": ["akshare"], "env": []},
-    "yahoo": {"modules": [], "env": []},
-    "stooq": {"modules": [], "env": []},
-    "alpha_vantage": {"modules": [], "env": ["ALPHAVANTAGE_API_KEY"]},
-}
+PROVIDER_REQUIREMENTS: dict[str, dict[str, Any]] = provider_requirements()
 
 
 def markets() -> list[dict[str, Any]]:
@@ -122,22 +98,37 @@ def markets() -> list[dict[str, Any]]:
             "key": "usa",
             "name": "US Equity",
             "currency": "USD",
-            "defaultProvider": "yahoo",
-            "providers": ["yahoo", "stooq", "alpha_vantage", "akshare", "sina"],
+            "defaultProvider": "yfinance",
+            "providers": ["yfinance", "yahoo", "stooq", "alpha_vantage", "finnhub", "longbridge", "akshare", "sina"],
         },
         {
             "key": "china",
             "name": "A Share",
             "currency": "CNY",
             "defaultProvider": "jqdata",
-            "providers": ["jqdata", "akshare", "tushare", "rqdata", "adata", "baostock", "eastmoney", "sina", "tonghuashun"],
+            "providers": [
+                "jqdata",
+                "akshare",
+                "efinance",
+                "tencent",
+                "tushare",
+                "tickflow",
+                "pytdx",
+                "baostock",
+                "adata",
+                "eastmoney",
+                "sina",
+                "tonghuashun",
+                "yfinance",
+                "rqdata",
+            ],
         },
         {
             "key": "hongkong",
             "name": "Hong Kong",
             "currency": "HKD",
-            "defaultProvider": "sina",
-            "providers": ["eastmoney", "sina", "akshare"],
+            "defaultProvider": "akshare",
+            "providers": ["akshare", "sina", "eastmoney", "longbridge", "yfinance"],
         },
     ]
 
@@ -156,7 +147,7 @@ def asset_classes() -> list[dict[str, Any]]:
         {
             "key": "crypto",
             "name": "Crypto",
-            "defaultVenue": "coinbase",
+            "defaultVenue": "binance",
             "defaultResolution": "daily",
             "venues": ["coinbase", "binance", "bybit", "bitfinex", "kraken"],
             "dataTypes": ["trade", "quote"],
@@ -213,179 +204,12 @@ def djia_universe() -> dict[str, Any]:
 
 
 def data_providers() -> list[dict[str, Any]]:
-    return [
-        {
-            "key": "binance",
-            "name": "Binance",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["crypto"],
-            "assetClasses": ["crypto"],
-            "venues": ["binance"],
-            "notes": "Public spot kline endpoint for crypto OHLCV. Availability depends on region, symbol, and Binance limits.",
-        },
-        {
-            "key": "jqdata",
-            "name": "JQData",
-            "requiresApiKey": True,
-            "supportsBatch": True,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": f"Primary A-share daily data source for entitled windows. Account data range {jqdata_entitlement()['startDate']}..{jqdata_entitlement()['endDate']}; outside this window use AKShare.",
-        },
-        {
-            "key": "tushare",
-            "name": "TuShare Pro",
-            "requiresApiKey": True,
-            "supportsBatch": True,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": "Uses TUSHARE_TOKEN from local .env or request apiKey. Current minimum permission is pro.daily; adj_factor, stk_limit, trade_cal, and stock_basic are opportunistic or later-stage permissions.",
-        },
-        {
-            "key": "eastmoney",
-            "name": "EastMoney",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["china", "hongkong"],
-            "assetClasses": ["equity"],
-            "venues": ["china", "hongkong"],
-            "notes": "Direct EastMoney daily K-line endpoint for A-share equities; Hong Kong availability depends on network/provider behavior.",
-        },
-        {
-            "key": "sina",
-            "name": "Sina Finance",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["usa", "china", "hongkong"],
-            "assetClasses": ["equity"],
-            "venues": ["usa", "china", "hongkong"],
-            "notes": "Uses AKShare's Sina adapters. Public endpoints may throttle or change.",
-        },
-        {
-            "key": "akshare",
-            "name": "AKShare",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["usa", "china", "hongkong"],
-            "assetClasses": ["equity"],
-            "venues": ["usa", "china", "hongkong"],
-            "notes": "Requires the Python akshare package. Uses AKShare adapters for public US/CN/HK daily data.",
-        },
-        {
-            "key": "rqdata",
-            "name": "RQData",
-            "requiresApiKey": True,
-            "supportsBatch": False,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": "Backup interface placeholder. Availability diagnostics are supported; live import requires a later adapter implementation.",
-        },
-        {
-            "key": "adata",
-            "name": "AData",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": "Optional A-share public-data adapter. Imported dynamically; currently writes raw daily bars for source comparison.",
-        },
-        {
-            "key": "baostock",
-            "name": "Baostock",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": "Optional free A-share daily K-line adapter. Imported dynamically and useful as a historical OHLCV fallback/check source.",
-        },
-        {
-            "key": "tonghuashun",
-            "name": "TongHuaShun",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["china"],
-            "assetClasses": ["equity"],
-            "venues": ["china"],
-            "notes": "A-share daily data only in v1; Hong Kong should use EastMoney, Sina, or AKShare.",
-        },
-        {
-            "key": "yahoo",
-            "name": "Yahoo Finance",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["usa"],
-            "assetClasses": ["equity"],
-            "venues": ["usa"],
-            "notes": "Free chart endpoint when not rate-limited. Use for local demos only; review terms and data quality.",
-        },
-        {
-            "key": "stooq",
-            "name": "Stooq",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["usa"],
-            "assetClasses": ["equity"],
-            "venues": ["usa"],
-            "notes": "Free daily OHLCV CSV. Suitable for local demos; review data quality before production research.",
-        },
-        {
-            "key": "alpha_vantage",
-            "name": "Alpha Vantage",
-            "requiresApiKey": True,
-            "supportsBatch": True,
-            "markets": ["usa"],
-            "assetClasses": ["equity"],
-            "venues": ["usa"],
-            "notes": "Daily OHLCV API. Free keys are rate-limited and may not allow full history.",
-        },
-    ]
+    return DATA_PROVIDER_MANAGER.providers()
 
 
 def provider_availability(provider: str | None = None) -> dict[str, Any]:
-    providers = data_providers()
     provider_filter = provider.strip().lower() if provider else None
-    items = []
-    for item in providers:
-        key = item["key"]
-        if provider_filter and key != provider_filter:
-            continue
-        requirements = PROVIDER_REQUIREMENTS.get(key, {"modules": [], "env": []})
-        modules = [
-            {"name": module, "available": importlib.util.find_spec(module) is not None}
-            for module in requirements.get("modules", [])
-        ]
-        env_options = requirements.get("env", [])
-        env_names = sorted({name for option in env_options for name in (option if isinstance(option, list) else [option])})
-        env = [{"name": name, "present": bool(os.environ.get(name))} for name in env_names]
-        missing_modules = [module["name"] for module in modules if not module["available"]]
-        env_configured = not env_options or any(
-            all(os.environ.get(name) for name in (option if isinstance(option, list) else [option]))
-            for option in env_options
-        )
-        missing_env = [] if env_configured else [entry["name"] for entry in env if not entry["present"]]
-        available = not missing_modules and not missing_env
-        reason = "ok" if available else ";".join(
-            [*(f"missing_module:{name}" for name in missing_modules), *(f"missing_env:{name}" for name in missing_env)]
-        )
-        items.append(
-            {
-                **item,
-                "available": available,
-                "reason": reason,
-                "diagnostics": {
-                    "modules": modules,
-                    "env": env,
-                    "networkChecked": False,
-                    "networkCheck": "not_run",
-                },
-            }
-        )
+    items = DATA_PROVIDER_MANAGER.availability([provider_filter] if provider_filter else None)
     return {
         "items": items,
         "count": len(items),
@@ -520,50 +344,26 @@ def fetch_provider_rows(
                 raise ValueError("Binance import currently writes LEAN crypto daily bars only; use local sample data for intraday.")
             return fetch_binance_crypto_rows(request.symbol, start=start_date, end=end_date, interval="1d")
         raise ValueError(f"Unsupported crypto data provider: {provider}")
-    if asset_class != "equity":
-        raise ValueError(f"Provider downloads are not enabled for asset class {asset_class}; use local LEAN data or CSV import.")
-    market = market_key(market)
-    symbol = normalize_symbol(symbol, market)
-    if provider == "tushare":
-        if market != "china":
-            raise ValueError("TuShare Pro only supports China A-share imports in this platform.")
-        return fetch_tushare_rows(symbol, start_date, end_date, token=api_key, adjust=adjust)
-    if provider == "jqdata":
-        if market != "china":
-            raise ValueError("JQData only supports China A-share imports in this platform.")
-        return fetch_jqdata_rows(symbol, start_date, end_date, adjust=adjust)
-    if provider == "eastmoney":
-        return fetch_eastmoney_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
-    if provider == "sina":
-        return fetch_sina_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
-    if provider == "akshare":
-        return fetch_akshare_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
-    if provider == "adata":
-        if market != "china":
+    provider_key = str(provider or "").strip().lower()
+    if provider_key == "adata":
+        if market_key(market) != "china":
             raise ValueError("AData only supports China A-share imports in this platform.")
         return fetch_adata_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
-    if provider == "baostock":
-        if market != "china":
+    if provider_key == "baostock":
+        if market_key(market) != "china":
             raise ValueError("Baostock only supports China A-share imports in this platform.")
         return fetch_baostock_rows(symbol, start=start_date, end=end_date, adjust=adjust or "raw")
-    if provider == "tonghuashun":
-        return fetch_tonghuashun_rows(symbol, market, start=start_date, end=end_date, adjust=adjust)
-    if provider == "stooq":
-        if market != "usa":
-            raise ValueError("Stooq only supports US equities in this platform.")
-        return fetch_stooq_rows(symbol)
-    if provider == "yahoo":
-        if market != "usa":
-            raise ValueError("Yahoo only supports US equities in this platform.")
-        return fetch_yahoo_rows(symbol, start=start_date or "2000-01-01", end=end_date)
-    if provider == "alpha_vantage":
-        if market != "usa":
-            raise ValueError("Alpha Vantage only supports US equities in this platform.")
-        key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY")
-        if not key:
-            raise ValueError("Alpha Vantage API key is required.")
-        return fetch_alpha_vantage_rows(symbol, key, outputsize)
-    raise ValueError(f"Unsupported data provider: {provider}")
+    return DATA_PROVIDER_MANAGER.fetch_provider_rows(
+        provider,
+        symbol,
+        market=market,
+        asset_class=asset_class,
+        api_key=api_key,
+        outputsize=outputsize,
+        start_date=start_date,
+        end_date=end_date,
+        adjust=adjust,
+    )
 
 
 def _ashare_rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -640,9 +440,10 @@ def _build_source_attempt(
 
 
 def _provider_chain_for_window(requested: str, start_date: str | None, end_date: str | None) -> list[str]:
-    policy = resolve_effective_data_source(requested, start_date=start_date, end_date=end_date)
-    return source_priority_for_window(
-        source=policy["requestedSource"],
+    return DATA_PROVIDER_MANAGER.chain(
+        requested,
+        market="china",
+        asset_class="equity",
         start_date=start_date,
         end_date=end_date,
     )
@@ -806,57 +607,66 @@ def fetch_and_import_symbol(
         market = market_key(market)
         venue = market
         symbol = normalize_symbol(symbol, market)
-        if market == "china":
-            source_policy = resolve_effective_data_source(provider, start_date=start_date, end_date=end_date)
-            source_chain = _provider_chain_for_window(provider, start_date=start_date, end_date=end_date)
-            provider_error: Exception | None = None
-            selected_provider: str | None = None
-            selected_rows: list[dict[str, Any]] | None = None
-            for source in source_chain:
-                t0 = time.perf_counter()
-                try:
-                    candidate_rows = fetch_provider_rows(
+        source_policy = {
+            "requestedSource": provider,
+            "sourceChain": DATA_PROVIDER_MANAGER.chain(
+                provider,
+                market=market,
+                asset_class=asset_class,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+        }
+        provider_error: Exception | None = None
+        selected_provider: str | None = None
+        selected_rows: list[dict[str, Any]] | None = None
+        for source in source_policy["sourceChain"]:
+            t0 = time.perf_counter()
+            availability = DATA_PROVIDER_MANAGER.availability([source], start_date=start_date, end_date=end_date)[0]
+            if not availability.get("available"):
+                source_attempts.append(
+                    _build_source_attempt(
                         source,
-                        symbol,
-                        market=market,
-                        asset_class=asset_class,
-                        venue=venue,
-                        resolution=resolution,
-                        api_key=api_key,
-                        outputsize=outputsize,
-                        start_date=start_date,
-                        end_date=end_date,
-                        adjust=adjust,
+                        "skipped",
+                        rows=0,
+                        error=availability.get("unavailableReason") or availability.get("reason"),
+                        duration_ms=(time.perf_counter() - t0) * 1000,
                     )
-                    elapsed = (time.perf_counter() - t0) * 1000
-                    if candidate_rows:
-                        source_attempts.append(_build_source_attempt(source, "success", rows=len(candidate_rows), duration_ms=elapsed))
-                        selected_provider = source
-                        selected_rows = candidate_rows
-                        break
-                    source_attempts.append(_build_source_attempt(source, "empty", rows=0, duration_ms=elapsed))
-                except Exception as exc:  # noqa: BLE001 - provider fetch can fail for different reasons
-                    elapsed = (time.perf_counter() - t0) * 1000
-                    source_error = str(exc)
-                    provider_error = exc
-                    source_attempts.append(
-                        _build_source_attempt(
-                            source,
-                            "failed",
-                            rows=0,
-                            error=source_error,
-                            duration_ms=elapsed,
-                        )
-                    )
-            if selected_rows is None:
-                raise ValueError(
-                    "No active source returned data for A-share symbol; attempted: "
-                    + ", ".join(
-                        f"{item['source']}:{item['status']}" for item in source_attempts
-                    )
-                ) from provider_error
-            rows = selected_rows
-            provider = selected_provider or source_attempts[0]["source"]
+                )
+                continue
+            try:
+                candidate_rows = fetch_provider_rows(
+                    source,
+                    symbol,
+                    market=market,
+                    asset_class=asset_class,
+                    venue=venue,
+                    resolution=resolution,
+                    api_key=api_key,
+                    outputsize=outputsize,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                )
+                if candidate_rows:
+                    selected_provider = source
+                    selected_rows = candidate_rows
+                    source_attempts.append(_build_source_attempt(source, "success", rows=len(candidate_rows), duration_ms=(time.perf_counter() - t0) * 1000))
+                    break
+                source_attempts.append(_build_source_attempt(source, "empty", rows=0, duration_ms=(time.perf_counter() - t0) * 1000))
+            except Exception as exc:  # noqa: BLE001
+                provider_error = exc
+                source_attempts.append(_build_source_attempt(source, "failed", rows=0, error=str(exc), duration_ms=(time.perf_counter() - t0) * 1000))
+        if selected_rows is None:
+            raise ValueError(
+                "No active source returned data; attempted: "
+                + ", ".join(f"{item['source']}:{item['status']}" for item in source_attempts)
+            ) from provider_error
+        rows = selected_rows
+        provider = selected_provider or provider
+        source_policy["effectiveSource"] = provider
+        source_policy["fallbackApplied"] = provider != source_policy["requestedSource"]
+        source_policy["fallbackReason"] = "provider_fallback" if source_policy["fallbackApplied"] else None
     else:
         request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
         market = request.venue
@@ -879,7 +689,9 @@ def fetch_and_import_symbol(
         source_attempts = _format_source_attempts(source_attempts) if source_attempts else [
             _build_source_attempt(provider, "success", rows=len(rows), duration_ms=0.0)
         ]
-        source_policy = resolve_effective_data_source(provider, start_date=start_date, end_date=end_date)
+        source_policy = locals().get("source_policy") or DATA_PROVIDER_MANAGER.chain(provider, market=market, asset_class=asset_class, start_date=start_date, end_date=end_date)
+        if isinstance(source_policy, list):
+            source_policy = {"requestedSource": provider, "effectiveSource": provider, "sourceChain": source_policy}
         source_policy["attemptedSources"] = [item["source"] for item in source_attempts]
         source_policy["sourceAttempts"] = source_attempts
         source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
@@ -924,6 +736,10 @@ def fetch_and_import_symbol(
     metadata["data_type"] = data_type
     metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
+    if source_attempts:
+        metadata["sourceAttempts"] = source_attempts
+    if asset_class == "equity" and locals().get("source_policy"):
+        metadata["sourcePolicy"] = source_policy
     upsert_market_daily_bars(
         rows,
         symbol=symbol,

@@ -30,6 +30,7 @@ from ..services.data import (
     record_data_asset,
     symbols_for_asset,
 )
+from ..services.data_provider_manager import DATA_PROVIDER_MANAGER
 from ..services.data_coverage import ashare_coverage, benchmark_coverage, symbol_coverage
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
 from ..services.parquet_lake import export_market_daily_bars, list_datasets, parquet_consistency_report, query_duckdb_bars, rebuild_all_market_parquet
@@ -60,7 +61,7 @@ class DataFetchRequest(BaseModel):
     venue: str | None = None
     resolution: str = "daily"
     dataType: str = "trade"
-    provider: str = "yahoo"
+    provider: str = "auto"
     apiKey: str | None = None
     outputsize: str = "compact"
     startDate: str | None = None
@@ -76,7 +77,7 @@ class BatchDataFetchRequest(BaseModel):
     venue: str | None = None
     resolution: str = "daily"
     dataType: str = "trade"
-    provider: str = "yahoo"
+    provider: str = "auto"
     apiKey: str | None = None
     outputsize: str = "compact"
     startDate: str | None = None
@@ -127,7 +128,7 @@ class ParquetConsistencyRequest(BaseModel):
 
 class AshareDailyCompareRequest(BaseModel):
     symbol: str
-    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
+    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
     startDate: str | None = None
     endDate: str | None = None
     adjust: str = "raw"
@@ -147,7 +148,7 @@ class AshareDailySampleImportRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     startDate: str
     endDate: str
-    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"])
+    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
     adjust: str = "raw"
     primaryProvider: str = "jqdata"
     exportParquet: bool = True
@@ -262,6 +263,7 @@ def query_data(
     dataType: str = "trade",
     source: str = "clickhouse",
     providerSource: str | None = None,
+    providerMode: str = "strict",
     allowResearchSource: bool = False,
     adjust: str = "raw",
     startDate: str | None = None,
@@ -273,7 +275,10 @@ def query_data(
         query_market = market.strip().lower() if market else None
         query_venue = venue.strip().lower() if venue else None
         query_source = source.strip().lower()
-        provider_source = require_source_allowed(providerSource, allow_research_source=allowResearchSource)
+        provider_input = (providerSource or "").strip().lower()
+        auto_provider = provider_input in {"", "auto"}
+        strict_provider = providerMode.strip().lower() != "auto" and not auto_provider
+        provider_source = None if auto_provider else require_source_allowed(providerSource, allow_research_source=allowResearchSource)
 
         def resolve_symbol(raw: str) -> str:
             raw_value = raw.strip()
@@ -290,33 +295,63 @@ def query_data(
             return raw_value.strip().upper()
 
         resolved_symbol = resolve_symbol(symbol)
-        if query_source in {"duckdb", "parquet"}:
-            return query_duckdb_bars(
+
+        def provider_chain() -> list[str | None]:
+            if provider_source and strict_provider:
+                return [provider_source]
+            if asset_class == "equity":
+                chain = DATA_PROVIDER_MANAGER.chain(
+                    provider_source or "auto",
+                    market=query_market or query_venue or "china",
+                    asset_class=asset_class,
+                    start_date=startDate,
+                    end_date=endDate,
+                    strict=False,
+                )
+                return chain or [provider_source]
+            return [provider_source]
+
+        def query_one(selected_source: str | None) -> dict[str, Any]:
+            if query_source in {"duckdb", "parquet"}:
+                return query_duckdb_bars(
+                    asset_class=asset_class,
+                    symbol=resolved_symbol,
+                    market=market,
+                    venue=venue,
+                    resolution=resolution,
+                    data_type=dataType,
+                    provider_source=selected_source,
+                    adjust=adjust or "raw",
+                    start_date=startDate,
+                    end_date=endDate,
+                    limit=limit,
+                )
+            query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
+            return query(
                 asset_class=asset_class,
                 symbol=resolved_symbol,
-                market=market,
-                venue=venue,
+                market=query_market,
+                venue=query_venue,
                 resolution=resolution,
                 data_type=dataType,
-                provider_source=provider_source,
-                adjust=adjust or "raw",
+                provider_source=selected_source,
                 start_date=startDate,
                 end_date=endDate,
                 limit=limit,
             )
-        query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
-        payload = query(
-            asset_class=asset_class,
-            symbol=resolved_symbol,
-            market=query_market,
-            venue=query_venue,
-            resolution=resolution,
-            data_type=dataType,
-            provider_source=provider_source,
-            start_date=startDate,
-            end_date=endDate,
-            limit=limit,
-        )
+
+        attempts = []
+        payload: dict[str, Any] | None = None
+        selected_provider = provider_source
+        for candidate in provider_chain():
+            current = query_one(candidate)
+            attempts.append({"source": candidate or "any", "status": "success" if current.get("count", 0) else "empty", "rows": current.get("count", 0)})
+            payload = current
+            selected_provider = candidate
+            if current.get("count", 0) or strict_provider:
+                break
+        if payload is None:
+            payload = query_one(provider_source)
         payload["query"] = {
             "symbolInput": symbol,
             "symbol": resolved_symbol,
@@ -324,8 +359,10 @@ def query_data(
             "market": query_market,
             "venue": query_venue,
         }
-        payload["providerSource"] = provider_source
-        payload["sourceCertification"] = source_certification(provider_source, asset_class=assetClass, market=market or venue or "china", venue=venue or market)
+        payload["providerSource"] = selected_provider
+        payload["providerMode"] = "auto" if auto_provider or not strict_provider else "strict"
+        payload["sourceAttempts"] = attempts
+        payload["sourceCertification"] = source_certification(selected_provider, asset_class=assetClass, market=market or venue or "china", venue=venue or market)
         return payload
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

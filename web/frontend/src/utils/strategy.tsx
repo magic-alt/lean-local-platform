@@ -46,7 +46,7 @@ export function defaultVenueFor(assetClass: string, assets: AssetClassInfo[], ma
 }
 
 export function defaultTemplateFor(assetClass: string) {
-  if (assetClass === "crypto") return "crypto_buy_hold";
+  if (assetClass === "crypto") return "crypto_momentum";
   if (assetClass === "future") return "futures_trend";
   return "ema_cross";
 }

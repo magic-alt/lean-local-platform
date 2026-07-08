@@ -33,7 +33,7 @@ def main() -> int:
     parser.add_argument("--symbols", required=True, help="Comma-separated symbols, e.g. 600519,000001.")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
-    parser.add_argument("--providers", default="jqdata,akshare,tushare,rqdata,baostock,adata")
+    parser.add_argument("--providers", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata")
     parser.add_argument("--adjust", default="raw")
     parser.add_argument("--primary-provider", default="jqdata")
     parser.add_argument("--no-parquet", action="store_true")

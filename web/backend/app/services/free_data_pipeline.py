@@ -8,7 +8,7 @@ from .data import fetch_and_import_symbol
 from .parquet_lake import export_market_daily_bars
 
 
-DEFAULT_ASHARE_PROVIDERS = ["jqdata", "akshare", "tushare", "rqdata", "baostock", "adata"]
+DEFAULT_ASHARE_PROVIDERS = ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"]
 
 
 def import_ashare_daily_sample(
