@@ -90,7 +90,6 @@ DJIA_COMPONENTS = [
 
 
 PROVIDER_REQUIREMENTS: dict[str, dict[str, Any]] = provider_requirements()
-PROVIDER_REQUIREMENTS["binance"] = {"modules": [], "env": []}
 
 
 def markets() -> list[dict[str, Any]]:
@@ -205,43 +204,12 @@ def djia_universe() -> dict[str, Any]:
 
 
 def data_providers() -> list[dict[str, Any]]:
-    return [
-        {
-            "key": "binance",
-            "name": "Binance",
-            "requiresApiKey": False,
-            "supportsBatch": True,
-            "markets": ["crypto"],
-            "assetClasses": ["crypto"],
-            "venues": ["binance"],
-            "capabilities": ["fetch_daily_bars", "provider_availability"],
-            "productionCertified": False,
-            "notes": "Public spot kline endpoint for crypto OHLCV. Availability depends on region, symbol, and Binance limits.",
-        },
-        *DATA_PROVIDER_MANAGER.providers(),
-    ]
+    return DATA_PROVIDER_MANAGER.providers()
 
 
 def provider_availability(provider: str | None = None) -> dict[str, Any]:
     provider_filter = provider.strip().lower() if provider else None
-    items = []
-    if not provider_filter or provider_filter == "binance":
-        items.append(
-            {
-                "key": "binance",
-                "provider": "binance",
-                "name": "Binance",
-                "available": True,
-                "installed": True,
-                "configured": True,
-                "status": "available",
-                "reason": "ok",
-                "unavailableReason": None,
-                "diagnostics": {"modules": [], "env": [], "networkChecked": False, "networkCheck": "not_run"},
-            }
-        )
-    if provider_filter != "binance":
-        items.extend(DATA_PROVIDER_MANAGER.availability([provider_filter] if provider_filter else None))
+    items = DATA_PROVIDER_MANAGER.availability([provider_filter] if provider_filter else None)
     return {
         "items": items,
         "count": len(items),

@@ -60,12 +60,6 @@ npm install
 npm run dev
 ```
 
-If the API is not on port `8000`, set the proxy target:
-
-```bash
-VITE_API_PROXY_TARGET=http://127.0.0.1:8001 npm run dev
-```
-
 Open:
 
 ```text
@@ -93,7 +87,7 @@ cd /Users/kaermax/lean-platform/web/frontend
 npm run dev
 ```
 
-If port `8000` is already in use, either stop the old process or run API on another port and set `VITE_API_PROXY_TARGET` for frontend development.
+If port `8000` is already in use, stop the old process and restart the backend on `127.0.0.1:8000` to keep frontend/API pairing consistent.
 
 ## Production-Style Local Build
 

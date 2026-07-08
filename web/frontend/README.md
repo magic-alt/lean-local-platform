@@ -18,11 +18,7 @@ For stable environment behavior, use the default pair:
 
 Frontend runs with strict port binding (`--port 5173 --strictPort`) and will fail fast if 5173 is already occupied instead of falling back to 5174/5175.
 
-Use another backend port:
-
-```bash
-VITE_API_PROXY_TARGET=http://127.0.0.1:8001 npm run dev
-```
+For consistency, keep the backend on `127.0.0.1:8000` while running the frontend.
 
 Build static assets for FastAPI to serve:
 
