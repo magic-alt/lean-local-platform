@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, RUNS_DIR
@@ -162,6 +163,70 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         validation=validation,
         experiment=experiment,
     )
+    return get_backtest(run_id) or {}
+
+
+def create_failed_backtest_job(request_data: dict[str, Any], error: str) -> dict[str, Any]:
+    symbol = str(request_data.get("symbol") or request_data.get("ticker") or "UNKNOWN").strip().upper()
+    start = str(request_data.get("start") or "unknown-start")
+    end = str(request_data.get("end") or "unknown-end")
+    project_id = request_data.get("projectId")
+    docker_image = request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE
+    parameters = {
+        "ticker": symbol,
+        "assetClass": request_data.get("assetClass", "equity"),
+        "market": request_data.get("market", "usa"),
+        "venue": request_data.get("venue"),
+        "resolution": request_data.get("resolution", "daily"),
+        "dataType": request_data.get("dataType", "trade"),
+        "start": start,
+        "end": end,
+        "cash": request_data.get("cash", 100000),
+        **(request_data.get("parameters") or {}),
+        **(request_data.get("extra") or {}),
+    }
+    run_symbol = re.sub(r"[^A-Za-z0-9]+", "", symbol) or "INVALID"
+    run_id = new_run_id(run_symbol, start, end)
+    task = create_task("backtest", f"Backtest {symbol}", parameters, project_id, run_id, status=FAILED)
+    append_log(task["id"], f"Backtest preflight failed: {error}")
+    run_dir = RUNS_DIR / run_id
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    now = utc_now()
+    name = request_data.get("name") or f"{symbol} {start} -> {end}"
+    with db() as connection:
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
+                 parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, error,
+                 error_message, created_at, started_at, finished_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                task["id"],
+                project_id,
+                name,
+                symbol,
+                parameters.get("assetClass", "equity"),
+                parameters.get("venue") or parameters.get("market"),
+                parameters.get("resolution", "daily"),
+                parameters.get("dataType", "trade"),
+                json_dump(parameters),
+                FAILED,
+                docker_image,
+                f"lean-{run_id}"[:60],
+                str(run_dir),
+                str(results_dir),
+                task["log_path"],
+                error,
+                error,
+                now,
+                now,
+                now,
+            ),
+        )
     return get_backtest(run_id) or {}
 
 

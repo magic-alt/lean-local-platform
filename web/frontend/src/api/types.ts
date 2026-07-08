@@ -127,19 +127,22 @@ export interface Universe {
 export interface DatabaseHealth {
   service: string;
   ok: boolean;
-  detail: {
-    engine?: string;
-    host?: string;
-    port?: number;
-    database?: string;
-    user?: string;
-    path?: string;
-    error?: string;
-    mode?: string;
-    missingTables: string[];
-    counts: Record<string, number>;
-    csi300MembershipRows: number;
-  };
+  detail:
+    | string
+    | {
+      [key: string]: unknown;
+      engine?: string;
+      host?: string;
+      port?: number;
+      database?: string;
+      user?: string;
+      path?: string;
+      mode?: string;
+      error?: string;
+      missingTables?: string[];
+      counts?: Record<string, number>;
+      csi300MembershipRows?: number;
+    };
   latency_ms?: number;
 }
 
@@ -441,6 +444,19 @@ export interface ChartPoint {
   value: number;
 }
 
+export interface OrderMarkerPoint {
+  time: string;
+  side: "BUY" | "SELL";
+  symbol: string;
+  quantity: number;
+  price: number;
+  fillPrice?: number;
+  fill_price?: number;
+  equityValue?: number | null;
+  priceValue?: number | null;
+  tag?: string | null;
+}
+
 export interface ChartData {
   statistics: Record<string, string>;
   series: {
@@ -461,6 +477,8 @@ export interface ChartData {
     fill_price?: number;
     status?: string;
   }>;
+  orderMarkers?: OrderMarkerPoint[];
+  order_markers?: OrderMarkerPoint[];
   metadata?: Record<string, unknown>;
 }
 
@@ -486,8 +504,36 @@ export interface DataQueryResult {
   error?: string;
 }
 
+export interface FactorQuantileReturn {
+  quantile: number;
+  mean_return: number | null;
+  count: number;
+}
+
+export interface FactorEvaluationSeriesPoint {
+  trade_date: string;
+  ic?: number;
+  rank_ic?: number;
+  count: number;
+}
+
 export interface FactorEvaluationResult {
-  summary: {
+  factor?: string;
+  universe?: string;
+  start_date?: string;
+  end_date?: string;
+  forward_days?: number;
+  quantiles?: number;
+  date_count?: number;
+  observations?: number;
+  mean_ic?: number | null;
+  mean_rank_ic?: number | null;
+  engine?: string;
+  ic_series?: FactorEvaluationSeriesPoint[];
+  rank_ic_series?: FactorEvaluationSeriesPoint[];
+  quantile_returns?: FactorQuantileReturn[];
+  matrix_preview?: unknown[];
+  summary?: {
     symbolCount: number;
     rowCount: number;
     factorCount: number;
@@ -496,7 +542,7 @@ export interface FactorEvaluationResult {
     startDate: string;
     endDate: string;
   };
-  factors: Array<{
+  factors?: Array<{
     symbol: string;
     factor: string;
     quantile: number;

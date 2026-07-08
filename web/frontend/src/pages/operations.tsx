@@ -322,7 +322,7 @@ export function MonitoringPage() {
       <div className="toolbar">
         <h1 className="page-title">Monitoring</h1>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={health.reload}>Refresh</Button>
+          <Button data-testid="check-system-status-button" icon={<ReloadOutlined />} onClick={health.reload}>Check System Status</Button>
           <Button href={health.data.urls.prometheus} target="_blank">Prometheus</Button>
           <Button type="primary" href={health.data.urls.grafana} target="_blank">Grafana</Button>
         </Space>
@@ -335,6 +335,7 @@ export function MonitoringPage() {
       </div>
       <Card title="Dependency Health">
         <Table
+          data-testid="dependency-health-table"
           rowKey="service"
           size="small"
           dataSource={health.data.dependencies}

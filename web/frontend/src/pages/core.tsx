@@ -1,5 +1,6 @@
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   Checkbox,
@@ -370,6 +371,8 @@ export function ProjectsPage() {
             <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class">
               <Select
+                data-testid="project-asset-select"
+                virtual={false}
                 options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
                 onChange={(value) => {
                   form.setFieldValue("templateKey", defaultTemplateFor(value));
@@ -377,11 +380,11 @@ export function ProjectsPage() {
                 }}
               />
             </Form.Item>
-            <Form.Item name="market" label="Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="venue" label="Venue"><Select disabled={selectedAssetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="templateKey" label="Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select data-testid="project-market-select" virtual={false} options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="venue" label="Venue"><Select data-testid="project-venue-select" virtual={false} disabled={selectedAssetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select data-testid="project-resolution-select" virtual={false} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select data-testid="project-data-type-select" virtual={false} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="algorithmClass" label="Class"><Input placeholder="Auto-generated if empty" /></Form.Item>
           </div>
           <Button type="primary" htmlType="submit">Create</Button>
@@ -675,9 +678,10 @@ export function BacktestsPage() {
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
-  const [filters, setFilters] = useState<{ status?: string; projectId?: string; symbol?: string }>({});
+  const [filters, setFilters] = useState<{ name?: string; status?: string; market?: string; projectId?: string; symbol?: string }>({});
   const runs = useAsyncData(() => api.backtests(filters), []);
   const [form] = Form.useForm();
+  const [historyForm] = Form.useForm();
   const [assetClass, setAssetClass] = useState("equity");
   const [market, setMarket] = useState("usa");
   const [venue, setVenue] = useState("usa");
@@ -685,6 +689,7 @@ export function BacktestsPage() {
   const [dataType, setDataType] = useState("trade");
   const [symbols, setSymbols] = useState<string[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
+  const [submitting, setSubmitting] = useState(false);
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
@@ -710,19 +715,41 @@ export function BacktestsPage() {
   }, [assetClass, dataType, market, resolution, venue]);
 
   async function submit(values: any) {
-    const run = await api.createBacktest({
-      ...values,
-      assetClass,
-      market,
-      venue,
-      resolution,
-      dataType,
-      projectId: values.projectId,
-      parameters: values.parameters ?? {}
-    });
-    message.success("Backtest queued");
-    navigate(`/runs/${run.id}`);
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const run = await api.createBacktest({
+        ...values,
+        symbol: String(values.symbol ?? "").trim().toUpperCase(),
+        assetClass,
+        market,
+        venue,
+        resolution,
+        dataType,
+        projectId: values.projectId,
+        parameters: {
+          ...(values.parameters ?? {}),
+          benchmarkSymbol: values.benchmarkSymbol,
+          feeModel: values.feeModel,
+          slippageModel: values.slippageModel,
+          source: values.source
+        }
+      });
+      message.success("Backtest queued");
+      navigate(`/runs/${run.id}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
   }
+  const runsForDisplay = runs.data.filter((run) => {
+    const name = String((filters as any).name ?? "").trim().toLowerCase();
+    const marketFilter = String((filters as any).market ?? "").trim().toLowerCase();
+    const runMarket = String(run.parameters?.market ?? run.venue ?? "").toLowerCase();
+    return (!name || String(run.name ?? run.id).toLowerCase().includes(name)) &&
+      (!marketFilter || runMarket === marketFilter);
+  });
 
   return (
     <>
@@ -733,34 +760,87 @@ export function BacktestsPage() {
           key={`${market}-${selectedProjectId ?? "none"}-${templates.data.length}`}
           layout="vertical"
           onFinish={submit}
-          initialValues={{ assetClass: settings.data.defaultAssetClass, market: settings.data.defaultMarket, venue: settings.data.defaultVenue, resolution: settings.data.defaultResolution, dataType: settings.data.defaultDataType, symbol: symbols[0] ?? "AAPL", start: settings.data.defaultStart, end: settings.data.defaultEnd, cash: settings.data.defaultCash, dockerImage: settings.data.dockerImage, parameters: templateDefaults(selectedTemplate) }}
+          initialValues={{
+            name: `Backtest ${symbols[0] ?? "AAPL"}`,
+            assetClass: settings.data.defaultAssetClass,
+            market: settings.data.defaultMarket,
+            venue: settings.data.defaultVenue,
+            resolution: settings.data.defaultResolution,
+            dataType: settings.data.defaultDataType,
+            symbol: symbols[0] ?? "AAPL",
+            start: settings.data.defaultStart,
+            end: settings.data.defaultEnd,
+            cash: settings.data.defaultCash,
+            benchmarkSymbol: settings.data.defaultMarket === "china" ? "000300" : "SPY",
+            feeModel: "default",
+            slippageModel: "default",
+            source: settings.data.defaultMarket === "china" ? "jqdata" : "",
+            dockerImage: settings.data.dockerImage,
+            parameters: templateDefaults(selectedTemplate)
+          }}
         >
           <div className="field-grid six">
-            <Form.Item name="projectId" label="Project"><Select allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const next = { assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
-            <Form.Item name="assetClass" label="Asset"><Select onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const next = { assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+            <Form.Item name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
+            <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY"); form.setFieldValue("source", value === "china" ? "jqdata" : ""); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="resolution" label="Resolution"><Select onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dataType" label="Data Type"><Select onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
-            <Form.Item name="start" label="Start" rules={[{ required: true }]}><Input type="date" /></Form.Item>
-            <Form.Item name="end" label="End" rules={[{ required: true }]}><Input type="date" /></Form.Item>
-            <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+            <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><AutoComplete data-testid="backtest-symbol-input" options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} filterOption={(input, option) => String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())} /></Form.Item>
+            <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }]}><Input type="date" data-testid="backtest-start-input" /></Form.Item>
+            <Form.Item
+              name="end"
+              label="End"
+              rules={[
+                { required: true, message: "End date is required" },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    const start = getFieldValue("start");
+                    if (!value || !start || value >= start) return Promise.resolve();
+                    return Promise.reject(new Error("End date must be on or after start date"));
+                  }
+                })
+              ]}
+            >
+              <Input type="date" data-testid="backtest-end-input" />
+            </Form.Item>
+            <Form.Item
+              name="cash"
+              label="Cash"
+              rules={[
+                { required: true, message: "Initial cash is required" },
+                {
+                  validator(_, value) {
+                    if (Number(value) > 0) return Promise.resolve();
+                    return Promise.reject(new Error("Initial cash must be greater than 0"));
+                  }
+                }
+              ]}
+            >
+              <InputNumber style={{ width: "100%" }} data-testid="backtest-cash-input" />
+            </Form.Item>
+            <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input data-testid="backtest-benchmark-input" /></Form.Item>
+            <Form.Item name="feeModel" label="Fee Model"><Select data-testid="backtest-fee-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Fees" }]} /></Form.Item>
+            <Form.Item name="slippageModel" label="Slippage Model"><Select data-testid="backtest-slippage-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
+            <Form.Item name="source" label="Data Source"><Input placeholder="jqdata for A-share" /></Form.Item>
             <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
             {strategyFields(selectedTemplate)}
           </div>
-          <Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>
+          <Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run</Button>
         </Form>
       </Card>
       <Card title="History" style={{ marginTop: 16 }}>
-        <Form layout="inline" style={{ marginBottom: 12 }} onFinish={(values) => setFilters(values)}>
-          <Form.Item name="status"><Select allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
-          <Form.Item name="projectId"><Select allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
-          <Form.Item name="symbol"><Input placeholder="Symbol" style={{ width: 130 }} /></Form.Item>
+        <Form form={historyForm} layout="inline" style={{ marginBottom: 12 }} onFinish={(values) => setFilters(values)}>
+          <Form.Item name="name" label="Name"><Input placeholder="Name" style={{ width: 180 }} /></Form.Item>
+          <Form.Item name="status" label="Status"><Select data-testid="history-status-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
+          <Form.Item name="market" label="Market"><Select data-testid="history-market-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Market" style={{ width: 150 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+          <Form.Item name="projectId" label="Project"><Select data-testid="history-project-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+          <Form.Item name="symbol" label="Symbol"><Input placeholder="Symbol" style={{ width: 130 }} /></Form.Item>
           <Button htmlType="submit">Filter</Button>
-          <Button onClick={() => setFilters({})}>Clear</Button>
+          <Button onClick={() => { historyForm.resetFields(); setFilters({}); }}>Clear</Button>
         </Form>
-        <RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} />
+        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(`/runs/${id}`)} />
       </Card>
     </>
   );
@@ -814,17 +894,32 @@ export function RunDetailPage() {
   const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? run.statistics?.["Sharpe Ratio"];
   const sharpeWarning = metricTruthy(summaryMetrics["Short Window Unstable"]);
   const metricCards = [
+    { title: "Initial Cash", value: run.parameters?.initialCash ?? run.parameters?.initial_cash ?? run.parameters?.cash },
     { title: "End Equity", value: run.statistics?.["End Equity"] },
+    { title: "Total Return", value: run.statistics?.["Net Profit"] ?? summaryMetrics["Total Return"] },
     { title: "Net Profit", value: run.statistics?.["Net Profit"] },
     { title: "Sharpe", value: sharpeMetric, warning: sharpeWarning },
-    { title: "Drawdown", value: run.statistics?.["Drawdown"] },
+    { title: "Drawdown", value: run.statistics?.["Drawdown"] ?? run.statistics?.["Max Drawdown"] },
+    { title: "Total Trades", value: run.statistics?.["Total Trades"] ?? run.statistics?.["Total Orders"] ?? result?.orders?.length },
   ];
+  const records = {
+    orders: result?.orders ?? chart?.orders ?? [],
+    trades: result?.trades ?? [],
+    holdings: result?.holdings ?? []
+  };
+  const recordColumns = [
+    { title: "Field", dataIndex: "field" },
+    { title: "Value", dataIndex: "value", render: (value: unknown) => shortValue(value) }
+  ];
+  function recordRows(row: Record<string, unknown>, index: number) {
+    return Object.entries(row).map(([field, value]) => ({ id: `${index}-${field}`, field, value }));
+  }
   return (
     <>
       <div className="toolbar">
         <h1 className="page-title">{run.name ?? run.id}</h1>
         <Space>
-          <StatusTag status={run.status} />
+          <span data-testid="run-status"><StatusTag status={run.status} /></span>
           {active && <Button danger onClick={cancelRun}>Cancel</Button>}
           <Button onClick={reload} icon={<ReloadOutlined />}>Refresh</Button>
         </Space>
@@ -840,7 +935,7 @@ export function RunDetailPage() {
       )}
       <div className="grid">
         {metricCards.map((item) => (
-          <Card key={item.title}>
+          <Card key={item.title} data-testid={`metric-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
             <Statistic title={item.title} value={shortValue(item.value ?? "N/A")} />
             {item.warning && <Tag color="orange">short window</Tag>}
           </Card>
@@ -852,9 +947,16 @@ export function RunDetailPage() {
             key: "status",
             label: "Status",
             children: (
-              <Card>
+              <Card data-testid="run-status-panel">
                 <Space wrap>
-                  <Tag>job_id: {run.id}</Tag>
+                  <Tag>backtest_id: {run.id}</Tag>
+                  <Tag>name: {run.name ?? "-"}</Tag>
+                  <Tag>strategy: {run.project_id ?? "default"}</Tag>
+                  <Tag>symbol: {run.symbol}</Tag>
+                  <Tag>market: {String(run.parameters?.market ?? run.venue ?? "-")}</Tag>
+                  <Tag>start: {run.parameters?.start}</Tag>
+                  <Tag>end: {run.parameters?.end}</Tag>
+                  <Tag>cash: {String(run.parameters?.cash ?? "-")}</Tag>
                   <Tag>created: {run.created_at}</Tag>
                   {run.queued_at && <Tag>queued: {run.queued_at}</Tag>}
                   {run.started_at && <Tag>started: {run.started_at}</Tag>}
@@ -874,7 +976,7 @@ export function RunDetailPage() {
             key: "metrics",
             label: "Metrics",
             children: (
-              <Card title="Summary">
+              <Card title="Summary" data-testid="metrics-table">
                 <Table
                   size="small"
                   pagination={false}
@@ -892,11 +994,34 @@ export function RunDetailPage() {
           },
           { key: "charts", label: "Charts", children: chart ? <BacktestCharts chartData={chart} /> : <Alert type="info" message="Charts are available after a successful run." /> },
           {
+            key: "records",
+            label: "Records",
+            children: (
+              <div data-testid="records-panel">
+                <Card title={`Orders (${records.orders.length})`}>
+                  {records.orders.length > 0 ? (
+                    <Table data-testid="result-orders-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.orders[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                  ) : <Alert type="info" message="No orders were parsed for this run." />}
+                </Card>
+                <Card title={`Trades (${records.trades.length})`} style={{ marginTop: 16 }}>
+                  {records.trades.length > 0 ? (
+                    <Table data-testid="result-trades-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.trades[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                  ) : <Alert type="info" message="No trades were parsed for this run." />}
+                </Card>
+                <Card title={`Holdings (${records.holdings.length})`} style={{ marginTop: 16 }}>
+                  {records.holdings.length > 0 ? (
+                    <Table data-testid="result-holdings-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.holdings[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                  ) : <Alert type="info" message="No holdings were parsed for this run." />}
+                </Card>
+              </div>
+            )
+          },
+          {
             key: "raw",
             label: "Raw Files",
             children: <Card title="Artifacts">{(run.artifacts ?? []).map((name) => <a className="artifact-link" key={name} target="_blank" href={`/api/backtests/${run.id}/artifacts/${name}`}>{name}</a>)}</Card>
           },
-          { key: "logs", label: "Logs", children: <Card><pre className="log-view">{logs || "No logs yet."}</pre></Card> }
+          { key: "logs", label: "Logs", children: <Card><pre data-testid="backtest-logs" className="log-view">{logs || "No logs yet."}</pre></Card> }
         ]}
       />
     </>

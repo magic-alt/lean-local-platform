@@ -12,6 +12,7 @@ from ..repositories.backtest_repository import get_backtest
 from ..services.backtest_service import (
     backtest_status,
     cancel_backtest,
+    create_failed_backtest_job,
     create_backtest_job,
     fail_backtest_queue,
     mark_backtest_queued,
@@ -78,7 +79,8 @@ def create_backtest(request: BacktestRequest):
         payload["extra"] = request.model_extra or {}
         run = create_backtest_job(payload)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        run = create_failed_backtest_job(payload, str(exc))
+        return detail(run["id"])
 
     try:
         dispatch_task(run_backtest_task.s(run["task_id"], run["id"]), run["task_id"])

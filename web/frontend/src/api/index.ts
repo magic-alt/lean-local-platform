@@ -194,6 +194,7 @@ export const api = {
   },
   createBacktest: (payload: {
     symbol: string;
+    name?: string;
     assetClass?: string;
     market?: string;
     venue?: string;
@@ -206,6 +207,12 @@ export const api = {
     cash: number;
     dockerImage: string;
     projectId?: string;
+    benchmarkSymbol?: string;
+    feeModel?: string;
+    slippageModel?: string;
+    source?: string;
+    provider?: string;
+    allowResearchSource?: boolean;
     parameters?: Record<string, unknown>;
   }) =>
     request<BacktestRun>("/api/backtests", {

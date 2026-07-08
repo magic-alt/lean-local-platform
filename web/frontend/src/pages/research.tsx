@@ -113,14 +113,17 @@ export function P2ResearchPage() {
 
   const databaseDetail = databaseHealth.data.detail;
   const databaseDetailRecord = typeof databaseDetail === "object" && databaseDetail !== null && !Array.isArray(databaseDetail)
-    ? databaseDetail
+    ? databaseDetail as Record<string, unknown>
     : {};
-  const databaseCounts = databaseDetailRecord.counts ?? {};
-  const databaseEngine = databaseDetailRecord.engine || "unknown engine";
-  const databaseName = databaseDetailRecord.database || "unknown database";
-  const databaseHost = databaseDetailRecord.host;
-  const databasePort = databaseDetailRecord.port;
-  const missingTables = databaseDetailRecord.missingTables ?? [];
+  const databaseCounts = (databaseDetailRecord.counts as Record<string, number>) ?? {};
+  const databaseEngine = (databaseDetailRecord.engine as string | undefined) || "unknown engine";
+  const databaseName = (databaseDetailRecord.database as string | undefined) || "unknown database";
+  const databaseHost = databaseDetailRecord.host as string | undefined;
+  const databasePort = databaseDetailRecord.port as number | undefined;
+  const missingTables = (databaseDetailRecord.missingTables as string[]) ?? [];
+  const csi300MembershipRows = (databaseDetailRecord.csi300MembershipRows as number | undefined) ?? 0;
+  const dailyBarsCount = databaseCounts.ashare_daily_bars ?? 0;
+  const pitRowsCount = databaseCounts.index_membership_pit ?? 0;
 
   async function evaluate(values: {
     factorName: string;
@@ -169,9 +172,9 @@ export function P2ResearchPage() {
               <>
                 <div className="grid">
                   <Card><Statistic title="Database" value={databaseHealth.data.ok ? "ready" : "check"} /></Card>
-                  <Card><Statistic title="CSI300 Rows" value={databaseHealth.data.detail.csi300MembershipRows} /></Card>
-                  <Card><Statistic title="Daily Bars" value={databaseHealth.data.detail.counts.ashare_daily_bars ?? 0} /></Card>
-                  <Card><Statistic title="PIT Rows" value={databaseHealth.data.detail.counts.index_membership_pit ?? 0} /></Card>
+                  <Card><Statistic title="CSI300 Rows" value={csi300MembershipRows} /></Card>
+                  <Card><Statistic title="Daily Bars" value={dailyBarsCount} /></Card>
+                  <Card><Statistic title="PIT Rows" value={pitRowsCount} /></Card>
                 </div>
                 <Card title="Database" style={{ marginTop: 16 }}>
                   <Space wrap>
@@ -181,7 +184,9 @@ export function P2ResearchPage() {
                     {databaseHost && <Tag>{databaseHost}:{databasePort}</Tag>}
                     {missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
                   </Space>
-                  {databaseDetailRecord.error && <Alert style={{ marginTop: 12 }} type="warning" showIcon message={String(databaseDetailRecord.error)} />}
+                  {Boolean(databaseDetailRecord.error) && (
+                    <Alert style={{ marginTop: 12 }} type="warning" showIcon message={String(databaseDetailRecord.error)} />
+                  )}
                 </Card>
                 <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
                   <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>

@@ -1,4 +1,4 @@
-import { Layout, Menu, Space, Tag } from "antd";
+import { Button, Layout, Menu, Result, Space, Tag } from "antd";
 import {
   AppstoreOutlined,
   CodeOutlined,
@@ -79,6 +79,17 @@ function AppShell() {
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/monitoring" element={<MonitoringPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route
+              path="*"
+              element={(
+                <Result
+                  status="404"
+                  title="Page Not Found"
+                  subTitle="The requested LEAN Local page does not exist."
+                  extra={<Button type="primary"><Link to="/">Back to Dashboard</Link></Button>}
+                />
+              )}
+            />
           </Routes>
         </Content>
       </Layout>

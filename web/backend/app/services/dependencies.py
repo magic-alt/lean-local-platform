@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import time
+import uuid
 from typing import Any, Callable
 
 from redis import Redis
 
-from ..core.config import DATA_DIR, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL
+from ..core.config import DATA_DIR, DEFAULT_DOCKER_IMAGE, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL, RUNS_DIR
 from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
@@ -45,6 +46,55 @@ def check_docker() -> dict[str, Any]:
 def check_data_dir() -> dict[str, Any]:
     ok = DATA_DIR.exists() and DATA_DIR.is_dir()
     return {"service": "lean_data_dir", "ok": ok, "detail": str(DATA_DIR)}
+
+
+def check_lean_image() -> dict[str, Any]:
+    result = subprocess.run(
+        ["docker", "image", "inspect", DEFAULT_DOCKER_IMAGE, "--format", "{{.Id}}"],
+        capture_output=True,
+        text=True,
+        timeout=3,
+        check=False,
+    )
+    ok = result.returncode == 0
+    detail = {
+        "image": DEFAULT_DOCKER_IMAGE,
+        "id": result.stdout.strip() if ok else None,
+        "error": None if ok else (result.stderr.strip() or "docker image inspect failed"),
+    }
+    return {"service": "lean_image", "ok": ok, "detail": detail}
+
+
+def check_results_dir() -> dict[str, Any]:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    probe = RUNS_DIR / f".healthcheck-{uuid.uuid4().hex}"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        ok = probe.read_text(encoding="utf-8") == "ok"
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"service": "results_dir_writable", "ok": ok, "detail": str(RUNS_DIR)}
+
+
+def check_lean_runner() -> dict[str, Any]:
+    docker = check_docker()
+    image = check_lean_image() if docker.get("ok") else {"ok": False, "detail": "docker unavailable"}
+    data_dir = check_data_dir()
+    results_dir = check_results_dir()
+    ok = bool(docker.get("ok") and image.get("ok") and data_dir.get("ok") and results_dir.get("ok"))
+    return {
+        "service": "lean_runner",
+        "ok": ok,
+        "detail": {
+            "docker": docker.get("detail"),
+            "image": image.get("detail"),
+            "dataDir": data_dir.get("detail"),
+            "resultsDir": results_dir.get("detail"),
+        },
+    }
 
 
 def _database_objects(connection) -> set[str]:
@@ -133,9 +183,12 @@ def dependency_health() -> dict[str, Any]:
         _timed("redis", check_redis),
         _timed("clickhouse", market_data.ping),
         _timed("docker", check_docker),
+        _timed("lean_image", check_lean_image),
         _timed("lean_data_dir", check_data_dir),
+        _timed("results_dir_writable", check_results_dir),
+        _timed("lean_runner", check_lean_runner),
     ]
-    critical = [item for item in checks if item["service"] in {"database", "redis", "docker", "lean_data_dir"}]
+    critical = [item for item in checks if item["service"] in {"database", "redis", "docker", "lean_data_dir", "results_dir_writable", "lean_runner"}]
     status = "ok" if all(item["ok"] for item in critical) else "degraded"
     return {
         "status": status,

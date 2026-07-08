@@ -6,7 +6,14 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "test:e2e": "NODE_PATH=./node_modules playwright test --project=chromium",
+    "test:e2e:headed": "NODE_PATH=./node_modules playwright test --project=chromium --headed",
+    "test:e2e:debug": "NODE_PATH=./node_modules PWDEBUG=1 playwright test --project=chromium --debug",
+    "test:e2e:report": "NODE_PATH=./node_modules playwright show-report ../../tests/e2e/reports/html",
+    "test:e2e:smoke": "NODE_PATH=./node_modules playwright test --project=chromium --grep @smoke",
+    "test:e2e:backtest": "NODE_PATH=./node_modules playwright test --project=chromium --grep @backtest",
+    "test:e2e:compat": "NODE_PATH=./node_modules playwright test --project=chromium-1920"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
@@ -23,6 +30,7 @@
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@playwright/test": "^1.54.0",
     "typescript": "^5.8.0"
   }
 }

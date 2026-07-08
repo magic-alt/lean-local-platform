@@ -1,6 +1,6 @@
-import { Card, Table, Tag } from "antd";
+import { Card, Empty, Table, Tag } from "antd";
 import ReactECharts from "echarts-for-react";
-import { BacktestRun, ChartData, RunStatus } from "./api";
+import { BacktestRun, ChartData, OrderMarkerPoint, RunStatus } from "./api";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -13,7 +13,7 @@ export function StatusTag({ status }: { status: string }) {
     interrupted: "warning",
     cancelled: "warning"
   };
-  return <Tag color={colors[status] ?? "default"}>{status}</Tag>;
+  return <Tag data-testid={`status-tag-${status}`} color={colors[status] ?? "default"}>{status}</Tag>;
 }
 
 export function lineOption(title: string, datasets: Array<{ name: string; points: { time: string; value: number }[] }>) {
@@ -37,11 +37,12 @@ function orderMarkerPoints(
   chartData: ChartData,
   valueKey: "equityValue" | "priceValue"
 ) {
-  return chartData.orderMarkers
-    .filter((marker) => marker[valueKey] != null)
+  const markers = chartData.orderMarkers ?? chartData.order_markers ?? [];
+  return markers
+    .filter((marker): marker is OrderMarkerPoint => marker.side != null && marker.time != null && marker[valueKey] != null)
     .map((marker) => ({
       name: marker.side,
-      coord: [marker.time, marker[valueKey]],
+      coord: [marker.time, marker[valueKey] as number],
       value: `${marker.side} ${marker.quantity}`,
       symbol: "triangle",
       symbolSize: 13,
@@ -77,11 +78,14 @@ function lineWithOrdersOption(
 export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: string) => void }) {
   return (
     <Table
+      data-testid="runs-table"
       rowKey="id"
       dataSource={runs}
       size="small"
       pagination={{ pageSize: 8 }}
+      locale={{ emptyText: <Empty description="No backtests found" /> }}
       columns={[
+        { title: "Name", dataIndex: "name", ellipsis: true },
         { title: "Run", dataIndex: "id", ellipsis: true },
         { title: "Symbol", dataIndex: "symbol" },
         { title: "Asset", render: (_, run) => run.asset_class ?? run.parameters.assetClass ?? "equity" },
@@ -91,7 +95,7 @@ export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: 
         { title: "Net Profit", render: (_, run) => run.statistics?.["Net Profit"] ?? "-" },
         { title: "Sharpe", render: (_, run) => run.statistics?.["Sharpe Ratio"] ?? "-" },
         { title: "Duration", render: (_, run) => run.duration_seconds == null ? "-" : `${run.duration_seconds}s` },
-        { title: "Action", render: (_, run) => <a onClick={() => onOpen(run.id)}>Open</a> }
+        { title: "Action", render: (_, run) => <a data-testid={`open-run-${run.id}`} onClick={() => onOpen(run.id)}>Open</a> }
       ]}
     />
   );
@@ -101,30 +105,34 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
   return (
     <>
       <Card title="Equity vs Benchmark" style={{ marginTop: 16 }}>
-        <ReactECharts
-          style={{ height: 380 }}
-          option={lineWithOrdersOption(
-            "Equity",
-            [
-              { name: "Equity", points: chartData.series.equity },
-              { name: "Benchmark", points: chartData.series.benchmark }
-            ],
-            chartData,
-            "equityValue"
-          )}
-        />
+        <div data-testid="equity-chart" data-point-count={chartData.series.equity.length}>
+          <ReactECharts
+            style={{ height: 380 }}
+            option={lineWithOrdersOption(
+              "Equity",
+              [
+                { name: "Equity", points: chartData.series.equity },
+                { name: "Benchmark", points: chartData.series.benchmark }
+              ],
+              chartData,
+              "equityValue"
+            )}
+          />
+        </div>
       </Card>
       {chartData.series.price.length > 0 && (
         <Card title="Asset Plot" style={{ marginTop: 16 }}>
-          <ReactECharts
-            style={{ height: 360 }}
-            option={lineWithOrdersOption(
-              "Price With Orders",
-              [{ name: "Close", points: chartData.series.price }],
-              chartData,
-              "priceValue"
-            )}
-          />
+          <div data-testid="price-chart" data-point-count={chartData.series.price.length}>
+            <ReactECharts
+              style={{ height: 360 }}
+              option={lineWithOrdersOption(
+                "Price With Orders",
+                [{ name: "Close", points: chartData.series.price }],
+                chartData,
+                "priceValue"
+              )}
+            />
+          </div>
         </Card>
       )}
       <div className="two-column">
@@ -140,14 +148,17 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           </Card>
         )}
         <Card title="Drawdown">
-          <ReactECharts
-            style={{ height: 320 }}
-            option={lineOption("Drawdown", [{ name: "Drawdown", points: chartData.series.drawdown }])}
-          />
+          <div data-testid="drawdown-chart" data-point-count={chartData.series.drawdown.length}>
+            <ReactECharts
+              style={{ height: 320 }}
+              option={lineOption("Drawdown", [{ name: "Drawdown", points: chartData.series.drawdown }])}
+            />
+          </div>
         </Card>
       </div>
       <Card title="Orders" style={{ marginTop: 16 }}>
         <Table
+          data-testid="orders-table"
           rowKey={(row) => `${row.time}-${row.side}-${row.quantity}`}
           dataSource={chartData.orders}
           size="small"
