@@ -92,19 +92,21 @@ check_dependencies() {
 start_backend() {
   log "启动后端: ${LEAN_WEB_HOST}:${LEAN_WEB_PORT}"
   log "数据库配置: ${LEAN_DATABASE_URL}"
-  (cd "${BACKEND_DIR}" && \
+  (
+    cd "${BACKEND_DIR}"
     LEAN_DATABASE_URL="${LEAN_DATABASE_URL}" \
-    ./.venv/bin/python -m uvicorn app.main:app --host "${LEAN_WEB_HOST}" --port "${LEAN_WEB_PORT}" \
-    >"${BACKEND_LOG}" 2>&1 & echo $! > /tmp/lean_backend_single.pid)
-  BACKEND_PID="$(cat /tmp/lean_backend_single.pid)"
+      ./.venv/bin/python -m uvicorn app.main:app --host "${LEAN_WEB_HOST}" --port "${LEAN_WEB_PORT}"
+  ) >"${BACKEND_LOG}" 2>&1 &
+  BACKEND_PID=$!
 }
 
 start_frontend() {
   log "启动前端: ${VITE_HOST}:${VITE_PORT}"
-  (cd "${FRONTEND_DIR}" && \
-    npm run dev -- --host "${VITE_HOST}" --port "${VITE_PORT}" \
-    >"${FRONTEND_LOG}" 2>&1 & echo $! > /tmp/lean_frontend_single.pid)
-  FRONTEND_PID="$(cat /tmp/lean_frontend_single.pid)"
+  (
+    cd "${FRONTEND_DIR}"
+    npm run dev -- --host "${VITE_HOST}" --port "${VITE_PORT}"
+  ) >"${FRONTEND_LOG}" 2>&1 &
+  FRONTEND_PID=$!
 }
 
 shutdown() {
@@ -148,4 +150,4 @@ log "前端PID: ${FRONTEND_PID}"
 log "访问地址: http://${VITE_HOST}:${VITE_PORT}"
 open_frontend_in_browser
 
-wait
+wait "${BACKEND_PID}" "${FRONTEND_PID}"
