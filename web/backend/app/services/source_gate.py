@@ -8,11 +8,24 @@ from ..db import db, row_to_dict, utc_now
 
 PRIMARY_DATA_SOURCE = "jqdata"
 SECONDARY_DATA_SOURCES = {"akshare"}
-BACKUP_DATA_SOURCE_PRIORITY = ["tushare", "rqdata", "baostock", "adata"]
+BACKUP_DATA_SOURCE_PRIORITY = [
+    "efinance",
+    "tencent",
+    "tushare",
+    "tickflow",
+    "pytdx",
+    "baostock",
+    "adata",
+    "eastmoney",
+    "sina",
+    "tonghuashun",
+    "yfinance",
+    "rqdata",
+]
 BACKUP_DATA_SOURCES = set(BACKUP_DATA_SOURCE_PRIORITY)
 DEFAULT_PRODUCTION_SOURCE = PRIMARY_DATA_SOURCE
 PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE, *SECONDARY_DATA_SOURCES}
-RESEARCH_SOURCES = {"test", "unit", "manual", "sina", *BACKUP_DATA_SOURCES}
+RESEARCH_SOURCES = {"test", "unit", "manual", *BACKUP_DATA_SOURCES}
 DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, "akshare", *BACKUP_DATA_SOURCE_PRIORITY]
 JQDATA_ENTITLEMENT_START = os.environ.get("JQDATA_DATA_RANGE_START", "2025-03-29")
 JQDATA_ENTITLEMENT_END = os.environ.get("JQDATA_DATA_RANGE_END", "2026-04-05")

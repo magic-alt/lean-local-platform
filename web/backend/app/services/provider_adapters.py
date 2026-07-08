@@ -171,6 +171,10 @@ def adapter_for(provider: str) -> ProviderAdapter:
         return JqDataAdapter()
     if key in {"baostock", "adata"}:
         return DiagnosticStubAdapter(key, endpoints={"fetch_daily_bars", "normalize", "qa", "provider_availability"})
+    if key in {"efinance", "tencent", "yfinance", "eastmoney", "sina", "tonghuashun"}:
+        return DiagnosticStubAdapter(key, endpoints={"fetch_daily_bars", "normalize", "qa", "provider_availability"})
+    if key in {"tickflow", "pytdx", "longbridge", "finnhub", "alpha_vantage"}:
+        return DiagnosticStubAdapter(key, endpoints={"provider_availability"})
     if key in {"rqdata"}:
         return DiagnosticStubAdapter(key)
     return DiagnosticStubAdapter(key)
