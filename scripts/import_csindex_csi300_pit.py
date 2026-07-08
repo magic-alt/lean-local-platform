@@ -23,7 +23,7 @@ BACKEND_DIR = ROOT / "web" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.db import DB_PATH, db, init_db  # noqa: E402
+from app.db import database_descriptor, db, init_db  # noqa: E402
 from app.services.csi300_pit import (  # noqa: E402
     build_membership_intervals,
     content_hash,
@@ -528,7 +528,7 @@ def main() -> int:
         )
         write_manifest(Path(args.manifest_out), sources=source_records, initial_members=initial_members)
 
-    print(f"database={DB_PATH}")
+    print(f"database={json.dumps(database_descriptor(), ensure_ascii=False)}")
     print(
         f"announcements={len(announcements)} candidates={len(candidates)} details={len(details)} "
         f"sources={len(source_records)} events={len(events)} intervals={len(built['intervals'])} "

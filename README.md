@@ -108,7 +108,7 @@ cd web/backend
 
 `adj_factor`、`stk_limit`、`trade_cal`、`stock_basic` 会在 token 权限允许时使用；无权限时不会阻断 `pro.daily()` 日线导入。
 
-沪深300 PIT 历史成分需要公告级调样记录，不等同于“当前 300 只股票历史行情”。当前本地库 `web/runtime/HS300.sqlite3` 已写入基于中证指数官网缓存附件重建的真实 `CSI300` PIT 成分：
+沪深300 PIT 历史成分需要公告级调样记录，不等同于“当前 300 只股票历史行情”。当前 MySQL 主库可写入基于中证指数官网缓存附件重建的真实 `CSI300` PIT 成分：
 
 ```bash
 web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --dry-run
@@ -123,7 +123,7 @@ web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --acknowled
 web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --manifest data_sources/csi300_pit_sources.example.json --dry-run --validate
 ```
 
-运行主库已切换为 MySQL。`web/runtime/HS300.sqlite3` 只保留为测试环境数据库模板，不再用于生产迁移流程。
+运行主库已切换为 MySQL；旧文件型本地库仅是历史迁移来源，不再作为默认库、测试模板或生产迁移目标。
 
 默认连接：
 
@@ -470,11 +470,7 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 ```
 
-SQLite 测试模板/备份：
-
-```text
-web/runtime/HS300.sqlite3
-```
+Parquet/DuckDB 研究层是 MySQL 行情表的可重建派生物，不作为运行元数据库。
 
 原始 LEAN JSON、日志和报告仍按 run 保存在文件系统缓存，同时归档到 MySQL `stored_objects/stored_object_chunks`：
 

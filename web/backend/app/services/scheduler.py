@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -23,7 +22,7 @@ def _iso(value: datetime) -> str:
 
 def _is_integrity_error(exc: Exception) -> bool:
     mysql_integrity = pymysql is not None and isinstance(exc, pymysql.err.IntegrityError)
-    return isinstance(exc, sqlite3.IntegrityError) or mysql_integrity
+    return mysql_integrity or exc.__class__.__name__ == "IntegrityError"
 
 
 def acquire_scheduler_lease(
