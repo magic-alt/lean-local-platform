@@ -140,7 +140,8 @@ function MarketDataDownloader({
   forcedMarket,
   forcedVenue,
   forcedResolution,
-  forcedDataType
+  forcedDataType,
+  hidePresetSymbols = false
 }: {
   compact?: boolean;
   forcedAssetClass?: string;
@@ -148,6 +149,7 @@ function MarketDataDownloader({
   forcedVenue?: string;
   forcedResolution?: string;
   forcedDataType?: string;
+  hidePresetSymbols?: boolean;
 }) {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
@@ -298,9 +300,9 @@ function MarketDataDownloader({
         </Space.Compact>
       </Form>
       <Space wrap style={{ marginBottom: 12 }}>
-        {djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.filter((item) => item.hasLocalData).map((item) => item.symbol))}>Use Ready DJIA</Button>}
-        {djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.map((item) => item.symbol))}>Use All DJIA</Button>}
-        <Button onClick={() => setSelectedSymbols(localSymbols.slice(0, 20))}>Use Local Sample</Button>
+        {!hidePresetSymbols && djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.filter((item) => item.hasLocalData).map((item) => item.symbol))}>Use Ready DJIA</Button>}
+        {!hidePresetSymbols && djiaReady && <Button onClick={() => setSelectedSymbols(universe.data.components.map((item) => item.symbol))}>Use All DJIA</Button>}
+        {!hidePresetSymbols && <Button onClick={() => setSelectedSymbols(localSymbols.slice(0, 20))}>Use Local Sample</Button>}
         <Button onClick={() => setSelectedSymbols([])}>Clear</Button>
         {selectedSymbols.map((symbol) => <Tag key={symbol} closable onClose={() => setSelectedSymbols(selectedSymbols.filter((item) => item !== symbol))}>{symbol}</Tag>)}
       </Space>
@@ -601,8 +603,22 @@ export function DataPage() {
     const file = values.file?.fileList?.[0]?.originFileObj;
     if (!file) return message.error("Choose a CSV file");
     const formData = new FormData();
-    ["symbol", "assetClass", "market", "venue", "dataType", "dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].forEach((key) => formData.append(key, values[key] ?? ""));
+    const columns = {
+      dateCol: "timestamp",
+      openCol: "open",
+      highCol: "high",
+      lowCol: "low",
+      closeCol: "close",
+      volumeCol: "volume"
+    };
+    formData.append("symbol", values.symbol ?? "");
+    formData.append("assetClass", values.assetClass ?? "equity");
+    formData.append("market", values.market ?? "usa");
     formData.append("overwrite", String(Boolean(values.overwrite)));
+    formData.append("dataType", "trade");
+    Object.entries(columns).forEach(([key, value]) => {
+      formData.append(key, values[key] || value);
+    });
     formData.append("file", file);
     await api.importCsv(formData);
     message.success("CSV imported");
@@ -623,25 +639,7 @@ export function DataPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Data Library</h1><Button icon={<ReloadOutlined />} onClick={() => queryMarketData(queryForm.getFieldsValue())}>Refresh Preview</Button></div>
-      <MarketDataDownloader />
-      <Card title="Import CSV" style={{ marginTop: 16 }}>
-        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
-          <div className="field-grid six">
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-            <Form.Item name="venue" label="Venue"><Select disabled={csvAssetClass === "equity"} options={(csvAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dataType" label="Data Type"><Select options={(csvAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-          </div>
-          <div className="field-grid six">{["dateCol", "openCol", "highCol", "lowCol", "closeCol", "volumeCol"].map((name) => <Form.Item key={name} name={name} label={name}><Input /></Form.Item>)}</div>
-          <Space wrap>
-            <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
-            <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite existing</Checkbox></Form.Item>
-            <Button type="primary" htmlType="submit">Import</Button>
-          </Space>
-        </Form>
-      </Card>
-      <Card title="Bar Data Preview" style={{ marginTop: 16 }}>
+      <Card title="Bar Data Preview" style={{ marginTop: 0 }}>
         <Form
           form={queryForm}
           layout="inline"
@@ -681,6 +679,22 @@ export function DataPage() {
           </>
         )}
       </Card>
+      <Card title="Import CSV" style={{ marginTop: 16 }}>
+        <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "usa", venue: "usa", dataType: "trade", dateCol: "timestamp", openCol: "open", highCol: "high", lowCol: "low", closeCol: "close", volumeCol: "volume" }}>
+          <div className="field-grid six">
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item><span>Column mapping uses defaults: timestamp, open, high, low, close, volume</span></Form.Item>
+          </div>
+          <Space wrap>
+            <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
+            <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite existing</Checkbox></Form.Item>
+            <Button type="primary" htmlType="submit">Import</Button>
+          </Space>
+        </Form>
+      </Card>
+      <MarketDataDownloader hidePresetSymbols />
     </>
   );
 }
