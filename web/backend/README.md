@@ -1,6 +1,6 @@
 # Backend
 
-The backend is a FastAPI API plus Celery worker. Redis is used as the broker/result backend, and MySQL is the runtime database for metadata, market data, PIT memberships, results, and stored objects. SQLite is only used as a migration source or isolated test backend.
+The backend is a FastAPI API plus Celery worker. Redis is used as the broker/result backend, and MySQL is the runtime database for metadata, market data, PIT memberships, results, and stored objects. SQLite remains available for isolated local test backend only.
 
 Install:
 

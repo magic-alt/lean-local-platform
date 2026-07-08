@@ -285,7 +285,7 @@ def query_data(
                 end_date=endDate,
                 limit=limit,
             )
-        query = query_database_bars if query_source in {"mysql", "database", "local", "sqlite", "local_sqlite"} else query_bars
+        query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
         payload = query(
             asset_class=assetClass,
             symbol=symbol,

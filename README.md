@@ -123,27 +123,14 @@ web/backend/.venv/bin/python scripts/import_csindex_csi300_cached.py --acknowled
 web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --manifest data_sources/csi300_pit_sources.example.json --dry-run --validate
 ```
 
-运行主库已切换为 MySQL。`web/runtime/HS300.sqlite3` 只作为一次性迁移源和备份，不再作为默认运行库。
+运行主库已切换为 MySQL。`web/runtime/HS300.sqlite3` 只保留为测试环境数据库模板，不再用于生产迁移流程。
 
 默认连接：
 
 ```text
 LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
-LEAN_SQLITE_MIGRATION_SOURCE=web/runtime/HS300.sqlite3
 ```
 
-从旧 SQLite 全量导入 MySQL：
-
-```bash
-cd /Users/kaermax/lean-platform
-docker compose up -d mysql
-web/backend/.venv/bin/python scripts/migrate_hs300_sqlite_to_mysql.py \
-  --source web/runtime/HS300.sqlite3 \
-  --database-url mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market \
-  --recreate-database
-```
-
-本次已验证迁移结果：`ashare_daily_bars=1,215,591`、`market_daily_bars=1,215,591`、`ashare_trade_status=1,215,554`、`universe_membership=1,240`、`stored_objects=2,206`、`stored_object_chunks=2,311`；本地 LEAN Data 2,041 个文件、runtime runs 161 个文件、object-store 2 个文件已归档为 MySQL 二进制对象。
 
 历史行情数据保存机制采用分层模型：
 
@@ -410,7 +397,7 @@ cd /Users/kaermax/lean-platform
 scripts/start_hs300_web.sh
 ```
 
-该脚本默认设置 `LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`，并保留 `LEAN_SQLITE_MIGRATION_SOURCE` 指向旧 `HS300.sqlite3`。需要换端口时：
+该脚本默认设置 `LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`。需要换端口时：
 
 ```bash
 LEAN_WEB_PORT=8002 scripts/start_hs300_web.sh
@@ -483,7 +470,7 @@ lsof -nP -iTCP:8000 -sTCP:LISTEN
 mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 ```
 
-SQLite 迁移源/备份：
+SQLite 测试模板/备份：
 
 ```text
 web/runtime/HS300.sqlite3

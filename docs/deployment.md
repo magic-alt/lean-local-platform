@@ -165,18 +165,6 @@ Also back up:
 
 If `stored_objects` contains all critical binaries, database backup covers archived artifacts, but raw filesystem workspaces are still useful for debugging.
 
-## SQLite Migration
-
-The project includes migration support from local SQLite to MySQL:
-
-```bash
-web/backend/.venv/bin/python scripts/migrate_hs300_sqlite_to_mysql.py \
-  --sqlite-path web/runtime/HS300.sqlite3 \
-  --database-url mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
-```
-
-Review the script options before production use.
-
 ## Health Checks
 
 ```text

@@ -83,7 +83,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
-      LEAN_SQLITE_MIGRATION_SOURCE: /workspace/web/runtime/HS300.sqlite3
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -118,7 +117,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
-      LEAN_SQLITE_MIGRATION_SOURCE: /workspace/web/runtime/HS300.sqlite3
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean

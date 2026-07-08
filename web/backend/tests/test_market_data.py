@@ -16,7 +16,7 @@ def configure_temp_db(tmp_path, monkeypatch):
     return db_module
 
 
-def test_query_sqlite_bars_reads_local_ashare_table(tmp_path, monkeypatch):
+def test_query_database_bars_reads_local_ashare_table(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
     with db_module.db() as connection:
         connection.execute(
@@ -52,7 +52,7 @@ def test_query_sqlite_bars_reads_local_ashare_table(tmp_path, monkeypatch):
     }
 
 
-def test_data_query_api_selects_sqlite_source(tmp_path, monkeypatch):
+def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
     with db_module.db() as connection:
         connection.execute(
@@ -70,13 +70,14 @@ def test_data_query_api_selects_sqlite_source(tmp_path, monkeypatch):
     response = client.get(
         "/api/data/query",
         params={
-            "source": "sqlite",
+            "source": "database",
             "assetClass": "equity",
             "symbol": "SH600519",
             "market": "china",
             "venue": "china",
             "resolution": "daily",
             "dataType": "trade",
+            "providerSource": "akshare",
         },
     )
 

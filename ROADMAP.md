@@ -5,7 +5,7 @@
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
 2026-07-07 更新：本次升级新增 Level 3 shadow production gate、daily shadow pipeline、paper constraints acceptance、Level 3 one-shot audit、instrument identifier backfill、coverage API、lightweight reports API 和 migration status/verify 命令。Level 3 Pass 仍以真实 MySQL/API/Docker/LEAN 验收报告为准；只有 `run_level3_shadow_audit.py` 在真实环境输出 `LEVEL3_PASS` 时，才允许把状态从 Candidate 提升为 Pass。
-当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。2026-07-05 继续补齐 P1 稳定模拟盘能力：真实 LEAN Docker integration 已在有 Docker 权限环境通过，Paper 日报落库/API 化，Paper 组合约束支持最大持仓、单票权重、现金下限、黑名单、观察池/只观察名单，Compose 支持 Redis/API/MySQL 等宿主端口覆盖并完成 API/worker/MySQL/Redis 一键启动验收，交易状态写入新增来源优先级，OHLCV 推断状态不会覆盖官方/手工状态。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 只作为迁移源/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
+当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。2026-07-05 继续补齐 P1 稳定模拟盘能力：真实 LEAN Docker integration 已在有 Docker 权限环境通过，Paper 日报落库/API 化，Paper 组合约束支持最大持仓、单票权重、现金下限、黑名单、观察池/只观察名单，Compose 支持 Redis/API/MySQL 等宿主端口覆盖并完成 API/worker/MySQL/Redis 一键启动验收，交易状态写入新增来源优先级，OHLCV 推断状态不会覆盖官方/手工状态。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 目前只保留为测试模板/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 
 2026-07-05 P2 效率和扩展性补强：新增全量 Parquet 重建任务和 `parquet_consistency` 一致性报告；新增 A 股多源 QA 批量验收报告 `ashare_daily_multisource_batch`，critical 场景自动落库并以非 0 退出；Paper 与 backtest 共用 A 股成本、滑点、交易日历、benchmark 和组合约束默认配置；期货和分钟线表仍作为扩展项预留，当前为空不影响 A 股日线主流程。
 
@@ -27,10 +27,10 @@
 实现内容：
 
 - 新增 MySQL 8.4 Docker Compose 服务，API/worker 默认使用 `LEAN_DATABASE_URL=mysql+pymysql://lean:lean@mysql:3306/lean_market`。
-- `app.db` 增加 MySQL 连接、DDL/占位符/upsert 兼容层；SQLite 仅保留为迁移源和测试隔离后端。
+- `app.db` 增加 MySQL 连接、DDL/占位符/upsert 兼容层；SQLite 仅保留为测试隔离后端。
 - 新增通用市场数据表：`instruments`、`instrument_identifiers`、`market_daily_bars`、`market_trade_status`，覆盖股票、可转债、加密币、期货的扩展模型。
 - 新增数据库对象表：`stored_objects`、`stored_object_chunks`，Object Store、LEAN zip/factor 文件、回测 result/summary、上传 CSV、runtime 文件均可入库保存。
-- 新增迁移脚本 `scripts/migrate_hs300_sqlite_to_mysql.py`，支持重建目标库、复制 SQLite 全部表、回填通用行情表、归档本地文件。
+- 完成从本地 SQLite 到 MySQL 的历史数据接入与重建（工具脚本已在当前里程碑后移除，主运行库统一使用 MySQL）。
 - A 股、可转债、期货和 CSV/Provider 导入会同步写通用行情表；数据查询预览默认读 MySQL `market_daily_bars`。
 
 2026-07-05 验证结果：

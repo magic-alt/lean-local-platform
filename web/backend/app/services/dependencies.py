@@ -7,7 +7,7 @@ from typing import Any, Callable
 from redis import Redis
 
 from ..core.config import DATA_DIR, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL
-from ..db import database_backend, database_descriptor, db
+from ..db import database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
 
@@ -48,20 +48,11 @@ def check_data_dir() -> dict[str, Any]:
 
 
 def _database_objects(connection) -> set[str]:
-    if database_backend() == "mysql":
-        rows = connection.execute(
-            """
-            select table_name as name
-            from information_schema.tables
-            where table_schema = database()
-            """
-        ).fetchall()
-        return {row["name"] for row in rows}
     rows = connection.execute(
         """
-        select name
-        from sqlite_master
-        where type in ('table', 'view')
+        select table_name as name
+        from information_schema.tables
+        where table_schema = database()
         """
     ).fetchall()
     return {row["name"] for row in rows}
@@ -88,11 +79,7 @@ def check_database() -> dict[str, Any]:
                 ).fetchone()["count"]
             )
     descriptor = database_descriptor()
-    core_ok = not missing
-    if database_backend() == "mysql":
-        core_ok = core_ok and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
-    else:
-        core_ok = core_ok and counts.get("ashare_daily_bars", 0) > 0 and csi300_count > 0
+    core_ok = not missing and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
     ok = bool(core_ok)
     detail = {
         **descriptor,
@@ -101,10 +88,6 @@ def check_database() -> dict[str, Any]:
         "csi300MembershipRows": csi300_count,
     }
     return {"service": "database", "ok": ok, "detail": detail}
-
-
-def check_sqlite_database() -> dict[str, Any]:
-    return check_database()
 
 
 def dependency_health() -> dict[str, Any]:
