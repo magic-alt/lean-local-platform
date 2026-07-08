@@ -7,7 +7,7 @@ from typing import Any, Callable
 from redis import Redis
 
 from ..core.config import DATA_DIR, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL
-from ..db import database_descriptor, db
+from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
 
@@ -48,11 +48,20 @@ def check_data_dir() -> dict[str, Any]:
 
 
 def _database_objects(connection) -> set[str]:
+    if database_backend() == "mysql":
+        rows = connection.execute(
+            """
+            select table_name as name
+            from information_schema.tables
+            where table_schema = database()
+            """
+        ).fetchall()
+        return {row["name"] for row in rows}
     rows = connection.execute(
         """
-        select table_name as name
-        from information_schema.tables
-        where table_schema = database()
+        select name
+        from sqlite_master
+        where type = 'table'
         """
     ).fetchall()
     return {row["name"] for row in rows}
