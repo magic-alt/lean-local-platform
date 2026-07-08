@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import logging
 
 from .api import ashare, backtests, cbond, compare, data, factors, futures, health, level3plus, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
@@ -31,11 +32,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger = logging.getLogger(__name__)
 
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:
+        logger.warning("Database initialization failed at startup; continuing in degraded mode: %s", exc)
 
 
 @app.exception_handler(LeanWebError)
