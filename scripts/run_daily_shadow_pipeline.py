@@ -28,7 +28,7 @@ from app.services.lean_cache import ensure_ashare_lean_cache  # noqa: E402
 from app.services.parquet_lake import parquet_consistency_report, rebuild_all_market_parquet  # noqa: E402
 from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
-from app.services.source_gate import resolve_effective_data_source, resolve_source_context, source_priority_for_window  # noqa: E402
+from app.services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, resolve_effective_data_source, resolve_source_context, source_priority_for_window  # noqa: E402
 from app.services.universe_certification import certified_symbols, get_certified_universe  # noqa: E402
 
 
@@ -209,7 +209,7 @@ def main() -> int:
     parser.add_argument("--symbols")
     parser.add_argument("--universe-code")
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--since-last-run", action="store_true")
@@ -291,7 +291,7 @@ def main() -> int:
 
     started = time.perf_counter()
     providers = provider_availability_report(
-        ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"],
+        list(DATA_SOURCE_PRIORITY),
         start_date=start_date,
         end_date=end_date,
         persist=True,

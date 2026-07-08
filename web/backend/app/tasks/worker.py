@@ -26,6 +26,7 @@ from ..services.optimization import best_candidate, candidate_suffix, parameter_
 from ..services.run_fingerprint import build_run_fingerprint
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
+from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
 from ..services.tasks import append_log, get_task, update_task
 
 
@@ -213,7 +214,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
                     report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
                     detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
                     raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
-            source = str(parameters.get("source") or parameters.get("provider") or "jqdata")
+            source = str(parameters.get("source") or parameters.get("provider") or DEFAULT_PRODUCTION_SOURCE)
             adjust = str(parameters.get("adjust") or "raw")
             lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()

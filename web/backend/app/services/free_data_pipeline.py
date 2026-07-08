@@ -6,9 +6,10 @@ from ..lean_engine.symbols import market_key, normalize_symbol
 from .ashare_multisource import compare_ashare_daily_sources
 from .data import fetch_and_import_symbol
 from .parquet_lake import export_market_daily_bars
+from .source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 
 
-DEFAULT_ASHARE_PROVIDERS = ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"]
+DEFAULT_ASHARE_PROVIDERS = list(DATA_SOURCE_PRIORITY)
 
 
 def import_ashare_daily_sample(
@@ -18,7 +19,7 @@ def import_ashare_daily_sample(
     end_date: str,
     providers: list[str] | None = None,
     adjust: str = "raw",
-    primary_provider: str = "jqdata",
+    primary_provider: str = PRIMARY_DATA_SOURCE,
     export_parquet: bool = True,
     compare_sources: bool = True,
     continue_on_error: bool = True,

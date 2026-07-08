@@ -6,12 +6,12 @@ from typing import Any
 from ..db import db, row_to_dict, utc_now
 
 
-PRIMARY_DATA_SOURCE = "jqdata"
-SECONDARY_DATA_SOURCES = {"akshare"}
+PRIMARY_DATA_SOURCE = "tushare"
+JQDATA_DATA_SOURCE = "jqdata"
+SECONDARY_DATA_SOURCES = {JQDATA_DATA_SOURCE, "akshare"}
 BACKUP_DATA_SOURCE_PRIORITY = [
     "efinance",
     "tencent",
-    "tushare",
     "tickflow",
     "pytdx",
     "baostock",
@@ -26,7 +26,7 @@ BACKUP_DATA_SOURCES = set(BACKUP_DATA_SOURCE_PRIORITY)
 DEFAULT_PRODUCTION_SOURCE = PRIMARY_DATA_SOURCE
 PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE, *SECONDARY_DATA_SOURCES}
 RESEARCH_SOURCES = {"test", "unit", "manual", *BACKUP_DATA_SOURCES}
-DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, "akshare", *BACKUP_DATA_SOURCE_PRIORITY]
+DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, JQDATA_DATA_SOURCE, "akshare", *BACKUP_DATA_SOURCE_PRIORITY]
 JQDATA_ENTITLEMENT_START = os.environ.get("JQDATA_DATA_RANGE_START", "2025-03-29")
 JQDATA_ENTITLEMENT_END = os.environ.get("JQDATA_DATA_RANGE_END", "2026-04-05")
 
@@ -62,11 +62,11 @@ def _date_key(value: str | None) -> str | None:
 
 def jqdata_entitlement() -> dict[str, Any]:
     return {
-        "provider": PRIMARY_DATA_SOURCE,
+        "provider": JQDATA_DATA_SOURCE,
         "startDate": JQDATA_ENTITLEMENT_START,
         "endDate": JQDATA_ENTITLEMENT_END,
-        "fallbackProvider": "akshare",
-        "note": "JQData account data entitlement is limited to this date range; windows outside it use AKShare.",
+        "fallbackProvider": DEFAULT_PRODUCTION_SOURCE,
+        "note": "JQData account data entitlement is limited to this date range; windows outside it use the default production source.",
     }
 
 
@@ -88,17 +88,17 @@ def resolve_source_chain(
 ) -> list[str]:
     requested = normalize_source(source)
     requested_effective = requested
-    if requested == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
-        requested_effective = "akshare"
+    jqdata_available = jqdata_covers_window(start_date, end_date)
+    if requested == JQDATA_DATA_SOURCE and not jqdata_available:
+        requested_effective = DEFAULT_PRODUCTION_SOURCE
 
     chain: list[str] = [requested_effective]
     for item in DATA_SOURCE_PRIORITY:
         normalized = normalize_source(item)
+        if normalized == JQDATA_DATA_SOURCE and not jqdata_available:
+            continue
         if normalized not in chain:
             chain.append(normalized)
-    if requested != requested_effective and requested in chain:
-        # requested source is temporarily out-of-window; prefer the effective source.
-        chain = [requested_effective, requested, *[item for item in chain if item not in {requested_effective, requested}]]
     return chain
 
 
@@ -111,8 +111,8 @@ def resolve_effective_data_source(
     requested = normalize_source(source)
     effective = requested
     reason = None
-    if requested == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
-        effective = "akshare"
+    if requested == JQDATA_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
+        effective = DEFAULT_PRODUCTION_SOURCE
         reason = "jqdata_entitlement_window_exceeded"
     chain = resolve_source_chain(source, start_date=start_date, end_date=end_date)
     return {

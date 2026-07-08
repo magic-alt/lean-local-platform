@@ -14,7 +14,7 @@ from ..core.config import BACKEND_DIR, GIT_ROOT
 from ..db import db, rows_to_dicts, utc_now
 from ..lean_engine import data_paths
 from ..lean_engine.symbols import normalize_symbol, symbol_key
-from .source_gate import source_certification
+from .source_gate import DEFAULT_PRODUCTION_SOURCE, source_certification
 
 
 def _json_hash(value: Any) -> str:
@@ -270,7 +270,7 @@ def _local_ashare_cache(parameters: dict[str, Any]) -> dict[str, Any]:
     raw_symbol = str(parameters.get("ticker") or parameters.get("symbol") or "").strip()
     if not raw_symbol:
         return {}
-    source = parameters.get("source") or parameters.get("provider") or "jqdata"
+    source = parameters.get("source") or parameters.get("provider") or DEFAULT_PRODUCTION_SOURCE
     adjust = parameters.get("adjust") or "raw"
 
     def files_for(symbol: str) -> dict[str, Any]:

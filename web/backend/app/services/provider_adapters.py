@@ -107,6 +107,7 @@ class AkshareAdapter(ProviderAdapter):
 
 class TushareAdapter(ProviderAdapter):
     key = "tushare"
+    production_certified = True
 
     def supported_endpoints(self) -> list[dict[str, Any]]:
         supported = {

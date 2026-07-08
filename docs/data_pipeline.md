@@ -2,6 +2,8 @@
 
 The data layer supports research tables, A-share reference data, LEAN cache generation, Parquet export, object storage, and quality gates. The current trusted chain focuses on A-share daily data and benchmark coverage for LEAN backtests.
 
+TuShare Pro is the default A-share production interface. JQData, AKShare, and the remaining public/vendor interfaces are kept in the priority chain for supplementation, fallback, and multi-source verification. The enabled TuShare Pro permissions cover A-share/fund/futures/options basics, HK/US/FX basics, low-frequency quotes, financial statements, macro data, ST status, stock connect lists, pledge/unlock/repurchase/holding-change references, Dragon Tiger data, and margin trading references; adapters should only call endpoints available under that entitlement.
+
 ## Layering
 
 ```text

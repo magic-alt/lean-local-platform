@@ -24,7 +24,7 @@ from app.services.data_coverage import benchmark_coverage  # noqa: E402
 from app.services.instrument_identity import identifier_coverage  # noqa: E402
 from app.services.parquet_lake import parquet_consistency_report  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
-from app.services.source_gate import resolve_effective_data_source, source_priority_for_window  # noqa: E402
+from app.services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, resolve_effective_data_source, source_priority_for_window  # noqa: E402
 from app.services.universe_certification import certified_symbols, get_certified_universe  # noqa: E402
 
 from scripts.cleanup_report_artifacts import _load_policy, _policy_cleanup  # noqa: E402
@@ -89,7 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Level3+ A-share shadow paper audit.")
     parser.add_argument("--universe-code", required=True)
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--lookback-trading-days", type=int, default=60)
     parser.add_argument("--min-symbols", type=int, default=20)
     parser.add_argument("--max-symbols", type=int, default=50)
@@ -130,7 +130,7 @@ def main() -> int:
     full_identifier = identifier_coverage()
     universe_identifier = identifier_coverage(symbols)
     provider = provider_availability_report(
-        ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"],
+        list(DATA_SOURCE_PRIORITY),
         start_date=start_date,
         end_date=end_date,
         persist=True,

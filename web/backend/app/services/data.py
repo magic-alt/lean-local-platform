@@ -30,7 +30,7 @@ from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
 from .market_repository import upsert_market_daily_bars
 from .data_provider_manager import DATA_PROVIDER_MANAGER, provider_requirements
-from .source_gate import jqdata_entitlement
+from .source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
@@ -105,23 +105,8 @@ def markets() -> list[dict[str, Any]]:
             "key": "china",
             "name": "A Share",
             "currency": "CNY",
-            "defaultProvider": "jqdata",
-            "providers": [
-                "jqdata",
-                "akshare",
-                "efinance",
-                "tencent",
-                "tushare",
-                "tickflow",
-                "pytdx",
-                "baostock",
-                "adata",
-                "eastmoney",
-                "sina",
-                "tonghuashun",
-                "yfinance",
-                "rqdata",
-            ],
+            "defaultProvider": PRIMARY_DATA_SOURCE,
+            "providers": list(DATA_SOURCE_PRIORITY),
         },
         {
             "key": "hongkong",

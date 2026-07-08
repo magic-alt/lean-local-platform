@@ -40,7 +40,7 @@ from ..services.intraday import import_intraday_bars
 from ..services.instrument_identity import identifier_coverage, identifiers_for_symbol
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
-from ..services.source_gate import require_source_allowed, source_certification
+from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, require_source_allowed, source_certification
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -93,7 +93,7 @@ class ParquetExportRequest(BaseModel):
     resolution: str = "daily"
     dataType: str = "trade"
     adjust: str = "raw"
-    providerSource: str = "jqdata"
+    providerSource: str = PRIMARY_DATA_SOURCE
     allowResearchSource: bool = False
     startDate: str | None = None
     endDate: str | None = None
@@ -128,7 +128,7 @@ class ParquetConsistencyRequest(BaseModel):
 
 class AshareDailyCompareRequest(BaseModel):
     symbol: str
-    sources: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
+    sources: list[str] = Field(default_factory=lambda: list(DATA_SOURCE_PRIORITY))
     startDate: str | None = None
     endDate: str | None = None
     adjust: str = "raw"
@@ -148,9 +148,9 @@ class AshareDailySampleImportRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     startDate: str
     endDate: str
-    providers: list[str] = Field(default_factory=lambda: ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"])
+    providers: list[str] = Field(default_factory=lambda: list(DATA_SOURCE_PRIORITY))
     adjust: str = "raw"
-    primaryProvider: str = "jqdata"
+    primaryProvider: str = PRIMARY_DATA_SOURCE
     exportParquet: bool = True
     compareSources: bool = True
     continueOnError: bool = True

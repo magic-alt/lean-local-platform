@@ -14,12 +14,13 @@ if str(BACKEND) not in sys.path:
 
 from app.db import init_db
 from app.services.ashare_multisource import compare_ashare_daily_sources
+from app.services.source_gate import DATA_SOURCE_PRIORITY
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare stored A-share daily bars across multiple local sources.")
     parser.add_argument("symbol", help="A-share symbol, e.g. 600519.")
-    parser.add_argument("--sources", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata", help="Comma-separated stored source names.")
+    parser.add_argument("--sources", default=",".join(DATA_SOURCE_PRIORITY), help="Comma-separated stored source names.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--adjust", default="raw")

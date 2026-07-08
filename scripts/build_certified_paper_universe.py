@@ -13,6 +13,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import init_db  # noqa: E402
+from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 from app.services.universe_certification import build_certified_universe  # noqa: E402
 
 
@@ -23,7 +24,7 @@ def _csv(value: str | None) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build and persist a certified Level3+ A-share paper universe.")
     parser.add_argument("--universe-code", required=True)
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)

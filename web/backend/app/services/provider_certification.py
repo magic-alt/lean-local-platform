@@ -9,6 +9,7 @@ from .data_provider_manager import provider_availability_item, provider_requirem
 from .source_gate import (
     BACKUP_DATA_SOURCES,
     DATA_SOURCE_PRIORITY,
+    JQDATA_DATA_SOURCE,
     PRIMARY_DATA_SOURCE,
     PRODUCTION_SOURCES,
     SECONDARY_DATA_SOURCES,
@@ -79,8 +80,8 @@ def provider_availability_report(
             unavailable_reasons.append("provider_returned_empty")
         elif provider not in PRODUCTION_SOURCES and coverage["rows"] == 0:
             unavailable_reasons.append("coverage_gap")
-        entitlement = jqdata_entitlement() if provider == PRIMARY_DATA_SOURCE else None
-        if provider == PRIMARY_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
+        entitlement = jqdata_entitlement() if provider == JQDATA_DATA_SOURCE else None
+        if provider == JQDATA_DATA_SOURCE and not jqdata_covers_window(start_date, end_date):
             if "entitlement_window_exceeded" not in unavailable_reasons:
                 unavailable_reasons.append("entitlement_window_exceeded")
         installed = bool(availability.get("installed"))

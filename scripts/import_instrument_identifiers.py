@@ -14,6 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import init_db  # noqa: E402
 from app.services.instrument_identity import identifier_coverage, identifier_conflicts, upsert_instrument_identifiers  # noqa: E402
+from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 
 
 def _symbols(value: str | None) -> list[str] | None:
@@ -25,7 +26,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill canonical instrument identifier mappings.")
     parser.add_argument("--all", action="store_true", help="Scan all A-share instruments from local database tables.")
     parser.add_argument("--symbols", help="Optional comma-separated symbols. Defaults to all canonical A-share symbols.")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--batch-id")
     parser.add_argument("--min-coverage-ratio", type=float, default=1.0)
     parser.add_argument("--dry-run", action="store_true")

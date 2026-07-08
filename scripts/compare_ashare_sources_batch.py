@@ -15,6 +15,7 @@ if str(BACKEND) not in sys.path:
 from app.db import init_db
 from app.services.ashare_multisource import compare_ashare_daily_sources_batch
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status
+from app.services.source_gate import DATA_SOURCE_PRIORITY
 from app.services.universe_certification import certified_symbols
 
 
@@ -22,7 +23,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run batch A-share local multi-source QA and emit an acceptance report.")
     parser.add_argument("--symbols", help="Comma-separated A-share symbols.")
     parser.add_argument("--universe-code", help="Certified paper universe code.")
-    parser.add_argument("--sources", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata", help="Comma-separated stored source names.")
+    parser.add_argument("--sources", default=",".join(DATA_SOURCE_PRIORITY), help="Comma-separated stored source names.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--adjust", default="raw")

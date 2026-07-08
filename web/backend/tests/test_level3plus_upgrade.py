@@ -43,7 +43,7 @@ def seed_level3plus_data(db_module):
             )
             for index, trade_date in enumerate(dates):
                 close = 10 + index
-                for source in ("jqdata", "akshare"):
+                for source in ("tushare", "jqdata", "akshare"):
                     connection.execute(
                         """
                         insert into ashare_daily_bars
@@ -74,7 +74,7 @@ def seed_level3plus_data(db_module):
                     (symbol, trade_date, 1.0, "jqdata", "batch"),
                 )
         for trade_date in dates:
-            for source in ("jqdata", "akshare"):
+            for source in ("tushare", "jqdata", "akshare"):
                 connection.execute(
                     """
                     insert into market_daily_bars
@@ -111,8 +111,9 @@ def test_provider_availability_reports_credential_missing(tmp_path, monkeypatch)
     payload = provider_availability_report(["tushare", "jqdata"], persist=True)
     reasons = {item["provider"]: item["unavailableReason"] for item in payload["providers"]}
     assert "credential_missing" in reasons["tushare"]
-    assert payload["primaryProvider"] == "jqdata"
-    assert [item["role"] for item in payload["providers"] if item["provider"] == "jqdata"] == ["primary"]
+    assert payload["primaryProvider"] == "tushare"
+    assert [item["role"] for item in payload["providers"] if item["provider"] == "tushare"] == ["primary"]
+    assert [item["role"] for item in payload["providers"] if item["provider"] == "jqdata"] == ["secondary"]
     assert payload["count"] == 2
 
 
@@ -123,10 +124,10 @@ def test_certified_universe_records_accepted_warning(tmp_path, monkeypatch):
     from app.services.instrument_identity import upsert_instrument_identifiers
     from app.services.universe_certification import build_certified_universe, certified_symbols
 
-    upsert_instrument_identifiers(source="jqdata", dry_run=False)
+    upsert_instrument_identifiers(source="tushare", dry_run=False)
     payload = build_certified_universe(
         universe_code="A_SHARE_L3P_TEST",
-        source="jqdata",
+        source="tushare",
         benchmark="000300",
         start_date="2026-06-01",
         end_date="2026-06-02",

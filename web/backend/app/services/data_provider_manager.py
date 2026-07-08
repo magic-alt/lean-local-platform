@@ -24,7 +24,7 @@ from ..lean_engine.providers import (
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .jqdata_adapter import fetch_jqdata_rows
-from .source_gate import jqdata_covers_window, resolve_effective_data_source, source_priority_for_window, source_role
+from .source_gate import DATA_SOURCE_PRIORITY, jqdata_covers_window, resolve_effective_data_source, source_priority_for_window, source_role
 from .tushare_adapter import fetch_tushare_rows
 
 
@@ -62,22 +62,7 @@ class ProviderSpec:
         }
 
 
-A_SHARE_PROVIDER_PRIORITY = [
-    "jqdata",
-    "akshare",
-    "efinance",
-    "tencent",
-    "tushare",
-    "tickflow",
-    "pytdx",
-    "baostock",
-    "adata",
-    "eastmoney",
-    "sina",
-    "tonghuashun",
-    "yfinance",
-    "rqdata",
-]
+A_SHARE_PROVIDER_PRIORITY = list(DATA_SOURCE_PRIORITY)
 US_PROVIDER_PRIORITY = ["yfinance", "yahoo", "stooq", "alpha_vantage", "finnhub", "longbridge", "akshare", "sina"]
 HK_PROVIDER_PRIORITY = ["akshare", "sina", "eastmoney", "longbridge", "yfinance"]
 
@@ -86,28 +71,28 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "jqdata": ProviderSpec(
         key="jqdata",
         name="JQData",
-        priority=0,
+        priority=1,
         markets=("china",),
         venues=("china",),
         modules=("jqdatasdk",),
         credentials=(["JQDATA_TOKEN"], ["JQDATA_USERNAME", "JQDATA_PASSWORD"]),
         production_certified=True,
-        notes="Primary A-share daily source inside the configured JQData entitlement window.",
+        notes="Secondary professional A-share source inside the configured JQData entitlement window.",
     ),
     "akshare": ProviderSpec(
         key="akshare",
         name="AKShare",
-        priority=1,
+        priority=2,
         markets=("china", "hongkong", "usa"),
         venues=("china", "hongkong", "usa"),
         modules=("akshare",),
         production_certified=True,
-        notes="Secondary A-share source and public US/HK fallback.",
+        notes="Public A-share verification source and US/HK fallback.",
     ),
     "efinance": ProviderSpec(
         key="efinance",
         name="Efinance",
-        priority=2,
+        priority=3,
         markets=("china",),
         venues=("china",),
         modules=("efinance",),
@@ -116,7 +101,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "tencent": ProviderSpec(
         key="tencent",
         name="Tencent",
-        priority=3,
+        priority=4,
         markets=("china",),
         venues=("china",),
         modules=(),
@@ -125,12 +110,27 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "tushare": ProviderSpec(
         key="tushare",
         name="TuShare Pro",
-        priority=4,
+        priority=0,
         markets=("china",),
         venues=("china",),
         modules=("tushare",),
         credentials=(["TUSHARE_TOKEN"],),
-        notes="Backup professional A-share source when TUSHARE_TOKEN is configured.",
+        production_certified=True,
+        capabilities=(
+            "fetch_security_master",
+            "fetch_daily_bars",
+            "fetch_trade_calendar",
+            "fetch_adjustment_factors",
+            "fetch_corporate_actions",
+            "fetch_financial_statements",
+            "fetch_index_membership_pit",
+            "provider_availability",
+        ),
+        notes=(
+            "Default professional A-share source with current TuShare Pro permissions for A-share/fund/futures/options basics, "
+            "HK/US/FX basics, low-frequency quotes, financial statements, macro data, ST, stock connect, "
+            "pledge/unlock/repurchase/holding-change references, LHB, and margin data."
+        ),
     ),
     "tickflow": ProviderSpec(
         key="tickflow",
@@ -508,6 +508,8 @@ def provider_chain(
         )
         default_chain = [item for item in default_chain if item in A_SHARE_PROVIDER_PRIORITY]
         for item in A_SHARE_PROVIDER_PRIORITY:
+            if item == "jqdata" and not jqdata_covers_window(start_date, end_date):
+                continue
             if item not in default_chain:
                 default_chain.append(item)
         if requested == "jqdata" and not jqdata_covers_window(start_date, end_date):

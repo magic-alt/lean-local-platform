@@ -14,6 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import init_db
 from app.services.parquet_lake import export_market_daily_bars
+from app.services.source_gate import PRIMARY_DATA_SOURCE
 
 
 def main() -> int:
@@ -24,7 +25,7 @@ def main() -> int:
     parser.add_argument("--resolution", default="daily")
     parser.add_argument("--data-type", default="trade")
     parser.add_argument("--adjust", default="raw")
-    parser.add_argument("--source", default="jqdata", help="Provider/source already stored in market_daily_bars.")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE, help="Provider/source already stored in market_daily_bars.")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     args = parser.parse_args()

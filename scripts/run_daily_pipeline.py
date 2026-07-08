@@ -19,6 +19,7 @@ from app.db import db, init_db  # noqa: E402
 from app.services.ashare_multisource import compare_ashare_daily_sources_batch  # noqa: E402
 from app.services.parquet_lake import rebuild_all_market_parquet  # noqa: E402
 from app.services.paper import run_replay  # noqa: E402
+from app.services.source_gate import DATA_SOURCE_PRIORITY  # noqa: E402
 
 
 def _csv(value: str | None) -> list[str]:
@@ -79,7 +80,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the A-share daily Paper pipeline: reference data, QA, Parquet, benchmark check, Paper Replay, report summary.")
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--symbols", default="600519,000001")
-    parser.add_argument("--qa-sources", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata")
+    parser.add_argument("--qa-sources", default=",".join(DATA_SOURCE_PRIORITY))
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")

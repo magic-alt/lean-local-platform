@@ -14,6 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import init_db  # noqa: E402
 from app.services.provider_certification import provider_availability_report  # noqa: E402
+from app.services.source_gate import DATA_SOURCE_PRIORITY  # noqa: E402
 
 
 def _csv(value: str) -> list[str]:
@@ -22,7 +23,7 @@ def _csv(value: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check A-share provider adapter availability and certification state.")
-    parser.add_argument("--providers", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata")
+    parser.add_argument("--providers", default=",".join(DATA_SOURCE_PRIORITY))
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--persist", action="store_true")

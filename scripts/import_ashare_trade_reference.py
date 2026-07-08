@@ -15,6 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, rows_to_dicts  # noqa: E402
+from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 from app.services.universe_certification import certified_symbols  # noqa: E402
 
 
@@ -136,7 +137,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import or validate A-share trade reference coverage.")
     parser.add_argument("--symbols")
     parser.add_argument("--universe-code")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--infer-missing", action="store_true")

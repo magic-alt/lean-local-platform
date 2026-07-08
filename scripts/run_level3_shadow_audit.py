@@ -17,7 +17,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import db, init_db  # noqa: E402
 from app.services.instrument_identity import identifier_coverage  # noqa: E402
-from app.services.source_gate import resolve_source_context  # noqa: E402
+from app.services.source_gate import PRIMARY_DATA_SOURCE, resolve_source_context  # noqa: E402
 
 
 def _csv(value: str) -> list[str]:
@@ -68,7 +68,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run a one-command Level 3 shadow audit.")
     parser.add_argument("--symbols", required=True)
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--min-trading-days", type=int, default=10)

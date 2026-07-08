@@ -4,9 +4,10 @@ import uuid
 from typing import Any
 
 from ..db import db, json_dump, rows_to_dicts, utc_now
+from .source_gate import DATA_SOURCE_PRIORITY
 
 
-DEFAULT_SOURCES = ["jqdata", "akshare", "efinance", "tencent", "tushare", "tickflow", "pytdx", "baostock", "adata", "eastmoney", "sina", "tonghuashun", "yfinance", "rqdata"]
+DEFAULT_SOURCES = list(DATA_SOURCE_PRIORITY)
 REPORT_NAMESPACE = uuid.UUID("d30cc089-890e-46f6-9e1f-d8874c30c773")
 
 

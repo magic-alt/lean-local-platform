@@ -42,7 +42,7 @@ def test_provider_manager_exposes_dsa_style_sources_and_jqdata_window_fallback()
         start_date="2026-06-01",
         end_date="2026-06-30",
     )
-    assert chain[0] == "akshare"
+    assert chain[0] == "tushare"
     assert "jqdata" not in chain
 
 

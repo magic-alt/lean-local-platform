@@ -17,6 +17,7 @@ if str(BACKEND) not in sys.path:
 from app.db import db, init_db, json_dump, row_to_dict, utc_now  # noqa: E402
 from app.services.ashare_repository import assert_benchmark_ready  # noqa: E402
 from app.services.paper import _replay_dates, create_session, create_signal, list_orders, run_replay  # noqa: E402
+from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 
 
 REQUIRED_REASONS = {"blacklisted", "observe_only", "st_blocked", "max_positions", "cash_floor", "not_in_watchlist", "qa_failed"}
@@ -226,7 +227,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Paper constraint acceptance scenarios.")
     parser.add_argument("--symbols", default="600519,000001,300750")
     parser.add_argument("--benchmark", default="000300")
-    parser.add_argument("--source", default="jqdata")
+    parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--start-date", default="2026-06-01")
     parser.add_argument("--end-date", default="2026-06-30")
     parser.add_argument("--dry-run", action="store_true")

@@ -14,6 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import init_db
 from app.services.free_data_pipeline import import_ashare_daily_sample
+from app.services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 
 
 def exit_code_for_result(result: dict, primary_provider: str) -> int:
@@ -33,9 +34,9 @@ def main() -> int:
     parser.add_argument("--symbols", required=True, help="Comma-separated symbols, e.g. 600519,000001.")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
-    parser.add_argument("--providers", default="jqdata,akshare,efinance,tencent,tushare,tickflow,pytdx,baostock,adata,eastmoney,sina,tonghuashun,yfinance,rqdata")
+    parser.add_argument("--providers", default=",".join(DATA_SOURCE_PRIORITY))
     parser.add_argument("--adjust", default="raw")
-    parser.add_argument("--primary-provider", default="jqdata")
+    parser.add_argument("--primary-provider", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--no-parquet", action="store_true")
     parser.add_argument("--no-compare", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")

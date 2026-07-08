@@ -246,4 +246,5 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
     assert payload["providerMode"] == "auto"
     assert payload["providerSource"] == "akshare"
     assert payload["count"] == 1
-    assert payload["sourceAttempts"][0]["source"] == "akshare"
+    assert payload["sourceAttempts"][0]["source"] == "tushare"
+    assert payload["sourceAttempts"][1]["source"] == "akshare"
