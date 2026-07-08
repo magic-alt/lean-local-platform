@@ -101,11 +101,31 @@ export function Dashboard() {
   const successRate = finishedRuns.length ? Math.round((successfulRuns / finishedRuns.length) * 100) : 0;
   const durations = runs.data.map((run) => run.duration_seconds).filter((value): value is number => typeof value === "number");
   const averageDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0;
+  async function clearLocalHistory() {
+    Modal.confirm({
+      title: "Clear local history and cache?",
+      content: "This will remove backtest/research history records and local runtime/cache files. Market data files and market data database entries will not be cleared.",
+      okText: "Clear",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await api.clearLocalHistory({ force: true });
+          message.success("Local history cleared");
+          await Promise.all([runs.reload(), tasks.reload()]);
+        } catch (error) {
+          message.error((error as Error).message);
+        }
+      }
+    });
+  }
   return (
     <>
       <div className="toolbar">
         <h1 className="page-title">Dashboard</h1>
-        <Button icon={<ReloadOutlined />} onClick={() => { runs.reload(); tasks.reload(); }}>Refresh</Button>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={() => { runs.reload(); tasks.reload(); }}>Refresh</Button>
+          <Button danger icon={<DeleteOutlined />} onClick={clearLocalHistory}>Clear Local History</Button>
+        </Space>
       </div>
       <Card className="workflow-card" style={{ marginBottom: 16 }}>
         <Space wrap>
@@ -152,7 +172,6 @@ function MarketDataDownloader({
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const [symbolsText, setSymbolsText] = useState("");
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [form] = Form.useForm();
   const selectedAssetClass = forcedAssetClass ?? (Form.useWatch("assetClass", form) || "equity");
   const selectedMarket = forcedMarket ?? (Form.useWatch("market", form) || "usa");
@@ -183,14 +202,8 @@ function MarketDataDownloader({
     }
   }, [selectedAssetClass, selectedDataType, selectedMarket, selectedProvider, selectedResolution, selectedVenue, markets.data, providers.data, form]);
 
-  function addTypedSymbols() {
-    const typed = symbolsText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean);
-    setSelectedSymbols(Array.from(new Set([...selectedSymbols, ...typed])));
-    setSymbolsText("");
-  }
-
   async function submit(values: any) {
-    const symbols = Array.from(new Set([...selectedSymbols, ...symbolsText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean)]));
+    const symbols = Array.from(new Set(symbolsText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean)));
     if (symbols.length === 0) {
       message.error("Select or enter at least one symbol");
       return;
@@ -211,6 +224,7 @@ function MarketDataDownloader({
       overwrite: Boolean(values.overwrite)
     });
     message.success(`Data fetch queued: ${task.id}`);
+    setSymbolsText("");
   }
 
   const marketProviders = providers.data.filter((provider) => (
@@ -285,14 +299,9 @@ function MarketDataDownloader({
             onChange={(event) => setSymbolsText(event.target.value)}
             placeholder={selectedAssetClass === "crypto" ? "BTCUSDT, ETHUSDT" : selectedAssetClass === "future" ? "GC, ES" : selectedMarket === "china" ? "600519, 000001" : selectedMarket === "hongkong" ? "00700, 00941" : "AAPL, MSFT"}
           />
-          <Button onClick={addTypedSymbols}>Add</Button>
           <Button type="primary" icon={<CloudDownloadOutlined />} htmlType="submit">Fetch</Button>
         </Space.Compact>
       </Form>
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Button onClick={() => setSelectedSymbols([])}>Clear</Button>
-        {selectedSymbols.map((symbol) => <Tag key={symbol} closable onClose={() => setSelectedSymbols(selectedSymbols.filter((item) => item !== symbol))}>{symbol}</Tag>)}
-      </Space>
       {selectedAssetClass !== "equity" && selectedProvider !== "binance" && (
         <Alert style={{ marginBottom: 12 }} type="warning" showIcon message="This asset class currently uses local LEAN files or CSV import unless Binance crypto daily is selected." />
       )}

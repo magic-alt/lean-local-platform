@@ -458,90 +458,91 @@ export interface ChartData {
     symbol: string;
     quantity: number;
     price: number;
-    tag?: string;
+    fill_price?: number;
+    status?: string;
   }>;
-  orderMarkers: Array<{
-    time: string;
-    side: "BUY" | "SELL";
-    symbol: string;
-    quantity: number;
-    price: number;
-    fillPrice: number;
-    priceValue?: number | null;
-    equityValue?: number | null;
-    tag?: string;
-  }>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DataQueryRow {
   timestamp: string;
+  time?: string;
   open: number;
   high: number;
   low: number;
   close: number;
   volume: number;
-  source: string;
+  source?: string;
 }
 
+export type DataRow = DataQueryRow;
+
 export interface DataQueryResult {
-  enabled: boolean;
+  source: string;
   items: DataQueryRow[];
   count: number;
-  source?: string;
+  enabled: boolean;
   message?: string;
   error?: string;
 }
 
 export interface FactorEvaluationResult {
-  id?: string;
-  factor: string;
-  universe: string;
-  start_date: string;
-  end_date: string;
-  forward_days: number;
-  quantiles: number;
-  engine: string;
-  observations: number;
-  date_count: number;
-  mean_ic?: number | null;
-  mean_rank_ic?: number | null;
-  ic_series: Array<{ trade_date: string; ic: number; count: number }>;
-  rank_ic_series: Array<{ trade_date: string; rank_ic: number; count: number }>;
-  quantile_returns: Array<{ quantile: number; mean_return?: number | null; count: number }>;
+  summary: {
+    symbolCount: number;
+    rowCount: number;
+    factorCount: number;
+    universeMembers?: number;
+    universe: string;
+    startDate: string;
+    endDate: string;
+  };
+  factors: Array<{
+    symbol: string;
+    factor: string;
+    quantile: number;
+    count: number;
+    validCount: number;
+    mean: number;
+    median: number;
+    volatility: number;
+  }>;
 }
 
 export interface CBondPoolItem {
-  bond_code: string;
-  bond_name?: string | null;
-  stock_symbol?: string | null;
-  trade_date: string;
-  close: number;
-  conversion_value?: number | null;
-  premium_rate?: number | null;
-  double_low?: number | null;
-  current_remaining_size?: number | null;
-  rating?: string | null;
+  code: string;
+  name: string;
+  date: string;
+  maturity: string;
+  yield: number;
+  price: number;
+  duration: number;
 }
 
 export interface CBondRiskItem {
-  id: string;
-  bond_code: string;
-  bond_name?: string | null;
-  announce_date: string;
-  trigger_date?: string | null;
-  status: string;
-  call_price?: number | null;
-  last_trade_date?: string | null;
+  date: string;
+  metric: string;
+  value: number;
 }
 
 export interface FuturesMainItem {
-  contract_code: string;
-  product: string;
+  code: string;
+  description: string;
   exchange: string;
-  bar_date: string;
-  close?: number | null;
-  volume?: number | null;
-  open_interest?: number | null;
-  last_trade_date?: string | null;
-  daysToExpiry?: number | null;
+}
+
+export interface MaintenanceHistoryClearResult {
+  status: "completed" | "ready" | "blocked";
+  dryRun: boolean;
+  force: boolean;
+  message?: string;
+  database?: Record<string, number>;
+  deletedRows?: Record<string, number>;
+  activeTasks?: string[];
+  activeTaskCount?: number;
+  runtime?: {
+    filesRemoved: number;
+    dirsRemoved: number;
+    bytesRemoved: number;
+    targets: string[];
+  };
 }

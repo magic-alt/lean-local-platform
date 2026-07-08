@@ -40,7 +40,8 @@ import type {
   FactorEvaluationResult,
   CBondPoolItem,
   CBondRiskItem,
-  FuturesMainItem
+  FuturesMainItem,
+  MaintenanceHistoryClearResult
 } from "./types";
 
 export * from "./types";
@@ -315,6 +316,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
+    }),
+  clearLocalHistory: (payload?: { dryRun?: boolean; force?: boolean }) =>
+    request<MaintenanceHistoryClearResult>("/api/maintenance/clear-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dryRun: payload?.dryRun ?? false,
+        force: payload?.force ?? false
+      })
     }),
   factorEngines: () => request<{ available: Record<string, boolean>; selected: string }>("/api/factors/engines"),
   evaluateFactor: (payload: {

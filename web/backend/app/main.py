@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
-from .api import ashare, backtests, cbond, compare, data, factors, futures, health, level3plus, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
+from .api import ashare, backtests, cbond, compare, data, factors, futures, health, level3plus, maintenance, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
@@ -107,6 +107,7 @@ app.include_router(paper.router)
 app.include_router(research.router)
 app.include_router(reports.router)
 app.include_router(object_store.router)
+app.include_router(maintenance.router)
 
 if FRONTEND_DIST.exists():
     app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
