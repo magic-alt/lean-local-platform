@@ -403,6 +403,22 @@ scripts/start_hs300_web.sh
 LEAN_WEB_PORT=8002 scripts/start_hs300_web.sh
 ```
 
+新增：一键启动（后端+前端）并做自检：
+
+```bash
+cd /Users/kaermax/lean-platform
+scripts/start_web_single_instance.sh
+```
+
+脚本会执行：
+
+- 清理旧实例（按 8000/5173 端口）
+- 启动后端 API（默认 127.0.0.1:8000）
+- 启动前端 dev server（默认 127.0.0.1:5173）
+- 等待端口就绪并打印：
+  - `GET /api/health`
+  - `GET /api/health/dependencies`
+
 启动 Celery worker：
 
 ```bash
