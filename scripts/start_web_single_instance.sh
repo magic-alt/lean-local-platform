@@ -41,6 +41,10 @@ log() {
   echo "[$(timestamp)] $*"
 }
 
+log_stderr() {
+  echo "[$(timestamp)] $*" >&2
+}
+
 is_port_in_use() {
   local port="$1"
   if command -v lsof >/dev/null 2>&1; then
@@ -66,7 +70,7 @@ find_next_available_port() {
   local max_tries="${2:-200}"
 
   if ! [[ "${start_port}" =~ ^[0-9]+$ ]]; then
-    log "端口配置无效: ${start_port}，将不做自动降级"
+    log_stderr "端口配置无效: ${start_port}，将不做自动降级"
     echo "${start_port}"
     return 0
   fi
@@ -81,11 +85,11 @@ find_next_available_port() {
       break
     fi
     max_tries=$((max_tries - 1))
-    log "端口 ${port} 被占用，自动尝试下一个端口"
+    log_stderr "端口 ${port} 被占用，自动尝试下一个端口"
     port=$((port + 1))
   done
 
-  log "在 ${start_port} 起始的端口范围内未找到可用端口"
+  log_stderr "在 ${start_port} 起始的端口范围内未找到可用端口"
   return 1
 }
 
