@@ -14,7 +14,8 @@ from ..repositories.backtest_repository import get_backtest, list_backtests, upd
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project
 from .ashare_multisource import quality_gate_range
-from .ashare_repository import assert_ashare_ready, assert_benchmark_ready
+from .ashare_repository import assert_ashare_ready, assert_benchmark_ready, data_coverage
+from .data_provider_manager import DATA_PROVIDER_MANAGER
 from .backtest_validation import build_backtest_validation, build_experiment_record
 from .experiments import record_experiment_versions
 from .run_fingerprint import build_run_fingerprint
@@ -47,7 +48,30 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             **template_parameters,
         }
     )
+
+    def _source_has_data(symbol: str, source: str) -> bool:
+        adjust = str(parameters.get("adjust") or "raw")
+        coverage = data_coverage(symbol, parameters["start"], parameters["end"], adjust=adjust, source=source)
+        return max(int(coverage["bar_count"] or 0), int(coverage["market_bar_count"] or 0)) > 0
+
+    def _resolve_request_source(requested: str, symbols_to_check: list[str]) -> str | None:
+        chain = DATA_PROVIDER_MANAGER.chain(
+            requested,
+            market=parameters["market"],
+            asset_class=parameters["assetClass"],
+            start_date=parameters["start"],
+            end_date=parameters["end"],
+            strict=False,
+        )
+        if not chain:
+            raise LeanPlatformError(f"No usable source chain for {requested}.")
+        for source in chain:
+            if all(_source_has_data(symbol, source) for symbol in symbols_to_check):
+                return source
+        return None
+
     is_china_equity = parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china"
+    preflight_source = parameters.get("source")
     if is_china_equity:
         explicit_source = (
             request_data.get("source")
@@ -56,8 +80,9 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             or request_data.get("parameters", {}).get("source")
         )
         requested_source = str(explicit_source).strip() if explicit_source is not None else None
+        requested_context = None
         if requested_source:
-            source_context = resolve_source_context(
+            requested_context = resolve_source_context(
                 parameters,
                 source=requested_source,
                 allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
@@ -65,15 +90,45 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 market=str(parameters.get("market") or "china"),
                 venue=str(parameters.get("venue") or parameters.get("market") or "china"),
             )
-            parameters = apply_source_context(parameters, source_context)
+            requested_source = requested_context["source"]
         else:
             parameters.pop("source", None)
             parameters.pop("providerSource", None)
         adjust = str(parameters.get("adjust") or "raw")
-        assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust, source=parameters.get("source"))
         parameters = merge_ashare_trading_config(parameters, request_data)
-        symbols_to_gate = [parameters["ticker"]]
         benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
+        symbols_to_gate = [parameters["ticker"]]
+        symbols_to_check = [parameters["ticker"]]
+        preflight_source: str | None
+        if requested_source:
+            effective_source = _resolve_request_source(requested_source, symbols_to_check)
+            if effective_source is None:
+                raise LeanPlatformError(
+                    f"A-share daily bars are missing for {parameters['ticker']} in {parameters['start']} -> {parameters['end']} "
+                    f"and all fallback sources for requested source {requested_source}."
+                )
+            preflight_source = effective_source
+            if effective_source == requested_source and requested_context is not None:
+                parameters = apply_source_context(parameters, requested_context)
+            elif effective_source != requested_source:
+                effective_context = resolve_source_context(
+                    parameters,
+                    source=effective_source,
+                    allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
+                    asset_class=str(parameters.get("assetClass") or "equity"),
+                    market=str(parameters.get("market") or "china"),
+                    venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+                )
+                parameters = apply_source_context(parameters, effective_context)
+                parameters["sourceFallback"] = requested_source
+        else:
+            preflight_source = _resolve_request_source("auto", symbols_to_check)
+            if preflight_source is None:
+                raise LeanPlatformError(
+                    f"A-share daily bars are missing for {parameters['ticker']} in {parameters['start']} -> {parameters['end']} "
+                    f"for all available sources."
+                )
+        assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust, source=preflight_source)
         assert_benchmark_ready(
             benchmark_symbol,
             parameters["start"],
@@ -84,7 +139,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             resolution=str(parameters.get("resolution") or "daily"),
             data_type=str(parameters.get("dataType") or "trade"),
             adjust=adjust,
-            source=parameters.get("source"),
+            source=preflight_source,
         )
         if benchmark_symbol:
             symbols_to_gate.append(benchmark_symbol)
@@ -96,6 +151,9 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
+    fingerprint_parameters = dict(parameters)
+    if preflight_source:
+        fingerprint_parameters["source"] = preflight_source
     project_id = request_data.get("projectId")
     if project_id:
         project = get_project(project_id)
@@ -114,15 +172,15 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     strategy_path = Path(project["project_path"]) / project["main_file"] if project_id else ALGORITHM_PATH
     fingerprint = build_run_fingerprint(
         run_id=run_id,
-        parameters=parameters,
+        parameters=fingerprint_parameters,
         docker_image=docker_image,
         strategy_path=strategy_path,
         config_path=run_dir / "config.json",
     )
-    validation = build_backtest_validation(parameters, fingerprint)
+    validation = build_backtest_validation(fingerprint_parameters, fingerprint)
     experiment = build_experiment_record(
         run_id=run_id,
-        parameters=parameters,
+        parameters=fingerprint_parameters,
         fingerprint=fingerprint,
         project_id=project_id,
         strategy_path=str(strategy_path),
