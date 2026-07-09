@@ -8,6 +8,7 @@ COMPOSE_PROJECT_DIR="${ROOT_DIR}"
 COMPOSE_SERVICES="${LEAN_COMPOSE_SERVICES:-mysql redis clickhouse prometheus grafana api worker}"
 COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 START_COMPOSE_SERVICES="${LEAN_START_COMPOSE_SERVICES:-1}"
+COMPOSE_BUILD="${LEAN_COMPOSE_BUILD:-0}"
 
 LEAN_WEB_HOST="${LEAN_WEB_HOST:-127.0.0.1}"
 LEAN_WEB_PORT="${LEAN_WEB_PORT:-8000}"
@@ -31,6 +32,24 @@ timestamp() {
 
 log() {
   echo "[$(timestamp)] $*"
+}
+
+parse_args() {
+  for arg in "$@"; do
+    case "${arg}" in
+      --build)
+        COMPOSE_BUILD="1"
+        ;;
+      --no-build)
+        COMPOSE_BUILD="0"
+        ;;
+      *)
+        echo "不支持的参数: ${arg}" >&2
+        echo "支持参数: --build / --no-build" >&2
+        exit 1
+        ;;
+    esac
+  done
 }
 
 wait_for_port() {
@@ -123,9 +142,18 @@ start_backend() {
 
 start_compose_services() {
   log "启动 compose 服务: ${COMPOSE_SERVICES}"
+  if [[ "${COMPOSE_BUILD}" == "1" ]]; then
+    log "开启 compose 镜像重建: docker compose --build"
+  else
+    log "跳过 compose 镜像重建: docker compose"
+  fi
   (
     cd "${COMPOSE_PROJECT_DIR}"
-    docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d --build ${COMPOSE_SERVICES}
+    if [[ "${COMPOSE_BUILD}" == "1" ]]; then
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d --build ${COMPOSE_SERVICES}
+    else
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d ${COMPOSE_SERVICES}
+    fi
   )
   COMPOSE_STARTED=1
 }
@@ -179,6 +207,7 @@ shutdown() {
 }
 
 trap shutdown INT TERM EXIT
+parse_args "$@"
 
 cleanup_previous_instances
 check_dependencies
