@@ -93,6 +93,67 @@ def test_parse_result_payload_filters_unfilled_orders(tmp_path):
     assert all(order["status"] not in {7, "invalid", "submitted", "rejected"} for order in payload["orders"])
 
 
+def test_parse_result_payload_infers_holdings_from_filled_orders(tmp_path):
+    result_json = tmp_path / "job-holdings.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "statistics": {
+                    "Net Profit": "10%",
+                    "Sharpe Ratio": "1.0",
+                    "Total Orders": "3",
+                },
+                "charts": {
+                    "Strategy Equity": {
+                        "series": {
+                            "Equity": {"values": [[0, 100000], [86400, 101000]]},
+                            "Return": {"values": [[0, 0], [86400, 0.01]]},
+                        }
+                    },
+                    "Drawdown": {"series": {"Equity Drawdown": {"values": [[0, 0], [86400, -0.02]]}},
+                    },
+                },
+                "orders": {
+                    "1": {
+                        "quantity": 10,
+                        "lastFillTime": "1970-01-01T00:00:00+00:00",
+                        "symbol": {"value": "SPY"},
+                        "price": 100,
+                        "tag": "",
+                        "status": 3,
+                    },
+                    "2": {
+                        "quantity": -4,
+                        "time": "1970-01-02T00:00:00+00:00",
+                        "symbol": {"value": "SPY"},
+                        "price": 101,
+                        "tag": "",
+                        "status": 3,
+                    },
+                    "3": {
+                        "quantity": 4,
+                        "lastFillTime": "1970-01-03T00:00:00+00:00",
+                        "symbol": {"value": "SPY"},
+                        "price": 102,
+                        "tag": "",
+                        "status": 3,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = parse_result_payload(result_json, run={"parameters": {"start": "1970-01-01", "end": "1970-01-02"}})
+    holdings = payload["holdings"]
+
+    assert holdings and len(holdings) == 1
+    holding = holdings[0]
+    assert holding["symbol"] == "SPY"
+    assert holding["quantity"] == 10  # 10 in - 4 + 4
+    assert round(holding["averagePrice"], 6) == 100.8
+
+
 def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
     import app.db as db_module
 

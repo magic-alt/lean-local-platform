@@ -132,6 +132,85 @@ def _nearest_value(points: list[dict[str, Any]], time_value: str | None) -> floa
     return float(nearest["value"])
 
 
+def infer_holdings_from_orders(
+    orders: list[dict[str, Any]],
+    price_series: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    def _order_time(order: dict[str, Any]) -> datetime:
+        return _parse_time(order.get("time")) or datetime.min.replace(tzinfo=timezone.utc)
+
+    sorted_orders = sorted(orders, key=_order_time)
+    lots_by_symbol: dict[str, list[dict[str, float]]] = {}
+    last_times: dict[str, datetime] = {}
+    for order in sorted_orders:
+        symbol = order.get("symbol") or ""
+        quantity = float(order.get("quantity") or 0)
+        price = float(order.get("price") or 0)
+        time_value = _order_time(order)
+        if not symbol or quantity == 0:
+            continue
+        if price <= 0 and quantity > 0:
+            continue
+        lots_by_symbol.setdefault(symbol, [])
+        last_times[symbol] = time_value
+        lots = lots_by_symbol[symbol]
+        if quantity > 0:
+            remaining = quantity
+            while remaining > 0 and lots and lots[0]["quantity"] < 0:
+                lot = lots[0]
+                used = min(remaining, -lot["quantity"])
+                lot["quantity"] += used
+                remaining -= used
+                if lot["quantity"] >= 0:
+                    lots.pop(0)
+            if remaining > 0:
+                lots.append({"quantity": remaining, "price": price})
+            continue
+        remaining = -quantity
+        while remaining > 0 and lots and lots[0]["quantity"] > 0:
+            lot = lots[0]
+            used = min(remaining, lot["quantity"])
+            lot["quantity"] -= used
+            remaining -= used
+            if lot["quantity"] <= 0:
+                lots.pop(0)
+        if remaining > 0 and not lots:
+            lots.append({"quantity": -remaining, "price": price})
+
+    holdings: list[dict[str, Any]] = []
+    for symbol, lots in lots_by_symbol.items():
+        quantity = sum(lot["quantity"] for lot in lots)
+        if abs(quantity) <= 1e-12:
+            continue
+        long_value = sum(lot["quantity"] * lot["price"] for lot in lots if lot["quantity"] > 0)
+        short_value = sum(lot["quantity"] * lot["price"] for lot in lots if lot["quantity"] < 0)
+        net_cost = long_value + short_value
+        long_quantity = sum(lot["quantity"] for lot in lots if lot["quantity"] > 0)
+        short_quantity = sum(lot["quantity"] for lot in lots if lot["quantity"] < 0)
+        if quantity > 0 and long_quantity > 0:
+            average_price = long_value / long_quantity
+        elif quantity < 0 and short_quantity < 0:
+            average_price = short_value / short_quantity
+        else:
+            average_price = 0
+        latest_time = last_times.get(symbol)
+        time_key = latest_time.isoformat() if latest_time else None
+        market_price = _nearest_value(price_series, time_key) or 0
+        market_value = quantity * market_price if market_price else 0
+        holdings.append(
+            {
+                "time": time_key,
+                "symbol": symbol,
+                "quantity": quantity,
+                "averagePrice": average_price,
+                "marketPrice": market_price,
+                "marketValue": market_value,
+                "netCost": net_cost,
+            }
+        )
+    return holdings
+
+
 def extract_chart_data(
     result_json: Path,
     symbol: str | None = None,
@@ -225,4 +304,5 @@ def extract_chart_data(
         "seriesSources": {"benchmark": benchmark_source},
         "orders": orders,
         "orderMarkers": order_markers,
+        "holdings": infer_holdings_from_orders(orders, price_series=price),
     }

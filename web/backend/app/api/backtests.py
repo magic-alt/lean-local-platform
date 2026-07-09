@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE
-from ..lean_engine.results import extract_chart_data
+from ..lean_engine.results import extract_chart_data, infer_holdings_from_orders
 from ..repositories.backtest_repository import get_backtest
 from ..services.backtest_service import (
     backtest_status,
@@ -113,6 +113,12 @@ def result(run_id: str):
     result_record = result_for_job(run_id)
     if not result_record:
         raise HTTPException(status_code=404, detail="Backtest result not found.")
+    orders = result_record.get("orders")
+    if (not result_record.get("holdings")) and isinstance(orders, list):
+        try:
+            result_record["holdings"] = infer_holdings_from_orders(orders, [])
+        except Exception:
+            result_record["holdings"] = []
     return {"job": run, "result": result_record}
 
 

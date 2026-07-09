@@ -41,6 +41,8 @@ def parse_result_payload(
         statistics = chart_data.get("statistics") or {}
     order_events = _values(data.get("orderEvents") or data.get("order-events") or data.get("OrderEvents"))
     holdings = _values(data.get("holdings") or data.get("Holdings"))
+    if not holdings:
+        holdings = chart_data.get("holdings") or []
     trades = order_events or chart_data.get("orders") or []
     performance = performance_analytics(statistics, chart_data, order_events, data)
     if run.get("validation"):
