@@ -20,7 +20,6 @@ import {
 } from "antd";
 import {
   CloudDownloadOutlined,
-  CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   ExperimentOutlined,
@@ -31,7 +30,6 @@ import {
   SettingOutlined,
   SlidersOutlined
 } from "@ant-design/icons";
-import Editor from "@monaco-editor/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
@@ -61,7 +59,6 @@ import type {
   PaperDailyReport,
   PaperSession,
   Project,
-  ProjectFile,
   ReportRecord,
   StrategyTemplate,
   Task,
@@ -86,8 +83,6 @@ import {
   strategyFields,
   templateDefaults
 } from "../utils/strategy";
-
-const CRYPTO_DEMO_SYMBOLS = ["BTCUSDT", "ETHUSDT"] as const;
 
 const A_SHARE_BACKTEST_SOURCE_OPTIONS = [
   { value: "tushare", label: "TuShare Pro" },
@@ -1091,200 +1086,6 @@ export function ProjectsPage() {
           ]}
         />
       </Card>
-    </>
-  );
-}
-
-export function ProjectWorkspacePage() {
-  const { projectId } = useParams();
-  const navigate = useNavigate();
-  const projects = useAsyncData(api.projects, []);
-  const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
-  const runs = useAsyncData(api.backtests, []);
-  const tasks = useAsyncData(api.tasks, []);
-  const [selectedId, setSelectedId] = useState<string | undefined>(projectId);
-  const [symbols, setSymbols] = useState<string[]>([]);
-  const [files, setFiles] = useState<ProjectFile[]>([]);
-  const [activeFile, setActiveFile] = useState<string>();
-  const [content, setContent] = useState("");
-  const [dirty, setDirty] = useState(false);
-
-  const project = projects.data.find((item) => item.id === selectedId);
-  const template = projectTemplate(project, templates.data);
-  const assetClass = projectAssetClass(project);
-  const market = projectMarket(project);
-  const venue = projectVenue(project);
-  const resolution = projectResolution(project);
-  const dataType = projectDataType(project);
-
-  useEffect(() => {
-    const knownProjects = projects.data.map((item) => item.id);
-    if (projectId) {
-      if (knownProjects.includes(projectId)) {
-        if (selectedId !== projectId) {
-          setSelectedId(projectId);
-        }
-        return;
-      }
-      if (selectedId === projectId) {
-        setSelectedId(undefined);
-      }
-    }
-    if (!projects.data.length) return;
-    if (!selectedId || !knownProjects.includes(selectedId)) {
-      setSelectedId(projects.data[0].id);
-    }
-  }, [projectId, projects.data, selectedId]);
-
-  const loadProjectFile = useCallback(async (target: Project, path?: string) => {
-    const tree = await api.projectFiles(target.id);
-    setFiles(tree);
-    const fileItems = tree.filter((item) => item.type === "file");
-    const requestedFile = path ?? target.main_file;
-    const nextFile = fileItems.some((item) => item.path === requestedFile) ? requestedFile : fileItems[0]?.path;
-    setActiveFile(nextFile);
-    if (!nextFile) {
-      setContent("");
-      setDirty(false);
-      return;
-    }
-    setContent((await api.readProjectFile(target.id, nextFile)).content);
-    setDirty(false);
-  }, []);
-
-  useEffect(() => {
-    if (project) loadProjectFile(project).catch((error) => message.error((error as Error).message));
-  }, [project?.id, loadProjectFile]);
-
-  useEffect(() => {
-    api.symbols(market, assetClass, venue, resolution, dataType).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
-  }, [assetClass, dataType, market, resolution, venue]);
-
-  async function saveFile() {
-    if (!project || !activeFile) return;
-    await api.writeProjectFile(project.id, activeFile, content);
-    setDirty(false);
-    message.success("Saved");
-  }
-
-  async function submitBacktest(values: any) {
-    if (!project) return;
-    const run = await api.createBacktest({
-      ...values,
-      projectId: project.id,
-      assetClass,
-      market,
-      venue,
-      resolution,
-      dataType,
-      parameters: {
-        ...(values.parameters ?? {}),
-        ...marketCostParameters(market, values.feeModel, values.slippageModel)
-      }
-    });
-    message.success("Backtest queued");
-    navigate(`/runs/${run.id}`);
-  }
-
-  const projectRuns = runs.data.filter((run) => run.project_id === project?.id);
-  const projectTasks = tasks.data.filter((task) => task.project_id === project?.id);
-  const backtestInitial = {
-    symbol: symbols[0] ?? (assetClass === "crypto" ? "BTCUSDT" : market === "china" ? "600519" : market === "hongkong" ? "00700" : "AAPL"),
-    start: "2024-01-01",
-    end: "2024-12-31",
-    cash: 300000,
-    dockerImage: "quantconnect/lean:latest",
-    assetClass,
-    market,
-    venue,
-    resolution,
-    dataType,
-    parameters: templateDefaults(template)
-  };
-
-  async function runCryptoDemoBacktest(symbol: string) {
-    if (!project || assetClass !== "crypto") {
-      message.info("Select a crypto project first to run BTC/ETH demo.");
-      return;
-    }
-    if (!symbols.includes(symbol)) {
-      message.warning("Please fetch symbol data in the Data tab first (Binance BTCUSDT/ETHUSDT).");
-      return;
-    }
-    await api.createBacktest({
-      ...backtestInitial,
-      symbol,
-      projectId: project.id,
-      assetClass,
-      market,
-      venue,
-      resolution,
-      dataType,
-      parameters: backtestInitial.parameters,
-    });
-    message.success(`Backtest queued: ${symbol}`);
-    runs.reload();
-  }
-
-  async function runCryptoDemoSuite() {
-    await Promise.all(CRYPTO_DEMO_SYMBOLS.map(runCryptoDemoBacktest));
-    runs.reload();
-  }
-
-  return (
-    <>
-      <div className="toolbar">
-        <div>
-          <h1 className="page-title">Project Workspace</h1>
-          {project && <span className="muted">{project.name} / {assetClass} / {venue} / {resolution} / {template?.name}</span>}
-        </div>
-        <Space wrap>
-          <Select
-            style={{ width: 280 }}
-            value={selectedId}
-            onChange={(value) => {
-              setSelectedId(value);
-              navigate(`/workspace/${value}`);
-            }}
-            options={projects.data.map((item) => ({ value: item.id, label: item.name }))}
-          />
-          <Button icon={<ReloadOutlined />} onClick={() => { projects.reload(); runs.reload(); tasks.reload(); }}>Refresh</Button>
-        </Space>
-      </div>
-      {!project ? <Alert type="info" message="Create or select a project first." /> : (
-        <Tabs items={[
-          { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
-          { key: "code", label: "Code", children: <Card title={`${activeFile ?? "No file selected"}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space>{!activeFile && <Alert type="warning" showIcon message="No project files found." style={{ marginBottom: 12 }} />}<Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty || !activeFile} onClick={saveFile}>Save</Button></Card> },
-          {
-            key: "data", label: "Data", children: (
-              <MarketDataDownloader
-                key={project.id}
-                forcedAssetClass={assetClass}
-                forcedMarket={market}
-                forcedVenue={venue}
-                forcedResolution={resolution}
-                forcedDataType={dataType}
-                compact={false}
-                showAssetClass={false}
-                showMarket={false}
-                showVenue={false}
-                showResolution={false}
-                showDataType={false}
-                showSourceSelect={false}
-                showAdjust={false}
-                showOverwrite={false}
-                showApiKey={false}
-                showLimitInput={false}
-                showOutputSize={false}
-                unboundedPreview
-              />
-            )
-          },
-          { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true, message: "End date is required" }, dateRule("End date"), ({ getFieldValue }) => ({ validator(_, value) { const start = getFieldValue("start"); if (!value || !start || !isValidDate(start) || !isValidDate(value)) return Promise.resolve(); if (dayjs(value).isBefore(dayjs(start))) { return Promise.reject(new Error("End date must be on or after start date")); } return Promise.resolve(); } })]}><DateStringPicker /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
-          { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
-          { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }
-        ]} />
-      )}
     </>
   );
 }
