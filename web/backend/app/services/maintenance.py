@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import shutil
 from pathlib import Path
 from typing import Any
 
-from ..core.config import OBJECT_STORE_DIR, RUNTIME_DIR, REPORTS_DIR, RESEARCH_DIR, RUNS_DIR, UPLOADS_DIR
+from ..core.config import OBJECT_STORE_DIR, QUEUED_TASK_TIMEOUT_MINUTES, RUNTIME_DIR, REPORTS_DIR, RESEARCH_DIR, RUNS_DIR, UPLOADS_DIR
 from ..db import db
 
 TARGET_DIRECTORIES = (
@@ -39,6 +40,90 @@ HISTORY_TABLES = (
 )
 
 TASK_TERMINAL_STATUSES = {"created", "queued", "running"}
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def cleanup_stale_queued(*, max_queued_minutes: int = QUEUED_TASK_TIMEOUT_MINUTES, dry_run: bool = False) -> dict[str, Any]:
+    if max_queued_minutes <= 0:
+        raise ValueError("max_queued_minutes must be greater than 0.")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=max_queued_minutes)
+    cutoff_iso = cutoff.isoformat()
+    now_iso = now.isoformat()
+    failure_reason = f"Queued for more than {max_queued_minutes} minutes without a worker."
+
+    tasks_marked: list[str] = []
+    runs_marked: list[str] = []
+    skipped_tasks = 0
+    skipped_runs = 0
+
+    with db() as connection:
+        task_rows = connection.execute("select id, created_at from tasks where status = 'queued'").fetchall()
+        for row in task_rows:
+            created_at = _parse_iso_datetime(row["created_at"])
+            if created_at is None:
+                skipped_tasks += 1
+                continue
+            if created_at < cutoff:
+                tasks_marked.append(row["id"])
+                if dry_run:
+                    continue
+                connection.execute(
+                    """
+                    update tasks
+                        set status = ?, error = ?, finished_at = coalesce(finished_at, ?)
+                        where id = ?
+                    """,
+                    ("failed", failure_reason, now_iso, row["id"]),
+                )
+
+        run_rows = connection.execute("select id, queued_at from backtest_runs where status = 'queued'").fetchall()
+        for row in run_rows:
+            queued_at = _parse_iso_datetime(row["queued_at"])
+            if queued_at is None:
+                skipped_runs += 1
+                continue
+            if queued_at < cutoff:
+                runs_marked.append(row["id"])
+                if dry_run:
+                    continue
+                connection.execute(
+                    """
+                    update backtest_runs
+                        set status = ?, error = ?, error_message = ?, finished_at = coalesce(finished_at, ?)
+                        where id = ?
+                    """,
+                    ("failed", failure_reason, failure_reason, now_iso, row["id"]),
+                )
+
+    return {
+        "status": "completed",
+        "dryRun": dry_run,
+        "maxQueuedMinutes": max_queued_minutes,
+        "cutoff": cutoff_iso,
+        "evaluated": len(task_rows) + len(run_rows),
+        "tasksMarked": len(tasks_marked),
+        "backtestRunsMarked": len(runs_marked),
+        "skipped": {
+            "invalidTaskCreatedAt": skipped_tasks,
+            "invalidRunQueuedAt": skipped_runs,
+        },
+        "taskIds": tasks_marked,
+        "backtestRunIds": runs_marked,
+    }
 
 
 def _count_table_rows(connection, table: str) -> int:
