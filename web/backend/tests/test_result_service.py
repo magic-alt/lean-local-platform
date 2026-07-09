@@ -52,6 +52,47 @@ def test_parse_result_payload_extracts_core_sections(tmp_path):
     assert payload["orders"][0]["symbol"] == "SPY"
 
 
+def test_parse_result_payload_filters_unfilled_orders(tmp_path):
+    result_json = tmp_path / "job-filter.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "statistics": {
+                    "Net Profit": "12.3%",
+                    "Sharpe Ratio": "1.42",
+                    "Total Orders": "3",
+                },
+                "charts": {
+                    "Strategy Equity": {
+                        "series": {
+                            "Equity": {"values": [[0, 100000], [86400, 101000]]},
+                            "Return": {"values": [[0, 0], [86400, 0.01]]},
+                        }
+                    },
+                    "Drawdown": {
+                        "series": {
+                            "Equity Drawdown": {"values": [[0, 0], [86400, -0.02]]}
+                        }
+                    },
+                },
+                "orders": {
+                    "1": {"quantity": 10, "lastFillTime": "1970-01-01T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 100, "tag": "filled", "status": 3},
+                    "2": {"quantity": 10, "time": "1970-01-02T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 0, "tag": "rejected", "status": 7},
+                    "3": {"quantity": -10, "time": "1970-01-03T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 101, "tag": "filled", "status": "filled"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = parse_result_payload(result_json, run={"parameters": {}})
+
+    assert payload["summary_metrics"]["Net Profit"] == "12.3%"
+    assert len(payload["orders"]) == 2
+    assert [order["status"] for order in payload["orders"]] == [3, "filled"]
+    assert all(order["status"] not in {7, "invalid", "submitted", "rejected"} for order in payload["orders"])
+
+
 def test_persist_result_archives_raw_lean_artifacts(tmp_path, monkeypatch):
     import app.db as db_module
 

@@ -76,6 +76,38 @@ def _has_moving_values(points: list[dict[str, Any]]) -> bool:
     return len(values) > 1
 
 
+FILLED_ORDER_STATUSES = {2, 3}
+FILLED_ORDER_STATUS_LABELS = {"filled", "partiallyfilled", "partialfilled", "partially"}
+NON_FILLED_ORDER_STATUS_LABELS = {"submitted", "invalid", "canceled", "cancelled", "rejected"}
+
+
+def _normalize_order_status(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if math.isnan(float(value)):
+            return None
+        int_value = int(value)
+        if int_value == value:
+            return int_value
+    text = str(value).strip().lower().replace("-", "").replace("_", "")
+    return text
+
+
+def _is_filled_order(order: dict[str, Any]) -> bool:
+    status = _normalize_order_status(order.get("status"))
+    if status is None:
+        return True
+    if isinstance(status, int):
+        return status in FILLED_ORDER_STATUSES
+    if isinstance(status, str):
+        if status in NON_FILLED_ORDER_STATUS_LABELS:
+            return False
+        if status in FILLED_ORDER_STATUS_LABELS:
+            return True
+    return True
+
+
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -120,11 +152,11 @@ def extract_chart_data(
     ema = charts.get("EMA") or {}
     benchmark = charts.get("Benchmark") or {}
 
-    orders = []
+    raw_orders = []
     for order in (data.get("orders") or {}).values():
         quantity = float(order.get("quantity", 0))
         time_value = order.get("lastFillTime") or order.get("time")
-        orders.append(
+        raw_orders.append(
             {
                 "time": time_value,
                 "side": "BUY" if quantity > 0 else "SELL",
@@ -132,8 +164,10 @@ def extract_chart_data(
                 "quantity": quantity,
                 "price": float(order.get("price") or 0),
                 "tag": order.get("tag") or "",
+                "status": _normalize_order_status(order.get("status")),
             }
         )
+    orders = [order for order in raw_orders if _is_filled_order(order)]
 
     inferred_symbol = symbol or next((order["symbol"] for order in orders if order["symbol"]), None)
     price = (
