@@ -93,6 +93,47 @@ def test_parse_result_payload_filters_unfilled_orders(tmp_path):
     assert all(order["status"] not in {7, "invalid", "submitted", "rejected"} for order in payload["orders"])
 
 
+def test_parse_result_payload_filters_string_status_codes(tmp_path):
+    result_json = tmp_path / "job-filter-status.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "statistics": {
+                    "Net Profit": "4%",
+                    "Sharpe Ratio": "0.9",
+                    "Total Orders": "3",
+                },
+                "charts": {
+                    "Strategy Equity": {
+                        "series": {
+                            "Equity": {"values": [[0, 100000], [86400, 101000]]},
+                            "Return": {"values": [[0, 0], [86400, 0.01]]},
+                        }
+                    },
+                    "Drawdown": {
+                        "series": {
+                            "Equity Drawdown": {"values": [[0, 0], [86400, -0.02]]}
+                        }
+                    },
+                },
+                "orders": {
+                    "1": {"quantity": 8, "time": "1970-01-01T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 100, "status": "3"},
+                    "2": {"quantity": 8, "time": "1970-01-02T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 101, "status": "7"},
+                    "3": {"quantity": -8, "time": "1970-01-03T00:00:00+00:00", "symbol": {"value": "SPY"}, "price": 102, "status": "3"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = parse_result_payload(result_json, run={"parameters": {}})
+
+    assert payload["summary_metrics"]["Net Profit"] == "4%"
+    assert len(payload["orders"]) == 2
+    assert payload["orders"][0]["status"] == 3
+    assert payload["orders"][1]["status"] == 3
+
+
 def test_parse_result_payload_infers_holdings_from_filled_orders(tmp_path):
     result_json = tmp_path / "job-holdings.json"
     result_json.write_text(

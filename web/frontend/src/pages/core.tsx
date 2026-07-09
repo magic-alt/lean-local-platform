@@ -1385,11 +1385,23 @@ export function RunDetailPage() {
     holdings: result?.holdings ?? []
   };
   const recordColumns = [
+    { title: "Record", dataIndex: "record" },
     { title: "Field", dataIndex: "field" },
     { title: "Value", dataIndex: "value", render: (value: unknown) => shortValue(value) }
   ];
-  function recordRows(row: Record<string, unknown>, index: number) {
-    return Object.entries(row).map(([field, value]) => ({ id: `${index}-${field}`, field, value }));
+  function recordRows(rows: Array<Record<string, unknown>>) {
+    return rows.flatMap((row, index) => {
+      const fields = Object.entries(row);
+      if (fields.length === 0) {
+        return [{ id: `${index}-empty`, record: index + 1, field: "—", value: "<empty>" }];
+      }
+      return fields.map(([field, value]) => ({
+        id: `${index}-${field}`,
+        record: index + 1,
+        field,
+        value,
+      }));
+    });
   }
   return (
     <>
@@ -1477,17 +1489,17 @@ export function RunDetailPage() {
               <div data-testid="records-panel">
                 <Card title={`Orders (${records.orders.length})`}>
                   {records.orders.length > 0 ? (
-                    <Table data-testid="result-orders-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.orders[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                    <Table data-testid="result-orders-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.orders)} columns={recordColumns} />
                   ) : <Alert type="info" message="No orders were parsed for this run." />}
                 </Card>
                 <Card title={`Trades (${records.trades.length})`} style={{ marginTop: 16 }}>
                   {records.trades.length > 0 ? (
-                    <Table data-testid="result-trades-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.trades[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                    <Table data-testid="result-trades-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.trades)} columns={recordColumns} />
                   ) : <Alert type="info" message="No trades were parsed for this run." />}
                 </Card>
                 <Card title={`Holdings (${records.holdings.length})`} style={{ marginTop: 16 }}>
                   {records.holdings.length > 0 ? (
-                    <Table data-testid="result-holdings-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.holdings[0] as Record<string, unknown>, 0)} columns={recordColumns} />
+                    <Table data-testid="result-holdings-table" size="small" pagination={{ pageSize: 5 }} rowKey="id" dataSource={recordRows(records.holdings)} columns={recordColumns} />
                   ) : <Alert type="info" message="No holdings were parsed for this run." />}
                 </Card>
               </div>

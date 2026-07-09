@@ -114,11 +114,40 @@ def result(run_id: str):
     if not result_record:
         raise HTTPException(status_code=404, detail="Backtest result not found.")
     orders = result_record.get("orders")
-    if (not result_record.get("holdings")) and isinstance(orders, list):
+    if not result_record.get("holdings"):
+        fallback_orders = orders if isinstance(orders, list) else []
+        price_series: list[dict[str, Any]] = []
+        if not isinstance(fallback_orders, list) or not fallback_orders:
+            result_path = run.get("result_json_path")
+            if result_path:
+                try:
+                    chart_data = extract_chart_data(
+                        Path(result_path),
+                        symbol=run.get("symbol"),
+                        benchmark_symbol=(run.get("parameters") or {}).get("benchmarkSymbol"),
+                        market=(run.get("parameters") or {}).get("market"),
+                        benchmark_market=(run.get("parameters") or {}).get("benchmarkMarket"),
+                        start=(run.get("parameters") or {}).get("start"),
+                        end=(run.get("parameters") or {}).get("end"),
+                        asset_class=(run.get("parameters") or {}).get("assetClass"),
+                        venue=(run.get("parameters") or {}).get("venue"),
+                        resolution=(run.get("parameters") or {}).get("resolution"),
+                        data_type=(run.get("parameters") or {}).get("dataType"),
+                    )
+                    fallback_orders = chart_data.get("orders") or []
+                    series = chart_data.get("series") or {}
+                    price_series = series.get("price") or []
+                except Exception:
+                    fallback_orders = []
         try:
-            result_record["holdings"] = infer_holdings_from_orders(orders, [])
+            if fallback_orders:
+                result_record["holdings"] = infer_holdings_from_orders(fallback_orders, price_series)
+            elif not result_record.get("holdings"):
+                result_record["holdings"] = []
         except Exception:
             result_record["holdings"] = []
+    if not result_record.get("holdings"):
+        result_record["holdings"] = []
     return {"job": run, "result": result_record}
 
 

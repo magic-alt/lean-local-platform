@@ -90,6 +90,13 @@ def _normalize_order_status(value: Any) -> Any:
         int_value = int(value)
         if int_value == value:
             return int_value
+    text = str(value).strip()
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError):
+        numeric = None
+    if numeric is not None and numeric.is_integer():
+        return int(numeric)
     text = str(value).strip().lower().replace("-", "").replace("_", "")
     return text
 
@@ -148,8 +155,6 @@ def infer_holdings_from_orders(
         price = float(order.get("price") or 0)
         time_value = _order_time(order)
         if not symbol or quantity == 0:
-            continue
-        if price <= 0 and quantity > 0:
             continue
         lots_by_symbol.setdefault(symbol, [])
         last_times[symbol] = time_value
@@ -232,16 +237,41 @@ def extract_chart_data(
     benchmark = charts.get("Benchmark") or {}
 
     raw_orders = []
-    for order in (data.get("orders") or {}).values():
-        quantity = float(order.get("quantity", 0))
-        time_value = order.get("lastFillTime") or order.get("time")
+    orders_payload = data.get("orders") or data.get("Orders") or {}
+    order_rows = list(orders_payload.values()) if isinstance(orders_payload, dict) else list(orders_payload) if isinstance(orders_payload, list) else []
+    for order in order_rows:
+        if not isinstance(order, dict):
+            continue
+        symbol_payload = order.get("symbol") or order.get("Symbol") or order.get("symbolValue") or order.get("symbolPermtick")
+        symbol = ""
+        if isinstance(symbol_payload, dict):
+            symbol = (
+                symbol_payload.get("value")
+                or symbol_payload.get("Value")
+                or symbol_payload.get("Symbol")
+                or symbol_payload.get("symbol")
+                or ""
+            )
+        elif symbol_payload is not None:
+            symbol = str(symbol_payload)
+        quantity = float(order.get("quantity", order.get("Quantity", 0)))
+        time_value = (
+            order.get("lastFillTime")
+            or order.get("LastFillTime")
+            or order.get("time")
+            or order.get("Time")
+            or order.get("orderTime")
+        )
+        price = float(
+            order.get("fillPrice", order.get("FillPrice", order.get("price", order.get("Price", 0))))
+        )
         raw_orders.append(
             {
                 "time": time_value,
                 "side": "BUY" if quantity > 0 else "SELL",
-                "symbol": ((order.get("symbol") or {}).get("value") or ""),
+                "symbol": symbol,
                 "quantity": quantity,
-                "price": float(order.get("price") or 0),
+                "price": price,
                 "tag": order.get("tag") or "",
                 "status": _normalize_order_status(order.get("status")),
             }
