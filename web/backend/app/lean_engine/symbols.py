@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
+from calendar import monthrange
 from typing import Any
 
 from .errors import LeanPlatformError
@@ -127,7 +129,16 @@ def _normalize_china_symbol(value: str) -> str:
 
 
 def parse_date(value: str) -> date:
+    text = str(value).strip()
+    match = re.fullmatch(r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})", text)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        if 1 <= month <= 12 and day >= 1:
+            normalized_day = min(day, monthrange(year, month)[1])
+            return date(year, month, normalized_day)
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError as exc:
         raise LeanPlatformError(f"Invalid date {value!r}; expected YYYY-MM-DD") from exc

@@ -55,15 +55,20 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             or request_data.get("provider")
             or request_data.get("parameters", {}).get("source")
         )
-        source_context = resolve_source_context(
-            parameters,
-            source=str(explicit_source) if explicit_source is not None else None,
-            allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
-            asset_class=str(parameters.get("assetClass") or "equity"),
-            market=str(parameters.get("market") or "china"),
-            venue=str(parameters.get("venue") or parameters.get("market") or "china"),
-        )
-        parameters = apply_source_context(parameters, source_context)
+        requested_source = str(explicit_source).strip() if explicit_source is not None else None
+        if requested_source:
+            source_context = resolve_source_context(
+                parameters,
+                source=requested_source,
+                allow_research_source=bool(request_data.get("allowResearchSource") or parameters.get("allowResearchSource")),
+                asset_class=str(parameters.get("assetClass") or "equity"),
+                market=str(parameters.get("market") or "china"),
+                venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+            )
+            parameters = apply_source_context(parameters, source_context)
+        else:
+            parameters.pop("source", None)
+            parameters.pop("providerSource", None)
         adjust = str(parameters.get("adjust") or "raw")
         assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust, source=parameters.get("source"))
         parameters = merge_ashare_trading_config(parameters, request_data)

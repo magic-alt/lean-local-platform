@@ -20,7 +20,27 @@ export function DateStringPicker({
   id,
   ...props
 }: DateStringPickerProps) {
-  const parsed = value ? dayjs(value) : null;
+  function normalizeDate(rawValue: string) {
+    const text = rawValue.trim();
+    const match = /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$/.exec(text);
+    if (!match) {
+      return text;
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (month < 1 || month > 12 || day < 1) {
+      return text;
+    }
+    const dayOfMonth = new Date(year, month, 0).getDate();
+    const normalizedDay = Math.min(day, dayOfMonth);
+    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(normalizedDay).padStart(2, "0")}`;
+  }
+
+  const parsed = value ? dayjs(normalizeDate(value), "YYYY-MM-DD", true) : null;
+
+  const normalizedValue = value ? normalizeDate(value) : "";
+
   return (
     <Space.Compact className={["date-string-picker", className].filter(Boolean).join(" ")} style={{ width: "100%", ...style }}>
       <Input
@@ -29,8 +49,8 @@ export function DateStringPicker({
         allowClear={allowClear === undefined ? true : Boolean(allowClear)}
         disabled={disabled}
         placeholder={placeholder ?? "YYYY-MM-DD"}
-        value={value ?? ""}
-        onChange={(event) => onChange?.(event.target.value)}
+        value={normalizedValue}
+        onChange={(event) => onChange?.(normalizeDate(event.target.value))}
       />
       <DatePicker
         {...props}

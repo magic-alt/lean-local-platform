@@ -309,6 +309,59 @@ def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, m
     assert job["status"] == "created"
 
 
+def test_backtest_creation_without_explicit_source_prefers_any_available_ashare_source(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    import app.services.data as data_service
+    from app.services.benchmark import import_benchmark_rows
+
+    data_service.import_ashare_research_data(
+        symbol="600519",
+        provider="akshare",
+        market="china",
+        rows=sample_ashare_rows(),
+        source="akshare",
+        overwrite=True,
+        adjust="raw",
+        outputsize="",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date=None,
+        end_date=None,
+    )
+    import_benchmark_rows(
+        symbol="000300",
+        source="akshare",
+        rows=[
+            {"date": "2024-01-02", "open": "3500", "high": "3510", "low": "3490", "close": "3505", "volume": "1000"},
+            {"date": "2024-01-03", "open": "3506", "high": "3520", "low": "3500", "close": "3518", "volume": "1100"},
+            {"date": "2024-01-04", "open": "3518", "high": "3530", "low": "3510", "close": "3522", "volume": "1200"},
+        ],
+    )
+
+    import app.services.backtest_service as backtest_service
+    import app.services.tasks as task_service
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+
+    job = backtest_service.create_backtest_job(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "start": "2024-01-02",
+            "end": "2024-01-04",
+            "cash": 100000,
+        }
+    )
+
+    assert job["status"] == "created"
+    assert "source" not in job["parameters"] or not job["parameters"].get("source")
+
+
 def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exist(tmp_path, monkeypatch):
     import_sample_ashare(tmp_path, monkeypatch)
 

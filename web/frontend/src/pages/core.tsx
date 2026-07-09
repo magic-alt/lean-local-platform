@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 
 import { api } from "../api";
+import dayjs from "dayjs";
 import type {
   AppSettings,
   AssetClassInfo,
@@ -100,6 +101,43 @@ const A_SHARE_BACKTEST_SOURCE_OPTIONS = [
   { value: "tonghuashun", label: "TongHuaShun" },
   { value: "yfinance", label: "YFinance" }
 ];
+const ISO_DATE_FORMAT = "YYYY-MM-DD";
+
+function normalizeDateInput(value: string) {
+  const text = String(value).trim();
+  const match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  if (!match) {
+    return text;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1) {
+    return text;
+  }
+  const dayOfMonth = new Date(year, month, 0).getDate();
+  const normalizedDay = Math.min(day, dayOfMonth);
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(normalizedDay).padStart(2, "0")}`;
+}
+
+function isValidDate(value: unknown) {
+  if (typeof value !== "string") return false;
+  return dayjs(normalizeDateInput(value), ISO_DATE_FORMAT, true).isValid();
+}
+
+function dateRule(fieldLabel: string) {
+  return {
+    validator(_: unknown, value: unknown) {
+      if (!value) {
+        return Promise.resolve();
+      }
+      if (isValidDate(value)) {
+        return Promise.resolve();
+      }
+      return Promise.reject(new Error(`${fieldLabel} must be a valid YYYY-MM-DD date.`));
+    },
+  };
+}
 
 function defaultBacktestSource(nextMarket: string) {
   return nextMarket === "china" ? "tushare" : "";
@@ -519,8 +557,34 @@ function MarketDataDownloader({
               <Select options={[{ value: "raw", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} />
             </Form.Item>
           )}
-          <Form.Item name="startDate" label="Start"><DateStringPicker testId="market-data-start-input" /></Form.Item>
-          <Form.Item name="endDate" label="End"><DateStringPicker testId="market-data-end-input" /></Form.Item>
+          <Form.Item
+            name="startDate"
+            label="Start"
+            rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}
+          >
+            <DateStringPicker testId="market-data-start-input" />
+          </Form.Item>
+          <Form.Item
+            name="endDate"
+            label="End"
+            rules={[
+              { required: true, message: "End date is required" },
+              dateRule("End date"),
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  const start = getFieldValue("startDate");
+                  if (!value || !start) return Promise.resolve();
+                  if (!isValidDate(start) || !isValidDate(value)) return Promise.resolve();
+                  if (dayjs(value).isBefore(dayjs(start))) {
+                    return Promise.reject(new Error("End date must be on or after start date"));
+                  }
+                  return Promise.resolve();
+                }
+              })
+            ]}
+          >
+            <DateStringPicker testId="market-data-end-input" />
+          </Form.Item>
           {showLimitInput && <Form.Item name="limit" label="Preview Rows"><InputNumber min={1} max={5000} style={{ width: "100%" }} /></Form.Item>}
           {showOutputSize && (
             <Form.Item name="outputsize" label="Output Size">
@@ -869,7 +933,7 @@ export function ProjectWorkspacePage() {
               />
             )
           },
-          { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
+          { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true, message: "End date is required" }, dateRule("End date"), ({ getFieldValue }) => ({ validator(_, value) { const start = getFieldValue("start"); if (!value || !start || !isValidDate(start) || !isValidDate(value)) return Promise.resolve(); if (dayjs(value).isBefore(dayjs(start))) { return Promise.reject(new Error("End date must be on or after start date")); } return Promise.resolve(); } })]}><DateStringPicker /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
           { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }
         ]} />
@@ -1043,17 +1107,21 @@ export function BacktestsPage() {
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><AutoComplete data-testid="backtest-symbol-input" options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} filterOption={(input, option) => String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())} /></Form.Item>
-            <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }]}><DateStringPicker testId="backtest-start-input" /></Form.Item>
+            <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker testId="backtest-start-input" /></Form.Item>
             <Form.Item
               name="end"
               label="End"
               rules={[
                 { required: true, message: "End date is required" },
+                dateRule("End date"),
                 ({ getFieldValue }) => ({
                   validator(_, value) {
                     const start = getFieldValue("start");
-                    if (!value || !start || value >= start) return Promise.resolve();
-                    return Promise.reject(new Error("End date must be on or after start date"));
+                    if (!value || !start || !isValidDate(start) || !isValidDate(value)) return Promise.resolve();
+                    if (dayjs(value).isBefore(dayjs(start))) {
+                      return Promise.reject(new Error("End date must be on or after start date"));
+                    }
+                    return Promise.resolve();
                   }
                 })
               ]}
