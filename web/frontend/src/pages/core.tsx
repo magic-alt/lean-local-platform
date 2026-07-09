@@ -212,6 +212,16 @@ function MarketDataDownloader({
   forcedVenue,
   forcedResolution,
   forcedDataType,
+  showProvider = true,
+  showAssetClass = true,
+  showMarket = true,
+  showVenue = true,
+  showResolution = true,
+  showDataType = true,
+  showSourceSelect = true,
+  showAdjust = true,
+  showOverwrite = true,
+  showApiKey = true,
   showLimitInput = true,
   showOutputSize = true,
   unboundedPreview = false
@@ -222,6 +232,16 @@ function MarketDataDownloader({
   forcedVenue?: string;
   forcedResolution?: string;
   forcedDataType?: string;
+  showProvider?: boolean;
+  showAssetClass?: boolean;
+  showMarket?: boolean;
+  showVenue?: boolean;
+  showResolution?: boolean;
+  showDataType?: boolean;
+  showSourceSelect?: boolean;
+  showAdjust?: boolean;
+  showOverwrite?: boolean;
+  showApiKey?: boolean;
   showLimitInput?: boolean;
   showOutputSize?: boolean;
   unboundedPreview?: boolean;
@@ -428,61 +448,77 @@ function MarketDataDownloader({
         }}
       >
         <div className="field-grid six">
-          <Form.Item name="source" label="Preview Store">
-            <Select
-              options={[
-                { value: "database", label: "Local MySQL" },
-                { value: "clickhouse", label: "ClickHouse" },
-                { value: "duckdb", label: "DuckDB Parquet" }
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="assetClass" label="Asset Class">
-            <Select
-              disabled={Boolean(forcedAssetClass)}
-              options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
-              onChange={(value) => {
-                const nextVenue = defaultVenueFor(value, assetClasses.data, selectedMarket);
-                form.setFieldsValue({
-                  venue: nextVenue,
-                  provider: value === "crypto" ? "binance" : defaultProviderForMarket(selectedMarket, markets.data)
-                });
-                setSymbolsText(defaultSymbolText(value, selectedMarket));
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="market" label="Market">
-            <Select
-              disabled={Boolean(forcedMarket)}
-              options={markets.data.map((item) => ({ value: item.key, label: item.name }))}
-              onChange={(value) => {
-                const nextVenue = selectedAssetClass === "equity" ? value : defaultVenueFor(selectedAssetClass, assetClasses.data, value);
-                form.setFieldsValue({ venue: nextVenue, provider: defaultProviderForMarket(value, markets.data) });
-                setSymbolsText(defaultSymbolText(selectedAssetClass, value));
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="venue" label="Venue">
-            <Select disabled={Boolean(forcedVenue) || selectedAssetClass === "equity"} options={venueOptions} />
-          </Form.Item>
-          <Form.Item name="resolution" label="Resolution">
-            <Select disabled={Boolean(forcedResolution)} options={resolutionOptions} />
-          </Form.Item>
-          <Form.Item name="dataType" label="Data Type">
-            <Select disabled={Boolean(forcedDataType)} options={dataTypeOptions} />
-          </Form.Item>
-          <Form.Item name="provider" label="Provider">
-            <Select
-              options={marketProviders.map((provider) => ({
-                value: provider.key,
-                label: providerSelectLabel(provider),
-                disabled: provider.disabledByDefault || provider.enabledByDefault === false
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="adjust" label="Adjust">
-            <Select options={[{ value: "raw", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} />
-          </Form.Item>
+          {showSourceSelect && (
+            <Form.Item name="source" label="Preview Store">
+              <Select
+                options={[
+                  { value: "database", label: "Local MySQL" },
+                  { value: "clickhouse", label: "ClickHouse" },
+                  { value: "duckdb", label: "DuckDB Parquet" }
+                ]}
+              />
+            </Form.Item>
+          )}
+          {showAssetClass && (
+            <Form.Item name="assetClass" label="Asset Class">
+              <Select
+                disabled={Boolean(forcedAssetClass)}
+                options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                onChange={(value) => {
+                  const nextVenue = defaultVenueFor(value, assetClasses.data, selectedMarket);
+                  form.setFieldsValue({
+                    venue: nextVenue,
+                    provider: value === "crypto" ? "binance" : defaultProviderForMarket(selectedMarket, markets.data)
+                  });
+                  setSymbolsText(defaultSymbolText(value, selectedMarket));
+                }}
+              />
+            </Form.Item>
+          )}
+          {showMarket && (
+            <Form.Item name="market" label="Market">
+              <Select
+                disabled={Boolean(forcedMarket)}
+                options={markets.data.map((item) => ({ value: item.key, label: item.name }))}
+                onChange={(value) => {
+                  const nextVenue = selectedAssetClass === "equity" ? value : defaultVenueFor(selectedAssetClass, assetClasses.data, value);
+                  form.setFieldsValue({ venue: nextVenue, provider: defaultProviderForMarket(value, markets.data) });
+                  setSymbolsText(defaultSymbolText(selectedAssetClass, value));
+                }}
+              />
+            </Form.Item>
+          )}
+          {showVenue && (
+            <Form.Item name="venue" label="Venue">
+              <Select disabled={Boolean(forcedVenue) || selectedAssetClass === "equity"} options={venueOptions} />
+            </Form.Item>
+          )}
+          {showResolution && (
+            <Form.Item name="resolution" label="Resolution">
+              <Select disabled={Boolean(forcedResolution)} options={resolutionOptions} />
+            </Form.Item>
+          )}
+          {showDataType && (
+            <Form.Item name="dataType" label="Data Type">
+              <Select disabled={Boolean(forcedDataType)} options={dataTypeOptions} />
+            </Form.Item>
+          )}
+          {showProvider && (
+            <Form.Item name="provider" label="Provider">
+              <Select
+                options={marketProviders.map((provider) => ({
+                  value: provider.key,
+                  label: providerSelectLabel(provider),
+                  disabled: provider.disabledByDefault || provider.enabledByDefault === false
+                }))}
+              />
+            </Form.Item>
+          )}
+          {showAdjust && (
+            <Form.Item name="adjust" label="Adjust">
+              <Select options={[{ value: "raw", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} />
+            </Form.Item>
+          )}
           <Form.Item name="startDate" label="Start"><DateStringPicker testId="market-data-start-input" /></Form.Item>
           <Form.Item name="endDate" label="End"><DateStringPicker testId="market-data-end-input" /></Form.Item>
           {showLimitInput && <Form.Item name="limit" label="Preview Rows"><InputNumber min={1} max={5000} style={{ width: "100%" }} /></Form.Item>}
@@ -491,10 +527,10 @@ function MarketDataDownloader({
               <Select disabled={selectedProvider !== "alpha_vantage"} options={[{ value: "compact" }, { value: "full" }]} />
             </Form.Item>
           )}
-          {(selectedProvider === "alpha_vantage") && (
+          {(showApiKey && (selectedProvider === "alpha_vantage")) && (
             <Form.Item name="apiKey" label="API Key"><Input.Password placeholder="or environment variable" /></Form.Item>
           )}
-          <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>
+          {showOverwrite && <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>}
         </div>
         <Space.Compact style={{ width: "100%", marginBottom: 12 }}>
           <Input
@@ -818,6 +854,15 @@ export function ProjectWorkspacePage() {
                 forcedResolution={resolution}
                 forcedDataType={dataType}
                 compact={false}
+                showAssetClass={false}
+                showMarket={false}
+                showVenue={false}
+                showResolution={false}
+                showDataType={false}
+                showSourceSelect={false}
+                showAdjust={false}
+                showOverwrite={false}
+                showApiKey={false}
                 showLimitInput={false}
                 showOutputSize={false}
                 unboundedPreview
