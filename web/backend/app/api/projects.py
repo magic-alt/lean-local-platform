@@ -58,6 +58,7 @@ def get_project(project_id: str):
 
 
 @router.delete("/{project_id}")
+@router.delete("/{project_id}/")
 def delete_project(project_id: str):
     try:
         return {"deleted": True, "details": project_service.delete_project(project_id)}

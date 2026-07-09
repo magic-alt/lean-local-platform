@@ -29,7 +29,10 @@ def normalize_status(value: str | None) -> str:
 
 
 def is_terminal(status: str | None) -> bool:
-    return normalize_status(status) in TERMINAL_STATUSES
+    try:
+        return normalize_status(status) in TERMINAL_STATUSES
+    except ValueError:
+        return False
 
 
 def duration_seconds(started_at: str | None, finished_at: str | None) -> float | None:

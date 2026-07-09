@@ -261,18 +261,27 @@ export function TasksPage() {
   const tasks = useAsyncData(api.tasks, []);
   const [selected, setSelected] = useState<Task>();
   const [logs, setLogs] = useState("");
+  const [deletingTaskId, setDeletingTaskId] = useState<string>();
+
   async function open(task: Task) {
     setSelected(task);
     setLogs((await api.taskLogs(task.id)).logs);
   }
   async function remove(task: Task) {
-    await api.deleteTask(task.id);
-    message.success("Task deleted");
-    if (selected?.id === task.id) {
-      setSelected(undefined);
-      setLogs("");
+    setDeletingTaskId(task.id);
+    try {
+      await api.deleteTask(task.id);
+      message.success("Task deleted");
+      if (selected?.id === task.id) {
+        setSelected(undefined);
+        setLogs("");
+      }
+      tasks.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setDeletingTaskId(undefined);
     }
-    tasks.reload();
   }
   return (
     <>
@@ -288,8 +297,13 @@ export function TasksPage() {
             render: (_, task) => (
               <Space>
                 <a onClick={() => open(task)}>Logs</a>
-                <Popconfirm title="Delete task?" okText="Delete" okButtonProps={{ danger: true }} onConfirm={() => remove(task)}>
-                  <Button size="small" danger>Delete</Button>
+                <Popconfirm
+                  title="Delete task?"
+                  okText="Delete"
+                  okButtonProps={{ danger: true, loading: deletingTaskId === task.id }}
+                  onConfirm={() => remove(task)}
+                >
+                  <Button size="small" danger loading={deletingTaskId === task.id}>Delete</Button>
                 </Popconfirm>
               </Space>
             )

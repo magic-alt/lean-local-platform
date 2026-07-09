@@ -20,5 +20,9 @@ def test_invalid_status_is_rejected():
         normalize_status("paused")
 
 
+def test_invalid_status_is_not_terminal():
+    assert not is_terminal("paused")
+
+
 def test_duration_seconds():
     assert duration_seconds("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:03.250000+00:00") == 3.25
