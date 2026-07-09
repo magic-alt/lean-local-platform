@@ -211,7 +211,10 @@ function MarketDataDownloader({
   forcedMarket,
   forcedVenue,
   forcedResolution,
-  forcedDataType
+  forcedDataType,
+  showLimitInput = true,
+  showOutputSize = true,
+  unboundedPreview = false
 }: {
   compact?: boolean;
   forcedAssetClass?: string;
@@ -219,6 +222,9 @@ function MarketDataDownloader({
   forcedVenue?: string;
   forcedResolution?: string;
   forcedDataType?: string;
+  showLimitInput?: boolean;
+  showOutputSize?: boolean;
+  unboundedPreview?: boolean;
 }) {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
@@ -308,7 +314,7 @@ function MarketDataDownloader({
       adjust: values.adjust,
       startDate: values.startDate,
       endDate: values.endDate,
-      limit: values.limit ?? defaultBarPreviewValues.limit
+      limit: unboundedPreview ? 0 : values.limit ?? defaultBarPreviewValues.limit
     });
   }
 
@@ -336,7 +342,7 @@ function MarketDataDownloader({
           dataType: selectedDataType,
           provider: "tushare",
           apiKey: values.apiKey,
-          outputsize: values.outputsize,
+          outputsize: values.outputsize ?? "compact",
           startDate: values.startDate,
           endDate: values.endDate,
           adjust: values.adjust,
@@ -377,7 +383,7 @@ function MarketDataDownloader({
         dataType: selectedDataType,
         provider: values.provider,
         apiKey: values.apiKey,
-        outputsize: values.outputsize,
+        outputsize: values.outputsize ?? "compact",
         startDate: values.startDate,
         endDate: values.endDate,
         adjust: values.adjust,
@@ -479,10 +485,12 @@ function MarketDataDownloader({
           </Form.Item>
           <Form.Item name="startDate" label="Start"><DateStringPicker testId="market-data-start-input" /></Form.Item>
           <Form.Item name="endDate" label="End"><DateStringPicker testId="market-data-end-input" /></Form.Item>
-          <Form.Item name="limit" label="Preview Rows"><InputNumber min={1} max={5000} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="outputsize" label="Output Size">
-            <Select disabled={selectedProvider !== "alpha_vantage"} options={[{ value: "compact" }, { value: "full" }]} />
-          </Form.Item>
+          {showLimitInput && <Form.Item name="limit" label="Preview Rows"><InputNumber min={1} max={5000} style={{ width: "100%" }} /></Form.Item>}
+          {showOutputSize && (
+            <Form.Item name="outputsize" label="Output Size">
+              <Select disabled={selectedProvider !== "alpha_vantage"} options={[{ value: "compact" }, { value: "full" }]} />
+            </Form.Item>
+          )}
           {(selectedProvider === "alpha_vantage") && (
             <Form.Item name="apiKey" label="API Key"><Input.Password placeholder="or environment variable" /></Form.Item>
           )}
@@ -800,7 +808,22 @@ export function ProjectWorkspacePage() {
         <Tabs items={[
           { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
           { key: "code", label: "Code", children: <Card title={`${activeFile ?? "No file selected"}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space>{!activeFile && <Alert type="warning" showIcon message="No project files found." style={{ marginBottom: 12 }} />}<Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty || !activeFile} onClick={saveFile}>Save</Button></Card> },
-          { key: "data", label: "Data", children: <MarketDataDownloader key={project.id} compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
+          {
+            key: "data", label: "Data", children: (
+              <MarketDataDownloader
+                key={project.id}
+                forcedAssetClass={assetClass}
+                forcedMarket={market}
+                forcedVenue={venue}
+                forcedResolution={resolution}
+                forcedDataType={dataType}
+                compact={false}
+                showLimitInput={false}
+                showOutputSize={false}
+                unboundedPreview
+              />
+            )
+          },
           { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
           { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }

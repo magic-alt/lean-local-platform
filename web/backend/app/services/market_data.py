@@ -284,14 +284,14 @@ def query_bars(
         predicates.append(f"timestamp >= toDateTime64({_literal(start_date + ' 00:00:00')}, 3, 'UTC')")
     if end_date:
         predicates.append(f"timestamp <= toDateTime64({_literal(end_date + ' 23:59:59')}, 3, 'UTC')")
-    bounded_limit = max(1, min(int(limit), 5000))
+    bounded_limit = None if int(limit) <= 0 else max(1, min(int(limit), 5000))
     result = _client().query(
         f"""
         SELECT timestamp, open, high, low, close, volume, source
         FROM {_table()} FINAL
         WHERE {" AND ".join(predicates)}
         ORDER BY timestamp ASC
-        LIMIT {bounded_limit}
+        {f"LIMIT {bounded_limit}" if bounded_limit else ""}
         """
     )
     items = [
@@ -309,8 +309,8 @@ def query_bars(
     return {"enabled": True, "items": items, "count": len(items)}
 
 
-def _bounded_limit(limit: int) -> int:
-    return max(1, min(int(limit), 5000))
+def _bounded_limit(limit: int) -> int | None:
+    return None if int(limit) <= 0 else max(1, min(int(limit), 5000))
 
 
 def query_database_bars(
@@ -345,18 +345,25 @@ def query_database_bars(
     if end_date:
         predicates.append("trade_date <= ?")
         params.append(end_date)
-    params.append(_bounded_limit(limit))
-    with db() as connection:
-        rows = connection.execute(
-            f"""
+    bounded_limit = _bounded_limit(limit)
+    if bounded_limit is None:
+        sql = f"""
+            select trade_date, open, high, low, close, volume, source
+            from market_daily_bars
+            where {" and ".join(predicates)}
+            order by trade_date asc, source asc
+            """
+    else:
+        params.append(bounded_limit)
+        sql = f"""
             select trade_date, open, high, low, close, volume, source
             from market_daily_bars
             where {" and ".join(predicates)}
             order by trade_date asc, source asc
             limit ?
-            """,
-            params,
-        ).fetchall()
+            """
+    with db() as connection:
+        rows = connection.execute(sql, params).fetchall()
     items = [
         {
             "timestamp": row["trade_date"],
