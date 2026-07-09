@@ -33,7 +33,7 @@ import {
 } from "@ant-design/icons";
 import Editor from "@monaco-editor/react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 
 import { api } from "../api";
@@ -228,6 +228,7 @@ function MarketDataDownloader({
   const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
+  const previewRequestId = useRef(0);
   const [form] = Form.useForm();
   const selectedAssetClass = forcedAssetClass ?? (Form.useWatch("assetClass", form) || defaultBarPreviewValues.assetClass);
   const selectedMarket = forcedMarket ?? (Form.useWatch("market", form) || defaultBarPreviewValues.market);
@@ -275,29 +276,29 @@ function MarketDataDownloader({
     return symbols;
   }
 
-  async function loadSecurityInfo(symbol: string) {
+  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
     try {
       const [search, identifiers] = await Promise.all([
         api.searchSecurities(selectedMarket, symbol),
         api.dataIdentifiers(symbol).catch(() => ({ symbol, items: [], count: 0 }))
       ]);
       const matched = search.items.find((item) => item.symbol === symbol) ?? search.items[0];
-      setSecurityInfo({
+      return {
         symbol,
         name: matched?.name ?? symbol,
         market: matched?.market ?? selectedMarket,
         hasLocalData: matched?.hasLocalData,
         identifierCount: identifiers.count,
         source: identifiers.items[0]?.source ? String(identifiers.items[0].source) : undefined
-      });
+      };
     } catch {
-      setSecurityInfo({ symbol, name: symbol, market: selectedMarket });
+      return { symbol, name: symbol, market: selectedMarket };
     }
   }
 
   async function queryLocalBars(values: any, symbol: string) {
     return api.queryData({
-      source: "database",
+      source: values.source ?? "database",
       symbol,
       assetClass: selectedAssetClass,
       market: selectedMarket,
@@ -314,10 +315,16 @@ function MarketDataDownloader({
   async function previewMarketData(values: any) {
     const [symbol] = selectedSymbols();
     if (!symbol) return;
+    const requestId = ++previewRequestId.current;
     setQueryLoading(true);
+    setQueryResult(undefined);
+    setSecurityInfo(undefined);
     try {
-      await loadSecurityInfo(symbol);
+      const security = await loadSecurityInfo(symbol);
+      if (requestId !== previewRequestId.current) return;
+      setSecurityInfo(security);
       let result = await queryLocalBars(values, symbol);
+      if (requestId !== previewRequestId.current) return;
       if (result.enabled && result.items.length === 0 && selectedMarket === "china" && values.provider === "tushare") {
         message.info(`No local MySQL bars for ${symbol}; fetching from TuShare Pro and saving locally.`);
         await api.fetchData({
@@ -335,7 +342,9 @@ function MarketDataDownloader({
           adjust: values.adjust,
           overwrite: Boolean(values.overwrite)
         });
+        if (requestId !== previewRequestId.current) return;
         result = await queryLocalBars(values, symbol);
+        if (requestId !== previewRequestId.current) return;
       }
       setQueryResult(result);
       if (!result.enabled) {
@@ -344,9 +353,13 @@ function MarketDataDownloader({
         message.warning(`No local MySQL bars found for ${symbol}.`);
       }
     } catch (error) {
-      message.error((error as Error).message);
+      if (requestId === previewRequestId.current) {
+        message.error((error as Error).message);
+      }
     } finally {
-      setQueryLoading(false);
+      if (requestId === previewRequestId.current) {
+        setQueryLoading(false);
+      }
     }
   }
 
@@ -650,8 +663,22 @@ export function ProjectWorkspacePage() {
   const dataType = projectDataType(project);
 
   useEffect(() => {
-    if (projectId) setSelectedId(projectId);
-    else if (!selectedId && projects.data.length > 0) setSelectedId(projects.data[0].id);
+    const knownProjects = projects.data.map((item) => item.id);
+    if (projectId) {
+      if (knownProjects.includes(projectId)) {
+        if (selectedId !== projectId) {
+          setSelectedId(projectId);
+        }
+        return;
+      }
+      if (selectedId === projectId) {
+        setSelectedId(undefined);
+      }
+    }
+    if (!projects.data.length) return;
+    if (!selectedId || !knownProjects.includes(selectedId)) {
+      setSelectedId(projects.data[0].id);
+    }
   }, [projectId, projects.data, selectedId]);
 
   const loadProjectFile = useCallback(async (target: Project, path?: string) => {
@@ -757,7 +784,15 @@ export function ProjectWorkspacePage() {
           {project && <span className="muted">{project.name} / {assetClass} / {venue} / {resolution} / {template?.name}</span>}
         </div>
         <Space wrap>
-          <Select style={{ width: 280 }} value={selectedId} onChange={(value) => setSelectedId(value)} options={projects.data.map((item) => ({ value: item.id, label: item.name }))} />
+          <Select
+            style={{ width: 280 }}
+            value={selectedId}
+            onChange={(value) => {
+              setSelectedId(value);
+              navigate(`/workspace/${value}`);
+            }}
+            options={projects.data.map((item) => ({ value: item.id, label: item.name }))}
+          />
           <Button icon={<ReloadOutlined />} onClick={() => { projects.reload(); runs.reload(); tasks.reload(); }}>Refresh</Button>
         </Space>
       </div>
@@ -765,7 +800,7 @@ export function ProjectWorkspacePage() {
         <Tabs items={[
           { key: "overview", label: "Overview", children: <div className="grid"><Card><Statistic title="Backtests" value={projectRuns.length} /></Card><Card><Statistic title="Tasks" value={projectTasks.length} /></Card><Card><Statistic title="Asset" value={assetClass} /></Card><Card><Statistic title="Local Symbols" value={symbols.length} /></Card></div> },
           { key: "code", label: "Code", children: <Card title={`${activeFile ?? "No file selected"}${dirty ? " *" : ""}`}><Space wrap style={{ marginBottom: 8 }}>{files.filter((item) => item.type === "file").map((file) => <Tag key={file.path} color={file.path === activeFile ? "blue" : "default"} onClick={() => loadProjectFile(project, file.path)}>{file.path}</Tag>)}</Space>{!activeFile && <Alert type="warning" showIcon message="No project files found." style={{ marginBottom: 12 }} />}<Editor height="540px" language={activeFile?.endsWith(".cs") ? "csharp" : "python"} value={content} onChange={(value) => { setContent(value ?? ""); setDirty(true); }} theme="vs-dark" /><Button type="primary" style={{ marginTop: 12 }} icon={<CodeOutlined />} disabled={!dirty || !activeFile} onClick={saveFile}>Save</Button></Card> },
-          { key: "data", label: "Data", children: <MarketDataDownloader compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
+          { key: "data", label: "Data", children: <MarketDataDownloader key={project.id} compact forcedAssetClass={assetClass} forcedMarket={market} forcedVenue={venue} forcedResolution={resolution} forcedDataType={dataType} /> },
           { key: "backtest", label: "Backtest", children: <Card title="Run Backtest"><Form key={`${project.id}-${symbols.length}`} layout="vertical" onFinish={submitBacktest} initialValues={backtestInitial}><div className="field-grid six"><Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item><Form.Item name="start" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="end" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item><Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item><Form.Item name="dockerImage" label="Image"><Input /></Form.Item>{strategyFields(template)}</div><Button type="primary" icon={<PlayCircleOutlined />} htmlType="submit">Run</Button>{assetClass === "crypto" && <Space wrap style={{ marginTop: 12 }}><Button onClick={() => runCryptoDemoBacktest("BTCUSDT")}>Run BTCUSDT Demo</Button><Button onClick={() => runCryptoDemoBacktest("ETHUSDT")}>Run ETHUSDT Demo</Button><Button type="primary" onClick={runCryptoDemoSuite}>Run BTCUSDT + ETHUSDT</Button></Space>}</Form></Card> },
           { key: "results", label: "Results", children: <Card title="Project Backtests"><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card> },
           { key: "logs", label: "Logs", children: <Card title="Project Tasks"><Table<Task> rowKey="id" dataSource={projectTasks} size="small" columns={[{ title: "Kind", dataIndex: "kind" }, { title: "Title", dataIndex: "title" }, { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> }, { title: "Created", dataIndex: "created_at" }]} /></Card> }
@@ -829,7 +864,8 @@ export function BacktestsPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const [filters, setFilters] = useState<{ name?: string; status?: string; market?: string; projectId?: string; symbol?: string }>({});
-  const runs = useAsyncData(() => api.backtests(filters), []);
+  const loadRuns = useCallback(() => api.backtests(filters), [filters]);
+  const runs = useAsyncData(loadRuns, []);
   const [form] = Form.useForm();
   const [historyForm] = Form.useForm();
   const [assetClass, setAssetClass] = useState("equity");

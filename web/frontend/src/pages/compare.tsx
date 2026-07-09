@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Form, Select, Space, Table, Tabs, Tag, message } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import ReactECharts from "echarts-for-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { api } from "../api";
 import type { BacktestCompareResult, BacktestRun } from "../api";
@@ -40,7 +40,8 @@ function compareChart(result?: BacktestCompareResult, key: "equityCurve" | "draw
 
 
 export function CompareRunsPanel() {
-  const runs = useAsyncData(() => api.backtests({ status: "success" }), []);
+  const loadRuns = useCallback(() => api.backtests({ status: "success" }), []);
+  const runs = useAsyncData(loadRuns, []);
   const [result, setResult] = useState<BacktestCompareResult>();
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
