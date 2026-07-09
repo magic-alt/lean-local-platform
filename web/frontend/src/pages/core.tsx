@@ -168,6 +168,100 @@ function marketCostParameters(nextMarket: string, feeModel?: string, slippageMod
   };
 }
 
+function normalizeConfigValue(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeConfigValue(item));
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).sort().reduce<Record<string, unknown>>((acc, key) => {
+      const next = normalizeConfigValue((value as Record<string, unknown>)[key]);
+      if (next !== undefined) {
+        acc[key] = next;
+      }
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
+function normalizeProjectConfig(config: Record<string, unknown> = {}) {
+  return normalizeConfigValue(config) as Record<string, unknown>;
+}
+
+function projectConfigEqual(left: Record<string, unknown> | undefined, right: Record<string, unknown> | undefined) {
+  return JSON.stringify(normalizeProjectConfig(left)) === JSON.stringify(normalizeProjectConfig(right));
+}
+
+function projectConfigForRun(values: any, selectedTemplate?: StrategyTemplate) {
+  const template = selectedTemplate;
+  const templateDefaultsFromForm = templateDefaults(template);
+  const mergedParameters = {
+    ...templateDefaultsFromForm,
+    ...(values.parameters || {})
+  };
+  return {
+    assetClass: values.assetClass,
+    market: values.market,
+    venue: values.venue,
+    resolution: values.resolution,
+    dataType: values.dataType,
+    templateKey: values.templateKey,
+    source: values.source,
+    symbol: values.symbol,
+    start: normalizeDateInput(values.start),
+    end: normalizeDateInput(values.end),
+    benchmarkSymbol: values.benchmarkSymbol,
+    cash: values.cash,
+    feeModel: values.feeModel,
+    slippageModel: values.slippageModel,
+    dockerImage: values.dockerImage,
+    parameters: mergedParameters
+  };
+}
+
+function projectFormDefaults(project?: Project, templates: StrategyTemplate[] = [], settings?: AppSettings) {
+  const safeSettings = settings || defaultSettings;
+  const template = projectTemplate(project, templates);
+  const defaults = templateDefaults(template);
+  const market = String(project?.config?.market ?? safeSettings.defaultMarket ?? "china");
+  const assetClass = String(project?.config?.assetClass ?? safeSettings.defaultAssetClass ?? "equity");
+  const venue = String(project?.config?.venue ?? projectMarket(project) ?? market);
+  const start = String(project?.config?.start ?? safeSettings.defaultStart ?? "2024-01-01");
+  const end = String(project?.config?.end ?? safeSettings.defaultEnd ?? "2024-12-31");
+  const cash = Number(project?.config?.cash ?? safeSettings.defaultCash);
+  return {
+    name: project?.name ?? "",
+    assetClass,
+    market,
+    venue,
+    resolution: String(project?.config?.resolution ?? safeSettings.defaultResolution ?? "daily"),
+    dataType: String(project?.config?.dataType ?? safeSettings.defaultDataType ?? "trade"),
+    templateKey: String(project?.config?.templateKey ?? template?.key ?? defaultTemplateFor(assetClass)),
+    source: String(project?.config?.source ?? defaultBacktestSource(market)),
+    symbol: String(project?.config?.symbol || defaultSymbolText(assetClass, market).split(",")[0]),
+    start: start ? normalizeDateInput(start) : start,
+    end: end ? normalizeDateInput(end) : end,
+    benchmarkSymbol: String(project?.config?.benchmarkSymbol ?? (market === "china" ? "000300" : "SPY")),
+    cash,
+    feeModel: String(project?.config?.feeModel ?? "default"),
+    slippageModel: String(project?.config?.slippageModel ?? "default"),
+    dockerImage: String(project?.config?.dockerImage ?? safeSettings.dockerImage),
+    parameters: {
+      ...defaults,
+      ...(project?.config?.parameters as Record<string, unknown> | undefined),
+    },
+  };
+}
+
 function providerSelectLabel(provider: DataProvider) {
   if (provider.disabledByDefault || provider.enabledByDefault === false) {
     return `${provider.name} (disabled)`;
@@ -647,13 +741,54 @@ function MarketDataDownloader({
 
 export function ProjectsPage() {
   const navigate = useNavigate();
+  const [createForm] = Form.useForm();
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
+  const settings = useAsyncData(api.settings, defaultSettings);
+  const runs = useAsyncData(api.backtests, []);
+  const tasks = useAsyncData(api.tasks, []);
   const [form] = Form.useForm();
-  const selectedAssetClass = Form.useWatch("assetClass", form) || "equity";
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const selectedAssetClass = Form.useWatch("assetClass", form) || settings.data.defaultAssetClass;
   const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
+  const selectedMarket = Form.useWatch("market", form) || settings.data.defaultMarket;
+  const selectedVenue = Form.useWatch("venue", form) || selectedMarket;
+  const selectedResolution = Form.useWatch("resolution", form) || settings.data.defaultResolution;
+  const selectedDataType = Form.useWatch("dataType", form) || settings.data.defaultDataType;
+  const selectedTemplateKey = Form.useWatch("templateKey", form);
+  const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
+  const selectedTemplate = templates.data.find((item) => item.key === (selectedTemplateKey || selectedProject?.config?.templateKey));
+
+  useEffect(() => {
+    if (selectedProjectId && projects.data.some((project) => project.id === selectedProjectId)) {
+      return;
+    }
+    if (projects.data.length === 0) {
+      setSelectedProjectId(undefined);
+      return;
+    }
+    setSelectedProjectId(projects.data[0].id);
+  }, [projects.data, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProject) return;
+    const nextValues = projectFormDefaults(selectedProject, templates.data, settings.data);
+    if (nextValues.venue === "undefined" && nextValues.market) {
+      nextValues.venue = nextValues.market;
+    }
+    form.setFieldsValue(nextValues);
+  }, [form, selectedProject, settings.data, templates.data, selectedProject?.id]);
+
+  useEffect(() => {
+    api.symbols(selectedMarket, selectedAssetClass, selectedVenue, selectedResolution, selectedDataType)
+      .then((result) => setSymbols(result.symbols))
+      .catch((error) => message.error((error as Error).message));
+  }, [selectedAssetClass, selectedDataType, selectedMarket, selectedResolution, selectedVenue]);
 
   async function createProject(values: any) {
     const template = templates.data.find((item) => item.key === values.templateKey);
@@ -670,9 +805,128 @@ export function ProjectsPage() {
       parameters: templateDefaults(template)
     });
     message.success("Project created");
-    form.resetFields();
     await projects.reload();
-    navigate(`/workspace/${project.id}`);
+    setSelectedProjectId(project.id);
+    createForm.resetFields();
+  }
+
+  function parseProjectConfig(values: any) {
+    const template = selectedTemplate || projectTemplate(selectedProject, templates.data);
+    return {
+      ...projectConfigForRun(values, template)
+    };
+  }
+
+  async function saveProject() {
+    if (!selectedProject) return;
+    setSaving(true);
+    try {
+      const values = form.getFieldsValue(true);
+      const config = parseProjectConfig(values);
+      const payload = {
+        name: String(values.name ?? selectedProject.name),
+        config
+      };
+      await api.updateProject(selectedProject.id, payload);
+      message.success("Project configuration saved");
+      await projects.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function backtestValuesForRequest(values: any) {
+    const template = selectedTemplate || projectTemplate(selectedProject, templates.data);
+    const config = projectConfigForRun(values, template);
+    return {
+      runName: `${values.symbol} ${config.start} -> ${config.end}`,
+      projectId: selectedProject?.id,
+      assetClass: config.assetClass,
+      market: config.market,
+      venue: config.venue || config.market,
+      resolution: config.resolution,
+      dataType: config.dataType,
+      source: config.source,
+      symbol: String(values.symbol ?? "").trim().toUpperCase(),
+      start: config.start,
+      end: config.end,
+      cash: Number(values.cash),
+      benchmarkSymbol: config.benchmarkSymbol,
+      feeModel: config.feeModel,
+      slippageModel: config.slippageModel,
+      dockerImage: config.dockerImage,
+      parameters: {
+        ...config.parameters,
+        benchmarkSymbol: config.benchmarkSymbol,
+        feeModel: config.feeModel,
+        slippageModel: config.slippageModel,
+        source: config.source,
+        ...marketCostParameters(config.market, config.feeModel, config.slippageModel)
+      },
+      baseConfig: config
+    };
+  }
+
+  async function runBacktest() {
+    if (!selectedProject) return;
+    if (submitting) return;
+    const values = form.getFieldsValue(true);
+    const request = backtestValuesForRequest(values);
+    if (!request.symbol) {
+      message.error("Symbol is required.");
+      return;
+    }
+    if (!request.start || !isValidDate(request.start) || !request.end || !isValidDate(request.end)) {
+      message.error("Please set valid start and end dates.");
+      return;
+    }
+    if (dayjs(request.end).isBefore(dayjs(request.start))) {
+      message.error("End date must be on or after start date");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const nextConfig = parseProjectConfig(values);
+      const shouldClone = !projectConfigEqual((selectedProject.config as Record<string, unknown> | undefined), nextConfig);
+      let targetProjectId = selectedProject.id;
+      if (shouldClone) {
+        const copied = await api.cloneProject(selectedProject.id, {
+          name: `${selectedProject.name} (copy ${dayjs().format("YYYYMMDD-HHmmss")})`,
+          config: nextConfig,
+        });
+        targetProjectId = copied.id;
+        await projects.reload();
+        setSelectedProjectId(copied.id);
+        message.success("Saved configuration as a new project.");
+      }
+      const run = await api.createBacktest({
+        symbol: request.symbol,
+        name: request.runName,
+        assetClass: request.assetClass,
+        market: request.market,
+        venue: request.venue,
+        resolution: request.resolution,
+        dataType: request.dataType,
+        start: request.start,
+        end: request.end,
+        cash: request.cash,
+        source: request.source,
+        benchmarkSymbol: request.benchmarkSymbol,
+        feeModel: request.feeModel,
+        slippageModel: request.slippageModel,
+        dockerImage: request.dockerImage,
+        projectId: targetProjectId,
+        parameters: request.parameters,
+      });
+      message.success("Backtest queued");
+      navigate(`/runs/${run.id}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function deleteProject(project: Project) {
@@ -687,6 +941,8 @@ export function ProjectsPage() {
       }
     });
   }
+  const projectRuns = runs.data.filter((run) => run.project_id === selectedProject?.id);
+  const projectTasks = tasks.data.filter((task) => task.project_id === selectedProject?.id);
 
   return (
     <>
@@ -695,7 +951,7 @@ export function ProjectsPage() {
         <Button icon={<ReloadOutlined />} onClick={projects.reload}>Refresh</Button>
       </div>
       <Card title="Create Project">
-        <Form form={form} layout="vertical" onFinish={createProject} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", templateKey: "ema_cross" }}>
+        <Form form={createForm} layout="vertical" onFinish={createProject} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", templateKey: "ema_cross" }}>
           <div className="field-grid">
             <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class">
@@ -704,8 +960,8 @@ export function ProjectsPage() {
                 virtual={false}
                 options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
                 onChange={(value) => {
-                  form.setFieldValue("templateKey", defaultTemplateFor(value));
-                  form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, form.getFieldValue("market") || "usa"));
+                  createForm.setFieldValue("templateKey", defaultTemplateFor(value));
+                  createForm.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, createForm.getFieldValue("market") || "usa"));
                 }}
               />
             </Form.Item>
@@ -719,6 +975,97 @@ export function ProjectsPage() {
           <Button type="primary" htmlType="submit">Create</Button>
         </Form>
       </Card>
+      {selectedProject && (
+        <Card title="Project Configuration" style={{ marginTop: 16 }}>
+          <div className="toolbar" style={{ marginBottom: 12 }}>
+            <h2 className="page-title" style={{ margin: 0 }}>Current Project: {selectedProject.name}</h2>
+            <Select
+              style={{ width: 320 }}
+              value={selectedProjectId}
+              onChange={setSelectedProjectId}
+              options={projects.data.map((project) => ({ value: project.id, label: project.name }))}
+            />
+          </div>
+          <Form form={form} layout="vertical" initialValues={projectFormDefaults(selectedProject, templates.data, settings.data)} key={`${selectedProject.id}-${templates.data.length}-${settings.data.defaultMarket}`}>
+            <div className="field-grid">
+              <Form.Item name="name" label="Project Name" rules={[{ required: true }]}><Input placeholder="Project name" /></Form.Item>
+              <Form.Item name="assetClass" label="Asset">
+                <Select
+                  data-testid="project-asset-select"
+                  virtual={false}
+                  options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                  onChange={(value) => {
+                    form.setFieldValue("templateKey", defaultTemplateFor(value));
+                    form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, form.getFieldValue("market") || "usa"));
+                  }}
+                />
+              </Form.Item>
+              <Form.Item name="market" label="Market">
+                <Select
+                  data-testid="project-market-select"
+                  virtual={false}
+                  options={markets.data.map((item) => ({ value: item.key, label: item.name }))}
+                  onChange={(value) => {
+                    form.setFieldValue("source", defaultBacktestSource(value));
+                    form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY");
+                  }}
+                />
+              </Form.Item>
+              <Form.Item name="venue" label="Venue">
+                <Select
+                  data-testid="project-venue-select"
+                  virtual={false}
+                  disabled={selectedAssetClass === "equity"}
+                  options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))}
+                />
+              </Form.Item>
+              <Form.Item name="resolution" label="Resolution">
+                <Select data-testid="project-resolution-select" virtual={false} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} />
+              </Form.Item>
+              <Form.Item name="dataType" label="Data Type">
+                <Select data-testid="project-data-type-select" virtual={false} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} />
+              </Form.Item>
+              <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+              <Form.Item name="source" label="Data Source">
+                {selectedMarket === "china" ? (
+                  <Select virtual={false} showSearch optionFilterProp="label" options={A_SHARE_BACKTEST_SOURCE_OPTIONS} />
+                ) : (
+                  <Input placeholder="optional provider source" />
+                )}
+              </Form.Item>
+              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><AutoComplete options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
+              <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker /></Form.Item>
+              <Form.Item name="end" label="End" rules={[{ required: true, message: "End date is required" }, dateRule("End date"), ({ getFieldValue }) => ({ validator(_, value) {
+                const start = getFieldValue("start");
+                if (!value || !start || !isValidDate(start) || !isValidDate(value)) return Promise.resolve();
+                if (dayjs(value).isBefore(dayjs(start))) {
+                  return Promise.reject(new Error("End date must be on or after start date"));
+                }
+                return Promise.resolve();
+              }})]}><DateStringPicker /></Form.Item>
+              <Form.Item name="cash" label="Cash">
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="dockerImage" label="Docker Image"><Input /></Form.Item>
+              <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input /></Form.Item>
+              <Form.Item name="feeModel" label="Fee Model"><Select virtual={false} options={[{ value: "default", label: "Default A-share statutory" }, { value: "zero", label: "Zero Fees" }]} /></Form.Item>
+              <Form.Item name="slippageModel" label="Slippage Model"><Select virtual={false} options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
+            </div>
+            {selectedTemplate && <div className="field-grid">{strategyFields(selectedTemplate)}</div>}
+            <Space wrap>
+              <Button icon={<ReloadOutlined />} type="default" onClick={saveProject} loading={saving} disabled={saving || !selectedProjectId}>Save Configuration</Button>
+              <Button type="primary" icon={<PlayCircleOutlined />} onClick={runBacktest} loading={submitting} disabled={submitting || !selectedProjectId}>Run Backtest</Button>
+            </Space>
+          </Form>
+          <div className="grid" style={{ marginTop: 16 }}>
+            <Card><Statistic title="Backtests" value={projectRuns.length} /></Card>
+            <Card><Statistic title="Tasks" value={projectTasks.length} /></Card>
+            <Card><Statistic title="Symbol" value={String(form.getFieldValue("symbol") || "-")} /></Card>
+            <Card><Statistic title="Local Symbols" value={symbols.length} /></Card>
+          </div>
+          <Card title="Project Backtests" style={{ marginTop: 16 }}><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
+        </Card>
+      )}
       <Card title="Projects" style={{ marginTop: 16 }}>
         <Table
           rowKey="id"
@@ -736,7 +1083,7 @@ export function ProjectsPage() {
               width: 190,
               render: (_, project) => (
                 <Space>
-                  <Button size="small" type="primary" onClick={() => navigate(`/workspace/${project.id}`)}>Workspace</Button>
+                  <Button size="small" type="primary" onClick={() => setSelectedProjectId(project.id)}>Open</Button>
                   <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} />
                 </Space>
               )

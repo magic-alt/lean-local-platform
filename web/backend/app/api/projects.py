@@ -25,6 +25,16 @@ class FileWrite(BaseModel):
     content: str
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+
+
+class ProjectClone(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+
+
 @router.get("")
 def list_projects():
     return project_service.list_projects()
@@ -62,6 +72,34 @@ def get_project(project_id: str):
 def delete_project(project_id: str):
     try:
         return {"deleted": True, "details": project_service.delete_project(project_id)}
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{project_id}")
+def update_project(project_id: str, request: ProjectUpdate):
+    try:
+        return project_service.update_project(
+            project_id,
+            name=request.name,
+            config_updates=request.config,
+        )
+    except LeanWebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{project_id}/clone")
+def clone_project(project_id: str, request: ProjectClone):
+    try:
+        return project_service.clone_project(
+            project_id,
+            name=request.name,
+            config_updates=request.config,
+        )
+    except LeanWebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

@@ -1,7 +1,6 @@
 import { Button, Layout, Menu, Result, Space, Tag } from "antd";
 import {
   AppstoreOutlined,
-  CodeOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -23,7 +22,6 @@ import {
   OptimizationPage,
   PaperPage,
   ProjectsPage,
-  ProjectWorkspacePage,
   ReportsPage,
   ResearchPage,
   RunDetailPage,
@@ -36,7 +34,6 @@ const { Content, Header, Sider } = Layout;
 function AppShell() {
   const menuItems = useMemo(() => [
     { key: "/", icon: <AppstoreOutlined />, label: <Link to="/">Dashboard</Link> },
-    { key: "/workspace", icon: <CodeOutlined />, label: <Link to="/workspace">Workspace</Link> },
     { key: "/projects", icon: <FolderOpenOutlined />, label: <Link to="/projects">Projects</Link> },
     { key: "/data", icon: <DatabaseOutlined />, label: <Link to="/data">Data</Link> },
     { key: "/backtests", icon: <PlayCircleOutlined />, label: <Link to="/backtests">Backtests</Link> },
@@ -56,8 +53,6 @@ function AppShell() {
         <Content className="app-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/workspace" element={<ProjectWorkspacePage />} />
-            <Route path="/workspace/:projectId" element={<ProjectWorkspacePage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/backtests" element={<BacktestsPage />} />

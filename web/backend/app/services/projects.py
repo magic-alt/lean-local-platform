@@ -31,6 +31,20 @@ def _normalize_project(project: dict[str, Any] | None) -> dict[str, Any] | None:
     return normalized
 
 
+def _copy_project_directory(source_root: Path, target_root: Path) -> None:
+    target_root.mkdir(parents=True, exist_ok=False)
+    for child in sorted(source_root.rglob("*")):
+        if any(part.startswith(".") for part in child.relative_to(source_root).parts):
+            continue
+        target = target_root / child.relative_to(source_root)
+        if child.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if child.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
 def get_project(project_id: str) -> dict[str, Any]:
     with db() as connection:
         row = connection.execute("select * from projects where id = ?", (project_id,)).fetchone()
@@ -105,6 +119,58 @@ def create_project(
             (project_id, name, language, algorithm_class, str(project_path), main_file, json_dump(config), now, now),
         )
     return get_project(project_id)
+
+
+def clone_project(
+    source_project_id: str,
+    name: str | None = None,
+    config_updates: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source = get_project(source_project_id)
+    source_root = _project_root(source)
+    if not source_root.exists():
+        raise LeanWebError("Source project path not found.")
+
+    source_name = name or f"{source['name']} Clone"
+    base_slug = slugify(source_name)
+    clone_project_id = f"{base_slug}-{time.strftime('%Y%m%d%H%M%S')}"
+    clone_project_path = PROJECTS_DIR / clone_project_id
+    _copy_project_directory(source_root, clone_project_path)
+
+    source_config = dict(source.get("config") or {})
+    if config_updates:
+        source_config.update({key: value for key, value in config_updates.items() if value is not None})
+
+    main_file = source.get("main_file") or "main.py"
+    source_main_file = source_root / main_file
+    if not source_main_file.exists():
+        files = sorted([path.name for path in clone_project_path.glob("*") if path.is_file()])
+        if files:
+            main_file = files[0]
+
+    (clone_project_path / "project.json").write_text(json.dumps(source_config, indent=2), encoding="utf-8")
+
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into projects
+                (id, name, language, algorithm_class, project_path, main_file, config_json, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clone_project_id,
+                source_name,
+                source["language"],
+                source["algorithm_class"],
+                str(clone_project_path),
+                main_file,
+                json_dump(source_config),
+                now,
+                now,
+            ),
+        )
+    return get_project(clone_project_id)
 
 
 def _remove_path(path: str | None) -> None:

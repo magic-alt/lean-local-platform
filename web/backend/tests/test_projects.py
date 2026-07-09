@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -61,3 +62,65 @@ def test_project_files_fallback_from_stale_host_path(tmp_path, monkeypatch):
     assert [item["path"] for item in files.json()] == ["main.py", "project.json"]
     assert main_file.status_code == 200
     assert main_file.json()["content"] == "class LegacyAlgorithm: pass\n"
+
+
+def test_api_update_project_config(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.main import app
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/projects",
+        json={
+            "name": "update-project",
+            "language": "Python",
+            "templateKey": "ema_cross",
+            "assetClass": "equity",
+            "market": "china",
+            "venue": "china",
+            "resolution": "daily",
+            "dataType": "trade",
+            "parameters": {"period": 20},
+        },
+    ).json()
+
+    response = client.put(f"/api/projects/{created['id']}", json={"name": "update-project-v2", "config": {"symbol": "600460", "source": "tushare"}})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "update-project-v2"
+    assert payload["config"]["symbol"] == "600460"
+    assert payload["config"]["source"] == "tushare"
+    assert payload["config"]["templateKey"] == "ema_cross"
+
+
+def test_api_clone_project_with_files(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.main import app
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/projects",
+        json={"name": "clone-source", "language": "Python", "templateKey": "ema_cross"},
+    ).json()
+
+    source_root = Path(created["project_path"])
+    (source_root / "extra.txt").write_text("extra payload\n", encoding="utf-8")
+
+    clone_response = client.post(
+        f"/api/projects/{created['id']}/clone",
+        json={"name": "clone-source-copy", "config": {"start": "2026-01-01", "symbol": "000001"}},
+    )
+    assert clone_response.status_code == 200
+    cloned = clone_response.json()
+    assert cloned["id"] != created["id"]
+    assert cloned["name"] == "clone-source-copy"
+    assert cloned["config"]["start"] == "2026-01-01"
+    assert cloned["config"]["symbol"] == "000001"
+    assert cloned["config"]["templateKey"] == "ema_cross"
+
+    files = client.get(f"/api/projects/{cloned['id']}/files").json()
+    file_names = {item["path"] for item in files}
+    assert "main.py" in file_names
+    assert "project.json" in file_names
+    assert "extra.txt" in file_names
+    assert (Path(cloned["project_path"]) / "project.json").read_text(encoding="utf-8").strip() != ""

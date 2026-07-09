@@ -87,6 +87,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  updateProject: (id: string, payload: { name?: string; config?: Record<string, unknown> }) =>
+    request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  cloneProject: (id: string, payload: { name?: string; config?: Record<string, unknown> }) =>
+    request<Project>(`/api/projects/${encodeURIComponent(id)}/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   deleteProject: (id: string) =>
     request<{ deleted: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
   projectFiles: (id: string) => request<ProjectFile[]>(`/api/projects/${encodeURIComponent(id)}/files`),

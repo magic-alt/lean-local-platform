@@ -4,7 +4,6 @@ export {
   DataPage,
   OptimizationPage,
   ProjectsPage,
-  ProjectWorkspacePage,
   RunDetailPage
 } from "./core";
 export { ResearchPage } from "./research";
