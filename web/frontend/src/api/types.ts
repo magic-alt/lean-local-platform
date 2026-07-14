@@ -444,6 +444,226 @@ export interface PaperDailyReport {
   report?: Record<string, unknown>;
 }
 
+export interface InsightCapabilities {
+  configured: boolean;
+  model?: string | null;
+  assetClasses: Array<"equity" | "crypto" | "crypto_future" | "future">;
+  resolutions: string[];
+  paperHandoffAssetClasses: string[];
+  promptVersion: string;
+}
+
+export interface InsightEvidence {
+  fact: string;
+  sourceKey: "price" | "technical" | "data_quality" | "backtest";
+}
+
+export interface InsightSignalPayload {
+  stance: "bullish" | "neutral" | "bearish";
+  direction: "long" | "flat" | "short";
+  intent: "enter" | "add" | "hold" | "reduce" | "exit";
+  targetExposure: number;
+  confidence: number;
+  score: number;
+  horizon: string;
+  entryLow?: number | null;
+  entryHigh?: number | null;
+  stopLoss?: number | null;
+  targetPrice?: number | null;
+  invalidation?: string;
+  reason?: string;
+  actionable?: boolean;
+}
+
+export interface InsightSignalRecord {
+  id: string;
+  insight_report_id: string;
+  status: string;
+  rawSignal: Record<string, unknown>;
+  finalSignal: InsightSignalPayload;
+  guardrail: { passed: boolean; adjusted: boolean; violations: string[] };
+  paper_session_id?: string | null;
+  paper_signal_id?: string | null;
+}
+
+export interface InsightReport {
+  id: string;
+  task_id?: string | null;
+  symbol: string;
+  asset_class: string;
+  market?: string | null;
+  venue: string;
+  resolution: string;
+  data_type: string;
+  as_of_date?: string | null;
+  lookback_bars: number;
+  backtest_run_id?: string | null;
+  status: string;
+  model?: string | null;
+  prompt_version: string;
+  input_fingerprint?: string | null;
+  context?: Record<string, unknown> | null;
+  report?: {
+    summary?: { headline?: string; thesis?: string; score?: number };
+    technical?: Record<string, unknown>;
+    risks?: string[];
+    catalysts?: string[];
+    evidence?: InsightEvidence[];
+    dataQuality?: { level?: string; sources?: string[]; warnings?: string[] };
+    disclaimer?: string;
+  } | null;
+  signal?: InsightSignalRecord | null;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface InsightListResponse {
+  items: InsightReport[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AshareTechCapabilities {
+  poolSize: number;
+  totalPoolSize: number;
+  defaultPoolSize: number;
+  groups: Array<{ key: string; name: string; count: number }>;
+  primarySource: string;
+  crossCheckSource: string;
+  promptVersion: string;
+  model?: string | null;
+  llmOptional: boolean;
+  paperHandoff: boolean;
+  schedule: string;
+  labels: string[];
+}
+
+export type AshareTechRuleTag = "strong_ai" | "storage";
+
+export interface AshareTechWatchlistItem {
+  code: string;
+  name: string;
+  groupKey: "core" | "semiconductor_storage" | "ai_compute";
+  group: string;
+  enabled: boolean;
+  ruleTags: AshareTechRuleTag[];
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AshareTechWatchlist {
+  items: AshareTechWatchlistItem[];
+  count: number;
+  enabledCount: number;
+  maxSize: number;
+  groups: Array<{ key: AshareTechWatchlistItem["groupKey"]; name: string }>;
+  fingerprint: string;
+}
+
+export interface AshareTechStockRow {
+  code: string;
+  name: string;
+  group: string;
+  date?: string;
+  close?: number | null;
+  changePct?: number | null;
+  ma5?: number | null;
+  ma10?: number | null;
+  ma20?: number | null;
+  ma60?: number | null;
+  ma120?: number | null;
+  ma20DeviationPct?: number | null;
+  ma60DeviationPct?: number | null;
+  drawdown20Pct?: number | null;
+  volumeRatio20?: number | null;
+  amountRatio20?: number | null;
+  turnoverRate?: number | null;
+  ma20Direction?: string | null;
+  ma60Direction?: string | null;
+  ma20Position?: string;
+  ma60Position?: string;
+  movingAverageDirection?: string;
+  macdStatus?: string;
+  priceStructure: string;
+  volumePriceState: string;
+  triggerType: string;
+  direction?: string;
+  keySupport?: number | null;
+  observationZone?: number[] | null;
+  invalidation?: number | null;
+  nextDayCondition?: string | null;
+  announcementRisk?: string;
+  conclusion: string;
+  dataCompleteness?: { sampleCount?: number; missing?: string[]; latestDate?: string };
+}
+
+export interface AshareTechReportPayload {
+  title: string;
+  requestedDate: string;
+  analysisDate: string;
+  marketStatus: string;
+  dataCutoffAt: string;
+  primarySource?: string;
+  crossCheckSource?: string;
+  sourceConflicts?: Array<Record<string, unknown>>;
+  summary?: string;
+  conclusionFirst?: {
+    lowBuy: string[];
+    smallPositionTrial: string[];
+    importantChanges: string[];
+    highRisk: string[];
+    versusPrevious: Record<string, string[] | string>;
+  };
+  focus?: AshareTechStockRow[];
+  fullPool?: AshareTechStockRow[];
+  groupSummary?: Array<Record<string, unknown>>;
+  marketEnvironment?: Array<Record<string, unknown>>;
+  policyEvidence?: Array<{ date: string; title: string; url: string; source: string }>;
+  doNotChase?: AshareTechStockRow[];
+  nextTradingDayWatch?: Array<{ code?: string; name?: string; condition: string; invalidation?: number | null }>;
+  finalThreeLines?: { mostWorthTracking: string; avoidChasingOrBreakdown: string; overallStage: string };
+  modelNarrative?: Record<string, string>;
+  narrativeStatus?: string;
+  narrativeWarning?: string;
+  disclaimer: string;
+}
+
+export interface AshareTechReport {
+  id: string;
+  task_id?: string | null;
+  requested_date: string;
+  analysis_date?: string | null;
+  market_status: string;
+  status: string;
+  attempt_count: number;
+  data_cutoff_at?: string | null;
+  primary_source: string;
+  sector_source?: string | null;
+  dataCompleteness?: Record<string, unknown>;
+  sourceConflicts?: Array<Record<string, unknown>>;
+  sourceManifest?: Array<Record<string, unknown>>;
+  report?: AshareTechReportPayload | null;
+  model?: string | null;
+  prompt_version: string;
+  input_fingerprint?: string | null;
+  pool_fingerprint?: string | null;
+  poolSnapshot?: { items: AshareTechWatchlistItem[]; count: number; fingerprint: string } | null;
+  error?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export interface AshareTechReportList {
+  items: AshareTechReport[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ChartPoint {
   time: string;
   value: number;

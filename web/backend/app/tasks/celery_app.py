@@ -1,6 +1,7 @@
 from celery import Celery
+from celery.schedules import crontab
 
-from ..core.config import REDIS_URL
+from ..core.config import ASHARE_TECH_REPORT_HOUR, ASHARE_TECH_REPORT_MINUTE, REDIS_URL
 
 
 celery_app = Celery(
@@ -14,6 +15,16 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone="UTC",
+    timezone="Asia/Shanghai",
     enable_utc=True,
+    beat_schedule={
+        "ashare-tech-report-after-close": {
+            "task": "lean_web.schedule_ashare_tech_report",
+            "schedule": crontab(
+                minute=ASHARE_TECH_REPORT_MINUTE,
+                hour=ASHARE_TECH_REPORT_HOUR,
+                day_of_week="1-5",
+            ),
+        },
+    },
 )

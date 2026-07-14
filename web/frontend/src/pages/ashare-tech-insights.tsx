@@ -1,0 +1,283 @@
+import { Alert, Button, Card, Checkbox, Col, Descriptions, Divider, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, message } from "antd";
+import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { useCallback, useEffect, useState } from "react";
+
+import { api } from "../api";
+import type { AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
+import { ApiError } from "../api/client";
+import { DateStringPicker } from "../components/DateStringPicker";
+import { useAsyncData } from "../hooks";
+
+const emptyList = { items: [], count: 0, limit: 50, offset: 0 };
+const emptyWatchlist = { items: [], count: 0, enabledCount: 0, maxSize: 60, groups: [], fingerprint: "" };
+const ruleTagOptions = [
+  { value: "strong_ai", label: "强势AI" },
+  { value: "storage", label: "存储" }
+];
+
+function statusColor(status: string) {
+  if (status === "success") return "green";
+  if (status === "failed" || status === "cancelled") return "red";
+  if (status === "waiting_data") return "orange";
+  return "blue";
+}
+
+function labelColor(label: string) {
+  if (["低吸观察", "小仓试错前置"].includes(label)) return "green";
+  if (["风险较高", "不追高"].includes(label)) return "red";
+  if (label === "重点观察") return "blue";
+  return "default";
+}
+
+const number = (value?: number | null) => value == null ? "-" : value.toFixed(2);
+
+const stockColumns = [
+  { title: "代码", dataIndex: "code", fixed: "left" as const, width: 86 },
+  { title: "名称", dataIndex: "name", fixed: "left" as const, width: 130 },
+  { title: "收盘", render: (_: unknown, item: AshareTechStockRow) => number(item.close), width: 80 },
+  { title: "涨跌%", render: (_: unknown, item: AshareTechStockRow) => number(item.changePct), width: 80 },
+  { title: "MA5", render: (_: unknown, item: AshareTechStockRow) => number(item.ma5), width: 75 },
+  { title: "MA10", render: (_: unknown, item: AshareTechStockRow) => number(item.ma10), width: 75 },
+  { title: "MA20", render: (_: unknown, item: AshareTechStockRow) => number(item.ma20), width: 75 },
+  { title: "MA60", render: (_: unknown, item: AshareTechStockRow) => number(item.ma60), width: 75 },
+  { title: "MA120", render: (_: unknown, item: AshareTechStockRow) => number(item.ma120), width: 78 },
+  { title: "偏离MA20%", render: (_: unknown, item: AshareTechStockRow) => number(item.ma20DeviationPct), width: 105 },
+  { title: "偏离MA60%", render: (_: unknown, item: AshareTechStockRow) => number(item.ma60DeviationPct), width: 105 },
+  { title: "20日回撤%", render: (_: unknown, item: AshareTechStockRow) => number(item.drawdown20Pct), width: 105 },
+  { title: "量比20", render: (_: unknown, item: AshareTechStockRow) => number(item.volumeRatio20), width: 85 },
+  { title: "额比20", render: (_: unknown, item: AshareTechStockRow) => number(item.amountRatio20), width: 85 },
+  { title: "换手率%", render: (_: unknown, item: AshareTechStockRow) => number(item.turnoverRate), width: 90 },
+  { title: "MA20位置", dataIndex: "ma20Position", width: 90 },
+  { title: "MA60位置", dataIndex: "ma60Position", width: 90 },
+  { title: "均线方向", dataIndex: "movingAverageDirection", width: 160 },
+  { title: "结构", dataIndex: "priceStructure", width: 100 },
+  { title: "量价", dataIndex: "volumePriceState", width: 125 },
+  { title: "MACD", dataIndex: "macdStatus", width: 165 },
+  { title: "方向", dataIndex: "direction", width: 105 },
+  { title: "触发类型", dataIndex: "triggerType", width: 190 },
+  { title: "关键支撑", render: (_: unknown, item: AshareTechStockRow) => number(item.keySupport), width: 95 },
+  { title: "观察区", render: (_: unknown, item: AshareTechStockRow) => item.observationZone?.map(number).join("–") || "-", width: 145 },
+  { title: "失效条件", render: (_: unknown, item: AshareTechStockRow) => item.invalidation == null ? "-" : `收盘低于 ${number(item.invalidation)}`, width: 145 },
+  { title: "数据完整度", render: (_: unknown, item: AshareTechStockRow) => item.dataCompleteness?.missing?.length ? `降级：${item.dataCompleteness.missing.join("；")}` : `${item.dataCompleteness?.sampleCount || 0}日/完整`, width: 220 },
+  { title: "公告风险", dataIndex: "announcementRisk", width: 190 },
+  { title: "结论", render: (_: unknown, item: AshareTechStockRow) => <Tag color={labelColor(item.conclusion)}>{item.conclusion}</Tag>, width: 110, fixed: "right" as const }
+];
+
+export function AshareTechInsights() {
+  const reports = useAsyncData(api.ashareTechReports, emptyList, false);
+  const capabilities = useAsyncData(api.ashareTechCapabilities, {
+    poolSize: 26, totalPoolSize: 26, defaultPoolSize: 26, groups: [], primarySource: "TuShare Pro", crossCheckSource: "东方财富",
+    promptVersion: "ashare-tech-gpt56-v1", model: null, llmOptional: true, paperHandoff: false,
+    schedule: "工作日17:30", labels: []
+  }, false);
+  const watchlist = useAsyncData(api.ashareTechWatchlist, emptyWatchlist, false);
+  const [selected, setSelected] = useState<AshareTechReport | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [mutating, setMutating] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [detailWarning, setDetailWarning] = useState<string | null>(null);
+  const [addForm] = Form.useForm();
+
+  const loadErrors = [reports.error, capabilities.error, watchlist.error].filter((item): item is Error => Boolean(item));
+  const routeMissing = loadErrors.some((error) => error instanceof ApiError && error.status === 404);
+
+  const refreshAll = useCallback(async () => {
+    const [nextReports] = await Promise.all([reports.reload(), capabilities.reload(), watchlist.reload()]);
+    if (selected && nextReports && !nextReports.items.some((item) => item.id === selected.id)) {
+      setSelected(null);
+      setDetailWarning("该报告已不在历史列表中，已清空详情并停止自动轮询。");
+    }
+  }, [capabilities, reports, selected, watchlist]);
+
+  const loadDetail = useCallback(async (id: string) => {
+    try {
+      setSelected(await api.ashareTechReport(id));
+      setDetailWarning(null);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setSelected(null);
+        setDetailWarning("该报告已不存在，已停止自动轮询。可能是历史数据被清理或后端尚未加载新版路由。");
+        return;
+      }
+      message.error((error as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected || !["queued", "running", "waiting_data"].includes(selected.status)) return;
+    const timer = window.setTimeout(() => { void loadDetail(selected.id); void reports.reload(); }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [loadDetail, reports, selected]);
+
+  async function create(values: { requestedDate?: string; force?: boolean }) {
+    setSubmitting(true);
+    try {
+      const result = await api.createAshareTechReport(values);
+      message.success(result.reused ? "已打开同日报告任务" : "日报任务已进入队列");
+      await reports.reload();
+      await loadDetail(result.id);
+    } catch (error) { message.error((error as Error).message); }
+    finally { setSubmitting(false); }
+  }
+
+  async function addStock(values: { code: string; groupKey: AshareTechWatchlistItem["groupKey"]; ruleTags?: AshareTechRuleTag[] }) {
+    setMutating(true);
+    try {
+      const item = await api.addAshareTechWatchlistItem({ ...values, code: values.code.trim(), ruleTags: values.ruleTags || [] });
+      message.success(`已添加 ${item.code} ${item.name}`);
+      setAddOpen(false);
+      addForm.resetFields();
+      await Promise.all([watchlist.reload(), capabilities.reload()]);
+    } catch (error) { message.error((error as Error).message); }
+    finally { setMutating(false); }
+  }
+
+  async function updateStock(code: string, payload: { enabled?: boolean; ruleTags?: AshareTechRuleTag[] }) {
+    setMutating(true);
+    try {
+      await api.updateAshareTechWatchlistItem(code, payload);
+      await Promise.all([watchlist.reload(), capabilities.reload()]);
+    } catch (error) {
+      message.error((error as Error).message);
+      await watchlist.reload();
+    } finally { setMutating(false); }
+  }
+
+  async function deleteStock(code: string) {
+    setMutating(true);
+    try {
+      await api.deleteAshareTechWatchlistItem(code);
+      message.success(`已从当前观察池删除 ${code}`);
+      await Promise.all([watchlist.reload(), capabilities.reload()]);
+    } catch (error) { message.error((error as Error).message); }
+    finally { setMutating(false); }
+  }
+
+  async function resetStocks() {
+    setMutating(true);
+    try {
+      await api.resetAshareTechWatchlist();
+      message.success("已恢复默认26只观察池");
+      await Promise.all([watchlist.reload(), capabilities.reload()]);
+    } catch (error) { message.error((error as Error).message); }
+    finally { setMutating(false); }
+  }
+
+  const report = selected?.report;
+  return (
+    <>
+      <Alert
+        showIcon type="info" style={{ marginBottom: 16 }}
+        message={`当前启用 ${capabilities.data.poolSize} / 总计 ${capabilities.data.totalPoolSize} 只｜${capabilities.data.schedule}`}
+        description="TuShare Pro 统一计算前复权日线、成交量、成交额和换手率；东方财富只核验最新收盘。规则引擎决定分类，模型未配置时仍生成确定性报告。本工作区没有 Paper 或自动下单入口。"
+      />
+      {loadErrors.length > 0 && <Alert
+        showIcon type="error" style={{ marginBottom: 16 }}
+        message={routeMissing ? "A股科技日报 API 未加载" : "刷新失败"}
+        description={routeMissing
+          ? "当前前端已使用新版独立接口，但 API 进程仍可能是旧版本。请重启 api、worker 和 beat：docker compose --profile app up -d --build api worker beat"
+          : [...new Set(loadErrors.map((error) => error.message))].join("；")}
+      />}
+      {detailWarning && <Alert showIcon closable onClose={() => setDetailWarning(null)} type="warning" style={{ marginBottom: 16 }} message={detailWarning} />}
+      <Card title="生成 A股科技股收盘日报" extra={<Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>刷新</Button>}>
+        <Form layout="inline" onFinish={create} initialValues={{ force: false }}>
+          <Form.Item name="requestedDate" label="报告日期"><DateStringPicker /></Form.Item>
+          <Form.Item name="force" valuePropName="checked"><Checkbox>使用最新观察池强制重新生成</Checkbox></Form.Item>
+          <Form.Item><Button type="primary" htmlType="submit" loading={submitting}>生成/打开日报</Button></Form.Item>
+        </Form>
+      </Card>
+      <Card
+        title={`观察池管理（启用 ${watchlist.data.enabledCount} / 总计 ${watchlist.data.count}，上限 ${watchlist.data.maxSize}）`}
+        style={{ marginTop: 16 }}
+        extra={<Space>
+          <Button icon={<PlusOutlined />} type="primary" onClick={() => setAddOpen(true)} disabled={watchlist.data.count >= watchlist.data.maxSize}>添加股票</Button>
+          <Popconfirm title="恢复默认26只观察池？" description="当前自定义增删、启停和规则标签将被覆盖；历史报告不受影响。" onConfirm={() => void resetStocks()}>
+            <Button danger loading={mutating}>恢复默认</Button>
+          </Popconfirm>
+        </Space>}
+      >
+        <Typography.Paragraph type="secondary">
+          名称和上市状态由 TuShare 验证。修改只影响此后创建的报告；已排队、重试中及历史报告继续使用创建时快照。
+        </Typography.Paragraph>
+        <Table<AshareTechWatchlistItem>
+          rowKey="code" size="small" loading={watchlist.loading} dataSource={watchlist.data.items}
+          pagination={{ pageSize: 10 }}
+          columns={[
+            { title: "代码", dataIndex: "code", width: 90 }, { title: "名称", dataIndex: "name", width: 150 },
+            { title: "固定分组", dataIndex: "group", width: 220 },
+            { title: "启用", width: 80, render: (_, item) => <Switch checked={item.enabled} loading={mutating} onChange={(enabled) => void updateStock(item.code, { enabled })} /> },
+            { title: "特殊规则标签", width: 260, render: (_, item) => <Select
+              mode="multiple" value={item.ruleTags} options={ruleTagOptions} style={{ width: "100%" }} disabled={mutating}
+              onChange={(ruleTags) => void updateStock(item.code, { ruleTags: ruleTags as AshareTechRuleTag[] })}
+            /> },
+            { title: "操作", width: 90, render: (_, item) => <Popconfirm title={`删除 ${item.code} ${item.name}？`} description="只从当前观察池删除，历史报告保持不变。" onConfirm={() => void deleteStock(item.code)}>
+              <Button danger size="small" disabled={mutating}>删除</Button>
+            </Popconfirm> }
+          ]}
+        />
+      </Card>
+      <Card title={`历史报告（${reports.data.count}）`} style={{ marginTop: 16 }}>
+        <Table<AshareTechReport> rowKey="id" size="small" loading={reports.loading} dataSource={reports.data.items} pagination={{ pageSize: 8 }} columns={[
+          { title: "请求日期", dataIndex: "requested_date" }, { title: "分析日期", dataIndex: "analysis_date" },
+          { title: "市场状态", dataIndex: "market_status" },
+          { title: "状态", render: (_, item) => <Tag color={statusColor(item.status)}>{item.status}</Tag> },
+          { title: "尝试", dataIndex: "attempt_count" },
+          { title: "操作", render: (_, item) => <Button size="small" onClick={() => void loadDetail(item.id)}>查看</Button> }
+        ]} />
+      </Card>
+      {selected && <Card title={report?.title || `报告 ${selected.requested_date}`} style={{ marginTop: 16 }}>
+        <Descriptions bordered size="small" column={3}>
+          <Descriptions.Item label="状态"><Tag color={statusColor(selected.status)}>{selected.status}</Tag></Descriptions.Item>
+          <Descriptions.Item label="行情日">{selected.analysis_date || "-"}</Descriptions.Item>
+          <Descriptions.Item label="截止">{selected.data_cutoff_at || "-"}</Descriptions.Item>
+          <Descriptions.Item label="主源">{report?.primarySource || selected.primary_source}</Descriptions.Item>
+          <Descriptions.Item label="交叉核验">{report?.crossCheckSource || "-"}</Descriptions.Item>
+          <Descriptions.Item label="模型">{selected.model || "确定性模板（未调用模型）"}</Descriptions.Item>
+        </Descriptions>
+        {selected.error && <Alert type="error" showIcon message={selected.error} style={{ marginTop: 16 }} />}
+        {report?.summary && <Alert type="warning" showIcon message={report.summary} style={{ marginTop: 16 }} />}
+        {report?.conclusionFirst && <>
+          <Divider>1. 结论先行</Divider>
+          <Row gutter={16}>
+            <Col span={8}><Statistic title="低吸观察" value={report.conclusionFirst.lowBuy.join("、")} /></Col>
+            <Col span={8}><Statistic title="小仓试错前置" value={report.conclusionFirst.smallPositionTrial.join("、")} /></Col>
+            <Col span={8}><Statistic title="来源冲突" value={report.sourceConflicts?.length || 0} suffix="项" /></Col>
+          </Row>
+          <Typography.Paragraph style={{ marginTop: 16 }}>{report.conclusionFirst.importantChanges.join("；") || "今日无重要升级"}</Typography.Paragraph>
+          <Typography.Paragraph>较上一期：{JSON.stringify(report.conclusionFirst.versusPrevious)}</Typography.Paragraph>
+          {report.conclusionFirst.highRisk.length > 0 && <Alert type="warning" message="高位追涨/破位风险" description={report.conclusionFirst.highRisk.join("；")} />}
+          {report.modelNarrative && <Alert type="info" style={{ marginTop: 12 }} message={`模型叙述（${report.narrativeStatus}）`} description={Object.values(report.modelNarrative).join(" ")} />}
+          {(report.sourceConflicts?.length || 0) > 0 && <Alert type="warning" style={{ marginTop: 12 }} message="来源冲突（采用TuShare并降级）" description={<pre>{JSON.stringify(report.sourceConflicts, null, 2)}</pre>} />}
+        </>}
+        {report?.focus && <><Divider>2. 重点提醒表</Divider><Table rowKey="code" size="small" dataSource={report.focus} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} /></>}
+        {report?.fullPool && <><Divider>3. 全池分析表（{report.fullPool.length}只）</Divider>
+          {[...new Set(report.fullPool.map((item) => item.group))].map((group) => <Card key={group} type="inner" title={group} style={{ marginBottom: 12 }}>
+            <Table rowKey="code" size="small" dataSource={report.fullPool?.filter((item) => item.group === group)} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} />
+          </Card>)}
+        </>}
+        {report?.groupSummary && <><Divider>4. 板块趋势总结</Divider><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify({ market: report.marketEnvironment, groups: report.groupSummary }, null, 2)}</pre>
+          {(report.policyEvidence?.length || 0) > 0 && <><Typography.Title level={5}>最近7日官方政策证据</Typography.Title><ul>{report.policyEvidence?.map((item) => <li key={item.url}>{item.date} {item.source}：<a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></li>)}</ul></>}
+        </>}
+        {report?.doNotChase && <><Divider>5. 今日不追高/只观察</Divider><Table rowKey="code" size="small" dataSource={report.doNotChase} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} /></>}
+        {report?.nextTradingDayWatch && <><Divider>6. 下一交易日观察清单</Divider><ol>{report.nextTradingDayWatch.map((item, index) => <li key={`${item.code}-${index}`}>{item.code} {item.name}：{item.condition}；失效位 {item.invalidation ?? "数据缺失"}</li>)}</ol></>}
+        {report?.finalThreeLines && <><Divider>7. 三行最终结论</Divider><Space direction="vertical"><div>最值得跟踪：{report.finalThreeLines.mostWorthTracking}</div><div>最应回避追高/警惕破位：{report.finalThreeLines.avoidChasingOrBreakdown}</div><div>总体阶段：{report.finalThreeLines.overallStage}</div></Space></>}
+        {report?.disclaimer && <Alert type="info" message={report.disclaimer} style={{ marginTop: 16 }} />}
+      </Card>}
+      <Modal title="添加A股股票" open={addOpen} onCancel={() => setAddOpen(false)} footer={null} destroyOnHidden>
+        <Form form={addForm} layout="vertical" onFinish={addStock} initialValues={{ groupKey: "core", ruleTags: [] }}>
+          <Form.Item name="code" label="股票代码" rules={[{ required: true }, { pattern: /^\d{6}$/, message: "请输入6位股票代码" }]}>
+            <Input maxLength={6} placeholder="例如 603019" />
+          </Form.Item>
+          <Form.Item name="groupKey" label="加入固定分组" rules={[{ required: true }]}>
+            <Select options={watchlist.data.groups.map((group) => ({ value: group.key, label: group.name }))} />
+          </Form.Item>
+          <Form.Item name="ruleTags" label="特殊低吸约束">
+            <Checkbox.Group options={ruleTagOptions} />
+          </Form.Item>
+          <Alert type="info" showIcon message="保存前必须通过 TuShare 确认为在市A股，名称由系统自动填写。" style={{ marginBottom: 16 }} />
+          <Button type="primary" htmlType="submit" loading={mutating}>验证并添加</Button>
+        </Form>
+      </Modal>
+    </>
+  );
+}

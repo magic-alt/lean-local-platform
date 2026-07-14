@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/web/backend"
 FRONTEND_DIR="${ROOT_DIR}/web/frontend"
 COMPOSE_PROJECT_DIR="${ROOT_DIR}"
-COMPOSE_SERVICES="${LEAN_COMPOSE_SERVICES:-mysql redis clickhouse prometheus grafana api worker}"
+COMPOSE_SERVICES="${LEAN_COMPOSE_SERVICES:-mysql redis clickhouse prometheus grafana api worker beat}"
 COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 START_COMPOSE_SERVICES="${LEAN_START_COMPOSE_SERVICES:-1}"
 COMPOSE_BUILD="${LEAN_COMPOSE_BUILD:-0}"
@@ -355,7 +355,7 @@ log "访问地址: http://${VITE_HOST}:${VITE_PORT}"
 open_frontend_in_browser
 
 if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-  docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs -f --tail=120 api worker
+  docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs -f --tail=120 api worker beat
 else
   log "后端PID: ${BACKEND_PID}"
   log "前端PID: ${FRONTEND_PID}"

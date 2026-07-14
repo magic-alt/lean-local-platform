@@ -148,6 +148,28 @@ def _cancel_report(task: dict[str, Any]) -> None:
         )
 
 
+def _cancel_insight(task: dict[str, Any]) -> None:
+    report_id = task.get("related_id")
+    if not report_id:
+        return
+    with db() as connection:
+        connection.execute(
+            "update insight_reports set status = ?, error = coalesce(error, ?), finished_at = coalesce(finished_at, ?) where id = ?",
+            (CANCELLED, "Cancellation requested by user.", utc_now(), report_id),
+        )
+
+
+def _cancel_ashare_tech_report(task: dict[str, Any]) -> None:
+    report_id = task.get("related_id")
+    if not report_id:
+        return
+    with db() as connection:
+        connection.execute(
+            "update ashare_tech_reports set status = ?, error = coalesce(error, ?), finished_at = coalesce(finished_at, ?), updated_at = ? where id = ?",
+            (CANCELLED, "Cancellation requested by user.", utc_now(), utc_now(), report_id),
+        )
+
+
 def cancel_task(task_id: str) -> dict[str, Any]:
     task = get_task(task_id)
     if is_terminal(task.get("status")):
@@ -167,6 +189,10 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         _cancel_research(task)
     elif task.get("kind") == "report":
         _cancel_report(task)
+    elif task.get("kind") == "insight":
+        _cancel_insight(task)
+    elif task.get("kind") == "ashare_tech_report":
+        _cancel_ashare_tech_report(task)
 
     update_task(
         task_id,

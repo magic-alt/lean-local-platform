@@ -68,6 +68,16 @@ JSON_COLUMNS = {
     "symbols_json": "symbols",
     "details_json": "details",
     "scope_json": "scope",
+    "context_json": "context",
+    "raw_response_json": "rawResponse",
+    "raw_signal_json": "rawSignal",
+    "final_signal_json": "finalSignal",
+    "guardrail_json": "guardrail",
+    "data_completeness_json": "dataCompleteness",
+    "source_conflicts_json": "sourceConflicts",
+    "source_manifest_json": "sourceManifest",
+    "pool_snapshot_json": "poolSnapshot",
+    "rule_tags_json": "ruleTags",
 }
 
 
@@ -110,6 +120,16 @@ LONG_TEXT_COLUMNS = {
     "affected_symbols_json",
     "details_json",
     "scope_json",
+    "context_json",
+    "raw_response_json",
+    "raw_signal_json",
+    "final_signal_json",
+    "guardrail_json",
+    "data_completeness_json",
+    "source_conflicts_json",
+    "source_manifest_json",
+    "pool_snapshot_json",
+    "rule_tags_json",
     "error",
     "error_message",
 }
@@ -1275,6 +1295,48 @@ def init_db() -> None:
                 finished_at text
             );
 
+            create table if not exists insight_reports (
+                id text primary key,
+                task_id text,
+                symbol text not null,
+                asset_class text not null,
+                market text,
+                venue text not null,
+                resolution text not null default 'daily',
+                data_type text not null default 'trade',
+                as_of_date text,
+                lookback_bars integer not null,
+                backtest_run_id text,
+                status text not null,
+                model text,
+                prompt_version text not null,
+                input_fingerprint text,
+                context_json text,
+                raw_response_json text,
+                report_json text,
+                error text,
+                created_at text not null,
+                started_at text,
+                finished_at text
+            );
+
+            create table if not exists decision_signals (
+                id text primary key,
+                insight_report_id text not null unique,
+                symbol text not null,
+                asset_class text not null,
+                venue text not null,
+                as_of_date text,
+                raw_signal_json text not null,
+                final_signal_json text not null,
+                guardrail_json text not null,
+                status text not null,
+                paper_session_id text,
+                paper_signal_id text,
+                created_at text not null,
+                updated_at text not null
+            );
+
             create table if not exists object_store_items (
                 key text primary key,
                 file_path text not null,
@@ -1593,6 +1655,12 @@ def init_db() -> None:
                 on paper_portfolio_snapshots(session_id, trade_date);
             create index if not exists idx_paper_reports_session_date
                 on paper_daily_reports(session_id, trade_date);
+            create index if not exists idx_insight_reports_created
+                on insight_reports(created_at desc);
+            create index if not exists idx_insight_reports_asset_symbol
+                on insight_reports(asset_class, venue, symbol, created_at desc);
+            create index if not exists idx_decision_signals_status
+                on decision_signals(status, created_at desc);
             """
         )
         _add_column(connection, "backtest_runs", "task_id", "text")

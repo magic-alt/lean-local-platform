@@ -81,3 +81,16 @@ PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090")
 GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 QUEUED_TASK_TIMEOUT_MINUTES = int(os.environ.get("QUEUED_TASK_TIMEOUT_MINUTES", "15"))
+
+# Optional, provider-neutral analysis service. Secrets remain environment-only.
+INSIGHTS_LLM_BASE_URL = os.environ.get("LEAN_INSIGHTS_LLM_BASE_URL", "").strip()
+INSIGHTS_LLM_API_KEY = os.environ.get("LEAN_INSIGHTS_LLM_API_KEY", "").strip()
+INSIGHTS_LLM_MODEL = os.environ.get("LEAN_INSIGHTS_LLM_MODEL", "").strip()
+INSIGHTS_LLM_TIMEOUT_SECONDS = int(os.environ.get("LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS", "60"))
+
+# A-share technology report. The observation pool and rule thresholds are code-versioned;
+# only operational timings and cross-check tolerance are configurable here.
+ASHARE_TECH_REPORT_HOUR = int(os.environ.get("LEAN_ASHARE_TECH_REPORT_HOUR", "17"))
+ASHARE_TECH_REPORT_MINUTE = int(os.environ.get("LEAN_ASHARE_TECH_REPORT_MINUTE", "30"))
+ASHARE_TECH_RETRY_MINUTES = int(os.environ.get("LEAN_ASHARE_TECH_RETRY_MINUTES", "30"))
+ASHARE_TECH_CLOSE_TOLERANCE_PCT = float(os.environ.get("LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT", "0.15"))

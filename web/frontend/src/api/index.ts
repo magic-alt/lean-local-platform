@@ -41,7 +41,16 @@ import type {
   CBondPoolItem,
   CBondRiskItem,
   FuturesMainItem,
-  MaintenanceHistoryClearResult
+  MaintenanceHistoryClearResult,
+  InsightCapabilities,
+  InsightListResponse,
+  InsightReport,
+  AshareTechCapabilities,
+  AshareTechReport,
+  AshareTechReportList,
+  AshareTechRuleTag,
+  AshareTechWatchlist,
+  AshareTechWatchlistItem
 } from "./types";
 
 export * from "./types";
@@ -343,6 +352,61 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
+  insightCapabilities: () => request<InsightCapabilities>("/api/insights/capabilities"),
+  insights: (filters?: { assetClass?: string; symbol?: string; status?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<InsightListResponse>(`/api/insights${suffix}`);
+  },
+  createInsight: (payload: {
+    symbol: string;
+    assetClass: "equity" | "crypto" | "crypto_future" | "future";
+    market?: string;
+    venue?: string;
+    resolution?: "daily";
+    dataType?: string;
+    asOfDate?: string;
+    lookbackBars?: number;
+    backtestRunId?: string;
+  }) => request<{ id: string; taskId: string; status: string }>("/api/insights", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }),
+  insight: (id: string) => request<InsightReport>(`/api/insights/${encodeURIComponent(id)}`),
+  handoffInsightToPaper: (id: string, payload: { sessionId: string; targetPercent?: number }) =>
+    request<{ created: boolean; paperSignal?: Record<string, unknown>; report: InsightReport }>(
+      `/api/insights/${encodeURIComponent(id)}/paper-signals`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }
+    ),
+  ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/ashare-tech-insights/capabilities"),
+  ashareTechReports: () => request<AshareTechReportList>("/api/ashare-tech-insights/reports"),
+  ashareTechReport: (id: string) => request<AshareTechReport>(`/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`),
+  createAshareTechReport: (payload: { requestedDate?: string; force?: boolean }) =>
+    request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/ashare-tech-insights/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  ashareTechWatchlist: () => request<AshareTechWatchlist>("/api/ashare-tech-insights/watchlist"),
+  addAshareTechWatchlistItem: (payload: { code: string; groupKey: AshareTechWatchlistItem["groupKey"]; ruleTags: AshareTechRuleTag[] }) =>
+    request<AshareTechWatchlistItem>("/api/ashare-tech-insights/watchlist/items", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  updateAshareTechWatchlistItem: (code: string, payload: { enabled?: boolean; ruleTags?: AshareTechRuleTag[] }) =>
+    request<AshareTechWatchlistItem>(`/api/ashare-tech-insights/watchlist/items/${encodeURIComponent(code)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  deleteAshareTechWatchlistItem: (code: string) =>
+    request<{ deleted: boolean; code: string; watchlist: AshareTechWatchlist }>(`/api/ashare-tech-insights/watchlist/items/${encodeURIComponent(code)}`, { method: "DELETE" }),
+  resetAshareTechWatchlist: () => request<AshareTechWatchlist>("/api/ashare-tech-insights/watchlist/reset", { method: "POST" }),
   updatePaperSessionStatus: (id: string, status: string) =>
     request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
       method: "POST",

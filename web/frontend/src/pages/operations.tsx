@@ -218,6 +218,13 @@ export function ReportsPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Reports</h1><Button icon={<ReloadOutlined />} onClick={() => { runs.reload(); reports.reload(); }}>Refresh</Button></div>
+      <Alert
+        type="info"
+        showIcon
+        message="Structured market insights are available in the Insights workspace."
+        action={<Button size="small" href="#/insights">Open Insights</Button>}
+        style={{ marginBottom: 16 }}
+      />
       <Card title="Generate Report">
         <Form layout="inline" onFinish={submit}>
           <Form.Item name="runId" rules={[{ required: true }]}><Select style={{ width: 420 }} placeholder="Backtest run" options={runs.data.map((run) => ({ value: run.id, label: run.id }))} /></Form.Item>

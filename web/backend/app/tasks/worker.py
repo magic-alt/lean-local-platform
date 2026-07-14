@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Any
 
 from .celery_app import celery_app
+from zoneinfo import ZoneInfo
+from datetime import datetime
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
@@ -27,7 +29,10 @@ from ..services.run_fingerprint import build_run_fingerprint
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
 from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
-from ..services.tasks import append_log, get_task, update_task
+from ..services.tasks import append_log, create_task, get_task, update_task
+from ..services.insights import run_report as run_insight_report
+from ..services import ashare_tech_insights
+from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
 
 def _record_task_metric(kind: str, status: str) -> None:
@@ -38,6 +43,49 @@ def _record_task_metric(kind: str, status: str) -> None:
 def _record_backtest_metric(status: str) -> None:
     if BACKTEST_STATUS is not None:
         BACKTEST_STATUS.labels(status).inc()
+
+
+@celery_app.task(name="lean_web.generate_insight")
+def generate_insight_task(task_id: str, report_id: str):
+    try:
+        result = run_insight_report(task_id, report_id)
+        _record_task_metric("insight", "success")
+        return result
+    except Exception:
+        _record_task_metric("insight", "failed")
+        raise
+
+
+@celery_app.task(name="lean_web.generate_ashare_tech_report", bind=True, max_retries=2)
+def generate_ashare_tech_report_task(self, task_id: str, report_id: str):
+    try:
+        result = ashare_tech_insights.run_report(task_id, report_id, attempt=self.request.retries)
+        _record_task_metric("ashare_tech_report", "success")
+        return result
+    except ashare_tech_insights.ReportDataNotReady as exc:
+        update_task(task_id, status="queued", error=str(exc))
+        raise self.retry(exc=exc, countdown=ASHARE_TECH_RETRY_MINUTES * 60)
+    except Exception as exc:
+        ashare_tech_insights.fail_report(report_id, str(exc))
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("ashare_tech_report", "failed")
+        raise
+
+
+@celery_app.task(name="lean_web.schedule_ashare_tech_report")
+def schedule_ashare_tech_report_task():
+    requested_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    report = ashare_tech_insights.create_report(requested_date)
+    if report.get("status") == "success":
+        return {"id": report["id"], "status": "success", "reused": True}
+    task = create_task(
+        "ashare_tech_report", f"A股科技股日报 {requested_date}",
+        {"requestedDate": requested_date, "scheduled": True}, related_id=report["id"],
+    )
+    ashare_tech_insights.attach_task(report["id"], task["id"])
+    result = generate_ashare_tech_report_task.apply_async(args=[task["id"], report["id"]])
+    update_task(task["id"], celery_task_id=result.id)
+    return {"id": report["id"], "taskId": task["id"], "status": "queued"}
 
 
 def _update_table(table: str, row_id: str, **fields):

@@ -202,6 +202,25 @@ class TushareAdapter:
                 )
         return records
 
+    def stock_by_code(self, symbol: str) -> dict[str, Any] | None:
+        frame = self.pro.stock_basic(
+            ts_code=to_tushare_stock_code(symbol),
+            fields="ts_code,symbol,name,area,industry,market,list_date,delist_date,list_status",
+        )
+        records = _records(frame)
+        if not records:
+            return None
+        item = records[0]
+        code = from_tushare_code(item.get("ts_code") or symbol)
+        delisted_date = _iso_date(item.get("delist_date"))
+        return {
+            "symbol": code, "name": item.get("name") or code, "exchange": infer_exchange(code),
+            "listed_date": _iso_date(item.get("list_date")), "delisted_date": delisted_date,
+            "status": "delisted" if delisted_date else _status(item.get("list_status")),
+            "is_st": _is_st_name(item.get("name")), "industry": item.get("industry"),
+            "source": "tushare:stock_basic",
+        }
+
     def daily_basic_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         frame = self.pro.daily_basic(
             ts_code=to_tushare_stock_code(symbol),
@@ -450,10 +469,13 @@ class TushareAdapter:
             return []
 
         ticker = from_tushare_code(records[0].get("ts_code") or symbol)
+        adj_factor_verified = is_index
         try:
             adj_factors = {} if is_index else self.adjustment_factors(ticker, start_date, end_date)
+            adj_factor_verified = is_index or len(adj_factors) >= len(records)
         except Exception:
             adj_factors = {}
+            adj_factor_verified = False
         limits = {} if is_index or not include_limits else self.limit_prices(ticker, start_date, end_date)
         rows: list[dict[str, Any]] = []
         for item in records:
@@ -480,6 +502,7 @@ class TushareAdapter:
                     "prev_close": item.get("pre_close"),
                     "pct_change": item.get("pct_chg"),
                     "adj_factor": adj_factors.get(trade_date, 1.0),
+                    "adj_factor_verified": adj_factor_verified,
                     "limitUp": limit_up,
                     "limitDown": limit_down,
                     "isLimitUp": is_limit_up if limit_up is not None else None,
@@ -489,6 +512,99 @@ class TushareAdapter:
                 }
             )
         return sorted(rows, key=lambda row: row["date"])
+
+    def index_daily_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Fetch an index explicitly so overlapping stock codes cannot be mistaken for an index."""
+        frame = self.pro.index_daily(
+            ts_code=to_tushare_index_code(symbol),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            trade_date = _iso_date(item.get("trade_date"))
+            if not trade_date:
+                continue
+            rows.append({
+                "date": trade_date, "open": item.get("open"), "high": item.get("high"),
+                "low": item.get("low"), "close": item.get("close"),
+                "volume": int((_float(item.get("vol")) or 0) * 100),
+                "amount": (_float(item.get("amount")) or 0) * 1000,
+                "prev_close": item.get("pre_close"), "pct_change": item.get("pct_chg"),
+                "adj_factor": 1.0,
+            })
+        return sorted(rows, key=lambda row: row["date"])
+
+    def announcement_directory_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Optional TuShare announcement catalogue; official exchange URLs remain the evidence source."""
+        frame = self.pro.anns_d(
+            ts_code=to_tushare_stock_code(symbol),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields="ann_date,ts_code,name,title,url,rec_time",
+        )
+        rows = []
+        for item in _records(frame):
+            ann_date = _iso_date(item.get("ann_date"))
+            if ann_date:
+                rows.append({
+                    "date": ann_date, "code": from_tushare_code(item.get("ts_code") or symbol),
+                    "title": item.get("title"), "url": item.get("url"), "source": "tushare:anns_d",
+                })
+        return sorted(rows, key=lambda row: (row["date"], str(row.get("title") or "")))
+
+    def sector_daily_rows(self, keywords: list[str], start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Resolve DC first, then THS industry/concept indexes, and return matched index bars."""
+        matches: list[dict[str, Any]] = []
+        providers = (
+            ("dc", lambda: self.pro.dc_index(fields="ts_code,name,publisher,category")),
+            ("ths", lambda: self.pro.ths_index(exchange="A", type="N", fields="ts_code,name,count,exchange,list_date,type")),
+        )
+        for provider, catalogue_call in providers:
+            try:
+                catalogue = _records(catalogue_call())
+            except Exception:
+                continue
+            for keyword in keywords:
+                found = next((item for item in catalogue if keyword.lower() in str(item.get("name") or "").lower()), None)
+                if not found:
+                    continue
+                ts_code = str(found.get("ts_code") or "")
+                try:
+                    if provider == "dc":
+                        frame = self.pro.dc_daily(
+                            ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
+                            end_date=_compact_date(end_date, "end_date"),
+                            fields="ts_code,trade_date,open,high,low,close,change,pct_change,vol,amount,turnover_rate",
+                        )
+                    else:
+                        frame = self.pro.ths_daily(
+                            ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
+                            end_date=_compact_date(end_date, "end_date"),
+                            fields="ts_code,trade_date,open,high,low,close,pct_change,vol,turnover_rate,total_mv,float_mv",
+                        )
+                except Exception:
+                    continue
+                bars = []
+                for item in _records(frame):
+                    trade_date = _iso_date(item.get("trade_date"))
+                    if not trade_date:
+                        continue
+                    bars.append({
+                        "date": trade_date, "open": item.get("open"), "high": item.get("high"), "low": item.get("low"),
+                        "close": item.get("close"), "volume": (_float(item.get("vol")) or 0) * 100,
+                        "amount": (_float(item.get("amount")) or 0) * 1000,
+                        "turnover_rate": item.get("turnover_rate"), "adj_factor": 1.0,
+                    })
+                if bars:
+                    matches.append({
+                        "keyword": keyword, "code": ts_code, "name": found.get("name") or keyword,
+                        "source": f"tushare:{provider}_daily", "rows": sorted(bars, key=lambda row: row["date"]),
+                    })
+            if matches:
+                break
+        return matches
 
 
 def fetch_tushare_rows(

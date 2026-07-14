@@ -2,6 +2,18 @@ export function encodePath(value: string): string {
   return value.split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 
+export class ApiError extends Error {
+  status: number;
+  path: string;
+
+  constructor(message: string, status: number, path: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, options);
   if (!response.ok) {
@@ -12,7 +24,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     } catch {
       // Keep status text when the response is not JSON.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, path);
   }
   return response.json() as Promise<T>;
 }

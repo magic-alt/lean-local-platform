@@ -96,6 +96,34 @@ Task cancellation is centralized in `services/tasks.py`.
 - `kind=optimization`: revokes the optimization task, cancels the optimization row, marks non-terminal child `backtest_runs` as `cancelled`, and stops child LEAN containers with known `container_name`.
 - `kind=research`: revokes the task and stops the recorded research container.
 - `kind=report` and data tasks: revoke the task when a Celery id exists and persist `cancelled`.
+- `kind=insight`: revokes the model task and marks the linked insight report `cancelled`.
+
+## Insights
+
+Insights create structured, model-assisted research reports from LEAN-owned daily market data. They are opt-in and unavailable until the three `LEAN_INSIGHTS_LLM_*` connection values are configured for both API and worker.
+
+```text
+GET    /api/insights/capabilities
+GET    /api/insights
+POST   /api/insights
+GET    /api/insights/{report_id}
+POST   /api/insights/{report_id}/paper-signals
+```
+
+`POST /api/insights` accepts `equity`, `crypto`, `crypto_future`, and `future`, currently at daily resolution. The optional `backtestRunId` must be a successful run for the same symbol, asset class, and venue. The response is HTTP 202 with the report and task identifiers.
+
+The model returns a candidate signal, but server-side guardrails own the final signal. Missing data, unsupported spot short exposure, invalid price plans, or missing evidence make the signal non-actionable. Nothing is sent to Paper automatically. The paper handoff endpoint is an explicit user action and currently supports equity and spot crypto sessions only.
+
+Environment variables:
+
+```text
+LEAN_INSIGHTS_LLM_BASE_URL=https://provider.example/v1
+LEAN_INSIGHTS_LLM_API_KEY=...
+LEAN_INSIGHTS_LLM_MODEL=provider-model
+LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS=60
+```
+
+The API key is never returned by capabilities, stored in settings, or persisted with the report.
 
 ## Reports
 
@@ -200,6 +228,38 @@ POST   /api/paper/{session_id}/replay
 ```
 
 Paper trading is P3-oriented. It must stay isolated from backtest execution until consistency validation is complete.
+
+## Insights and A-share Technology Daily Report
+
+```text
+GET  /api/insights/capabilities
+GET  /api/insights
+POST /api/insights
+GET  /api/insights/{report_id}
+POST /api/insights/{report_id}/paper-signals
+
+GET    /api/ashare-tech-insights/capabilities
+GET    /api/ashare-tech-insights/reports
+POST   /api/ashare-tech-insights/reports
+GET    /api/ashare-tech-insights/reports/{report_id}
+GET    /api/ashare-tech-insights/watchlist
+POST   /api/ashare-tech-insights/watchlist/items
+PATCH  /api/ashare-tech-insights/watchlist/items/{code}
+DELETE /api/ashare-tech-insights/watchlist/items/{code}
+POST   /api/ashare-tech-insights/watchlist/reset
+```
+
+The specialized A-share report starts with a 26-stock default pool and persists
+an editable add/delete/enable configuration. New symbols must pass TuShare
+`stock_basic` validation, while each report stores an immutable pool snapshot. It
+uses TuShare Pro for individual indicators and Eastmoney only to cross-check the
+latest close. DC/THS sector indexes are
+preferred; Eastmoney sector K-lines are a marked fallback. It runs at 17:30
+Asia/Shanghai on weekdays and retries at 18:00 and 18:30 when the full-pool
+close is incomplete. Exchange announcements and official government policy
+pages are checked over the latest seven calendar days. The rule engine owns all
+metrics, classifications and risk gates; an optional LLM may only add prose
+that cites report fact IDs. This workspace never creates Paper signals or orders.
 
 ## Health and Observability
 

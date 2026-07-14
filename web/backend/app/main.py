@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
-from .api import ashare, backtests, cbond, compare, data, factors, futures, health, level3plus, maintenance, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
+from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, factors, futures, health, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, projects, reports, research, settings, strategies, tasks, universes
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
@@ -106,6 +106,9 @@ app.include_router(compare.router)
 app.include_router(paper.router)
 app.include_router(research.router)
 app.include_router(reports.router)
+app.include_router(ashare_tech_insights.router)
+app.include_router(ashare_tech_insights.legacy_router)
+app.include_router(insights.router)
 app.include_router(object_store.router)
 app.include_router(maintenance.router)
 
