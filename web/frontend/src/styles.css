@@ -34,27 +34,27 @@ body {
 }
 
 .app-content {
-  padding: 20px;
+  padding: 14px 16px;
 }
 
 .page-title {
-  margin: 0 0 14px;
-  font-size: 22px;
+  margin: 0 0 8px;
+  font-size: 21px;
   font-weight: 700;
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
-  gap: 14px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .two-column {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .wide-left {
@@ -88,6 +88,31 @@ body {
 
 .ant-card {
   border-radius: 8px;
+}
+
+.app-content .ant-card-head {
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.app-content .ant-card-head-title {
+  padding: 10px 0;
+}
+
+.app-content .ant-card-body {
+  padding: 16px;
+}
+
+.app-content .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.app-content .ant-divider-horizontal {
+  margin: 14px 0;
+}
+
+.app-content .ant-tabs-nav {
+  margin-bottom: 10px;
 }
 
 .workflow-card .ant-card-body {
@@ -129,7 +154,31 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
+}
+
+.security-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.security-option-main {
+  min-width: 0;
+}
+
+.security-option-company {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.security-option-meta {
+  font-size: 12px;
 }
 
 .artifact-link {

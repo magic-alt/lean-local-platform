@@ -294,7 +294,7 @@ export function ResearchPage() {
             children: (
               <>
                 <Card title="Factor Evaluation">
-                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: "2024-01-02", endDate: "2024-12-31", forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
+                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: "2024-01-02", endDate: "2026-07-13", forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
                     <div className="field-grid six">
                       <Form.Item name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
                       <Form.Item name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>

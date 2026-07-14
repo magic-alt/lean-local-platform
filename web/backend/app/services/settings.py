@@ -15,7 +15,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "defaultStrategyTemplate": "ema_cross",
     "defaultCash": 300000,
     "defaultStart": "2024-01-01",
-    "defaultEnd": "2024-12-31",
+    "defaultEnd": "2026-07-13",
     "dockerImage": DEFAULT_DOCKER_IMAGE,
     "researchImage": DEFAULT_RESEARCH_IMAGE,
     "chartPointLimit": 1000000,

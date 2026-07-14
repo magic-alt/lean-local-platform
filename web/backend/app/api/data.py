@@ -7,7 +7,6 @@ from .common import dispatch_task
 from ..core.config import UPLOADS_DIR
 from ..core.errors import LeanWebError
 from ..db import db, rows_to_dicts, utc_now
-from ..lean_engine.data_paths import list_local_symbols
 from ..lean_engine.data_writers import (
     rows_from_csv,
     write_lean_crypto_daily_zip,
@@ -41,6 +40,7 @@ from ..services.instrument_identity import identifier_coverage, identifiers_for_
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
 from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, require_source_allowed, source_certification
+from ..services.security_search import search_securities as search_security_catalog
 from ..services.tasks import create_task
 from ..tasks.worker import fetch_data_batch_task
 
@@ -181,23 +181,8 @@ def symbols(
 
 
 @router.get("/securities/search")
-def search_securities(market: str = "usa", keyword: str = ""):
-    key = market_key(market)
-    query = keyword.strip()
-    local = list_local_symbols(key)
-    matches = [
-        {"symbol": symbol, "market": key, "name": symbol, "hasLocalData": True}
-        for symbol in local
-        if not query or query.upper() in symbol
-    ][:50]
-    if query:
-        try:
-            normalized = normalize_symbol(query, key).upper()
-            if normalized not in {item["symbol"] for item in matches}:
-                matches.insert(0, {"symbol": normalized, "market": key, "name": normalized, "hasLocalData": normalized in local})
-        except Exception:
-            pass
-    return {"items": matches, "count": len(matches)}
+def search_securities(market: str = "all", keyword: str = "", limit: int = 50):
+    return search_security_catalog(keyword=keyword, market=market, limit=limit)
 
 
 @router.get("/data-assets")
@@ -481,7 +466,7 @@ def data_coverage_ashare(
     benchmark: str = "000300",
     source: str | None = None,
     startDate: str = "2026-06-01",
-    endDate: str = "2026-06-30",
+    endDate: str = "2026-07-13",
 ):
     selected = [item.strip() for item in symbols.split(",") if item.strip()]
     return ashare_coverage(symbols=selected, benchmark=benchmark, source=source, start_date=startDate, end_date=endDate)
@@ -492,7 +477,7 @@ def data_coverage_symbol(
     symbol: str,
     source: str | None = None,
     startDate: str = "2026-06-01",
-    endDate: str = "2026-06-30",
+    endDate: str = "2026-07-13",
 ):
     return symbol_coverage(symbol, source=source, start_date=startDate, end_date=endDate)
 
@@ -502,7 +487,7 @@ def data_coverage_benchmark(
     symbol: str,
     source: str | None = None,
     startDate: str = "2026-06-01",
-    endDate: str = "2026-06-30",
+    endDate: str = "2026-07-13",
 ):
     return benchmark_coverage(symbol, source=source, start_date=startDate, end_date=endDate)
 

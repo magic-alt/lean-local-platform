@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { InsightReport, PaperSession } from "../api";
 import { DateStringPicker } from "../components/DateStringPicker";
+import { SecuritySearch } from "../components/SecuritySearch";
 import { useAsyncData } from "../hooks";
 import { AshareTechInsights } from "./ashare-tech-insights";
 
@@ -55,6 +56,8 @@ function GenericInsightsPage() {
   const reports = useAsyncData(loadInsights, emptyList);
   const paperSessions = useAsyncData<PaperSession[]>(api.paperSessions, []);
   const [form] = Form.useForm();
+  const assetClass = Form.useWatch("assetClass", form) || "equity";
+  const market = Form.useWatch("market", form) || "china";
   const [handoffForm] = Form.useForm();
   const [selected, setSelected] = useState<InsightReport | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -149,7 +152,7 @@ function GenericInsightsPage() {
             <Form.Item name="assetClass" label="Asset Class" rules={[{ required: true }]}>
               <Select options={capabilities.data.assetClasses.map((value) => ({ value, label: value }))} />
             </Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input placeholder="600519 / BTCUSDT / GC" /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={assetClass} market={market} placeholder="代码 / 公司名 / 拼音 / 别名" /></Form.Item>
             <Form.Item name="market" label="Market"><Input placeholder="china / usa" /></Form.Item>
             <Form.Item name="venue" label="Venue"><Input placeholder="china / coinbase / comex" /></Form.Item>
             <Form.Item name="asOfDate" label="As-of Date"><DateStringPicker /></Form.Item>

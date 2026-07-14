@@ -6,6 +6,7 @@ import { api } from "../api";
 import type { AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
 import { ApiError } from "../api/client";
 import { DateStringPicker } from "../components/DateStringPicker";
+import { SecuritySearch } from "../components/SecuritySearch";
 import { useAsyncData } from "../hooks";
 
 const emptyList = { items: [], count: 0, limit: 50, offset: 0 };
@@ -345,7 +346,7 @@ export function AshareTechInsights() {
       <Modal title="添加A股股票" open={addOpen} onCancel={() => setAddOpen(false)} footer={null} destroyOnHidden>
         <Form form={addForm} layout="vertical" onFinish={addStock} initialValues={{ groupKey: "core", ruleTags: [] }}>
           <Form.Item name="code" label="股票代码" rules={[{ required: true }, { pattern: /^\d{6}$/, message: "请输入6位股票代码" }]}>
-            <Input maxLength={6} placeholder="例如 603019" />
+            <SecuritySearch market="china" placeholder="代码 / 公司名 / 拼音 / 别名" />
           </Form.Item>
           <Form.Item name="groupKey" label="加入固定分组" rules={[{ required: true }]}>
             <Select options={watchlist.data.groups.map((group) => ({ value: group.key, label: group.name }))} />

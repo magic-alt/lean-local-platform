@@ -67,6 +67,7 @@ import type {
 } from "../api";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
+import { SecuritySearch } from "../components/SecuritySearch";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -149,7 +150,7 @@ export function PaperPage() {
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Select showSearch options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={assetClass} market={market} localSymbols={symbols} /></Form.Item>
             <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="executionPolicy" label="Execution"><Select options={[{ value: "next_open", label: "Next Open" }, { value: "next_close", label: "Next Close" }, { value: "next_vwap", label: "Next VWAP" }]} /></Form.Item>
             <Form.Item name="benchmarkSymbol" label="Benchmark"><Input /></Form.Item>

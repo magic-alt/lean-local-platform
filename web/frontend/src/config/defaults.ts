@@ -11,7 +11,7 @@ export const defaultSettings: AppSettings = {
   defaultStrategyTemplate: "ema_cross",
   defaultCash: 300000,
   defaultStart: "2024-01-01",
-  defaultEnd: "2024-12-31",
+  defaultEnd: "2026-07-13",
   dockerImage: "quantconnect/lean:latest",
   researchImage: "quantconnect/research:latest",
   chartPointLimit: 1000000,
@@ -32,6 +32,6 @@ export const defaultBarPreviewValues = {
   providerMode: "strict",
   adjust: "raw",
   startDate: "2024-01-01",
-  endDate: "2024-12-31",
+  endDate: "2026-07-13",
   limit: 200
 };

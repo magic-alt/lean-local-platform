@@ -44,7 +44,7 @@ class {class_name}(QCAlgorithm):
             Market.Add("hongkong", 102)
 
         start = datetime.strptime(self.get_parameter("start", "2018-01-01"), "%Y-%m-%d")
-        end = datetime.strptime(self.get_parameter("end", "2024-12-31"), "%Y-%m-%d")
+        end = datetime.strptime(self.get_parameter("end", "2026-07-13"), "%Y-%m-%d")
         cash = float(
             parameter_value(
                 self,

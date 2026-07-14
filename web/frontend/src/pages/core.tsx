@@ -1,6 +1,5 @@
 import {
   Alert,
-  AutoComplete,
   Button,
   Card,
   Checkbox,
@@ -66,6 +65,7 @@ import type {
 import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
+import { SecuritySearch } from "../components/SecuritySearch";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -231,7 +231,7 @@ function projectFormDefaults(project?: Project, templates: StrategyTemplate[] = 
   const assetClass = String(project?.config?.assetClass ?? safeSettings.defaultAssetClass ?? "equity");
   const venue = String(project?.config?.venue ?? projectMarket(project) ?? market);
   const start = String(project?.config?.start ?? safeSettings.defaultStart ?? "2024-01-01");
-  const end = String(project?.config?.end ?? safeSettings.defaultEnd ?? "2024-12-31");
+  const end = String(project?.config?.end ?? safeSettings.defaultEnd ?? "2026-07-13");
   const cash = Number(project?.config?.cash ?? safeSettings.defaultCash);
   return {
     name: project?.name ?? "",
@@ -377,8 +377,9 @@ function MarketDataDownloader({
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const [symbolsText, setSymbolsText] = useState(defaultSymbolText(defaultBarPreviewValues.assetClass, defaultBarPreviewValues.market));
+  const [symbolLookup, setSymbolLookup] = useState("");
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
-  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
+  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; marketLabel?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const previewRequestId = useRef(0);
@@ -429,7 +430,7 @@ function MarketDataDownloader({
     return symbols;
   }
 
-  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
+  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; marketLabel?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
     try {
       const [search, identifiers] = await Promise.all([
         api.searchSecurities(selectedMarket, symbol),
@@ -440,6 +441,7 @@ function MarketDataDownloader({
         symbol,
         name: matched?.name ?? symbol,
         market: matched?.market ?? selectedMarket,
+        marketLabel: matched?.marketLabel,
         hasLocalData: matched?.hasLocalData,
         identifierCount: identifiers.count,
         source: identifiers.items[0]?.source ? String(identifiers.items[0].source) : undefined
@@ -686,6 +688,19 @@ function MarketDataDownloader({
           {showOverwrite && <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>}
         </div>
         <Space.Compact style={{ width: "100%", marginBottom: 12 }}>
+          <SecuritySearch
+            assetClass={selectedAssetClass}
+            market={selectedMarket}
+            value={symbolLookup}
+            onChange={setSymbolLookup}
+            onSelectSecurity={(security) => {
+              const existing = selectedSymbols();
+              setSymbolsText(Array.from(new Set([...existing, security.symbol])).join(", "));
+              setSymbolLookup("");
+            }}
+            placeholder="搜索代码 / 公司 / 拼音"
+            style={{ width: 320 }}
+          />
           <Input
             value={symbolsText}
             onChange={(event) => setSymbolsText(event.target.value)}
@@ -700,7 +715,7 @@ function MarketDataDownloader({
           <Space wrap>
             <Tag color="blue">{securityInfo.symbol}</Tag>
             <Tag>{securityInfo.name}</Tag>
-            <Tag>{securityInfo.market}</Tag>
+            <Tag color={securityInfo.market === "china" ? "red" : securityInfo.market === "hongkong" ? "green" : "blue"}>{securityInfo.marketLabel ?? securityInfo.market}</Tag>
             <Tag color={securityInfo.hasLocalData ? "success" : "warning"}>{securityInfo.hasLocalData ? "local data" : "local data pending"}</Tag>
             {securityInfo.identifierCount !== undefined && <Tag>{securityInfo.identifierCount} identifiers</Tag>}
             {securityInfo.source && <Tag>{securityInfo.source}</Tag>}
@@ -1028,7 +1043,7 @@ export function ProjectsPage() {
                   <Input placeholder="optional provider source" />
                 )}
               </Form.Item>
-              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><AutoComplete options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} /></Form.Item>
+              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={selectedAssetClass} market={selectedMarket} localSymbols={symbols} /></Form.Item>
               <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker /></Form.Item>
               <Form.Item name="end" label="End" rules={[{ required: true, message: "End date is required" }, dateRule("End date"), ({ getFieldValue }) => ({ validator(_, value) {
                 const start = getFieldValue("start");
@@ -1093,6 +1108,8 @@ export function ProjectsPage() {
 export function DataPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const [csvForm] = Form.useForm();
+  const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
+  const csvMarket = Form.useWatch("market", csvForm) || "china";
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
@@ -1123,7 +1140,7 @@ export function DataPage() {
       <Card title="Import CSV" style={{ marginTop: 16 }}>
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>
           <div className="field-grid three">
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={csvAssetClass} market={csvMarket} /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
           </div>
@@ -1254,7 +1271,7 @@ export function BacktestsPage() {
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><AutoComplete data-testid="backtest-symbol-input" options={symbols.map((symbol) => ({ value: symbol, label: symbol }))} filterOption={(input, option) => String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())} /></Form.Item>
+            <Form.Item name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><SecuritySearch data-testid="backtest-symbol-input" assetClass={assetClass} market={market} localSymbols={symbols} /></Form.Item>
             <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker testId="backtest-start-input" /></Form.Item>
             <Form.Item
               name="end"
@@ -1313,7 +1330,7 @@ export function BacktestsPage() {
           <Form.Item name="status" label="Status"><Select data-testid="history-status-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="market" label="Market"><Select data-testid="history-market-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Market" style={{ width: 150 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
           <Form.Item name="projectId" label="Project"><Select data-testid="history-project-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
-          <Form.Item name="symbol" label="Symbol"><Input placeholder="Symbol" style={{ width: 130 }} /></Form.Item>
+          <Form.Item name="symbol" label="Symbol"><SecuritySearch market="all" placeholder="代码 / 公司" style={{ width: 180 }} /></Form.Item>
           <Button htmlType="submit">Filter</Button>
           <Button onClick={() => { historyForm.resetFields(); setFilters({}); }}>Clear</Button>
         </Form>
@@ -1524,6 +1541,7 @@ export function OptimizationPage() {
   const optimizations = useAsyncData(api.optimizations, []);
   const [form] = Form.useForm();
   const assetClass = Form.useWatch("assetClass", form) || "equity";
+  const market = Form.useWatch("market", form) || "china";
   const selectedProjectId = Form.useWatch("projectId", form);
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
@@ -1575,7 +1593,7 @@ export function OptimizationPage() {
             children: (
               <>
                 <Card title="Parameter Grid">
-                  <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2024-12-31", cash: 300000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
+                  <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2026-07-13", cash: 300000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
                     <div className="field-grid">
                       <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
                       <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
@@ -1583,7 +1601,7 @@ export function OptimizationPage() {
                       <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
                       <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
                       <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-                      <Form.Item name="symbol" label="Symbol"><Input /></Form.Item>
+                      <Form.Item name="symbol" label="Symbol"><SecuritySearch assetClass={assetClass} market={market} /></Form.Item>
                       <Form.Item name="start" label="Start"><DateStringPicker /></Form.Item>
                       <Form.Item name="end" label="End"><DateStringPicker /></Form.Item>
                       <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>

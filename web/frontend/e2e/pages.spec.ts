@@ -12,7 +12,7 @@ function mockState() {
     defaultStrategyTemplate: "ema_cross",
     defaultCash: 300000,
     defaultStart: "2024-01-01",
-    defaultEnd: "2024-12-31",
+    defaultEnd: "2026-07-13",
     chartPointLimit: 10000,
     maxConcurrentJobs: 2,
     jobTimeoutSeconds: 3600,
@@ -358,7 +358,9 @@ async function setupApiMocks(page: Page) {
 
     if (method === "GET" && pathname === "/api/securities/search") {
       const keyword = url.searchParams.get("keyword") || "000001";
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ symbol: keyword.toUpperCase(), market: url.searchParams.get("market") || "china", name: "平安银行", hasLocalData: state.localDataFetched }], count: 1 }) });
+      const market = url.searchParams.get("market") || "china";
+      const marketLabel = market === "usa" ? "美股" : market === "hongkong" ? "H股" : "A股";
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [{ symbol: keyword.toUpperCase(), market, marketLabel, name: "平安银行", hasLocalData: state.localDataFetched, matchType: "exact", matchField: "code", score: 100 }], count: 1, query: keyword, markets: [market] }) });
     }
 
     const identifierMatch = pathname.match(/^\/api\/data\/identifiers\/([^/]+)$/);

@@ -125,9 +125,25 @@ export const api = {
     request<{ symbols: string[]; count: number }>(
       `/api/symbols?market=${encodeURIComponent(market)}&assetClass=${encodeURIComponent(assetClass)}&venue=${encodeURIComponent(venue ?? "")}&resolution=${encodeURIComponent(resolution)}&dataType=${encodeURIComponent(dataType)}`
     ),
-  searchSecurities: (market: string, keyword: string) =>
-    request<{ items: Array<{ symbol: string; market: string; name: string; hasLocalData: boolean }>; count: number }>(
-      `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}`
+  searchSecurities: (market: string, keyword: string, limit = 50) =>
+    request<{
+      items: Array<{
+        symbol: string;
+        market: string;
+        marketLabel: string;
+        name: string;
+        exchange?: string;
+        status?: string;
+        hasLocalData: boolean;
+        matchType: "exact" | "prefix" | "contains" | "browse";
+        matchField: "code" | "name" | "pinyin" | "alias" | "none";
+        score: number;
+      }>;
+      count: number;
+      query: string;
+      markets: string[];
+    }>(
+      `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}&limit=${encodeURIComponent(limit)}`
     ),
   dataIdentifiers: (symbol: string) =>
     request<{ symbol: string; items: Array<Record<string, unknown>>; count: number }>(
