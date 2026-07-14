@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from contextlib import contextmanager
 
 import pytest
 
@@ -216,6 +217,33 @@ def test_watchlist_never_allows_zero_enabled_symbols(tmp_path, monkeypatch):
         service.update_watchlist_item(items[0]["code"], enabled=False)
     with pytest.raises(service.AshareTechReportError, match="最后1只"):
         service.delete_watchlist_item(items[0]["code"])
+
+
+def test_watchlist_count_queries_support_mysql_dict_rows(monkeypatch):
+    from app.services import ashare_tech_insights as service
+
+    class Result:
+        @staticmethod
+        def fetchone():
+            return {"count": 1}
+
+        @staticmethod
+        def fetchall():
+            return []
+
+    class Connection:
+        @staticmethod
+        def execute(sql, _params=None):
+            assert "ashare_tech" in sql.lower()
+            return Result()
+
+    @contextmanager
+    def mapping_db():
+        yield Connection()
+
+    monkeypatch.setattr(service, "db", mapping_db)
+    service._ensure_default_watchlist()
+    assert service.list_reports()["count"] == 1
 
 
 def test_watchlist_api_validates_and_manages_items(tmp_path, monkeypatch):

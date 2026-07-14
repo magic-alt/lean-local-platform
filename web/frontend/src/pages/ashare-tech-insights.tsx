@@ -3,7 +3,7 @@ import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
+import type { AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
 import { ApiError } from "../api/client";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { useAsyncData } from "../hooks";
@@ -30,6 +30,56 @@ function labelColor(label: string) {
 }
 
 const number = (value?: number | null) => value == null ? "-" : value.toFixed(2);
+const ratio = (value?: number | null) => value == null ? "-" : `${value.toFixed(2)}×`;
+const amountYi = (value?: number | null) => value == null ? "-" : `${(value / 100_000_000).toFixed(2)}亿`;
+
+function changeValue(value?: number | null) {
+  if (value == null) return <span>-</span>;
+  return <span style={{ color: value > 0 ? "#cf1322" : value < 0 ? "#389e0d" : undefined, fontWeight: 600 }}>
+    {value > 0 ? "+" : ""}{value.toFixed(2)}%
+  </span>;
+}
+
+function energyState(item: AshareTechMarketEnvironmentItem) {
+  const level = Math.max(item.volumeRatio20 || 0, item.amountRatio20 || 0);
+  if (level >= 2) return <Tag color="red">强放量</Tag>;
+  if (level >= 1.5) return <Tag color="orange">明显放量</Tag>;
+  if (level <= 0.7 && level > 0) return <Tag color="blue">明显缩量</Tag>;
+  return <Tag>量能平稳</Tag>;
+}
+
+const marketColumns = [
+  { title: "代码", dataIndex: "code", width: 110 },
+  { title: "名称", dataIndex: "name", width: 130 },
+  { title: "日期", dataIndex: "date", width: 110 },
+  { title: "收盘", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => number(item.close), width: 100 },
+  { title: "涨跌幅", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => changeValue(item.changePct), width: 100 },
+  { title: "量比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.volumeRatio20), width: 90 },
+  { title: "额比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.amountRatio20), width: 90 },
+  { title: "量能判断", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => energyState(item), width: 110 },
+  { title: "来源", dataIndex: "source", width: 180 }
+];
+
+const sectorColumns = [
+  { title: "板块", dataIndex: "name", width: 150 },
+  { title: "匹配主题", dataIndex: "keyword", width: 100 },
+  { title: "代码", dataIndex: "code", width: 120 },
+  { title: "涨跌幅", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => changeValue(item.changePct), width: 100 },
+  { title: "量比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.volumeRatio20), width: 90 },
+  { title: "额比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.amountRatio20), width: 90 },
+  { title: "换手率", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.turnoverRate == null ? "-" : `${item.turnoverRate.toFixed(2)}%`, width: 90 },
+  { title: "连续回调", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => `${item.pullbackDays || 0}日`, width: 100 },
+  { title: "量能判断", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => energyState(item), width: 110 },
+  { title: "来源", dataIndex: "source", width: 180 }
+];
+
+const groupColumns = [
+  { title: "观察池分组", dataIndex: "group", width: 240 },
+  { title: "等权平均涨跌", render: (_: unknown, item: AshareTechGroupSummary) => changeValue(item.averageChangePct), width: 130 },
+  { title: "合计成交额", render: (_: unknown, item: AshareTechGroupSummary) => amountYi(item.totalAmount), width: 130 },
+  { title: "上涨/下跌", render: (_: unknown, item: AshareTechGroupSummary) => <Space><Tag color="red">涨 {item.advancers}</Tag><Tag color="green">跌 {item.decliners}</Tag></Space>, width: 150 },
+  { title: "口径", dataIndex: "source", width: 260 }
+];
 
 const stockColumns = [
   { title: "代码", dataIndex: "code", fixed: "left" as const, width: 86 },
@@ -164,6 +214,12 @@ export function AshareTechInsights() {
   }
 
   const report = selected?.report;
+  const marketEnvironment = report?.marketEnvironment || [];
+  const indexEnvironment = marketEnvironment.filter((item) => item.category !== "sector");
+  const sectorEnvironment = marketEnvironment.filter((item) => item.category === "sector");
+  const expectedSectorKeywords = ["半导体", "存储", "CPO", "PCB", "AI服务器"];
+  const coveredSectorKeywords = new Set(sectorEnvironment.map((item) => item.keyword).filter(Boolean));
+  const missingSectorKeywords = expectedSectorKeywords.filter((keyword) => !coveredSectorKeywords.has(keyword));
   return (
     <>
       <Alert
@@ -255,7 +311,30 @@ export function AshareTechInsights() {
             <Table rowKey="code" size="small" dataSource={report.fullPool?.filter((item) => item.group === group)} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} />
           </Card>)}
         </>}
-        {report?.groupSummary && <><Divider>4. 板块趋势总结</Divider><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify({ market: report.marketEnvironment, groups: report.groupSummary }, null, 2)}</pre>
+        {report?.groupSummary && <><Divider>4. 板块趋势总结</Divider>
+          <Typography.Title level={5}>大盘指数环境</Typography.Title>
+          <Table<AshareTechMarketEnvironmentItem>
+            rowKey="code" size="small" dataSource={indexEnvironment} columns={marketColumns}
+            scroll={{ x: 1000 }} pagination={false}
+          />
+          <Typography.Title level={5} style={{ marginTop: 20 }}>科技主题板块</Typography.Title>
+          {missingSectorKeywords.length > 0 && <Alert
+            type="warning" showIcon style={{ marginBottom: 12 }}
+            message={`板块数据缺失：${missingSectorKeywords.join("、")}`}
+            description="TuShare DC/THS及东方财富回退源均未匹配到可核验板块，本期不补造数据。"
+          />}
+          <Table<AshareTechMarketEnvironmentItem>
+            rowKey={(item) => `${item.source}:${item.code}`} size="small" dataSource={sectorEnvironment}
+            columns={sectorColumns} scroll={{ x: 1150 }} pagination={false}
+          />
+          <Typography.Title level={5} style={{ marginTop: 20 }}>观察池分组表现</Typography.Title>
+          <Table<AshareTechGroupSummary>
+            rowKey="group" size="small" dataSource={report.groupSummary}
+            columns={groupColumns} scroll={{ x: 920 }} pagination={false}
+          />
+          <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>
+            分组涨跌采用观察池内个股等权平均，成交额为组内个股合计，仅用于内部环境比较，不替代正式行业指数。
+          </Typography.Paragraph>
           {(report.policyEvidence?.length || 0) > 0 && <><Typography.Title level={5}>最近7日官方政策证据</Typography.Title><ul>{report.policyEvidence?.map((item) => <li key={item.url}>{item.date} {item.source}：<a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></li>)}</ul></>}
         </>}
         {report?.doNotChase && <><Divider>5. 今日不追高/只观察</Divider><Table rowKey="code" size="small" dataSource={report.doNotChase} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} /></>}

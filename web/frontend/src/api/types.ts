@@ -620,8 +620,8 @@ export interface AshareTechReportPayload {
   };
   focus?: AshareTechStockRow[];
   fullPool?: AshareTechStockRow[];
-  groupSummary?: Array<Record<string, unknown>>;
-  marketEnvironment?: Array<Record<string, unknown>>;
+  groupSummary?: AshareTechGroupSummary[];
+  marketEnvironment?: AshareTechMarketEnvironmentItem[];
   policyEvidence?: Array<{ date: string; title: string; url: string; source: string }>;
   doNotChase?: AshareTechStockRow[];
   nextTradingDayWatch?: Array<{ code?: string; name?: string; condition: string; invalidation?: number | null }>;
@@ -630,6 +630,32 @@ export interface AshareTechReportPayload {
   narrativeStatus?: string;
   narrativeWarning?: string;
   disclaimer: string;
+}
+
+export interface AshareTechMarketEnvironmentItem {
+  code: string;
+  name: string;
+  category?: "sector";
+  keyword?: string;
+  date?: string;
+  close?: number | null;
+  changePct?: number | null;
+  volumeRatio20?: number | null;
+  amountRatio20?: number | null;
+  turnoverRate?: number | null;
+  pullbackDays?: number;
+  source: string;
+  error?: string;
+}
+
+export interface AshareTechGroupSummary {
+  group: string;
+  source: string;
+  averageChangePct?: number | null;
+  totalAmount?: number | null;
+  advancers: number;
+  decliners: number;
+  interpretation: string;
 }
 
 export interface AshareTechReport {

@@ -113,7 +113,8 @@ def _insert_watchlist_item(connection: Any, item: dict[str, Any], now: str) -> N
 
 def _ensure_default_watchlist() -> None:
     with db() as connection:
-        count = int(connection.execute("select count(*) from ashare_tech_watchlist_items").fetchone()[0])
+        row = connection.execute("select count(*) as count from ashare_tech_watchlist_items").fetchone()
+        count = int(row["count"] if row else 0)
         if count:
             return
         now = utc_now()
@@ -857,7 +858,8 @@ def list_reports(limit: int = 50, offset: int = 0) -> dict[str, Any]:
     limit, offset = min(max(limit, 1), 200), max(offset, 0)
     with db() as connection:
         rows = connection.execute("select * from ashare_tech_reports order by requested_date desc limit ? offset ?", (limit, offset)).fetchall()
-        count = connection.execute("select count(*) from ashare_tech_reports").fetchone()[0]
+        row = connection.execute("select count(*) as count from ashare_tech_reports").fetchone()
+        count = int(row["count"] if row else 0)
     return {"items": rows_to_dicts(rows), "count": count, "limit": limit, "offset": offset}
 
 

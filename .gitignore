@@ -12,6 +12,7 @@ web/backend/.env.*
 web/runtime/
 web/backend/.venv/
 web/backend/dump.rdb
+web/backend/celerybeat-schedule*
 web/backend/app/__pycache__/
 web/frontend/node_modules/
 web/frontend/dist/
