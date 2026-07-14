@@ -446,6 +446,7 @@ export interface PaperDailyReport {
 
 export interface InsightCapabilities {
   configured: boolean;
+  provider?: string | null;
   model?: string | null;
   assetClasses: Array<"equity" | "crypto" | "crypto_future" | "future">;
   resolutions: string[];

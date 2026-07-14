@@ -45,6 +45,7 @@ function JsonBlock({ value }: { value: unknown }) {
 function GenericInsightsPage() {
   const capabilities = useAsyncData(api.insightCapabilities, {
     configured: false,
+    provider: null,
     model: null,
     assetClasses: ["equity", "crypto", "crypto_future", "future"],
     resolutions: ["daily"],
@@ -129,10 +130,12 @@ function GenericInsightsPage() {
       <Alert
         type={capabilities.data.configured ? "info" : "warning"}
         showIcon
-        message={capabilities.data.configured ? `Structured analysis enabled: ${capabilities.data.model}` : "Insights LLM is not configured"}
+        message={capabilities.data.configured
+          ? `Structured analysis enabled: ${capabilities.data.provider} / ${capabilities.data.model}`
+          : "Insights LLM is not configured"}
         description={capabilities.data.configured
           ? "Reports use LEAN market data only. Signals remain advisory until you explicitly hand them to Paper."
-          : "Set LEAN_INSIGHTS_LLM_BASE_URL, LEAN_INSIGHTS_LLM_API_KEY, and LEAN_INSIGHTS_LLM_MODEL for both API and worker."}
+          : "Set a DeepSeek, Zhipu, Kimi, OpenAI, or Anthropic API key for both API and worker."}
         style={{ marginBottom: 16 }}
       />
       <Card title="Create Structured Insight">

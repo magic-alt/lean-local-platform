@@ -100,7 +100,7 @@ Task cancellation is centralized in `services/tasks.py`.
 
 ## Insights
 
-Insights create structured, model-assisted research reports from LEAN-owned daily market data. They are opt-in and unavailable until the three `LEAN_INSIGHTS_LLM_*` connection values are configured for both API and worker.
+Insights create structured, model-assisted research reports from LEAN-owned daily market data. They support DeepSeek, Zhipu, Kimi, OpenAI, and Anthropic, and remain opt-in until a supported API key is configured for both API and worker.
 
 ```text
 GET    /api/insights/capabilities
@@ -117,13 +117,21 @@ The model returns a candidate signal, but server-side guardrails own the final s
 Environment variables:
 
 ```text
-LEAN_INSIGHTS_LLM_BASE_URL=https://provider.example/v1
-LEAN_INSIGHTS_LLM_API_KEY=...
-LEAN_INSIGHTS_LLM_MODEL=provider-model
+DEEPSEEK_API_KEY=...
+ZHIPU_API_KEY=...
+KIMI_API_KEY=...
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+
+# Optional provider selection; otherwise the first configured key in the listed order is used.
+LEAN_INSIGHTS_LLM_PROVIDER=deepseek
+# Optional provider-default overrides.
+LEAN_INSIGHTS_LLM_BASE_URL=
+LEAN_INSIGHTS_LLM_MODEL=
 LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS=60
 ```
 
-The API key is never returned by capabilities, stored in settings, or persisted with the report.
+Configure only the key for the provider you want to use. Provider defaults are `deepseek-v4-flash`, `glm-5.2`, `kimi-k2.6`, `gpt-5-mini`, and `claude-sonnet-4-6`, respectively. `ZAI_API_KEY` and `MOONSHOT_API_KEY` are accepted as aliases for `ZHIPU_API_KEY` and `KIMI_API_KEY`. API keys are never returned by capabilities, stored in settings, or persisted with the report.
 
 ## Reports
 

@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -82,10 +83,70 @@ GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 QUEUED_TASK_TIMEOUT_MINUTES = int(os.environ.get("QUEUED_TASK_TIMEOUT_MINUTES", "15"))
 
-# Optional, provider-neutral analysis service. Secrets remain environment-only.
-INSIGHTS_LLM_BASE_URL = os.environ.get("LEAN_INSIGHTS_LLM_BASE_URL", "").strip()
-INSIGHTS_LLM_API_KEY = os.environ.get("LEAN_INSIGHTS_LLM_API_KEY", "").strip()
-INSIGHTS_LLM_MODEL = os.environ.get("LEAN_INSIGHTS_LLM_MODEL", "").strip()
+# Optional multi-provider analysis service. Secrets remain environment-only.
+_INSIGHTS_LLM_PROVIDERS = {
+    "deepseek": {
+        "api_key_names": ("DEEPSEEK_API_KEY",),
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
+    },
+    "zhipu": {
+        "api_key_names": ("ZHIPU_API_KEY", "ZAI_API_KEY"),
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.2",
+    },
+    "kimi": {
+        "api_key_names": ("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "kimi-k2.6",
+    },
+    "openai": {
+        "api_key_names": ("OPENAI_API_KEY",),
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5-mini",
+    },
+    "anthropic": {
+        "api_key_names": ("ANTHROPIC_API_KEY",),
+        "base_url": "https://api.anthropic.com/v1",
+        "model": "claude-sonnet-4-6",
+    },
+}
+
+
+def _resolve_insights_llm(environ: Mapping[str, str]) -> dict[str, str]:
+    requested_provider = environ.get("LEAN_INSIGHTS_LLM_PROVIDER", "").strip().lower()
+    provider = requested_provider or next(
+        (
+            name
+            for name, settings in _INSIGHTS_LLM_PROVIDERS.items()
+            if any(environ.get(key_name, "").strip() for key_name in settings["api_key_names"])
+        ),
+        "deepseek",
+    )
+    settings = _INSIGHTS_LLM_PROVIDERS.get(provider)
+    if settings is None:
+        return {"provider": provider, "api_key": "", "base_url": "", "model": ""}
+    api_key = next(
+        (
+            environ.get(key_name, "").strip()
+            for key_name in settings["api_key_names"]
+            if environ.get(key_name, "").strip()
+        ),
+        "",
+    )
+    return {
+        "provider": provider,
+        "api_key": api_key,
+        "base_url": environ.get("LEAN_INSIGHTS_LLM_BASE_URL", "").strip() or settings["base_url"],
+        "model": environ.get("LEAN_INSIGHTS_LLM_MODEL", "").strip() or settings["model"],
+    }
+
+
+_INSIGHTS_LLM = _resolve_insights_llm(os.environ)
+INSIGHTS_LLM_PROVIDER = _INSIGHTS_LLM["provider"]
+INSIGHTS_LLM_BASE_URL = _INSIGHTS_LLM["base_url"]
+INSIGHTS_LLM_API_KEY = _INSIGHTS_LLM["api_key"]
+INSIGHTS_LLM_MODEL = _INSIGHTS_LLM["model"]
 INSIGHTS_LLM_TIMEOUT_SECONDS = int(os.environ.get("LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS", "60"))
 
 # A-share technology report. The observation pool and rule thresholds are code-versioned;

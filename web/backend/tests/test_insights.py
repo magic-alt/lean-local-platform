@@ -186,6 +186,24 @@ def test_invalid_structured_llm_output_is_retried_then_rejected(monkeypatch):
     assert len(calls) == 2
 
 
+def test_kimi_request_uses_structured_non_thinking_mode(monkeypatch):
+    insights = configure_llm(monkeypatch)
+    payloads = []
+    monkeypatch.setattr(insights, "INSIGHTS_LLM_PROVIDER", "kimi")
+
+    def capture_payload(payload):
+        payloads.append(payload)
+        return sample_llm_response()
+
+    monkeypatch.setattr(insights, "_post_json", capture_payload)
+
+    insights.request_analysis({"instrument": {}, "price": {}, "technical": {}, "dataQuality": {}})
+
+    assert payloads[0]["thinking"] == {"type": "disabled"}
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+    assert "temperature" not in payloads[0]
+
+
 def test_insights_api_is_opt_in_and_queues_configured_requests(tmp_path, monkeypatch):
     configure_platform(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient

@@ -15,6 +15,7 @@ from ..core.config import (
     INSIGHTS_LLM_API_KEY,
     INSIGHTS_LLM_BASE_URL,
     INSIGHTS_LLM_MODEL,
+    INSIGHTS_LLM_PROVIDER,
     INSIGHTS_LLM_TIMEOUT_SECONDS,
 )
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
@@ -41,6 +42,7 @@ def capabilities() -> dict[str, Any]:
     configured = bool(INSIGHTS_LLM_BASE_URL and INSIGHTS_LLM_API_KEY and INSIGHTS_LLM_MODEL)
     return {
         "configured": configured,
+        "provider": INSIGHTS_LLM_PROVIDER or None,
         "model": INSIGHTS_LLM_MODEL or None,
         "assetClasses": sorted(ASSET_CLASSES),
         "resolutions": ["daily"],
@@ -286,7 +288,9 @@ def _validate_analysis_response(value: dict[str, Any]) -> dict[str, Any]:
 
 def request_analysis(context: dict[str, Any]) -> dict[str, Any]:
     if not capabilities()["configured"]:
-        raise InsightConfigurationError("Configure LEAN_INSIGHTS_LLM_BASE_URL, LEAN_INSIGHTS_LLM_API_KEY, and LEAN_INSIGHTS_LLM_MODEL.")
+        raise InsightConfigurationError(
+            "Configure DEEPSEEK_API_KEY, ZHIPU_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY to enable Insights."
+        )
     system = (
         "You are a quantitative research assistant. Use only facts in CONTEXT. "
         "No news or sentiment claims are allowed. Return JSON only with keys summary, technical, risks, catalysts, evidence, signal. "
@@ -295,13 +299,14 @@ def request_analysis(context: dict[str, Any]) -> dict[str, Any]:
     )
     payload = {
         "model": INSIGHTS_LLM_MODEL,
-        "temperature": 0.1,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": "CONTEXT:\n" + json.dumps(context, ensure_ascii=False)},
         ],
     }
+    if INSIGHTS_LLM_PROVIDER == "kimi":
+        payload["thinking"] = {"type": "disabled"}
     last_error: Exception | None = None
     for attempt in range(2):
         try:

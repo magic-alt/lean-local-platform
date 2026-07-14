@@ -18,6 +18,7 @@ from ..core.config import (
     INSIGHTS_LLM_API_KEY,
     INSIGHTS_LLM_BASE_URL,
     INSIGHTS_LLM_MODEL,
+    INSIGHTS_LLM_PROVIDER,
     INSIGHTS_LLM_TIMEOUT_SECONDS,
 )
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
@@ -243,6 +244,7 @@ def capabilities() -> dict[str, Any]:
         "primarySource": "TuShare Pro",
         "crossCheckSource": "东方财富",
         "promptVersion": PROMPT_VERSION,
+        "provider": INSIGHTS_LLM_PROVIDER or None,
         "model": INSIGHTS_LLM_MODEL or None,
         "llmOptional": True,
         "paperHandoff": False,
@@ -765,7 +767,7 @@ def _maybe_add_llm_narrative(report: dict[str, Any]) -> dict[str, Any] | None:
     if not endpoint.endswith("/chat/completions"):
         endpoint += "/chat/completions"
     payload = {
-        "model": INSIGHTS_LLM_MODEL, "temperature": 0.1, "response_format": {"type": "json_object"},
+        "model": INSIGHTS_LLM_MODEL, "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": (
                 "你只负责润色A股科技股收盘复盘，不得修改或新增数字、结论等级、支撑位、观察区或失效位。"
@@ -775,6 +777,8 @@ def _maybe_add_llm_narrative(report: dict[str, Any]) -> dict[str, Any] | None:
             {"role": "user", "content": json.dumps({"FACTS": facts, "ruleConclusions": report.get("conclusionFirst")}, ensure_ascii=False)},
         ],
     }
+    if INSIGHTS_LLM_PROVIDER == "kimi":
+        payload["thinking"] = {"type": "disabled"}
     try:
         request = Request(
             endpoint, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), method="POST",

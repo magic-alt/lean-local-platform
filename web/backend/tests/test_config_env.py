@@ -28,6 +28,52 @@ ALPHAVANTAGE_API_KEY=from-alpha
     assert os.environ["TUSHARE_TOKEN"] == "from-env"
 
 
+@pytest.mark.parametrize(
+    ("environment", "provider", "base_url", "model"),
+    [
+        ({"DEEPSEEK_API_KEY": "deepseek-key"}, "deepseek", "https://api.deepseek.com", "deepseek-v4-flash"),
+        ({"ZHIPU_API_KEY": "zhipu-key"}, "zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-5.2"),
+        ({"ZAI_API_KEY": "zai-key"}, "zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-5.2"),
+        ({"KIMI_API_KEY": "kimi-key"}, "kimi", "https://api.moonshot.cn/v1", "kimi-k2.6"),
+        ({"MOONSHOT_API_KEY": "moonshot-key"}, "kimi", "https://api.moonshot.cn/v1", "kimi-k2.6"),
+        ({"OPENAI_API_KEY": "openai-key"}, "openai", "https://api.openai.com/v1", "gpt-5-mini"),
+        ({"ANTHROPIC_API_KEY": "anthropic-key"}, "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-6"),
+    ],
+)
+def test_insights_llm_provider_is_inferred_from_api_key(environment, provider, base_url, model):
+    from app.core.config import _resolve_insights_llm
+
+    resolved = _resolve_insights_llm(environment)
+
+    assert resolved == {
+        "provider": provider,
+        "api_key": next(iter(environment.values())),
+        "base_url": base_url,
+        "model": model,
+    }
+
+
+def test_insights_llm_explicit_provider_and_overrides_win():
+    from app.core.config import _resolve_insights_llm
+
+    resolved = _resolve_insights_llm(
+        {
+            "DEEPSEEK_API_KEY": "deepseek-key",
+            "OPENAI_API_KEY": "openai-key",
+            "LEAN_INSIGHTS_LLM_PROVIDER": "openai",
+            "LEAN_INSIGHTS_LLM_BASE_URL": "https://gateway.example/v1",
+            "LEAN_INSIGHTS_LLM_MODEL": "custom-model",
+        }
+    )
+
+    assert resolved == {
+        "provider": "openai",
+        "api_key": "openai-key",
+        "base_url": "https://gateway.example/v1",
+        "model": "custom-model",
+    }
+
+
 def test_database_descriptor_defaults_to_mysql_without_sqlite_path(monkeypatch):
     import app.db as db_module
 
