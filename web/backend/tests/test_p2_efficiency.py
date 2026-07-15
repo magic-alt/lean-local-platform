@@ -252,15 +252,19 @@ def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch)
             result_json.write_text(
                 json.dumps(
                     {
-                        "statistics": {"Sharpe Ratio": str(parameters["fast"])},
+                        "statistics": {
+                            "Sharpe Ratio": str(parameters["fast"]),
+                            "End Equity": "101000",
+                            "Drawdown": "1%",
+                        },
                         "charts": {
                             "Strategy Equity": {
                                 "series": {
-                                    "Equity": {"values": [[0, 100000], [86400, 101000]]},
-                                    "Return": {"values": [[0, 0], [86400, 0.01]]},
+                                    "Equity": {"values": [[1577836800, 100000], [1609372800, 101000]]},
+                                    "Return": {"values": [[1577836800, 0], [1609372800, 0.01]]},
                                 }
                             },
-                            "Drawdown": {"series": {"Equity Drawdown": {"values": [[0, 0], [86400, -0.01]]}}},
+                            "Drawdown": {"series": {"Equity Drawdown": {"values": [[1577836800, 0], [1609372800, -0.01]]}}},
                         },
                     }
                 ),
@@ -278,7 +282,11 @@ def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch)
                 "summary_json_path": None,
                 "report_html_path": str(report_html),
                 "artifact_manifest_path": str(results_dir / "artifact-manifest.json"),
-                "statistics": {"Sharpe Ratio": str(parameters["fast"])},
+                "statistics": {
+                    "Sharpe Ratio": str(parameters["fast"]),
+                    "End Equity": "101000",
+                    "Drawdown": "1%",
+                },
                 "error": None,
             }
 

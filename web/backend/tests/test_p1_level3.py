@@ -25,6 +25,8 @@ def test_china_strategy_template_hard_fails_without_real_benchmark():
     assert "constant benchmark fallback is disabled" in code
     assert "backtest is blocked" in code
     assert "set_benchmark(lambda time: 1)" not in code
+    assert "AccountType.CASH" in code
+    assert "if not data.contains_key(self.symbol)" in code
 
 
 def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
@@ -35,6 +37,8 @@ def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
     assert "constant benchmark fallback is disabled" in code
     assert "backtest is blocked" in code
     assert "set_benchmark(lambda time: 1)" not in code
+    assert "AccountType.CASH" in code
+    assert "if not data.contains_key(self.symbol)" in code
 
 
 def test_strategy_templates_include_p1_standard_set():
@@ -60,6 +64,8 @@ def test_strategy_templates_include_p1_standard_set():
     assert "self.rotation_symbols" in render_python_template("RotationAlgorithm", "etf_rotation")
     assert "inverse_volatility" in render_python_template("RiskParityAlgorithm", "risk_parity")
     assert "self.gap_weight" in render_python_template("TurningPointAlgorithm", "turning_point")
+    for key in ("etf_rotation", "risk_parity", "turning_point"):
+        assert "ashare_execution.target_percent" in render_python_template("MultiAssetAlgorithm", key)
 
 
 def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkeypatch):

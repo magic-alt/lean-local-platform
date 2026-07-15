@@ -39,6 +39,9 @@ class DockerDemoAlgorithm(QCAlgorithm):
         self.set_end_date(end.year, end.month, end.day)
         self.set_account_currency("CNY" if self.market == "china" else "USD")
         self.set_cash(cash)
+        if self.market == "china":
+            self.set_brokerage_model(BrokerageName.DEFAULT, AccountType.CASH)
+            self.debug("AShare execution account type: cash; short selling disabled.")
 
         equity = self.add_equity(
             self.ticker,
@@ -65,6 +68,8 @@ class DockerDemoAlgorithm(QCAlgorithm):
         else:
             self.set_benchmark(self.symbol)
         self.ashare_execution = None
+        if self.market == "china" and self.ashare_rules and AShareExecutionHelper is None:
+            raise ValueError("A-share execution helper is required; unguarded execution is blocked.")
         if self.ashare_rules and AShareExecutionHelper is not None:
             apply_ashare_models(self, equity)
             self.ashare_execution = AShareExecutionHelper(self, self.get_parameter("ashareStatusFile", "/Lean/Run/ashare_trade_status.json"))
@@ -78,7 +83,7 @@ class DockerDemoAlgorithm(QCAlgorithm):
         )
 
     def on_data(self, data):
-        if self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
 
         invested = self.portfolio[self.symbol].invested

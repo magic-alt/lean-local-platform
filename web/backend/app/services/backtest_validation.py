@@ -4,7 +4,7 @@ from typing import Any
 
 from ..db import utc_now
 from .ashare_multisource import quality_gate_range
-from .ashare_repository import data_coverage, latest_batch_for_symbol
+from .ashare_repository import data_coverage, end_coverage_status, latest_batch_for_symbol
 
 
 P1_RULE_VERSION = 1
@@ -58,6 +58,9 @@ def _ashare_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
         "lotSize": parameters.get("lotSize"),
         "executionPolicy": parameters.get("executionPolicy"),
         "cashBuffer": parameters.get("cashBuffer"),
+        "nextOpenGapBufferBps": parameters.get("nextOpenGapBufferBps"),
+        "cashAccount": True,
+        "shortSellingAllowed": False,
         "minCash": parameters.get("minCash"),
         "allowStBuy": parameters.get("allowStBuy"),
         "constraintVersion": parameters.get("constraintVersion"),
@@ -135,10 +138,13 @@ def build_backtest_validation(
     bar_count = max(_int_value(coverage.get("bar_count")), _int_value(coverage.get("market_bar_count")))
     status_count = _int_value(coverage.get("status_count"))
     coverage_passed = bar_count > 0 and status_count >= bar_count
+    end_coverage = end_coverage_status("china", end, coverage.get("market_last_date") or coverage.get("last_date"))
+    benchmark_end_coverage = end_coverage_status("china", end, benchmark.get("lastDate"))
     batch_passed = batch.get("status") == "success" and bool(qa_report.get("passed"))
     gates = [
         _gate("ashare_data_coverage", coverage_passed, details=coverage),
         _gate("ashare_trade_status", status_count >= bar_count > 0, details=coverage),
+        _gate("ashare_end_date_coverage", bool(end_coverage.get("passed")), details=end_coverage),
         _gate(
             "ashare_import_batch_qa",
             batch_passed,
@@ -150,6 +156,7 @@ def build_backtest_validation(
             },
         ),
         _gate("benchmark_data", bool(benchmark.get("passed")), details=benchmark),
+        _gate("benchmark_end_date_coverage", bool(benchmark_end_coverage.get("passed")), details=benchmark_end_coverage),
         *[
             _gate(
                 "ashare_multisource_quality",
@@ -166,6 +173,7 @@ def build_backtest_validation(
             "marketRules": _ashare_market_rules(parameters),
             "data": {
                 "coverage": coverage,
+                "endCoverage": end_coverage,
                 "latestImportBatch": {
                     "id": batch.get("id"),
                     "status": batch.get("status"),
@@ -175,6 +183,7 @@ def build_backtest_validation(
                     "qaReport": qa_report,
                 },
                 "benchmark": benchmark,
+                "benchmarkEndCoverage": benchmark_end_coverage,
                 "qualityGates": quality_gates,
                 "coverageSummary": coverage_summary,
             },

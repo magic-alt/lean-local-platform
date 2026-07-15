@@ -5,7 +5,7 @@
         self.set_warm_up(period, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.rsi.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.rsi.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.rsi.current.value < self.buy_below and not invested:

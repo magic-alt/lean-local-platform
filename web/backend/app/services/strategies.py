@@ -58,6 +58,9 @@ class {class_name}(QCAlgorithm):
         self.set_end_date(end.year, end.month, end.day)
         self.set_account_currency(account_currency)
         self.set_cash(cash)
+        if market == "china" and self.asset_class == "equity":
+            self.set_brokerage_model(BrokerageName.DEFAULT, AccountType.CASH)
+            self.debug("AShare execution account type: cash; short selling disabled.")
 
         if self.asset_class == "crypto":
             security = self.add_crypto(ticker, self.resolution, venue)
@@ -79,9 +82,8 @@ class {class_name}(QCAlgorithm):
         if market == "china":
             try:
                 from ashare_execution import AShareExecutionHelper, apply_ashare_models
-            except Exception:
-                AShareExecutionHelper = None
-                apply_ashare_models = _fallback_ashare_models
+            except Exception as exc:
+                raise ValueError("A-share execution helper is required; unguarded execution is blocked.") from exc
 
             benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
             if not benchmark_ticker:
@@ -123,7 +125,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -149,7 +151,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -176,7 +178,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(slow + signal, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.macd.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.macd.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.macd.current.value > self.macd.signal.current.value and not invested:
@@ -203,7 +205,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(period, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.rsi.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.rsi.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.rsi.current.value < self.buy_below and not invested:
@@ -330,8 +332,10 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             return
         scores.sort(reverse=True, key=lambda item: item[0])
         winner = scores[0][1]
-        for rotation_symbol in self.rotation_symbols:
-            self.set_holdings(rotation_symbol, 1.0 if rotation_symbol == winner else 0.0)
+        ordered_symbols = [symbol for symbol in self.rotation_symbols if symbol != winner] + [winner]
+        for rotation_symbol in ordered_symbols:
+            target = 1.0 if rotation_symbol == winner else 0.0
+            self.ashare_execution.target_percent(rotation_symbol, target) if self.ashare_execution else self.set_holdings(rotation_symbol, target)
         self.last_rebalance = today
         self.plot("Rotation", "BestMomentum", scores[0][0])
 ''',
@@ -350,7 +354,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(lookback, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.roc.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.roc.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.roc.current.value > self.threshold and not invested:
@@ -378,7 +382,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -411,7 +415,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "body": '''        self.set_warm_up(1, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up:
+        if not data.contains_key(self.symbol) or self.is_warming_up:
             return
         # Write custom strategy logic here.
 ''',

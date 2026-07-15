@@ -213,7 +213,8 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["minCash"] == 1000.0
     assert job["parameters"]["cashBuffer"] == 1000.0
     assert job["parameters"]["blacklist"] == ["000001", "600000"]
-    assert job["parameters"]["constraintVersion"] == 1
+    assert job["parameters"]["constraintVersion"] == 2
+    assert job["parameters"]["nextOpenGapBufferBps"] == 2000.0
     assert job["fingerprint"]["parameters_sha256"]
     assert "git_commit" in job["fingerprint"]
     assert job["fingerprint"]["benchmark_rows"] == 3
@@ -222,6 +223,9 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["validation"]["passed"] is True
     assert job["validation"]["marketRules"]["tPlusOne"] is True
     assert job["validation"]["marketRules"]["limitUpBuyBlocked"] is True
+    assert job["validation"]["marketRules"]["cashAccount"] is True
+    assert job["validation"]["marketRules"]["shortSellingAllowed"] is False
+    assert job["validation"]["marketRules"]["nextOpenGapBufferBps"] == 2000.0
     assert job["validation"]["marketRules"]["feeModel"]["commissionRate"] == 0.0001
     assert job["validation"]["marketRules"]["feeModel"]["minCommission"] == 0.0
     assert job["validation"]["marketRules"]["feeModel"]["stampTaxSell"] == 0.0005
@@ -232,8 +236,10 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert {gate["name"] for gate in job["validation"]["gates"]} >= {
         "ashare_data_coverage",
         "ashare_trade_status",
+        "ashare_end_date_coverage",
         "ashare_import_batch_qa",
         "benchmark_data",
+        "benchmark_end_date_coverage",
         "ashare_multisource_quality",
     }
     assert job["experiment"]["parameters"]["sha256"] == job["fingerprint"]["parameters_sha256"]
@@ -920,11 +926,19 @@ def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tm
         cash = 50000.0
         total_portfolio_value = 50000.0
 
+    class Transactions:
+        def __init__(self):
+            self.open_orders = []
+
+        def get_open_orders(self, symbol):
+            return list(self.open_orders)
+
     class FakeAlgorithm:
         def __init__(self):
             self.time = datetime(2024, 1, 2)
             self.securities = {"600001": Security()}
             self.portfolio = Portfolio({"600001": Holding()})
+            self.transactions = Transactions()
             self.orders = []
             self.messages = []
 
@@ -948,10 +962,13 @@ def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tm
     algo.time = datetime(2024, 1, 3)
     helper.target_percent("600001", 1)
     assert algo.orders
-    assert algo.orders[-1][1] % 100 == 0
-    assert algo.orders[-1][1] > 0
+    assert algo.orders[-1][1] == 4100
 
     algo.time = datetime(2024, 1, 4)
+    algo.transactions.open_orders = [types.SimpleNamespace(id=1)]
+    assert helper.target_percent("600001", 0) is None
+    assert len(algo.orders) == 1
+    algo.transactions.open_orders = []
     fill_event = types.SimpleNamespace(status="filled", fill_quantity=algo.orders[-1][1], symbol="600001")
     helper.on_order_event(fill_event)
     assert helper.exit("600001") is None
@@ -960,3 +977,39 @@ def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tm
     algo.time = datetime(2024, 1, 6)
     algo.portfolio["600001"].quantity = 0
     assert helper.target_percent("600001", 1) is None
+
+    algo.time = datetime(2024, 1, 7)
+    algo.portfolio["600001"].quantity = 150
+    helper.exit("600001")
+    assert algo.orders[-1] == ("600001", -100)
+    assert algo.portfolio["600001"].quantity == 50
+
+
+def test_ashare_end_date_coverage_blocks_or_marks_truncated_runs(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    import app.services.backtest_service as backtest_service
+    import app.services.tasks as task_service
+    from app.lean_engine.errors import LeanWebError
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+    request = {
+        "symbol": "600519",
+        "assetClass": "equity",
+        "market": "china",
+        "start": "2024-01-02",
+        "end": "2024-01-10",
+        "cash": 100000,
+    }
+
+    with pytest.raises(LeanWebError, match="truncated"):
+        backtest_service.create_backtest_job(request)
+
+    job = backtest_service.create_backtest_job({**request, "extra": {"allowTruncatedData": True}})
+    assert job["parameters"]["allowTruncatedData"] is True
+    assert job["validation"]["passed"] is False
+    end_coverage = job["validation"]["data"]["endCoverage"]
+    assert end_coverage["truncated"] is True
+    assert end_coverage["actualLastDate"] == "2024-01-04"
+    assert end_coverage["requestedEnd"] == "2024-01-10"

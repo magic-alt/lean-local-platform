@@ -4,7 +4,7 @@
         self.set_warm_up(lookback, self.resolution)
 
     def on_data(self, data):
-        if self.is_warming_up or not self.roc.is_ready:
+        if not data.contains_key(self.symbol) or self.is_warming_up or not self.roc.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.roc.current.value > self.threshold and not invested:

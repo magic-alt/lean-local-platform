@@ -16,6 +16,7 @@ ASHARE_DEFAULTS: dict[str, Any] = {
     "stampTaxSell": 0.0005,
     "transferFeeRate": 0.00001,
     "slippageBps": 5.0,
+    "nextOpenGapBufferBps": 2000.0,
     "maxPositions": None,
     "maxPositionWeight": None,
     "minCash": 0.0,
@@ -24,7 +25,7 @@ ASHARE_DEFAULTS: dict[str, Any] = {
     "watchlist": [],
     "observeOnlySymbols": [],
     "allowStBuy": False,
-    "constraintVersion": 1,
+    "constraintVersion": 2,
 }
 
 
@@ -84,6 +85,13 @@ def ashare_trading_config(parameters: dict[str, Any] | None = None, request_data
         "stampTaxSell": _float_value(params, request, "stampTaxSell", "stamp_tax_sell", default=ASHARE_DEFAULTS["stampTaxSell"]),
         "transferFeeRate": _float_value(params, request, "transferFeeRate", "transfer_fee_rate", default=ASHARE_DEFAULTS["transferFeeRate"]),
         "slippageBps": _float_value(params, request, "slippageBps", "slippage_bps", default=ASHARE_DEFAULTS["slippageBps"]),
+        "nextOpenGapBufferBps": _float_value(
+            params,
+            request,
+            "nextOpenGapBufferBps",
+            "next_open_gap_buffer_bps",
+            default=ASHARE_DEFAULTS["nextOpenGapBufferBps"],
+        ),
         "maxPositions": _int_value(params, request, "maxPositions", "max_positions", "maxHoldings", default=ASHARE_DEFAULTS["maxPositions"]),
         "maxPositionWeight": _float_value(params, request, "maxPositionWeight", "max_position_weight", "singleStockMaxWeight", default=ASHARE_DEFAULTS["maxPositionWeight"]),
         "minCash": min_cash,

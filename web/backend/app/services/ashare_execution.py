@@ -90,7 +90,10 @@ class AShareExecutionHelper:
         self.status_file = status_file or _parameter(algorithm, "ashareStatusFile", "/Lean/Run/ashare_trade_status.json")
         self.lot_size = _int_parameter(algorithm, "lotSize", 100)
         self.min_cash_buffer = _float_parameter(algorithm, "cashBuffer", 0.0)
+        self.execution_policy = str(_parameter(algorithm, "executionPolicy", "next_open")).lower()
+        self.next_open_gap_buffer_bps = _float_parameter(algorithm, "nextOpenGapBufferBps", 2000.0)
         self.buy_dates = {}
+        self.registered_symbols = set()
         self.status = self._load_status()
 
     def _load_status(self):
@@ -150,6 +153,31 @@ class AShareExecutionHelper:
     def _holding_quantity(self, symbol):
         return int(float(self.algorithm.portfolio[symbol].quantity))
 
+    def _open_orders(self, symbol):
+        transactions = getattr(self.algorithm, "transactions", getattr(self.algorithm, "Transactions", None))
+        if transactions is None:
+            return []
+        try:
+            return list(transactions.get_open_orders(symbol))
+        except AttributeError:
+            try:
+                return list(transactions.GetOpenOrders(symbol))
+            except AttributeError:
+                return []
+
+    def _block_when_order_pending(self, symbol):
+        if not self._open_orders(symbol):
+            return False
+        self.algorithm.debug(f"AShare order blocked {_symbol_key(symbol)} pending_open_order")
+        return True
+
+    def _ensure_models(self, symbol):
+        key = _symbol_key(symbol)
+        if key in self.registered_symbols:
+            return
+        apply_ashare_models(self.algorithm, self.algorithm.securities[symbol])
+        self.registered_symbols.add(key)
+
     def _available_cash(self):
         try:
             return float(self.algorithm.portfolio.cash) - self.min_cash_buffer
@@ -162,8 +190,16 @@ class AShareExecutionHelper:
         slippage = trade_value * _float_parameter(self.algorithm, "slippageBps", 5.0) / 10000.0
         return commission + transfer + slippage
 
+    def _reserved_buy_price(self, price):
+        if self.execution_policy != "next_open":
+            return price
+        return price * (1.0 + max(0.0, self.next_open_gap_buffer_bps) / 10000.0)
+
     def target_percent(self, symbol, target_percent):
         target_percent = max(0.0, float(target_percent))
+        self._ensure_models(symbol)
+        if self._block_when_order_pending(symbol):
+            return None
         price = self._price(symbol)
         if price <= 0:
             return None
@@ -176,7 +212,10 @@ class AShareExecutionHelper:
             if not can_trade:
                 self.algorithm.debug(f"AShare buy blocked {_symbol_key(symbol)} {reason}")
                 return None
-            max_affordable = self._round_to_lot((self._available_cash() - self._buy_fee_buffer(delta * price)) / price)
+            reserved_price = self._reserved_buy_price(price)
+            max_affordable = self._round_to_lot(
+                (self._available_cash() - self._buy_fee_buffer(delta * reserved_price)) / reserved_price
+            )
             quantity = min(delta, max_affordable)
             quantity = self._round_to_lot(quantity)
             if quantity <= 0:
@@ -189,13 +228,18 @@ class AShareExecutionHelper:
             if not can_trade:
                 self.algorithm.debug(f"AShare sell blocked {_symbol_key(symbol)} {reason}")
                 return None
-            quantity = self._round_to_lot(delta)
+            available_to_sell = max(0, current_quantity)
+            quantity = -self._round_to_lot(min(abs(delta), available_to_sell))
             if quantity == 0:
+                self.algorithm.debug(f"AShare sell blocked {_symbol_key(symbol)} no_available_long_position")
                 return None
             return self.algorithm.market_order(symbol, quantity)
         return None
 
     def exit(self, symbol):
+        self._ensure_models(symbol)
+        if self._block_when_order_pending(symbol):
+            return None
         current_quantity = self._holding_quantity(symbol)
         if current_quantity <= 0:
             return None

@@ -35,7 +35,9 @@
             return
         scores.sort(reverse=True, key=lambda item: item[0])
         winner = scores[0][1]
-        for rotation_symbol in self.rotation_symbols:
-            self.set_holdings(rotation_symbol, 1.0 if rotation_symbol == winner else 0.0)
+        ordered_symbols = [symbol for symbol in self.rotation_symbols if symbol != winner] + [winner]
+        for rotation_symbol in ordered_symbols:
+            target = 1.0 if rotation_symbol == winner else 0.0
+            self.ashare_execution.target_percent(rotation_symbol, target) if self.ashare_execution else self.set_holdings(rotation_symbol, target)
         self.last_rebalance = today
         self.plot("Rotation", "BestMomentum", scores[0][0])

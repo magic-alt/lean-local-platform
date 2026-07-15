@@ -263,6 +263,42 @@ def trade_dates_between(market: str, start: str, end: str) -> list[str]:
     return [row["trade_date"] for row in rows]
 
 
+def end_coverage_status(market: str, requested_end: str, actual_last_date: str | None) -> dict[str, Any]:
+    with db() as connection:
+        row = connection.execute(
+            "select max(trade_date) as latest_date from trade_calendar where market = ? and is_open = 1",
+            (market,),
+        ).fetchone()
+    calendar_latest = row["latest_date"] if row else None
+    trade_dates = trade_dates_between(market, "1900-01-01", requested_end)
+    expected_last = trade_dates[-1] if trade_dates else requested_end
+    requested = datetime.fromisoformat(requested_end).date()
+    calendar_date = datetime.fromisoformat(calendar_latest).date() if calendar_latest else None
+    actual_date = datetime.fromisoformat(str(actual_last_date)).date() if actual_last_date else None
+    calendar_lag_days = (requested - calendar_date).days if calendar_date and calendar_date < requested else 0
+    # A Friday close legitimately covers a weekend end date. A longer gap means
+    # the calendar itself is stale, so using its last row as the expected end
+    # would silently bless a truncated backtest.
+    # Exact bar coverage remains valid if a legacy dataset has no separate
+    # calendar rows. The calendar is only mandatory when it is needed to prove
+    # that an earlier bar date is the final trading day in the request window.
+    calendar_complete = bool(actual_date and actual_date >= requested) or (
+        bool(calendar_latest) and calendar_lag_days <= 3
+    )
+    data_complete = bool(actual_last_date) and str(actual_last_date) >= str(expected_last)
+    return {
+        "requestedEnd": requested_end,
+        "expectedLastTradeDate": expected_last,
+        "actualLastDate": actual_last_date,
+        "calendarLatestDate": calendar_latest,
+        "calendarLagDays": calendar_lag_days,
+        "calendarComplete": calendar_complete,
+        "dataComplete": data_complete,
+        "passed": calendar_complete and data_complete,
+        "truncated": not (calendar_complete and data_complete),
+    }
+
+
 def upsert_daily_bars(rows: list[dict[str, Any]], source: str, batch_id: str, adjust: str) -> None:
     now = utc_now()
     with db() as connection:
@@ -970,7 +1006,15 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
     }
 
 
-def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw", source: str | None = None) -> None:
+def assert_ashare_ready(
+    symbol: str,
+    start: str,
+    end: str,
+    adjust: str = "raw",
+    source: str | None = None,
+    *,
+    allow_truncated: bool = False,
+) -> None:
     if not get_security(symbol):
         raise LeanWebError(f"A-share security master is missing for {symbol}. Import or register the security first.")
     trade_dates = trade_dates_between("china", start, end)
@@ -987,6 +1031,13 @@ def assert_ashare_ready(symbol: str, start: str, end: str, adjust: str = "raw", 
         )
     if coverage["status_count"] < bar_count:
         raise LeanWebError(f"A-share trade status is incomplete for {symbol} in {start} -> {end}.")
+    end_status = end_coverage_status("china", end, coverage.get("market_last_date") or coverage.get("last_date"))
+    if not end_status["passed"] and not allow_truncated:
+        raise LeanWebError(
+            f"A-share daily bars are truncated for {symbol}: requested end {end}, "
+            f"actual last date {end_status.get('actualLastDate')}, calendar latest "
+            f"{end_status.get('calendarLatestDate')}. Set allowTruncatedData=true only for explicitly untrusted research."
+        )
     batch = latest_batch_for_symbol(symbol, source=source)
     if not batch:
         raise LeanWebError(f"A-share import batch is missing for {symbol}.")
@@ -1007,6 +1058,7 @@ def assert_benchmark_ready(
     data_type: str = "trade",
     adjust: str = "raw",
     source: str | None = None,
+    allow_truncated: bool = False,
 ) -> None:
     benchmark = str(symbol or "").strip().upper()
     if not benchmark:
@@ -1045,4 +1097,10 @@ def assert_benchmark_ready(
     if expected_dates and row_count < expected_dates:
         raise LeanPlatformError(
             f"benchmark_missing:{benchmark} has {row_count}/{expected_dates} daily bars in {start} -> {end}."
+        )
+    end_status = end_coverage_status(market.lower(), end, benchmark_row.get("last_date"))
+    if not end_status["passed"] and not allow_truncated:
+        raise LeanPlatformError(
+            f"benchmark_truncated:{benchmark} requested end {end}, actual last date "
+            f"{end_status.get('actualLastDate')}, calendar latest {end_status.get('calendarLatestDate')}."
         )

@@ -18,8 +18,13 @@ from ..repositories.backtest_repository import get_backtest, update_backtest
 from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
 from ..services.ashare_multisource import quality_gate_range
-from ..services.ashare_repository import assert_benchmark_ready
+from ..services.ashare_repository import assert_ashare_ready, assert_benchmark_ready
 from ..services.backtest_validation import build_backtest_validation, build_experiment_record
+from ..services.backtest_execution_validation import (
+    audit_backtest_execution,
+    execution_failure_message,
+    merge_execution_validation,
+)
 from ..services.experiments import record_experiment_versions
 from ..services.projects import get_project
 from ..services.result_service import persist_result
@@ -204,7 +209,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
     lean_cache: dict[str, Any] = {}
     strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
 
-    def update_fingerprint() -> None:
+    def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> None:
         fingerprint = build_run_fingerprint(
             run_id=run_id,
             parameters=parameters,
@@ -214,6 +219,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
             config_path=run_dir / "config.json",
         )
         validation = build_backtest_validation(parameters, fingerprint)
+        if execution_validation is not None:
+            validation = merge_execution_validation(validation, execution_validation)
         experiment = build_experiment_record(
             run_id=run_id,
             parameters=parameters,
@@ -243,6 +250,16 @@ def run_backtest_task(self, task_id: str, run_id: str):
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
             gate_symbols = [str(parameters["ticker"]).upper()]
             benchmark_for_gate = str(parameters.get("benchmarkSymbol") or "").upper()
+            source = str(parameters.get("source") or parameters.get("provider") or DEFAULT_PRODUCTION_SOURCE)
+            adjust = str(parameters.get("adjust") or "raw")
+            assert_ashare_ready(
+                str(parameters["ticker"]).upper(),
+                parameters["start"],
+                parameters["end"],
+                adjust=adjust,
+                source=source,
+                allow_truncated=bool(parameters.get("allowTruncatedData")),
+            )
             assert_benchmark_ready(
                 benchmark_for_gate,
                 parameters["start"],
@@ -252,7 +269,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 venue=str(parameters.get("venue") or parameters.get("market") or "china"),
                 resolution=str(parameters.get("resolution") or "daily"),
                 data_type=str(parameters.get("dataType") or "trade"),
-                adjust=str(parameters.get("adjust") or "raw"),
+                adjust=adjust,
+                source=source,
+                allow_truncated=bool(parameters.get("allowTruncatedData")),
             )
             if benchmark_for_gate:
                 gate_symbols.append(benchmark_for_gate)
@@ -262,8 +281,6 @@ def run_backtest_task(self, task_id: str, run_id: str):
                     report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
                     detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
                     raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
-            source = str(parameters.get("source") or parameters.get("provider") or DEFAULT_PRODUCTION_SOURCE)
-            adjust = str(parameters.get("adjust") or "raw")
             lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
             if benchmark_symbol:
@@ -299,8 +316,24 @@ def run_backtest_task(self, task_id: str, run_id: str):
             _record_backtest_metric(CANCELLED)
             return {"status": CANCELLED, "run_id": run_id}
 
-        status = "success" if output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out") else "failed"
-        error = None if status == "success" else output.get("error") or "Docker run failed or did not produce result JSON."
+        raw_success = bool(output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out"))
+        execution_validation = (
+            audit_backtest_execution(
+                Path(output["result_json_path"]),
+                parameters,
+                (get_backtest(run_id) or {}).get("validation") or {},
+            )
+            if raw_success
+            else None
+        )
+        status = "success" if raw_success and execution_validation and execution_validation.get("passed") else "failed"
+        error = (
+            None
+            if status == "success"
+            else execution_failure_message(execution_validation or {})
+            or output.get("error")
+            or "Docker run failed or did not produce result JSON."
+        )
         finished_at = utc_now()
         update_backtest(
             run_id,
@@ -317,8 +350,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
             results_dir=output.get("results_dir"),
             finished_at=finished_at,
         )
-        update_fingerprint()
-        if status == "success" and output["result_json_path"]:
+        update_fingerprint(execution_validation)
+        if raw_success and output["result_json_path"]:
             run = get_backtest(run_id) or {}
             persist_result(
                 run_id,
@@ -439,8 +472,7 @@ def optimize_task(task_id: str, optimization_id: str):
                 language=project["language"],
                 project_dir=Path(project["project_path"]),
             )
-            status = "success" if output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out") else "failed"
-            error = None if status == "success" else output.get("error") or "Optimization candidate failed or did not produce result JSON."
+            raw_success = bool(output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out"))
             finished_at = utc_now()
             fingerprint = build_run_fingerprint(
                 run_id=run_id,
@@ -451,6 +483,21 @@ def optimize_task(task_id: str, optimization_id: str):
                 config_path=run_dir / "config.json",
             )
             validation = build_backtest_validation(child_params, fingerprint)
+            execution_validation = (
+                audit_backtest_execution(Path(output["result_json_path"]), child_params, validation)
+                if raw_success
+                else None
+            )
+            if execution_validation is not None:
+                validation = merge_execution_validation(validation, execution_validation)
+            status = "success" if raw_success and execution_validation and execution_validation.get("passed") else "failed"
+            error = (
+                None
+                if status == "success"
+                else execution_failure_message(execution_validation or {})
+                or output.get("error")
+                or "Optimization candidate failed or did not produce result JSON."
+            )
             experiment = build_experiment_record(
                 run_id=run_id,
                 parameters=child_params,
@@ -484,7 +531,7 @@ def optimize_task(task_id: str, optimization_id: str):
                 validation=validation,
                 experiment=experiment,
             )
-            if status == "success" and output["result_json_path"]:
+            if raw_success and output["result_json_path"]:
                 persist_result(
                     run_id,
                     Path(output["result_json_path"]),
@@ -503,7 +550,7 @@ def optimize_task(task_id: str, optimization_id: str):
                 "reportHtml": output.get("report_html_path"),
                 "stdoutLog": output.get("stdout_log_path"),
                 "exitCode": output["exit_code"],
-                "error": output.get("error"),
+                "error": error,
             }
             results.append(candidate_result)
             if candidate_result["status"] != "success":

@@ -128,7 +128,14 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                     f"A-share daily bars are missing for {parameters['ticker']} in {parameters['start']} -> {parameters['end']} "
                     f"for all available sources."
                 )
-        assert_ashare_ready(parameters["ticker"], parameters["start"], parameters["end"], adjust=adjust, source=preflight_source)
+        assert_ashare_ready(
+            parameters["ticker"],
+            parameters["start"],
+            parameters["end"],
+            adjust=adjust,
+            source=preflight_source,
+            allow_truncated=bool(parameters.get("allowTruncatedData")),
+        )
         assert_benchmark_ready(
             benchmark_symbol,
             parameters["start"],
@@ -140,6 +147,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             data_type=str(parameters.get("dataType") or "trade"),
             adjust=adjust,
             source=preflight_source,
+            allow_truncated=bool(parameters.get("allowTruncatedData")),
         )
         if benchmark_symbol:
             symbols_to_gate.append(benchmark_symbol)

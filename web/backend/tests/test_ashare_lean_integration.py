@@ -88,6 +88,7 @@ class P0IntegrationAlgorithm(QCAlgorithm):
         self.set_end_date(2024, 1, 10)
         self.set_account_currency("CNY")
         self.set_cash(100000)
+        self.set_brokerage_model(BrokerageName.DEFAULT, AccountType.CASH)
         equity = self.add_equity("600001", Resolution.DAILY, "china", data_normalization_mode=DataNormalizationMode.RAW)
         self.symbol = equity.symbol
         self.set_benchmark(lambda time: 1)
@@ -95,6 +96,8 @@ class P0IntegrationAlgorithm(QCAlgorithm):
         self.helper = AShareExecutionHelper(self, self.get_parameter("ashareStatusFile", "/Lean/Run/ashare_trade_status.json"))
 
     def on_data(self, data):
+        if not data.contains_key(self.symbol):
+            return
         day = self.time.strftime("%Y-%m-%d")
         if day == "2024-01-02":
             self.helper.target_percent(self.symbol, 1)

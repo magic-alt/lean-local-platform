@@ -1,0 +1,148 @@
+import json
+from pathlib import Path
+
+
+def _write_result(
+    tmp_path: Path,
+    *,
+    statistics: dict[str, str],
+    events: list[dict],
+    log_lines: list[str],
+    state: dict | None = None,
+) -> Path:
+    result_path = tmp_path / "run.json"
+    result_path.write_text(
+        json.dumps({"statistics": statistics, "state": state or {}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "run-order-events.json").write_text(json.dumps(events), encoding="utf-8")
+    (tmp_path / "run-log.txt").write_text("\n".join(log_lines), encoding="utf-8")
+    return result_path
+
+
+def _parameters() -> dict:
+    return {
+        "ticker": "600460",
+        "assetClass": "equity",
+        "market": "china",
+        "start": "2024-01-01",
+        "end": "2026-07-13",
+        "cash": 800000,
+        "initialCash": 800000,
+    }
+
+
+def test_execution_audit_rejects_negative_equity_short_oversell_and_lean_errors(tmp_path):
+    from app.services.backtest_execution_validation import audit_backtest_execution
+
+    result_path = _write_result(
+        tmp_path,
+        statistics={"End Equity": "-30942.62", "Drawdown": "102.900%"},
+        events=[
+            {
+                "orderId": 1,
+                "symbolValue": "600460",
+                "fillQuantity": 30100,
+                "fillPrice": 25,
+                "orderFeeAmount": 10,
+                "status": "filled",
+            },
+            {
+                "orderId": 2,
+                "symbolValue": "600460",
+                "fillQuantity": -30100,
+                "fillPrice": 26,
+                "orderFeeAmount": 10,
+                "status": "filled",
+            },
+            {
+                "orderId": 3,
+                "symbolValue": "600460",
+                "fillQuantity": -30100,
+                "fillPrice": 27,
+                "orderFeeAmount": 10,
+                "status": "filled",
+            },
+        ],
+        log_lines=[
+            "ERROR:: AlgorithmManager.Run(): Portfolio value is less than or equal to zero, stopping algorithm.",
+            "Debug: 2026-06-29 03:00:00 Algorithm Id:(run) completed in 1 seconds.",
+        ],
+    )
+
+    audit = audit_backtest_execution(result_path, _parameters())
+    failed = {gate["name"] for gate in audit["gates"] if not gate["passed"]}
+
+    assert audit["passed"] is False
+    assert {
+        "lean_log_errors",
+        "positive_end_equity",
+        "drawdown_not_over_100pct",
+        "backtest_reached_data_end",
+        "ashare_no_short_positions",
+        "ashare_no_oversell",
+    } <= failed
+    assert audit["ledger"]["negativePositions"] == {"600460": -30100.0}
+
+
+def test_execution_audit_accepts_completed_cash_only_ashare_run(tmp_path):
+    from app.services.backtest_execution_validation import audit_backtest_execution
+
+    result_path = _write_result(
+        tmp_path,
+        statistics={"End Equity": "801000", "Drawdown": "2.5%"},
+        events=[
+            {
+                "orderId": 1,
+                "symbolValue": "600460",
+                "fillQuantity": 100,
+                "fillPrice": 25,
+                "orderFeeAmount": 5,
+                "status": "filled",
+            },
+            {
+                "orderId": 2,
+                "symbolValue": "600460",
+                "fillQuantity": -100,
+                "fillPrice": 35,
+                "orderFeeAmount": 5,
+                "status": "filled",
+            },
+        ],
+        log_lines=[
+            "Debug: AShare execution account type: cash; short selling disabled.",
+            "Debug: 2026-07-13 03:00:00 Algorithm Id:(run) completed in 1 seconds.",
+        ],
+    )
+
+    audit = audit_backtest_execution(result_path, _parameters())
+
+    assert audit["passed"] is True
+    assert all(gate["passed"] for gate in audit["gates"])
+    assert audit["ledger"]["positions"] == {"600460": 0.0}
+    assert audit["ledger"]["minimumCash"] >= 0
+
+
+def test_execution_validation_merge_replaces_previous_execution_gates():
+    from app.services.backtest_execution_validation import merge_execution_validation
+
+    preflight = {
+        "passed": False,
+        "gates": [
+            {"name": "data", "passed": True},
+            {"name": "old_execution", "passed": False},
+        ],
+        "execution": {
+            "passed": False,
+            "gates": [{"name": "old_execution", "passed": False}],
+        },
+    }
+    execution = {
+        "passed": True,
+        "gates": [{"name": "new_execution", "passed": True}],
+    }
+
+    merged = merge_execution_validation(preflight, execution)
+
+    assert merged["passed"] is True
+    assert [gate["name"] for gate in merged["gates"]] == ["data", "new_execution"]
