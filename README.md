@@ -1,6 +1,6 @@
 # LEAN Local Platform
 
-这个平台不依赖 Lean CLI，直接使用你已经拉取的 `quantconnect/lean:latest` 镜像运行本地 Python 回测。它包含 CLI demo 和 Web 工作台，用来导入公开 OHLCV 数据、选择标的、运行 Docker LEAN 回测并生成 HTML 报告。
+这个平台不依赖 Lean CLI，默认使用固定 digest 的 `quantconnect/lean` 镜像运行本地 Python 回测（可通过 `LEAN_DOCKER_IMAGE` 覆盖）。它包含 CLI demo 和 Web 工作台，用来导入公开 OHLCV 数据、选择标的、运行 Docker LEAN 回测并生成 HTML 报告。
 
 策略文件：
 

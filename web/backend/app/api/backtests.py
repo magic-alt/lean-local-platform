@@ -20,6 +20,7 @@ from ..services.backtest_service import (
 )
 from ..services.experiments import get_experiment_versions
 from ..services.result_service import result_for_job
+from ..services.strategy_admission import admission_for_run
 from ..services.tasks import task_logs
 from ..tasks.worker import run_backtest_task
 
@@ -165,6 +166,16 @@ def validation(run_id: str):
         "experiment": run.get("experiment"),
         "fingerprint": run.get("fingerprint"),
     }
+
+
+@router.get("/{run_id}/admission")
+def admission(run_id: str, profile: str = "institutional"):
+    try:
+        return admission_for_run(run_id, profile)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{run_id}/versions")

@@ -25,7 +25,9 @@ import type {
   BacktestValidation,
   BacktestExperiment,
   BacktestValidationResponse,
+  BacktestAdmissionResponse,
   BacktestResult,
+  PortfolioOptimizationResult,
   BacktestCompareResult,
   OptimizationRun,
   ResearchSession,
@@ -275,6 +277,8 @@ export const api = {
     request<{ job: BacktestRun; result: BacktestResult }>(`/api/backtests/${encodeURIComponent(id)}/result`),
   backtestValidation: (id: string) =>
     request<BacktestValidationResponse>(`/api/backtests/${encodeURIComponent(id)}/validation`),
+  backtestAdmission: (id: string, profile = "institutional") =>
+    request<BacktestAdmissionResponse>(`/api/backtests/${encodeURIComponent(id)}/admission?profile=${encodeURIComponent(profile)}`),
   cancelBacktest: (id: string) =>
     request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   logs: (id: string) =>
@@ -309,6 +313,18 @@ export const api = {
     }),
   compareBacktests: (payload: { runIds: string[]; includeCurves?: boolean }) =>
     request<BacktestCompareResult>("/api/compare/backtests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  optimizePortfolio: (payload: {
+    runIds: string[];
+    objective?: "sharpe" | "return" | "drawdown";
+    step?: number;
+    maxWeight?: number;
+    allowShort?: boolean;
+  }) =>
+    request<PortfolioOptimizationResult>("/api/portfolios/optimize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)

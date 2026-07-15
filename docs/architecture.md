@@ -10,6 +10,7 @@ Current implementation is between Level 3 and early Level 4:
 - P0 has hardened the LEAN run chain with artifact manifests and raw artifact archiving.
 - P1 has added trusted backtest validation metadata for A-share rules, data coverage, benchmark coverage, QA gates, experiment fingerprint, and UI visibility.
 - P1 also has database-backed scheduler leases for `maxConcurrentJobs` and version rows for strategy, dataset, and experiment records.
+- Strategy admission adds regime-complete baselines and drift gates before a parameter set can be used by the portfolio optimizer.
 - P2/P3 features exist only partially. Optimization, factors, paper replay, convertible bonds, futures, ClickHouse, Prometheus, and Grafana have code or infrastructure, but they are not yet the primary acceptance chain.
 
 ## Module Map
@@ -24,6 +25,8 @@ Browser
   -> Services
       backtest_service.py
       backtest_validation.py
+      strategy_admission.py
+      portfolio_optimization.py
       result_service.py
       strategies.py
       scheduler.py, experiments.py
@@ -37,7 +40,7 @@ Browser
       runners/docker_runner.py
       lean.py config/mount helpers
   -> LEAN Docker container
-      quantconnect/lean:latest by default
+      pinned quantconnect/lean digest by default
   -> Storage
       MySQL or SQLite via db.py
       stored_objects/stored_object_chunks
@@ -101,7 +104,7 @@ Strategy selection or project upload
   -> LeanRunner.run_backtest()
   -> create web/runtime/runs/<run_id>
   -> write config.json and optional A-share helper files
-  -> docker run quantconnect/lean
+  -> docker run pinned quantconnect/lean image
   -> tee Docker/LEAN console output to results/stdout.log and task log
   -> write raw LEAN results
   -> write artifact-manifest.json
@@ -109,7 +112,7 @@ Strategy selection or project upload
   -> archive raw artifacts into stored_objects
   -> save parsed backtest_results row
   -> GET /api/backtests/<id>/result, /validation, /logs, /chart-data
-  -> UI details, charts, validation tab, reports
+  -> UI details, charts, validation/admission tabs, reports
 ```
 
 ## Runtime Dependencies

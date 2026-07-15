@@ -65,9 +65,11 @@ export interface LocalDataFile {
 export interface StrategyParameter {
   key: string;
   label: string;
-  type: "number" | "string";
+  type: "number" | "string" | "text";
   default?: string | number;
   min?: number;
+  max?: number;
+  step?: number;
 }
 
 export interface StrategyTemplate {
@@ -304,6 +306,60 @@ export interface BacktestValidationResponse {
   validation?: BacktestValidation | null;
   experiment?: BacktestExperiment | null;
   fingerprint?: Record<string, unknown> | null;
+}
+
+export interface StrategyAdmissionGate {
+  name: string;
+  passed: boolean;
+  severity: string;
+  actual?: unknown;
+  expected?: unknown;
+  baseline?: unknown;
+  reason?: string;
+}
+
+export interface StrategyAdmission {
+  id: string;
+  strategy_id: string;
+  strategy_version_id?: string | null;
+  parameters_sha256: string;
+  profile_name: string;
+  profile_version: string;
+  sample_set: string;
+  current_stage: "research" | "baseline_registered" | "admission_passed" | "paper_validated";
+  baselineSnapshot?: Record<string, unknown> | null;
+  evaluation?: {
+    status?: "pass" | "watch" | "fail";
+    stage?: string;
+    aggregate?: Record<string, unknown>;
+    gates?: StrategyAdmissionGate[];
+    evaluatedAt?: string;
+  } | null;
+  events?: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BacktestAdmissionResponse {
+  runId: string;
+  strategyId?: string | null;
+  parametersSha256: string;
+  profile: string;
+  admission?: StrategyAdmission | null;
+}
+
+export interface PortfolioOptimizationResult {
+  schemaVersion: number;
+  objective: "sharpe" | "return" | "drawdown";
+  runIds: string[];
+  weights: Record<string, number>;
+  metrics: Record<string, number>;
+  alignedStart: string;
+  alignedEnd: string;
+  alignedPoints: number;
+  candidateCount: number;
+  equityCurve: ChartPoint[];
+  generatedAt: string;
 }
 
 export interface BacktestResult {

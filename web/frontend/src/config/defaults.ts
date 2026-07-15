@@ -12,7 +12,7 @@ export const defaultSettings: AppSettings = {
   defaultCash: 300000,
   defaultStart: "2024-01-01",
   defaultEnd: "2026-07-13",
-  dockerImage: "quantconnect/lean:latest",
+  dockerImage: "quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823",
   researchImage: "quantconnect/research:latest",
   chartPointLimit: 1000000,
   maxConcurrentJobs: 1,

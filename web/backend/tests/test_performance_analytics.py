@@ -173,6 +173,9 @@ def test_performance_analytics_recomputes_sharpe_and_flags_short_window():
     assert performance["sharpe_recompute_status"] == "computed_with_warnings"
     assert "short_window_unstable" in performance["sharpe_metric_warnings"]
     assert "lean_sharpe_diverges_from_equity_recompute" in performance["sharpe_metric_warnings"]
+    assert performance["var95"] >= 0
+    assert performance["expectedShortfall95"] >= performance["var95"]
+    assert performance["riskMetricSampleCount"] == 3
 
 
 def test_performance_analytics_handles_zero_volatility_without_misleading_sharpe():

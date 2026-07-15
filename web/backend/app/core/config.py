@@ -64,7 +64,10 @@ DATABASE_URL = os.environ.get("LEAN_DATABASE_URL") or os.environ.get("DATABASE_U
 DB_OBJECT_CHUNK_BYTES = int(os.environ.get("LEAN_DB_OBJECT_CHUNK_BYTES", str(1024 * 1024)))
 DB_OBJECT_STORE_ENABLED = os.environ.get("LEAN_DB_OBJECT_STORE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
 
-DEFAULT_DOCKER_IMAGE = os.environ.get("LEAN_DOCKER_IMAGE", "quantconnect/lean:latest")
+DEFAULT_DOCKER_IMAGE = os.environ.get(
+    "LEAN_DOCKER_IMAGE",
+    "quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823",
+)
 DEFAULT_RESEARCH_IMAGE = os.environ.get("LEAN_RESEARCH_IMAGE", "quantconnect/research:latest")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 JOB_TIMEOUT_SECONDS = int(os.environ.get("BACKTEST_JOB_TIMEOUT_SECONDS", "7200"))

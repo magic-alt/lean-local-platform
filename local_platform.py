@@ -447,7 +447,10 @@ def build_parser():
     backtest.add_argument("--fast", type=int, default=10)
     backtest.add_argument("--slow", type=int, default=30)
     backtest.add_argument("--cash", type=float, default=100000)
-    backtest.add_argument("--image", default="quantconnect/lean:latest")
+    backtest.add_argument(
+        "--image",
+        default="quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823",
+    )
     backtest.add_argument("--run-id", default=None)
     backtest.add_argument("--open", action="store_true")
     backtest.set_defaults(func=run_backtest)

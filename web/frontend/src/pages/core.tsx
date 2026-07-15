@@ -38,6 +38,7 @@ import dayjs from "dayjs";
 import type {
   AppSettings,
   AssetClassInfo,
+  BacktestAdmissionResponse,
   BacktestResult,
   BacktestRun,
   BacktestValidationResponse,
@@ -57,6 +58,7 @@ import type {
   OptimizationRun,
   PaperDailyReport,
   PaperSession,
+  PortfolioOptimizationResult,
   Project,
   ReportRecord,
   StrategyTemplate,
@@ -66,7 +68,7 @@ import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
-import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
+import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
@@ -1346,6 +1348,7 @@ export function RunDetailPage() {
   const [chart, setChart] = useState<ChartData>();
   const [result, setResult] = useState<BacktestResult>();
   const [trust, setTrust] = useState<BacktestValidationResponse>();
+  const [admission, setAdmission] = useState<BacktestAdmissionResponse>();
   const [logs, setLogs] = useState("");
   const active = run ? ["created", "queued", "running"].includes(run.status) : false;
   const reload = useCallback(async () => {
@@ -1357,6 +1360,11 @@ export function RunDetailPage() {
       setTrust(await api.backtestValidation(id));
     } catch {
       setTrust(undefined);
+    }
+    try {
+      setAdmission(await api.backtestAdmission(id));
+    } catch {
+      setAdmission(undefined);
     }
     if (next.result_json_path) setChart(await api.chartData(id));
     if (next.status === "success" || next.status === "succeeded") {
@@ -1395,6 +1403,13 @@ export function RunDetailPage() {
     { title: "Sharpe", value: sharpeMetric, warning: sharpeWarning },
     { title: "Drawdown", value: run.statistics?.["Drawdown"] ?? run.statistics?.["Max Drawdown"] },
     { title: "Total Trades", value: run.statistics?.["Total Trades"] ?? run.statistics?.["Total Orders"] ?? result?.orders?.length },
+    { title: "VaR 95%", value: summaryMetrics["VaR 95%"] },
+    { title: "Expected Shortfall 95%", value: summaryMetrics["Expected Shortfall 95%"] },
+    { title: "Tracking Error", value: summaryMetrics["Computed Tracking Error"] },
+    { title: "Information Ratio", value: summaryMetrics["Computed Information Ratio"] },
+    { title: "Market Correlation", value: summaryMetrics["Market Correlation"] },
+    { title: "Position HHI", value: summaryMetrics["Position HHI"] },
+    { title: "Top Position Weight", value: summaryMetrics["Top Position Weight"] },
   ];
   const records = {
     orders: result?.orders ?? chart?.orders ?? [],
@@ -1498,6 +1513,11 @@ export function RunDetailPage() {
             label: "Validation",
             children: <BacktestTrustPanel validation={validation} experiment={experiment} fingerprint={fingerprint} />
           },
+          {
+            key: "admission",
+            label: "Admission",
+            children: <StrategyAdmissionPanel value={admission} />
+          },
           { key: "charts", label: "Charts", children: chart ? <BacktestCharts chartData={chart} /> : <Alert type="info" message="Charts are available after a successful run." /> },
           {
             key: "records",
@@ -1540,6 +1560,9 @@ export function OptimizationPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const optimizations = useAsyncData(api.optimizations, []);
   const [form] = Form.useForm();
+  const [portfolioForm] = Form.useForm();
+  const [portfolioResult, setPortfolioResult] = useState<PortfolioOptimizationResult>();
+  const [portfolioSubmitting, setPortfolioSubmitting] = useState(false);
   const assetClass = Form.useWatch("assetClass", form) || "equity";
   const market = Form.useWatch("market", form) || "china";
   const selectedProjectId = Form.useWatch("projectId", form);
@@ -1582,6 +1605,27 @@ export function OptimizationPage() {
     message.success("Optimization queued");
     optimizations.reload();
   }
+  async function submitPortfolio(values: any) {
+    const runIds = String(values.runIds ?? "")
+      .split(/[\s,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setPortfolioSubmitting(true);
+    try {
+      setPortfolioResult(await api.optimizePortfolio({
+        runIds,
+        objective: values.objective,
+        step: Number(values.step),
+        maxWeight: Number(values.maxWeight),
+        allowShort: false
+      }));
+      message.success("Portfolio weights optimized");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setPortfolioSubmitting(false);
+    }
+  }
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Optimization</h1><Button icon={<ReloadOutlined />} onClick={optimizations.reload}>Refresh</Button></div>
@@ -1593,7 +1637,7 @@ export function OptimizationPage() {
             children: (
               <>
                 <Card title="Parameter Grid">
-                  <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2026-07-13", cash: 300000, maxCandidates: 50, dockerImage: "quantconnect/lean:latest" }}>
+                  <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2026-07-13", cash: 300000, maxCandidates: 50, dockerImage: defaultSettings.dockerImage }}>
                     <div className="field-grid">
                       <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
                       <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
@@ -1633,6 +1677,76 @@ export function OptimizationPage() {
                     { title: "Created", dataIndex: "created_at" }
                   ]} />
                 </Card>
+              </>
+            )
+          },
+          {
+            key: "portfolio",
+            label: "Portfolio Weights",
+            children: (
+              <>
+                <Card title="Admission-Gated Portfolio Optimization">
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Only successful run IDs whose strategy parameter set passed admission can be optimized."
+                    style={{ marginBottom: 16 }}
+                  />
+                  <Form
+                    form={portfolioForm}
+                    layout="vertical"
+                    onFinish={submitPortfolio}
+                    initialValues={{ objective: "sharpe", step: 0.1, maxWeight: 1.0 }}
+                  >
+                    <Form.Item name="runIds" label="Run IDs" rules={[{ required: true }]}>
+                      <Input.TextArea rows={4} placeholder="run-id-1, run-id-2" />
+                    </Form.Item>
+                    <div className="field-grid">
+                      <Form.Item name="objective" label="Objective">
+                        <Select options={[
+                          { value: "sharpe", label: "Maximum Sharpe" },
+                          { value: "return", label: "Maximum Annual Return" },
+                          { value: "drawdown", label: "Minimum Drawdown" }
+                        ]} />
+                      </Form.Item>
+                      <Form.Item name="step" label="Weight Step">
+                        <InputNumber min={0.01} max={0.5} step={0.05} style={{ width: "100%" }} />
+                      </Form.Item>
+                      <Form.Item name="maxWeight" label="Maximum Weight">
+                        <InputNumber min={0.01} max={1} step={0.05} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </div>
+                    <Button type="primary" htmlType="submit" loading={portfolioSubmitting}>Optimize Weights</Button>
+                  </Form>
+                </Card>
+                {portfolioResult && (
+                  <div className="two-column" style={{ marginTop: 16 }}>
+                    <Card title="Weights">
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey="runId"
+                        dataSource={Object.entries(portfolioResult.weights).map(([runId, weight]) => ({ runId, weight }))}
+                        columns={[
+                          { title: "Run ID", dataIndex: "runId" },
+                          { title: "Weight", dataIndex: "weight", render: (value) => `${(Number(value) * 100).toFixed(1)}%` }
+                        ]}
+                      />
+                    </Card>
+                    <Card title={`Metrics (${portfolioResult.candidateCount} candidates)`}>
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey="metric"
+                        dataSource={Object.entries(portfolioResult.metrics).map(([metric, value]) => ({ metric, value }))}
+                        columns={[
+                          { title: "Metric", dataIndex: "metric" },
+                          { title: "Value", dataIndex: "value", render: (value) => shortValue(value) }
+                        ]}
+                      />
+                    </Card>
+                  </div>
+                )}
               </>
             )
           },

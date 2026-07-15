@@ -9,7 +9,7 @@ export function templateDefaults(template?: StrategyTemplate) {
 export function strategyFields(template?: StrategyTemplate) {
   return (template?.parameters ?? []).map((parameter) => (
     <Form.Item key={parameter.key} name={["parameters", parameter.key]} label={parameter.label}>
-      {parameter.type === "number" ? <InputNumber min={parameter.min} style={{ width: "100%" }} /> : <Input />}
+      {parameter.type === "number" ? <InputNumber min={parameter.min} max={parameter.max} step={parameter.step} style={{ width: "100%" }} /> : <Input />}
     </Form.Item>
   ));
 }

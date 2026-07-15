@@ -1,6 +1,6 @@
 import { Alert, Card, Space, Statistic, Table, Tag, Tooltip } from "antd";
 
-import type { BacktestExperiment, BacktestValidation } from "../../api";
+import type { BacktestAdmissionResponse, BacktestExperiment, BacktestValidation } from "../../api";
 import { asRecord, shortHash, shortValue } from "../../utils/display";
 
 export function ValidationStatusTag({ validation }: { validation?: BacktestValidation | null }) {
@@ -153,6 +153,52 @@ export function BacktestTrustPanel({
           />
         </Card>
       </div>
+    </>
+  );
+}
+
+export function StrategyAdmissionPanel({ value }: { value?: BacktestAdmissionResponse | null }) {
+  const admission = value?.admission;
+  if (!value) return <Alert type="info" message="Strategy admission metadata is not available for this run." />;
+  if (!admission) {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        message="This parameter set has not passed strategy admission."
+        description={`Parameter fingerprint: ${shortHash(value.parametersSha256)}`}
+      />
+    );
+  }
+  const evaluation = admission.evaluation ?? {};
+  const status = evaluation.status ?? (admission.current_stage === "admission_passed" || admission.current_stage === "paper_validated" ? "pass" : "pending");
+  const statusColor = status === "pass" ? "green" : status === "watch" ? "gold" : status === "fail" ? "red" : "blue";
+  const gates = evaluation.gates ?? [];
+  return (
+    <>
+      <div className="grid">
+        <Card><div className="metric-label">Stage</div><Tag color={admission.current_stage === "admission_passed" || admission.current_stage === "paper_validated" ? "green" : "blue"}>{admission.current_stage}</Tag></Card>
+        <Card><div className="metric-label">Evaluation</div><Tag color={statusColor}>{status}</Tag></Card>
+        <Card><Statistic title="Profile" value={`${admission.profile_name} / ${admission.profile_version}`} /></Card>
+        <Card><Statistic title="Sample Set" value={admission.sample_set} /></Card>
+      </div>
+      <Card title="Admission Gates" style={{ marginTop: 16 }}>
+        {gates.length ? (
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="name"
+            dataSource={gates}
+            columns={[
+              { title: "Gate", dataIndex: "name" },
+              { title: "Status", render: (_, gate) => <Tag color={gate.passed ? "green" : gate.severity === "warning" ? "gold" : "red"}>{gate.passed ? "passed" : "failed"}</Tag> },
+              { title: "Severity", dataIndex: "severity" },
+              { title: "Actual", dataIndex: "actual", render: (item) => shortValue(item) },
+              { title: "Expected / Baseline", render: (_, gate) => shortValue(gate.expected ?? gate.baseline ?? gate.reason) }
+            ]}
+          />
+        ) : <Alert type="info" message="A baseline is registered; admission gates have not been evaluated yet." />}
+      </Card>
     </>
   );
 }

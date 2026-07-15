@@ -49,7 +49,7 @@ Useful environment variables:
 ```bash
 export REDIS_URL=redis://127.0.0.1:6379/0
 export LEAN_DATABASE_URL=mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
-export LEAN_DOCKER_IMAGE=quantconnect/lean:latest
+export LEAN_DOCKER_IMAGE=quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823
 export LEAN_RESEARCH_IMAGE=quantconnect/research:latest
 ```
 

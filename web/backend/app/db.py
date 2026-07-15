@@ -45,6 +45,9 @@ JSON_COLUMNS = {
     "fingerprint_json": "fingerprint",
     "validation_json": "validation",
     "experiment_json": "experiment",
+    "baseline_snapshot_json": "baselineSnapshot",
+    "evaluation_json": "evaluation",
+    "payload_json": "payload",
     "positions_json": "positions",
     "report_json": "report",
     "signals_json": "signals",
@@ -384,6 +387,10 @@ def _parse_alter_table_add_column(sql: str) -> tuple[str, str] | None:
 def _mysql_text_type(column: str) -> str:
     column = column.strip("`").lower()
     if column in ID_TEXT_COLUMNS or column.endswith("_id"):
+        return "varchar(64)"
+    if column.endswith("_sha256"):
+        return "varchar(64)"
+    if column in {"profile_name", "profile_version", "sample_set", "current_stage", "stage"}:
         return "varchar(64)"
     if column in CODE_TEXT_COLUMNS:
         return "varchar(96)"
@@ -1443,6 +1450,31 @@ def init_db() -> None:
                 updated_at text not null
             );
 
+            create table if not exists strategy_admissions (
+                id text primary key,
+                strategy_id text not null,
+                strategy_version_id text,
+                parameters_sha256 text not null,
+                profile_name text not null,
+                profile_version text not null,
+                sample_set text not null,
+                current_stage text not null,
+                baseline_snapshot_json text not null,
+                evaluation_json text not null,
+                created_at text not null,
+                updated_at text not null,
+                unique(strategy_id, parameters_sha256, profile_name, profile_version)
+            );
+
+            create table if not exists strategy_admission_events (
+                id text primary key,
+                admission_id text not null,
+                stage text not null,
+                source_id text,
+                payload_json text not null,
+                created_at text not null
+            );
+
             create table if not exists paper_sessions (
                 id text primary key,
                 project_id text,
@@ -1645,6 +1677,10 @@ def init_db() -> None:
                 on dataset_versions(asset_class, market, symbol, start_date, end_date);
             create index if not exists idx_experiments_run
                 on experiments(run_id);
+            create index if not exists idx_strategy_admissions_lookup
+                on strategy_admissions(strategy_id, parameters_sha256, updated_at desc);
+            create index if not exists idx_strategy_admission_events
+                on strategy_admission_events(admission_id, created_at);
             create index if not exists idx_paper_sessions_created_at
                 on paper_sessions(created_at desc);
             create index if not exists idx_paper_signals_session_date

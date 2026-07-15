@@ -50,12 +50,16 @@ def test_strategy_templates_include_p1_standard_set():
         "bollinger_reversion",
         "etf_rotation",
         "future_trend",
+        "risk_parity",
+        "turning_point",
     } <= set(templates)
     assert templates["donchian_breakout"]["parameters"][0]["key"] == "lookback"
     assert templates["etf_rotation"]["parameters"][0]["key"] == "symbols"
     assert templates["sma_cross"]["template_path"].replace("\\", "/").endswith("strategies/templates/sma_cross")
     assert "max(self.highs" in render_python_template("DonchianAlgorithm", "donchian_breakout")
     assert "self.rotation_symbols" in render_python_template("RotationAlgorithm", "etf_rotation")
+    assert "inverse_volatility" in render_python_template("RiskParityAlgorithm", "risk_parity")
+    assert "self.gap_weight" in render_python_template("TurningPointAlgorithm", "turning_point")
 
 
 def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkeypatch):

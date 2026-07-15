@@ -198,6 +198,16 @@ def _last_value_by_date(series: list[dict[str, Any]]) -> dict[str, float]:
     return {key: item[1] for key, item in values.items()}
 
 
+def _daily_return_by_date(series: list[dict[str, Any]]) -> dict[str, float]:
+    values = _last_value_by_date(series)
+    dates = sorted(values)
+    return {
+        current_date: values[current_date] / values[previous_date] - 1.0
+        for previous_date, current_date in zip(dates, dates[1:])
+        if values[previous_date] > 0
+    }
+
+
 def _calendar_dates(series: list[dict[str, Any]]) -> set[str]:
     dates: set[str] = set()
     for point in series:
@@ -246,6 +256,80 @@ def _sample_std(values: list[float]) -> float | None:
     mean = sum(values) / len(values)
     variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
     return math.sqrt(variance)
+
+
+def _percentile(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = max(0.0, min(1.0, quantile)) * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _risk_attribution_metrics(
+    equity_curve: list[dict[str, Any]],
+    benchmark_series: list[dict[str, Any]],
+) -> dict[str, Any]:
+    strategy_returns = _daily_return_by_date(equity_curve)
+    values = list(strategy_returns.values())
+    fifth = _percentile(values, 0.05)
+    tail = [value for value in values if fifth is not None and value <= fifth]
+    benchmark_returns = _daily_return_by_date(benchmark_series)
+    common = sorted(set(strategy_returns) & set(benchmark_returns))
+    excess = [strategy_returns[key] - benchmark_returns[key] for key in common]
+    excess_std = _sample_std(excess)
+    tracking_error = excess_std * math.sqrt(SHARPE_ANNUALIZATION_FACTOR) if excess_std is not None else None
+    information_ratio = (
+        (sum(excess) / len(excess)) / excess_std * math.sqrt(SHARPE_ANNUALIZATION_FACTOR)
+        if excess and excess_std is not None and excess_std > 1e-18
+        else None
+    )
+    correlation = None
+    if len(common) >= 2:
+        strategy_values = [strategy_returns[key] for key in common]
+        benchmark_values = [benchmark_returns[key] for key in common]
+        strategy_mean = sum(strategy_values) / len(strategy_values)
+        benchmark_mean = sum(benchmark_values) / len(benchmark_values)
+        numerator = sum((left - strategy_mean) * (right - benchmark_mean) for left, right in zip(strategy_values, benchmark_values))
+        left_scale = math.sqrt(sum((value - strategy_mean) ** 2 for value in strategy_values))
+        right_scale = math.sqrt(sum((value - benchmark_mean) ** 2 for value in benchmark_values))
+        if left_scale > 1e-18 and right_scale > 1e-18:
+            correlation = numerator / (left_scale * right_scale)
+    return {
+        "var95": max(0.0, -fifth) if fifth is not None else None,
+        "expectedShortfall95": max(0.0, -(sum(tail) / len(tail))) if tail else None,
+        "trackingError": tracking_error,
+        "informationRatio": information_ratio,
+        "marketCorrelation": correlation,
+        "riskMetricSampleCount": len(values),
+        "benchmarkAlignedSampleCount": len(common),
+    }
+
+
+def _position_concentration(filled: list[dict[str, Any]]) -> dict[str, Any]:
+    positions: dict[str, dict[str, float]] = {}
+    for event in filled:
+        symbol = str(event["symbol"])
+        item = positions.setdefault(symbol, {"quantity": 0.0, "price": float(event["price"])})
+        item["quantity"] += float(event["quantity"])
+        item["price"] = float(event["price"])
+    notionals = sorted(
+        (abs(item["quantity"] * item["price"]) for item in positions.values() if abs(item["quantity"] * item["price"]) > 1e-9),
+        reverse=True,
+    )
+    total = sum(notionals)
+    weights = [value / total for value in notionals] if total > 0 else []
+    return {
+        "positionCount": len(weights),
+        "hhi": sum(weight * weight for weight in weights) if weights else 0.0,
+        "top1Weight": weights[0] if weights else 0.0,
+        "top3Weight": sum(weights[:3]),
+    }
 
 
 def _sharpe_quality(
@@ -330,6 +414,19 @@ def summary_with_benchmark_metrics(statistics: dict[str, Any], performance: dict
         summary["Computed Alpha"] = performance.get("computed_alpha")
     if performance.get("computed_beta") is not None:
         summary["Computed Beta"] = performance.get("computed_beta")
+    for key, label in (
+        ("var95", "VaR 95%"),
+        ("expectedShortfall95", "Expected Shortfall 95%"),
+        ("trackingError", "Computed Tracking Error"),
+        ("informationRatio", "Computed Information Ratio"),
+        ("marketCorrelation", "Market Correlation"),
+    ):
+        if performance.get(key) is not None:
+            summary[label] = performance.get(key)
+    concentration = performance.get("concentration") or {}
+    summary["Position HHI"] = concentration.get("hhi")
+    summary["Top Position Weight"] = concentration.get("top1Weight")
+    summary["Top 3 Position Weight"] = concentration.get("top3Weight")
     return summary
 
 
@@ -387,6 +484,7 @@ def performance_analytics(
     elif benchmark_source == "lean_data_cache":
         metric_status = "benchmark_return_available_from_lean_data_cache"
     sharpe_quality = _sharpe_quality(statistics, chart_data, equity_curve)
+    benchmark_series = chart_data["series"].get("benchmark") or []
     return {
         "monthly_returns": _period_returns(equity_curve, "month"),
         "yearly_returns": _period_returns(equity_curve, "year"),
@@ -412,6 +510,8 @@ def performance_analytics(
         "benchmarkMetricStatus": metric_status,
         "benchmarkMetricPoints": alpha_beta["points"],
         "benchmarkSeriesSource": benchmark_source,
+        **_risk_attribution_metrics(equity_curve, benchmark_series),
+        "concentration": _position_concentration(filled),
         **sharpe_quality,
         "industry_exposure": _industry_exposure(filled),
     }

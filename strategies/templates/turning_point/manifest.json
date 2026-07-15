@@ -1,0 +1,52 @@
+{
+  "key": "turning_point",
+  "name": "Turning Point Selection",
+  "description": "Rank a small universe by momentum, opening gap and relative volume, then hold the strongest assets.",
+  "parameters": [
+    {
+      "key": "symbols",
+      "label": "Symbols",
+      "type": "text",
+      "default": "SPY,QQQ,IWM,DIA"
+    },
+    {
+      "key": "lookback",
+      "label": "Momentum Lookback",
+      "type": "number",
+      "default": 20,
+      "min": 3
+    },
+    {
+      "key": "topN",
+      "label": "Assets To Hold",
+      "type": "number",
+      "default": 2,
+      "min": 1
+    },
+    {
+      "key": "rebalanceDays",
+      "label": "Rebalance Days",
+      "type": "number",
+      "default": 5,
+      "min": 1
+    },
+    {
+      "key": "gapWeight",
+      "label": "Gap Weight",
+      "type": "number",
+      "default": 0.25,
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    {
+      "key": "volumeWeight",
+      "label": "Volume Weight",
+      "type": "number",
+      "default": 0.1,
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  ]
+}
