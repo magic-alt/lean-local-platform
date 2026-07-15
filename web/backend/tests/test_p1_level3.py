@@ -26,7 +26,7 @@ def test_china_strategy_template_hard_fails_without_real_benchmark():
     assert "backtest is blocked" in code
     assert "set_benchmark(lambda time: 1)" not in code
     assert "AccountType.CASH" in code
-    assert "if not data.contains_key(self.symbol)" in code
+    assert "if not has_fresh_data(data, self.symbol)" in code
 
 
 def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
@@ -38,7 +38,7 @@ def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
     assert "backtest is blocked" in code
     assert "set_benchmark(lambda time: 1)" not in code
     assert "AccountType.CASH" in code
-    assert "if not data.contains_key(self.symbol)" in code
+    assert "if not has_fresh_data(data, self.symbol)" in code
 
 
 def test_strategy_templates_include_p1_standard_set():

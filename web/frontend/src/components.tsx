@@ -1,6 +1,7 @@
 import { Card, Empty, Table, Tag } from "antd";
 import ReactECharts from "echarts-for-react";
 import { BacktestRun, ChartData, OrderMarkerPoint, RunStatus } from "./api";
+import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -120,42 +121,16 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           />
         </div>
       </Card>
-      {chartData.series.price.length > 0 && (
-        <Card title="Asset Plot" style={{ marginTop: 16 }}>
-          <div data-testid="price-chart" data-point-count={chartData.series.price.length}>
+      {((chartData.candles?.length ?? 0) > 0 || chartData.series.price.length > 0) && (
+        <Card title="Asset Price, Orders & Indicators" style={{ marginTop: 16 }}>
+          <div data-testid="price-chart" data-point-count={chartData.candles?.length ?? chartData.series.price.length}>
             <ReactECharts
-              style={{ height: 360 }}
-              option={lineWithOrdersOption(
-                "Price With Orders",
-                [{ name: "Close", points: chartData.series.price }],
-                chartData,
-                "priceValue"
-              )}
+              style={{ height: backtestAssetChartHeight(chartData) }}
+              option={backtestAssetOption(chartData)}
             />
           </div>
         </Card>
       )}
-      <div className="two-column">
-        {(chartData.series.emaFast.length > 0 || chartData.series.emaSlow.length > 0) && (
-          <Card title="EMA">
-            <ReactECharts
-              style={{ height: 320 }}
-              option={lineOption("EMA", [
-                { name: "Fast", points: chartData.series.emaFast },
-                { name: "Slow", points: chartData.series.emaSlow }
-              ])}
-            />
-          </Card>
-        )}
-        <Card title="Drawdown">
-          <div data-testid="drawdown-chart" data-point-count={chartData.series.drawdown.length}>
-            <ReactECharts
-              style={{ height: 320 }}
-              option={lineOption("Drawdown", [{ name: "Drawdown", points: chartData.series.drawdown }])}
-            />
-          </div>
-        </Card>
-      </div>
       <Card title="Orders" style={{ marginTop: 16 }}>
         <Table
           data-testid="orders-table"

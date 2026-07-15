@@ -18,7 +18,7 @@
 
     def on_data(self, data):
         for asset_symbol in self.risk_symbols:
-            if data.contains_key(asset_symbol):
+            if has_fresh_data(data, asset_symbol):
                 history = self.price_history[asset_symbol]
                 history.append(float(data[asset_symbol].close))
                 self.price_history[asset_symbol] = history[-(self.lookback + 1):]

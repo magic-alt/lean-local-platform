@@ -12,7 +12,7 @@ ASHARE_DEFAULTS: dict[str, Any] = {
     "calendarMarket": "china",
     "lotSize": 100,
     "commissionRate": 0.0001,
-    "minCommission": 0.0,
+    "minCommission": 5.0,
     "stampTaxSell": 0.0005,
     "transferFeeRate": 0.00001,
     "slippageBps": 5.0,
@@ -25,7 +25,7 @@ ASHARE_DEFAULTS: dict[str, Any] = {
     "watchlist": [],
     "observeOnlySymbols": [],
     "allowStBuy": False,
-    "constraintVersion": 2,
+    "constraintVersion": 3,
 }
 
 

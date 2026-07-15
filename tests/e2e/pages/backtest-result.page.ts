@@ -36,11 +36,11 @@ export class BacktestResultPage extends BasePage {
   async expectCharts() {
     await this.page.getByRole("tab", { name: "Charts" }).click();
     const equity = this.page.getByTestId("equity-chart");
-    const drawdown = this.page.getByTestId("drawdown-chart");
+    const price = this.page.getByTestId("price-chart");
     await expect(equity).toBeVisible();
-    await expect(drawdown).toBeVisible();
+    await expect(price).toBeVisible();
     await expect.poll(async () => Number(await equity.getAttribute("data-point-count"))).toBeGreaterThan(0);
-    await expect.poll(async () => Number(await drawdown.getAttribute("data-point-count"))).toBeGreaterThan(0);
+    await expect.poll(async () => Number(await price.getAttribute("data-point-count"))).toBeGreaterThan(0);
   }
 
   async expectLogs(pattern: RegExp) {

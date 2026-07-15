@@ -4,7 +4,7 @@
         self.set_warm_up(self.period, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol):
+        if not has_fresh_data(data, self.symbol):
             return
         close = float(data[self.symbol].close)
         self.closes.append(close)

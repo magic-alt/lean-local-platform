@@ -5,7 +5,7 @@
         self.set_warm_up(max(self.lookback, self.exit_lookback), self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol):
+        if not has_fresh_data(data, self.symbol):
             return
         bar = data[self.symbol]
         previous_high = max(self.highs[-self.lookback:]) if len(self.highs) >= self.lookback else None

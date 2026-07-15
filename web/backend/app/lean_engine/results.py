@@ -12,6 +12,7 @@ from ..domain.assets import (
     asset_class_key,
     asset_request,
     data_type_key,
+    parse_lean_zip_ohlcv_series,
     parse_lean_zip_price_series,
     resolution_key,
 )
@@ -69,6 +70,29 @@ def read_lean_daily_price_series(
     except LeanWebError:
         return []
     return parse_lean_zip_price_series(request, start_date, end_date)
+
+
+def read_lean_daily_candle_series(
+    symbol: str,
+    market: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    asset_class: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+) -> list[dict[str, Any]]:
+    start_date = parse_date(start) if start else None
+    end_date = parse_date(end) if end else None
+    try:
+        if asset_class_key(asset_class or "equity") == "equity":
+            market_value = market_key(market or venue)
+            request = AssetRequest("equity", normalize_symbol(symbol, market_value).upper(), market_value, resolution_key(resolution), data_type_key(data_type))
+        else:
+            request = asset_request(symbol, asset_class, venue=venue or market, resolution=resolution, data_type=data_type)
+    except LeanWebError:
+        return []
+    return parse_lean_zip_ohlcv_series(request, start_date, end_date)
 
 
 def _has_moving_values(points: list[dict[str, Any]]) -> bool:
@@ -279,8 +303,8 @@ def extract_chart_data(
     orders = [order for order in raw_orders if _is_filled_order(order)]
 
     inferred_symbol = symbol or next((order["symbol"] for order in orders if order["symbol"]), None)
-    price = (
-        read_lean_daily_price_series(
+    candles = (
+        read_lean_daily_candle_series(
             inferred_symbol,
             market,
             start,
@@ -293,6 +317,7 @@ def extract_chart_data(
         if inferred_symbol
         else []
     )
+    price = [{"time": row["time"], "value": row["close"]} for row in candles]
     benchmark_series = point_series(benchmark, "Benchmark")
     benchmark_source = "lean_result"
     if benchmark_symbol and not _has_moving_values(benchmark_series):
@@ -310,11 +335,30 @@ def extract_chart_data(
             benchmark_series = cache_series
             benchmark_source = "lean_data_cache"
     equity_series = point_series(equity, "Equity")
+    excluded_indicator_charts = {
+        "Strategy Equity",
+        "Drawdown",
+        "Benchmark",
+        "Portfolio Turnover",
+        "Exposure",
+        "Capacity",
+        "Assets Sales Volume",
+        "Portfolio Margin",
+    }
+    indicators = []
+    for chart_name, chart in charts.items():
+        if chart_name in excluded_indicator_charts or not isinstance(chart, dict):
+            continue
+        for series_name in (chart.get("series") or {}):
+            points = point_series(chart, series_name)
+            if points:
+                indicators.append({"chart": chart_name, "name": series_name, "points": points})
+
     order_markers = [
         {
             **order,
             "fillPrice": order["price"],
-            "priceValue": _nearest_value(price, order["time"]) or order["price"],
+            "priceValue": order["price"] or _nearest_value(price, order["time"]),
             "equityValue": _nearest_value(equity_series, order["time"]),
         }
         for order in orders
@@ -322,6 +366,8 @@ def extract_chart_data(
 
     return {
         "statistics": data.get("statistics") or {},
+        "candles": candles,
+        "indicators": indicators,
         "series": {
             "equity": equity_series,
             "return": point_series(equity, "Return"),

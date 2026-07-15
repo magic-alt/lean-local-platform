@@ -24,6 +24,13 @@ def parameter_value(algorithm, key, default):
     return default if value in (None, "") else value
 
 
+def has_fresh_data(data, symbol):
+    if not data.contains_key(symbol):
+        return False
+    bar = data[symbol]
+    return not bool(getattr(bar, "is_fill_forward", getattr(bar, "IsFillForward", False)))
+
+
 class {class_name}(QCAlgorithm):
     def initialize(self):
         ticker = self.get_parameter("ticker", "SPY").upper()
@@ -125,7 +132,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -151,7 +158,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -178,7 +185,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(slow + signal, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.macd.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.macd.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.macd.current.value > self.macd.signal.current.value and not invested:
@@ -205,7 +212,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(period, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.rsi.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.rsi.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.rsi.current.value < self.buy_below and not invested:
@@ -230,7 +237,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(self.lookback, self.exit_lookback), self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol):
+        if not has_fresh_data(data, self.symbol):
             return
         bar = data[self.symbol]
         previous_high = max(self.highs[-self.lookback:]) if len(self.highs) >= self.lookback else None
@@ -264,7 +271,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(self.period, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol):
+        if not has_fresh_data(data, self.symbol):
             return
         close = float(data[self.symbol].close)
         self.closes.append(close)
@@ -314,7 +321,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
 
     def on_data(self, data):
         for rotation_symbol in self.rotation_symbols:
-            if data.contains_key(rotation_symbol):
+            if has_fresh_data(data, rotation_symbol):
                 history = self.price_history[rotation_symbol]
                 history.append(float(data[rotation_symbol].close))
                 self.price_history[rotation_symbol] = history[-self.lookback:]
@@ -354,7 +361,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(lookback, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.roc.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.roc.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.roc.current.value > self.threshold and not invested:
@@ -382,7 +389,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         self.set_warm_up(max(fast_period, slow_period), self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
@@ -401,7 +408,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "body": '''        self.has_bought = False
 
     def on_data(self, data):
-        if self.has_bought or not data.contains_key(self.symbol):
+        if self.has_bought or not has_fresh_data(data, self.symbol):
             return
         self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
         self.has_bought = True
@@ -415,7 +422,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "body": '''        self.set_warm_up(1, self.resolution)
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up:
             return
         # Write custom strategy logic here.
 ''',

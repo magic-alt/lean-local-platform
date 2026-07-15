@@ -610,7 +610,7 @@ def _float_parameter(parameters: dict[str, Any], key: str, default: float) -> fl
 def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
-    commission = max(value * _float_parameter(parameters, "commissionRate", 0.0001), _float_parameter(parameters, "minCommission", 0.0)) if value else 0
+    commission = max(value * _float_parameter(parameters, "commissionRate", 0.0001), _float_parameter(parameters, "minCommission", 5.0)) if value else 0
     stamp_tax = value * _float_parameter(parameters, "stampTaxSell", 0.0005) if side == "sell" else 0
     transfer = value * _float_parameter(parameters, "transferFeeRate", 0.00001)
     return commission + stamp_tax + transfer

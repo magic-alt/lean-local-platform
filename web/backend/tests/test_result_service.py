@@ -3,6 +3,69 @@ import json
 from app.services.result_service import parse_result_payload, persist_result
 
 
+def test_extract_chart_data_includes_candles_volume_and_strategy_indicators(tmp_path, monkeypatch):
+    import app.lean_engine.results as results_module
+
+    result_json = tmp_path / "chart.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "charts": {
+                    "Strategy Equity": {"series": {"Equity": {"values": [[1704153600, 100000]]}}},
+                    "RSI": {"series": {"RSI": {"values": [[1704153600, 28.5]]}}},
+                    "EMA": {
+                        "series": {
+                            "Fast": {"values": [[1704153600, 10.2]]},
+                            "Slow": {"values": [[1704153600, 10.0]]},
+                        }
+                    },
+                },
+                "orders": {
+                    "1": {
+                        "quantity": 100,
+                        "lastFillTime": "2024-01-02T07:00:00Z",
+                        "symbol": {"value": "600460"},
+                        "price": 10.15,
+                        "status": 3,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        results_module,
+        "read_lean_daily_candle_series",
+        lambda *args, **kwargs: [
+            {
+                "time": "2024-01-02T21:00:00+00:00",
+                "open": 10.0,
+                "high": 10.3,
+                "low": 9.9,
+                "close": 10.2,
+                "volume": 123456,
+            }
+        ],
+    )
+
+    chart = results_module.extract_chart_data(
+        result_json,
+        symbol="600460",
+        market="china",
+        start="2024-01-02",
+        end="2024-01-02",
+    )
+
+    assert chart["candles"][0]["volume"] == 123456
+    assert chart["series"]["price"] == [{"time": "2024-01-02T21:00:00+00:00", "value": 10.2}]
+    assert {(item["chart"], item["name"]) for item in chart["indicators"]} == {
+        ("EMA", "Fast"),
+        ("EMA", "Slow"),
+        ("RSI", "RSI"),
+    }
+    assert chart["orderMarkers"][0]["priceValue"] == 10.15
+
+
 def test_parse_result_payload_extracts_core_sections(tmp_path):
     result_json = tmp_path / "job.json"
     result_json.write_text(

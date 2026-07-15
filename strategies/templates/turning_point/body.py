@@ -20,7 +20,7 @@
 
     def on_data(self, data):
         for asset_symbol in self.selection_symbols:
-            if data.contains_key(asset_symbol):
+            if has_fresh_data(data, asset_symbol):
                 bar = data[asset_symbol]
                 history = self.bar_history[asset_symbol]
                 history.append((float(bar.open), float(bar.close), float(bar.volume)))

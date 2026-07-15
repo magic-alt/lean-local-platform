@@ -17,7 +17,7 @@
 
     def on_data(self, data):
         for rotation_symbol in self.rotation_symbols:
-            if data.contains_key(rotation_symbol):
+            if has_fresh_data(data, rotation_symbol):
                 history = self.price_history[rotation_symbol]
                 history.append(float(data[rotation_symbol].close))
                 self.price_history[rotation_symbol] = history[-self.lookback:]

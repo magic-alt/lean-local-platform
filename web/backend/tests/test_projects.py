@@ -92,6 +92,15 @@ def test_api_update_project_config(tmp_path, monkeypatch):
     assert payload["config"]["source"] == "tushare"
     assert payload["config"]["templateKey"] == "ema_cross"
 
+    changed = client.put(
+        f"/api/projects/{created['id']}",
+        json={"config": {"templateKey": "rsi_reversion", "parameters": {"period": 14, "buyBelow": 30, "sellAbove": 55}}},
+    ).json()
+    source = (Path(changed["project_path"]) / "main.py").read_text(encoding="utf-8")
+    assert changed["config"]["templateKey"] == "rsi_reversion"
+    assert "self.rsi = self.rsi" in source
+    assert "self.fast = self.ema" not in source
+
 
 def test_api_clone_project_with_files(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
@@ -124,3 +133,12 @@ def test_api_clone_project_with_files(tmp_path, monkeypatch):
     assert "project.json" in file_names
     assert "extra.txt" in file_names
     assert (Path(cloned["project_path"]) / "project.json").read_text(encoding="utf-8").strip() != ""
+
+    changed_clone = client.post(
+        f"/api/projects/{created['id']}/clone",
+        json={"name": "clone-rsi", "config": {"templateKey": "rsi_reversion"}},
+    ).json()
+    changed_source = (Path(changed_clone["project_path"]) / "main.py").read_text(encoding="utf-8")
+    assert changed_clone["config"]["templateKey"] == "rsi_reversion"
+    assert "self.rsi = self.rsi" in changed_source
+    assert "self.fast = self.ema" not in changed_source

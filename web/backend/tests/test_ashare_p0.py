@@ -213,7 +213,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["minCash"] == 1000.0
     assert job["parameters"]["cashBuffer"] == 1000.0
     assert job["parameters"]["blacklist"] == ["000001", "600000"]
-    assert job["parameters"]["constraintVersion"] == 2
+    assert job["parameters"]["constraintVersion"] == 3
     assert job["parameters"]["nextOpenGapBufferBps"] == 2000.0
     assert job["fingerprint"]["parameters_sha256"]
     assert "git_commit" in job["fingerprint"]
@@ -227,7 +227,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["validation"]["marketRules"]["shortSellingAllowed"] is False
     assert job["validation"]["marketRules"]["nextOpenGapBufferBps"] == 2000.0
     assert job["validation"]["marketRules"]["feeModel"]["commissionRate"] == 0.0001
-    assert job["validation"]["marketRules"]["feeModel"]["minCommission"] == 0.0
+    assert job["validation"]["marketRules"]["feeModel"]["minCommission"] == 5.0
     assert job["validation"]["marketRules"]["feeModel"]["stampTaxSell"] == 0.0005
     assert job["validation"]["data"]["coverage"]["bar_count"] == 3
     assert job["validation"]["data"]["coverage"]["status_count"] == 3

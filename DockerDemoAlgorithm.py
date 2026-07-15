@@ -15,6 +15,13 @@ def parameter_value(algorithm, key, default):
     return default if value in (None, "") else value
 
 
+def has_fresh_data(data, symbol):
+    if not data.contains_key(symbol):
+        return False
+    bar = data[symbol]
+    return not bool(getattr(bar, "is_fill_forward", getattr(bar, "IsFillForward", False)))
+
+
 class DockerDemoAlgorithm(QCAlgorithm):
     def initialize(self):
         self.ticker = self.get_parameter("ticker", "SPY").upper()
@@ -83,7 +90,7 @@ class DockerDemoAlgorithm(QCAlgorithm):
         )
 
     def on_data(self, data):
-        if not data.contains_key(self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
+        if not has_fresh_data(data, self.symbol) or self.is_warming_up or not self.fast.is_ready or not self.slow.is_ready:
             return
 
         invested = self.portfolio[self.symbol].invested

@@ -158,7 +158,7 @@ function marketCostParameters(nextMarket: string, feeModel?: string, slippageMod
   const zeroFees = feeModel === "zero";
   return {
     commissionRate: zeroFees ? 0 : 0.0001,
-    minCommission: 0,
+    minCommission: zeroFees ? 0 : 5,
     stampTaxSell: zeroFees ? 0 : 0.0005,
     transferFeeRate: zeroFees ? 0 : 0.00001,
     slippageBps: slippageModel === "zero" ? 0 : 5.0
@@ -1060,7 +1060,7 @@ export function ProjectsPage() {
               </Form.Item>
               <Form.Item name="dockerImage" label="Docker Image"><Input /></Form.Item>
               <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input /></Form.Item>
-              <Form.Item name="feeModel" label="Fee Model"><Select virtual={false} options={[{ value: "default", label: "Default A-share statutory" }, { value: "zero", label: "Zero Fees" }]} /></Form.Item>
+              <Form.Item name="feeModel" label="Fee Model"><Select virtual={false} options={[{ value: "default", label: "Default A-share costs" }, { value: "zero", label: "Zero Fees (research only)" }]} /></Form.Item>
               <Form.Item name="slippageModel" label="Slippage Model"><Select virtual={false} options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
             </div>
             {selectedTemplate && <div className="field-grid">{strategyFields(selectedTemplate)}</div>}
@@ -1311,7 +1311,7 @@ export function BacktestsPage() {
               <InputNumber style={{ width: "100%" }} data-testid="backtest-cash-input" />
             </Form.Item>
             <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input data-testid="backtest-benchmark-input" /></Form.Item>
-            <Form.Item name="feeModel" label="Fee Model"><Select data-testid="backtest-fee-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default A-share statutory" }, { value: "zero", label: "Zero Fees" }]} /></Form.Item>
+            <Form.Item name="feeModel" label="Fee Model"><Select data-testid="backtest-fee-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default A-share costs" }, { value: "zero", label: "Zero Fees (research only)" }]} /></Form.Item>
             <Form.Item name="slippageModel" label="Slippage Model"><Select data-testid="backtest-slippage-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
             <Form.Item name="source" label="Data Source">
               {market === "china" ? (

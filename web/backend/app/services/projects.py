@@ -45,6 +45,23 @@ def _copy_project_directory(source_root: Path, target_root: Path) -> None:
             shutil.copy2(child, target)
 
 
+def _render_template_change(
+    project_root: Path,
+    *,
+    language: str,
+    algorithm_class: str,
+    main_file: str,
+    previous_template: str | None,
+    next_template: str | None,
+) -> None:
+    if language != "Python" or not next_template or next_template == previous_template:
+        return
+    (project_root / main_file).write_text(
+        render_python_template(algorithm_class, next_template),
+        encoding="utf-8",
+    )
+
+
 def get_project(project_id: str) -> dict[str, Any]:
     with db() as connection:
         row = connection.execute("select * from projects where id = ?", (project_id,)).fetchone()
@@ -138,6 +155,7 @@ def clone_project(
     _copy_project_directory(source_root, clone_project_path)
 
     source_config = dict(source.get("config") or {})
+    previous_template = source_config.get("templateKey")
     if config_updates:
         source_config.update({key: value for key, value in config_updates.items() if value is not None})
 
@@ -147,6 +165,15 @@ def clone_project(
         files = sorted([path.name for path in clone_project_path.glob("*") if path.is_file()])
         if files:
             main_file = files[0]
+
+    _render_template_change(
+        clone_project_path,
+        language=source["language"],
+        algorithm_class=source["algorithm_class"],
+        main_file=main_file,
+        previous_template=previous_template,
+        next_template=source_config.get("templateKey"),
+    )
 
     (clone_project_path / "project.json").write_text(json.dumps(source_config, indent=2), encoding="utf-8")
 
@@ -248,11 +275,20 @@ def write_file(project_id: str, relative_path: str, content: str) -> dict[str, A
 def update_project(project_id: str, name: str | None = None, config_updates: dict[str, Any] | None = None) -> dict[str, Any]:
     project = get_project(project_id)
     config = dict(project.get("config") or {})
+    previous_template = config.get("templateKey")
     if config_updates:
         config.update({key: value for key, value in config_updates.items() if value is not None})
     next_name = name or project["name"]
     now = utc_now()
     project_path = _project_root(project)
+    _render_template_change(
+        project_path,
+        language=project["language"],
+        algorithm_class=project["algorithm_class"],
+        main_file=project["main_file"],
+        previous_template=previous_template,
+        next_template=config.get("templateKey"),
+    )
     (project_path / "project.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     with db() as connection:
         connection.execute(

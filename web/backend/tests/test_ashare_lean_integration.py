@@ -98,6 +98,9 @@ class P0IntegrationAlgorithm(QCAlgorithm):
     def on_data(self, data):
         if not data.contains_key(self.symbol):
             return
+        bar = data[self.symbol]
+        if bool(getattr(bar, "is_fill_forward", getattr(bar, "IsFillForward", False))):
+            return
         day = self.time.strftime("%Y-%m-%d")
         if day == "2024-01-02":
             self.helper.target_percent(self.symbol, 1)
@@ -134,7 +137,7 @@ class P0IntegrationAlgorithm(QCAlgorithm):
         "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
         "lotSize": 100,
         "commissionRate": 0.0001,
-        "minCommission": 0.0,
+        "minCommission": 5.0,
         "stampTaxSell": 0.0005,
         "transferFeeRate": 0.00001,
         "slippageBps": 0.0,

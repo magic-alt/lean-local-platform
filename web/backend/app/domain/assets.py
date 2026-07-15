@@ -244,7 +244,18 @@ def parse_lean_zip_price_series(
     start_date,
     end_date,
 ) -> list[dict[str, Any]]:
-    points_by_time: dict[str, float] = {}
+    return [
+        {"time": row["time"], "value": row["close"]}
+        for row in parse_lean_zip_ohlcv_series(request, start_date, end_date)
+    ]
+
+
+def parse_lean_zip_ohlcv_series(
+    request: AssetRequest,
+    start_date,
+    end_date,
+) -> list[dict[str, Any]]:
+    points_by_time: dict[str, dict[str, Any]] = {}
     scale = 10000 if request.asset_class == "equity" else 1
     for path in lean_data_paths(request):
         if not path.exists() or not path.is_file():
@@ -262,7 +273,11 @@ def parse_lean_zip_price_series(
                                 continue
                             try:
                                 item_date = datetime.strptime(fields[0].split()[0], "%Y%m%d").date()
+                                open_price = float(fields[1]) / scale
+                                high = float(fields[2]) / scale
+                                low = float(fields[3]) / scale
                                 close = float(fields[4]) / scale
+                                volume = float(fields[5]) if len(fields) > 5 else 0.0
                             except ValueError:
                                 continue
                             if start_date and item_date < start_date:
@@ -270,7 +285,15 @@ def parse_lean_zip_price_series(
                             if end_date and item_date > end_date:
                                 continue
                             timestamp = datetime(item_date.year, item_date.month, item_date.day, 21, tzinfo=timezone.utc)
-                            points_by_time[timestamp.isoformat()] = close
+                            time_key = timestamp.isoformat()
+                            points_by_time[time_key] = {
+                                "time": time_key,
+                                "open": open_price,
+                                "high": high,
+                                "low": low,
+                                "close": close,
+                                "volume": volume,
+                            }
         except zipfile.BadZipFile:
             continue
-    return [{"time": key, "value": value} for key, value in sorted(points_by_time.items())]
+    return [value for _, value in sorted(points_by_time.items())]

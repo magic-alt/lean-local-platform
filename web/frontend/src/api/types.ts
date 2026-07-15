@@ -752,6 +752,21 @@ export interface ChartPoint {
   value: number;
 }
 
+export interface CandlePoint {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface StrategyIndicatorSeries {
+  chart: string;
+  name: string;
+  points: ChartPoint[];
+}
+
 export interface OrderMarkerPoint {
   time: string;
   side: "BUY" | "SELL";
@@ -767,6 +782,8 @@ export interface OrderMarkerPoint {
 
 export interface ChartData {
   statistics: Record<string, string>;
+  candles?: CandlePoint[];
+  indicators?: StrategyIndicatorSeries[];
   series: {
     equity: ChartPoint[];
     return: ChartPoint[];
