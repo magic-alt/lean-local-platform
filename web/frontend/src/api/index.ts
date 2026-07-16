@@ -20,6 +20,7 @@ import type {
   ProjectFile,
   Task,
   BacktestRun,
+  BacktestPreflight,
   BacktestStatus,
   BacktestValidationGate,
   BacktestValidation,
@@ -243,6 +244,32 @@ export const api = {
     const suffix = query.toString() ? `?${query.toString()}` : "";
     return request<BacktestRun[]>(`/api/backtests${suffix}`);
   },
+  preflightBacktest: (payload: {
+    symbol: string;
+    name?: string;
+    assetClass?: string;
+    market?: string;
+    venue?: string;
+    resolution?: string;
+    dataType?: string;
+    start: string;
+    end: string;
+    cash: number;
+    dockerImage: string;
+    projectId?: string;
+    benchmarkSymbol?: string;
+    feeModel?: string;
+    slippageModel?: string;
+    source?: string;
+    provider?: string;
+    allowResearchSource?: boolean;
+    parameters?: Record<string, unknown>;
+  }) =>
+    request<BacktestPreflight>("/api/backtests/preflight", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   createBacktest: (payload: {
     symbol: string;
     name?: string;

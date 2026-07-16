@@ -10,6 +10,7 @@ from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, 
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
+from .services.projects import consolidate_automatic_copies
 from .observability.metrics import metrics_middleware
 
 
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 def startup() -> None:
     try:
         init_db()
+        consolidation = consolidate_automatic_copies()
+        if consolidation["merged"] or consolidation["renamed"]:
+            logger.info("Project copy consolidation: %s", consolidation)
     except Exception as exc:
         logger.warning("Database initialization failed at startup; continuing in degraded mode: %s", exc)
 

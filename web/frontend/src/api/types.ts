@@ -178,11 +178,15 @@ export interface IndexMembersResult {
 export interface Project {
   id: string;
   name: string;
+  display_name?: string;
   language: "Python" | "CSharp";
   algorithm_class: string;
   project_path: string;
   main_file: string;
   config?: Record<string, unknown>;
+  run_count?: number;
+  latest_run_at?: string | null;
+  latest_run_status?: RunStatus | null;
   created_at: string;
   updated_at: string;
 }
@@ -248,6 +252,13 @@ export interface BacktestRun {
   exit_code?: number | null;
   error?: string | null;
   error_message?: string | null;
+  failure?: {
+    stage: "preflight" | "queue" | "execution" | "validation" | "analysis" | string;
+    code: string;
+    message: string;
+    retryable?: boolean;
+    details?: Record<string, unknown>;
+  } | null;
   created_at: string;
   queued_at?: string | null;
   started_at?: string | null;
@@ -257,6 +268,21 @@ export interface BacktestRun {
   fingerprint?: Record<string, unknown> | null;
   validation?: BacktestValidation | null;
   experiment?: BacktestExperiment | null;
+}
+
+export interface BacktestPreflight {
+  ready: boolean;
+  market?: string;
+  assetClass?: string;
+  effectiveSource?: string;
+  repaired: string[];
+  items: Array<{
+    role: string;
+    repaired: boolean;
+    reason?: string;
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+  }>;
 }
 
 export interface BacktestStatus {

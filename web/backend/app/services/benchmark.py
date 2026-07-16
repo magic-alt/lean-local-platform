@@ -108,3 +108,33 @@ def import_csi300_benchmark_from_akshare(start_date: str | None = None, end_date
             continue
         rows.append(item)
     return import_benchmark_rows(symbol="000300", rows=rows, source="akshare", market="china", adjust="raw")
+
+
+def fetch_and_import_benchmark(
+    symbol: str,
+    source: str,
+    *,
+    start_date: str,
+    end_date: str,
+    market: str = "china",
+) -> dict[str, Any]:
+    """Fetch an index explicitly so an overlapping stock code is never used as the benchmark."""
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_source = str(source or "").strip().lower()
+    if normalized_source == "tushare":
+        from .tushare_adapter import TushareAdapter
+
+        rows = TushareAdapter().index_daily_rows(normalized_symbol, start_date, end_date)
+        return import_benchmark_rows(
+            symbol=normalized_symbol,
+            rows=rows,
+            source="tushare",
+            market=market,
+            adjust="raw",
+        )
+    if normalized_source == "akshare" and normalized_symbol == "000300":
+        return import_csi300_benchmark_from_akshare(start_date, end_date)
+    raise LeanPlatformError(
+        f"benchmark_source_not_supported:{normalized_source}:{normalized_symbol}:"
+        "use tushare for explicit index daily data"
+    )

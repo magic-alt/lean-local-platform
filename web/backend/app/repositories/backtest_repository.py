@@ -38,6 +38,7 @@ BACKTEST_UPDATE_COLUMNS = {
     "fingerprint_json",
     "validation_json",
     "experiment_json",
+    "failure_json",
 }
 
 

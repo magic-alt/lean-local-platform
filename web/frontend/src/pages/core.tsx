@@ -19,6 +19,7 @@ import {
 } from "antd";
 import {
   CloudDownloadOutlined,
+  CopyOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   ExperimentOutlined,
@@ -26,6 +27,7 @@ import {
   FolderOpenOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  SaveOutlined,
   SettingOutlined,
   SlidersOutlined
 } from "@ant-design/icons";
@@ -39,6 +41,7 @@ import type {
   AppSettings,
   AssetClassInfo,
   BacktestAdmissionResponse,
+  BacktestPreflight,
   BacktestResult,
   BacktestRun,
   BacktestValidationResponse,
@@ -165,39 +168,6 @@ function marketCostParameters(nextMarket: string, feeModel?: string, slippageMod
   };
 }
 
-function normalizeConfigValue(value: unknown): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === null) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeConfigValue(item));
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (typeof value === "object") {
-    return Object.keys(value).sort().reduce<Record<string, unknown>>((acc, key) => {
-      const next = normalizeConfigValue((value as Record<string, unknown>)[key]);
-      if (next !== undefined) {
-        acc[key] = next;
-      }
-      return acc;
-    }, {});
-  }
-  return value;
-}
-
-function normalizeProjectConfig(config: Record<string, unknown> = {}) {
-  return normalizeConfigValue(config) as Record<string, unknown>;
-}
-
-function projectConfigEqual(left: Record<string, unknown> | undefined, right: Record<string, unknown> | undefined) {
-  return JSON.stringify(normalizeProjectConfig(left)) === JSON.stringify(normalizeProjectConfig(right));
-}
-
 function projectConfigForRun(values: any, selectedTemplate?: StrategyTemplate) {
   const template = selectedTemplate;
   const templateDefaultsFromForm = templateDefaults(template);
@@ -233,7 +203,7 @@ function projectFormDefaults(project?: Project, templates: StrategyTemplate[] = 
   const assetClass = String(project?.config?.assetClass ?? safeSettings.defaultAssetClass ?? "equity");
   const venue = String(project?.config?.venue ?? projectMarket(project) ?? market);
   const start = String(project?.config?.start ?? safeSettings.defaultStart ?? "2024-01-01");
-  const end = String(project?.config?.end ?? safeSettings.defaultEnd ?? "2026-07-13");
+  const end = String(project?.config?.end ?? safeSettings.defaultEnd ?? dayjs().format(ISO_DATE_FORMAT));
   const cash = Number(project?.config?.cash ?? safeSettings.defaultCash);
   return {
     name: project?.name ?? "",
@@ -769,6 +739,8 @@ export function ProjectsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [preflight, setPreflight] = useState<BacktestPreflight>();
   const selectedAssetClass = Form.useWatch("assetClass", form) || settings.data.defaultAssetClass;
   const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
   const selectedMarket = Form.useWatch("market", form) || settings.data.defaultMarket;
@@ -797,6 +769,8 @@ export function ProjectsPage() {
       nextValues.venue = nextValues.market;
     }
     form.setFieldsValue(nextValues);
+    setDirty(false);
+    setPreflight(undefined);
   }, [form, selectedProject, settings.data, templates.data, selectedProject?.id]);
 
   useEffect(() => {
@@ -836,7 +810,7 @@ export function ProjectsPage() {
     if (!selectedProject) return;
     setSaving(true);
     try {
-      const values = form.getFieldsValue(true);
+      const values = await form.validateFields();
       const config = parseProjectConfig(values);
       const payload = {
         name: String(values.name ?? selectedProject.name),
@@ -845,6 +819,8 @@ export function ProjectsPage() {
       await api.updateProject(selectedProject.id, payload);
       message.success("Project configuration saved");
       await projects.reload();
+      setDirty(false);
+      setPreflight(undefined);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -887,7 +863,13 @@ export function ProjectsPage() {
   async function runBacktest() {
     if (!selectedProject) return;
     if (submitting) return;
-    const values = form.getFieldsValue(true);
+    let values: any;
+    try {
+      values = await form.validateFields();
+    } catch {
+      message.error("Please correct the project configuration before running.");
+      return;
+    }
     const request = backtestValuesForRequest(values);
     if (!request.symbol) {
       message.error("Symbol is required.");
@@ -904,19 +886,12 @@ export function ProjectsPage() {
     setSubmitting(true);
     try {
       const nextConfig = parseProjectConfig(values);
-      const shouldClone = !projectConfigEqual((selectedProject.config as Record<string, unknown> | undefined), nextConfig);
-      let targetProjectId = selectedProject.id;
-      if (shouldClone) {
-        const copied = await api.cloneProject(selectedProject.id, {
-          name: `${selectedProject.name} (copy ${dayjs().format("YYYYMMDD-HHmmss")})`,
-          config: nextConfig,
-        });
-        targetProjectId = copied.id;
-        await projects.reload();
-        setSelectedProjectId(copied.id);
-        message.success("Saved configuration as a new project.");
-      }
-      const run = await api.createBacktest({
+      await api.updateProject(selectedProject.id, {
+        name: String(values.name ?? selectedProject.name),
+        config: nextConfig,
+      });
+      setDirty(false);
+      const payload = {
         symbol: request.symbol,
         name: request.runName,
         assetClass: request.assetClass,
@@ -932,9 +907,16 @@ export function ProjectsPage() {
         feeModel: request.feeModel,
         slippageModel: request.slippageModel,
         dockerImage: request.dockerImage,
-        projectId: targetProjectId,
+        projectId: selectedProject.id,
         parameters: request.parameters,
-      });
+      };
+      const readiness = await api.preflightBacktest(payload);
+      setPreflight(readiness);
+      if (readiness.repaired.length > 0) {
+        message.success(`Data repaired: ${readiness.repaired.join(", ")}`);
+      }
+      const run = await api.createBacktest(payload);
+      await projects.reload();
       message.success("Backtest queued");
       navigate(`/runs/${run.id}`);
     } catch (error) {
@@ -954,6 +936,35 @@ export function ProjectsPage() {
         message.success("Project deleted");
         await projects.reload();
       }
+    });
+  }
+
+  function duplicateProject(project: Project) {
+    const baseName = project.display_name || project.name;
+    let duplicateName = `${baseName} variant`;
+    Modal.confirm({
+      title: `Duplicate ${baseName}`,
+      content: (
+        <Input
+          defaultValue={duplicateName}
+          placeholder="Enter a meaningful project name"
+          onChange={(event) => { duplicateName = event.target.value.trim(); }}
+        />
+      ),
+      okText: "Duplicate",
+      onOk: async () => {
+        if (
+          !duplicateName
+          || duplicateName.toLocaleLowerCase() === baseName.toLocaleLowerCase()
+          || /\(copy\s+\d{8}-\d{6}\)/i.test(duplicateName)
+        ) {
+          throw new Error("Enter a meaningful name without an automatic copy timestamp.");
+        }
+        const duplicated = await api.cloneProject(project.id, { name: duplicateName });
+        await projects.reload();
+        setSelectedProjectId(duplicated.id);
+        message.success("Project duplicated");
+      },
     });
   }
   const projectRuns = runs.data.filter((run) => run.project_id === selectedProject?.id);
@@ -993,15 +1004,24 @@ export function ProjectsPage() {
       {selectedProject && (
         <Card title="Project Configuration" style={{ marginTop: 16 }}>
           <div className="toolbar" style={{ marginBottom: 12 }}>
-            <h2 className="page-title" style={{ margin: 0 }}>Current Project: {selectedProject.name}</h2>
+            <h2 className="page-title" style={{ margin: 0 }}>Current Project: {selectedProject.display_name || selectedProject.name}</h2>
             <Select
               style={{ width: 320 }}
               value={selectedProjectId}
               onChange={setSelectedProjectId}
-              options={projects.data.map((project) => ({ value: project.id, label: project.name }))}
+              options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))}
             />
           </div>
-          <Form form={form} layout="vertical" initialValues={projectFormDefaults(selectedProject, templates.data, settings.data)} key={`${selectedProject.id}-${templates.data.length}-${settings.data.defaultMarket}`}>
+          <Form
+            form={form}
+            layout="vertical"
+            initialValues={projectFormDefaults(selectedProject, templates.data, settings.data)}
+            key={`${selectedProject.id}-${templates.data.length}-${settings.data.defaultMarket}`}
+            onValuesChange={() => {
+              setDirty(true);
+              setPreflight(undefined);
+            }}
+          >
             <div className="field-grid">
               <Form.Item name="name" label="Project Name" rules={[{ required: true }]}><Input placeholder="Project name" /></Form.Item>
               <Form.Item name="assetClass" label="Asset">
@@ -1067,9 +1087,19 @@ export function ProjectsPage() {
               <Form.Item name="slippageModel" label="Slippage Model"><Select virtual={false} options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
             </div>
             {selectedTemplate && <div className="field-grid">{strategyFields(selectedTemplate)}</div>}
+            {preflight?.ready && (
+              <Alert
+                type={preflight.repaired.length > 0 ? "warning" : "success"}
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={preflight.repaired.length > 0
+                  ? `Data is ready after repairing: ${preflight.repaired.join(", ")}`
+                  : `Data is ready from ${preflight.effectiveSource || "the selected source"}.`}
+              />
+            )}
             <Space wrap>
-              <Button icon={<ReloadOutlined />} type="default" onClick={saveProject} loading={saving} disabled={saving || !selectedProjectId}>Save Configuration</Button>
-              <Button type="primary" icon={<PlayCircleOutlined />} onClick={runBacktest} loading={submitting} disabled={submitting || !selectedProjectId}>Run Backtest</Button>
+              <Button icon={<SaveOutlined />} type="default" onClick={saveProject} loading={saving} disabled={saving || !selectedProjectId}>Save{dirty ? " Changes" : ""}</Button>
+              <Button type="primary" icon={<PlayCircleOutlined />} onClick={runBacktest} loading={submitting} disabled={submitting || !selectedProjectId}>Save & Run</Button>
             </Space>
           </Form>
           <div className="grid" style={{ marginTop: 16 }}>
@@ -1088,17 +1118,24 @@ export function ProjectsPage() {
           dataSource={projects.data}
           pagination={{ pageSize: 10 }}
           columns={[
-            { title: "Name", dataIndex: "name" },
+            { title: "Name", render: (_, project) => project.display_name || project.name },
             { title: "Asset", render: (_, project) => String(project.config?.assetClass ?? "equity") },
             { title: "Venue", render: (_, project) => String(project.config?.venue ?? project.config?.market ?? "usa") },
-            { title: "Strategy", render: (_, project) => String(project.config?.templateKey ?? "custom") },
+            {
+              title: "Strategy",
+              render: (_, project) => templates.data.find((item) => item.key === project.config?.templateKey)?.name
+                || String(project.config?.templateKey ?? "Custom")
+            },
+            { title: "Runs", render: (_, project) => project.run_count ?? 0 },
+            { title: "Latest", render: (_, project) => project.latest_run_status ? <StatusTag status={project.latest_run_status} /> : "-" },
             { title: "Updated", dataIndex: "updated_at" },
             {
               title: "Actions",
-              width: 190,
+              width: 240,
               render: (_, project) => (
                 <Space>
                   <Button size="small" type="primary" onClick={() => setSelectedProjectId(project.id)}>Open</Button>
+                  <Button size="small" icon={<CopyOutlined />} onClick={() => duplicateProject(project)}>Duplicate</Button>
                   <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} />
                 </Space>
               )
@@ -1178,6 +1215,7 @@ export function BacktestsPage() {
   const [symbols, setSymbols] = useState<string[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [preflight, setPreflight] = useState<BacktestPreflight>();
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
@@ -1206,7 +1244,7 @@ export function BacktestsPage() {
     if (submitting) return;
     setSubmitting(true);
     try {
-      const run = await api.createBacktest({
+      const payload = {
         ...values,
         symbol: String(values.symbol ?? "").trim().toUpperCase(),
         assetClass,
@@ -1223,7 +1261,10 @@ export function BacktestsPage() {
           slippageModel: values.slippageModel,
           source: values.source
         }
-      });
+      };
+      const readiness = await api.preflightBacktest(payload);
+      setPreflight(readiness);
+      const run = await api.createBacktest(payload);
       message.success("Backtest queued");
       navigate(`/runs/${run.id}`);
     } catch (error) {
@@ -1269,7 +1310,7 @@ export function BacktestsPage() {
           }}
         >
           <div className="field-grid six">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: nextMarket === "china" ? "000300" : "SPY", source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: nextMarket === "china" ? "000300" : "SPY", source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
             <Form.Item name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
             <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY"); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
@@ -1326,6 +1367,16 @@ export function BacktestsPage() {
             <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
             {strategyFields(selectedTemplate)}
           </div>
+          {preflight?.ready && (
+            <Alert
+              type={preflight.repaired.length > 0 ? "warning" : "success"}
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={preflight.repaired.length > 0
+                ? `Data repaired and ready: ${preflight.repaired.join(", ")}`
+                : `Data ready from ${preflight.effectiveSource || "the selected source"}.`}
+            />
+          )}
           <Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run</Button>
         </Form>
       </Card>
@@ -1334,7 +1385,7 @@ export function BacktestsPage() {
           <Form.Item name="name" label="Name"><Input placeholder="Name" style={{ width: 180 }} /></Form.Item>
           <Form.Item name="status" label="Status"><Select data-testid="history-status-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="market" label="Market"><Select data-testid="history-market-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Market" style={{ width: 150 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-          <Form.Item name="projectId" label="Project"><Select data-testid="history-project-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
+          <Form.Item name="projectId" label="Project"><Select data-testid="history-project-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
           <Form.Item name="symbol" label="Symbol"><SecuritySearch market="all" placeholder="代码 / 公司" style={{ width: 180 }} /></Form.Item>
           <Button htmlType="submit">Filter</Button>
           <Button onClick={() => { historyForm.resetFields(); setFilters({}); }}>Clear</Button>
@@ -1369,8 +1420,14 @@ export function RunDetailPage() {
     } catch {
       setAdmission(undefined);
     }
-    if (next.result_json_path) setChart(await api.chartData(id));
-    if (next.status === "success" || next.status === "succeeded") {
+    if (next.result_json_path) {
+      try {
+        setChart(await api.chartData(id));
+      } catch {
+        setChart(undefined);
+      }
+    }
+    if (next.result_json_path) {
       try {
         setResult((await api.backtestResult(id)).result);
       } catch {
@@ -1395,6 +1452,8 @@ export function RunDetailPage() {
   const validation = trust?.validation ?? run.validation ?? result?.performance?.validation;
   const experiment = trust?.experiment ?? run.experiment ?? result?.performance?.experiment;
   const fingerprint = trust?.fingerprint ?? run.fingerprint;
+  const performance = asRecord(result?.performance);
+  const trustedMetrics = ["success", "succeeded"].includes(run.status) && validation?.passed !== false;
   const summaryMetrics = result?.summary_metrics ?? {};
   const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? run.statistics?.["Sharpe Ratio"];
   const sharpeWarning = metricTruthy(summaryMetrics["Short Window Unstable"]);
@@ -1413,6 +1472,32 @@ export function RunDetailPage() {
     { title: "Market Correlation", value: summaryMetrics["Market Correlation"] },
     { title: "Position HHI", value: summaryMetrics["Position HHI"] },
     { title: "Top Position Weight", value: summaryMetrics["Top Position Weight"] },
+  ];
+  const analysisCards = [
+    { title: "Strategy Return", value: performance.strategy_return },
+    { title: "Benchmark Return", value: performance.benchmark_return },
+    { title: "Excess Return", value: performance.excess_return },
+    { title: "Recomputed Sharpe", value: performance.sharpe_recomputed_from_equity },
+    { title: "Calmar", value: performance.calmar },
+    { title: "Tracking Error", value: performance.trackingError },
+    { title: "Information Ratio", value: performance.informationRatio },
+    { title: "Alpha", value: performance.computed_alpha },
+    { title: "Beta", value: performance.computed_beta },
+  ];
+  const monthlyReturns = Array.isArray(performance.monthly_returns) ? performance.monthly_returns as Array<Record<string, unknown>> : [];
+  const yearlyReturns = Array.isArray(performance.yearly_returns) ? performance.yearly_returns as Array<Record<string, unknown>> : [];
+  const tradePnl = Array.isArray(performance.trade_pnl) ? performance.trade_pnl as Array<Record<string, unknown>> : [];
+  const industryExposure = Array.isArray(performance.industry_exposure) ? performance.industry_exposure as Array<Record<string, unknown>> : [];
+  const tradeSummary = asRecord(performance.trade_pnl_summary);
+  const tradeSummaryRows = Object.entries(tradeSummary).map(([key, value]) => ({ key, value }));
+  const riskRows: Array<Record<string, unknown>> = [
+    { key: "VaR 95%", value: performance.var95 },
+    { key: "Expected Shortfall 95%", value: performance.expectedShortfall95 },
+    { key: "Market Correlation", value: performance.marketCorrelation },
+    { key: "Position HHI", value: asRecord(performance.concentration).hhi },
+    { key: "Top Position Weight", value: asRecord(performance.concentration).top1Weight },
+    { key: "Benchmark Status", value: performance.benchmarkMetricStatus },
+    { key: "Sharpe Status", value: performance.sharpe_recompute_status },
   ];
   const records = {
     orders: result?.orders ?? chart?.orders ?? [],
@@ -1448,8 +1533,25 @@ export function RunDetailPage() {
           <Button onClick={reload} icon={<ReloadOutlined />}>Refresh</Button>
         </Space>
       </div>
-      {(run.error_message || run.error) && <Alert type="error" showIcon message={run.error_message ?? run.error} style={{ marginBottom: 16 }} />}
-      {sharpeWarning && (
+      {(run.error_message || run.error) && (
+        <Alert
+          type="error"
+          showIcon
+          message={run.failure?.stage ? `${run.failure.stage.toUpperCase()} failed: ${run.failure.code}` : "Backtest failed"}
+          description={run.failure?.message || run.error_message || run.error}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {!trustedMetrics && !active && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="This run is not eligible for strategy evaluation."
+          description="Return, Sharpe, drawdown, and other performance values are hidden because execution or validation did not pass. Raw artifacts remain available for diagnosis."
+        />
+      )}
+      {trustedMetrics && sharpeWarning && (
         <Alert
           type="warning"
           showIcon
@@ -1457,19 +1559,21 @@ export function RunDetailPage() {
           message="Sharpe is marked unstable because the effective daily return sample is short."
         />
       )}
-      <div className="grid">
-        {metricCards.map((item) => (
-          <Card key={item.title} data-testid={`metric-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
-            <Statistic title={item.title} value={shortValue(item.value ?? "N/A")} />
-            {item.warning && <Tag color="orange">short window</Tag>}
-          </Card>
-        ))}
-      </div>
+      {trustedMetrics && (
+        <div className="grid">
+          {metricCards.map((item) => (
+            <Card key={item.title} data-testid={`metric-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
+              <Statistic title={item.title} value={shortValue(item.value ?? "N/A")} />
+              {item.warning && <Tag color="orange">short window</Tag>}
+            </Card>
+          ))}
+        </div>
+      )}
       <Tabs
         items={[
           {
             key: "status",
-            label: "Status",
+            label: "Overview",
             children: (
               <Card data-testid="run-status-panel">
                 <Space wrap>
@@ -1492,13 +1596,79 @@ export function RunDetailPage() {
             )
           },
           {
+            key: "analysis",
+            label: "Analysis",
+            children: trustedMetrics ? (
+              <>
+                <div className="grid">
+                  {analysisCards.map((item) => (
+                    <Card key={item.title}><Statistic title={item.title} value={shortValue(item.value ?? "N/A")} /></Card>
+                  ))}
+                </div>
+                <div className="grid" style={{ marginTop: 16 }}>
+                  <Card title="Trade Summary">
+                    <Table<Record<string, unknown>>
+                      size="small"
+                      pagination={false}
+                      rowKey="key"
+                      dataSource={tradeSummaryRows}
+                      columns={[{ title: "Metric", dataIndex: "key" }, { title: "Value", dataIndex: "value", render: (value) => shortValue(value) }]}
+                    />
+                  </Card>
+                  <Card title="Risk & Attribution">
+                    <Table<Record<string, unknown>>
+                      size="small"
+                      pagination={false}
+                      rowKey="key"
+                      dataSource={riskRows}
+                      columns={[{ title: "Metric", dataIndex: "key" }, { title: "Value", dataIndex: "value", render: (value) => shortValue(value) }]}
+                    />
+                  </Card>
+                </div>
+                <Card title="Monthly Returns" style={{ marginTop: 16 }}>
+                  <Table<Record<string, unknown>> size="small" rowKey={(row) => String(row.period)} dataSource={monthlyReturns} columns={[
+                    { title: "Period", dataIndex: "period" },
+                    { title: "Start", dataIndex: "start" },
+                    { title: "End", dataIndex: "end" },
+                    { title: "Return", dataIndex: "return", render: (value) => shortValue(value) },
+                  ]} />
+                </Card>
+                <Card title="Yearly Returns" style={{ marginTop: 16 }}>
+                  <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.period)} dataSource={yearlyReturns} columns={[
+                    { title: "Year", dataIndex: "period" },
+                    { title: "Start", dataIndex: "start" },
+                    { title: "End", dataIndex: "end" },
+                    { title: "Return", dataIndex: "return", render: (value) => shortValue(value) },
+                  ]} />
+                </Card>
+                <Card title="Trade P&L" style={{ marginTop: 16 }}>
+                  <Table<Record<string, unknown>> size="small" rowKey={(_, index) => String(index)} dataSource={tradePnl} columns={[
+                    { title: "Symbol", dataIndex: "symbol" },
+                    { title: "Entry", dataIndex: "entry_time" },
+                    { title: "Exit", dataIndex: "exit_time" },
+                    { title: "Holding Days", dataIndex: "holding_days" },
+                    { title: "Net P&L", dataIndex: "net_pnl", render: (value) => shortValue(value) },
+                    { title: "Return", dataIndex: "return", render: (value) => shortValue(value) },
+                  ]} />
+                </Card>
+                <Card title="Industry Exposure" style={{ marginTop: 16 }}>
+                  <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.industry)} dataSource={industryExposure} columns={[
+                    { title: "Industry", dataIndex: "industry" },
+                    { title: "Market Value", dataIndex: "market_value", render: (value) => shortValue(value) },
+                    { title: "Weight", dataIndex: "weight", render: (value) => shortValue(value) },
+                  ]} />
+                </Card>
+              </>
+            ) : <Alert type="warning" showIcon message="Trusted analysis is unavailable for this run." />
+          },
+          {
             key: "config",
             label: "Config",
             children: <Card title="Parameters"><Space wrap>{Object.entries(run.parameters).map(([key, value]) => <Tag key={key}>{key}: {String(value)}</Tag>)}</Space></Card>
           },
           {
             key: "metrics",
-            label: "Metrics",
+            label: "Raw Metrics",
             children: (
               <Card title="Summary" data-testid="metrics-table">
                 <Table

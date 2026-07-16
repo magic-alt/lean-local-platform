@@ -1,10 +1,17 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from app.db import db, init_db
 from app.services.settings import get_settings
 
 
-def test_web_default_end_date_is_2026_07_13():
+def current_shanghai_date():
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+
+
+def test_web_default_end_date_is_current_date():
     init_db()
-    assert get_settings()["defaultEnd"] == "2026-07-13"
+    assert get_settings()["defaultEnd"] == current_shanghai_date()
 
 
 def test_web_default_end_date_migration_advances_legacy_value():
@@ -18,4 +25,4 @@ def test_web_default_end_date_migration_advances_legacy_value():
 
     init_db()
 
-    assert get_settings()["defaultEnd"] == "2026-07-13"
+    assert get_settings()["defaultEnd"] == current_shanghai_date()

@@ -315,7 +315,7 @@ def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, m
     assert job["status"] == "created"
 
 
-def test_backtest_creation_without_explicit_source_prefers_any_available_ashare_source(tmp_path, monkeypatch):
+def test_backtest_creation_without_explicit_source_requires_default_production_source(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
     import app.services.data as data_service
@@ -348,27 +348,36 @@ def test_backtest_creation_without_explicit_source_prefers_any_available_ashare_
     )
 
     import app.services.backtest_service as backtest_service
+    import app.services.backtest_preflight as backtest_preflight
     import app.services.tasks as task_service
+    from app.lean import LeanPlatformError
 
     monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+    attempts = []
 
-    job = backtest_service.create_backtest_job(
-        {
-            "symbol": "600519",
-            "assetClass": "equity",
-            "market": "china",
-            "start": "2024-01-02",
-            "end": "2024-01-04",
-            "cash": 100000,
-        }
-    )
+    def unavailable(symbol, parameters, source, role):
+        attempts.append((symbol, source))
+        raise LeanPlatformError("provider unavailable")
 
-    assert job["status"] == "created"
-    assert "source" not in job["parameters"] or not job["parameters"].get("source")
+    monkeypatch.setattr(backtest_preflight, "_repair_symbol", unavailable)
+
+    with pytest.raises(LeanPlatformError, match="symbol_data_repair_failed:600519"):
+        backtest_service.create_backtest_job(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+                "cash": 100000,
+            }
+        )
+
+    assert attempts == [("600519", "tushare")]
 
 
-def test_backtest_creation_falls_back_to_other_available_ashare_source(tmp_path, monkeypatch):
+def test_backtest_creation_does_not_silently_fall_back_to_other_source(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
     import app.services.data as data_service
@@ -401,26 +410,30 @@ def test_backtest_creation_falls_back_to_other_available_ashare_source(tmp_path,
     )
 
     import app.services.backtest_service as backtest_service
+    import app.services.backtest_preflight as backtest_preflight
     import app.services.tasks as task_service
+    from app.lean import LeanPlatformError
 
     monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
-
-    job = backtest_service.create_backtest_job(
-        {
-            "symbol": "600519",
-            "assetClass": "equity",
-            "market": "china",
-            "start": "2024-01-02",
-            "end": "2024-01-04",
-            "cash": 100000,
-            "source": "tushare",
-        }
+    monkeypatch.setattr(
+        backtest_preflight,
+        "_repair_symbol",
+        lambda symbol, parameters, source, role: (_ for _ in ()).throw(LeanPlatformError(f"{source} unavailable")),
     )
 
-    assert job["status"] == "created"
-    assert job["parameters"]["source"] == "akshare"
-    assert job["parameters"]["sourceFallback"] == "tushare"
+    with pytest.raises(LeanPlatformError, match="symbol_data_repair_failed:600519:tushare unavailable"):
+        backtest_service.create_backtest_job(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+                "cash": 100000,
+                "source": "tushare",
+            }
+        )
 
 
 def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exist(tmp_path, monkeypatch):
@@ -480,9 +493,16 @@ def test_backtest_creation_blocks_missing_benchmark(tmp_path, monkeypatch):
     import_sample_ashare(tmp_path, monkeypatch)
 
     import app.services.backtest_service as backtest_service
+    import app.services.backtest_preflight as backtest_preflight
     from app.lean import LeanPlatformError
 
-    with pytest.raises(LeanPlatformError, match="benchmark_missing:999999"):
+    monkeypatch.setattr(
+        backtest_preflight,
+        "_repair_symbol",
+        lambda symbol, parameters, source, role: (_ for _ in ()).throw(LeanPlatformError("benchmark unavailable")),
+    )
+
+    with pytest.raises(LeanPlatformError, match="benchmark_data_repair_failed:999999"):
         backtest_service.create_backtest_job(
             {
                 "symbol": "600519",
@@ -989,6 +1009,7 @@ def test_ashare_end_date_coverage_blocks_or_marks_truncated_runs(tmp_path, monke
     import_sample_ashare(tmp_path, monkeypatch)
 
     import app.services.backtest_service as backtest_service
+    import app.services.backtest_preflight as backtest_preflight
     import app.services.tasks as task_service
     from app.lean_engine.errors import LeanWebError
 
@@ -1003,7 +1024,13 @@ def test_ashare_end_date_coverage_blocks_or_marks_truncated_runs(tmp_path, monke
         "cash": 100000,
     }
 
-    with pytest.raises(LeanWebError, match="truncated"):
+    monkeypatch.setattr(
+        backtest_preflight,
+        "_repair_symbol",
+        lambda symbol, parameters, source, role: (_ for _ in ()).throw(LeanWebError("provider unavailable")),
+    )
+
+    with pytest.raises(LeanWebError, match="symbol_data_repair_failed:600519"):
         backtest_service.create_backtest_job(request)
 
     job = backtest_service.create_backtest_job({**request, "extra": {"allowTruncatedData": True}})

@@ -1,4 +1,6 @@
 import json
+import hashlib
+import re
 import shutil
 import time
 from pathlib import Path
@@ -9,6 +11,8 @@ from ..core.errors import LeanWebError, NotFoundError
 from ..core.files import ensure_child_path, slugify
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .strategies import render_python_template
+
+COPY_SUFFIX = re.compile(r"\s+\(copy\s+\d{8}-\d{6}\)$", re.IGNORECASE)
 
 
 def _class_name(name: str) -> str:
@@ -28,7 +32,40 @@ def _normalize_project(project: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     normalized = dict(project)
     normalized["project_path"] = str(_project_root(normalized))
+    normalized["display_name"] = clean_project_name(str(normalized.get("name") or ""))
     return normalized
+
+
+def clean_project_name(name: str) -> str:
+    cleaned = str(name or "").strip()
+    while COPY_SUFFIX.search(cleaned):
+        cleaned = COPY_SUFFIX.sub("", cleaned).strip()
+    return cleaned or "Project"
+
+
+def _project_manifest(project: dict[str, Any]) -> str:
+    root = _project_root(project)
+    digest = hashlib.sha256()
+    if not root.exists():
+        return ""
+    paths = (
+        item
+        for item in root.rglob("*")
+        if item.is_file()
+        and item.suffix != ".pyc"
+        and not any(part.startswith(".") or part == "__pycache__" for part in item.relative_to(root).parts)
+    )
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _config_hash(project: dict[str, Any]) -> str:
+    payload = json.dumps(project.get("config") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _copy_project_directory(source_root: Path, target_root: Path) -> None:
@@ -74,7 +111,104 @@ def get_project(project_id: str) -> dict[str, Any]:
 def list_projects() -> list[dict[str, Any]]:
     with db() as connection:
         rows = connection.execute("select * from projects order by updated_at desc").fetchall()
-    return [_normalize_project(project) or project for project in rows_to_dicts(rows)]
+        counts = connection.execute(
+            """
+            select project_id, count(*) as run_count, max(created_at) as latest_run_at
+            from backtest_runs
+            where project_id is not null
+            group by project_id
+            """
+        ).fetchall()
+        latest = connection.execute(
+            """
+            select project_id, status
+            from backtest_runs
+            where project_id is not null
+            order by created_at desc
+            """
+        ).fetchall()
+    count_by_id = {row["project_id"]: dict(row) for row in counts}
+    latest_by_id: dict[str, str] = {}
+    for row in latest:
+        latest_by_id.setdefault(row["project_id"], row["status"])
+    result = []
+    for item in rows_to_dicts(rows):
+        project = _normalize_project(item) or item
+        stats = count_by_id.get(project["id"], {})
+        project["run_count"] = int(stats.get("run_count") or 0)
+        project["latest_run_at"] = stats.get("latest_run_at")
+        project["latest_run_status"] = latest_by_id.get(project["id"])
+        result.append(project)
+    return result
+
+
+def _merge_admissions(connection, source_id: str, target_id: str) -> None:
+    rows = connection.execute(
+        "select * from strategy_admissions where strategy_id = ?",
+        (source_id,),
+    ).fetchall()
+    for row in rows:
+        existing = connection.execute(
+            """
+            select id from strategy_admissions
+            where strategy_id = ? and parameters_sha256 = ? and profile_name = ? and profile_version = ?
+            """,
+            (target_id, row["parameters_sha256"], row["profile_name"], row["profile_version"]),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                "update strategy_admission_events set admission_id = ? where admission_id = ?",
+                (existing["id"], row["id"]),
+            )
+            connection.execute("delete from strategy_admissions where id = ?", (row["id"],))
+        else:
+            connection.execute("update strategy_admissions set strategy_id = ? where id = ?", (target_id, row["id"]))
+
+
+def _merge_project(source: dict[str, Any], target: dict[str, Any]) -> None:
+    source_id = str(source["id"])
+    target_id = str(target["id"])
+    with db() as connection:
+        for table in ("backtest_runs", "tasks", "optimization_runs", "research_sessions", "paper_sessions", "strategy_versions"):
+            connection.execute(f"update {table} set project_id = ? where project_id = ?", (target_id, source_id))
+        _merge_admissions(connection, source_id, target_id)
+        connection.execute("delete from projects where id = ?", (source_id,))
+    _remove_path(str(_project_root(source)))
+
+
+def consolidate_automatic_copies() -> dict[str, Any]:
+    projects = list_projects()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for project in projects:
+        clean_name = clean_project_name(str(project.get("name") or ""))
+        groups.setdefault(clean_name.casefold(), []).append(project)
+    merged: list[dict[str, str]] = []
+    renamed: list[dict[str, str]] = []
+    for group in groups.values():
+        if len(group) < 2 or not any(COPY_SUFFIX.search(str(item.get("name") or "")) for item in group):
+            continue
+        clean_name = clean_project_name(str(group[0].get("name") or ""))
+        base = next((item for item in group if str(item.get("name")) == clean_name), None)
+        if base is None:
+            base = min(group, key=lambda item: str(item.get("created_at") or ""))
+            update_project(base["id"], name=clean_name)
+            base = get_project(base["id"])
+        base_signature = (_config_hash(base), _project_manifest(base))
+        variants = []
+        for candidate in sorted(group, key=lambda item: str(item.get("created_at") or "")):
+            if candidate["id"] == base["id"]:
+                continue
+            signature = (_config_hash(candidate), _project_manifest(candidate))
+            if signature == base_signature:
+                _merge_project(candidate, base)
+                merged.append({"source": candidate["id"], "target": base["id"]})
+            else:
+                variants.append(candidate)
+        for index, variant in enumerate(variants, start=1):
+            next_name = f"{clean_name} · variant {index}"
+            update_project(variant["id"], name=next_name)
+            renamed.append({"project": variant["id"], "name": next_name})
+    return {"merged": merged, "renamed": renamed}
 
 
 def create_project(

@@ -1,4 +1,6 @@
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..core.config import DEFAULT_DOCKER_IMAGE, DEFAULT_RESEARCH_IMAGE, JOB_TIMEOUT_SECONDS, MAX_CONCURRENT_JOBS, LOG_LEVEL
 from ..db import db, json_dump, utc_now
@@ -15,7 +17,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "defaultStrategyTemplate": "ema_cross",
     "defaultCash": 300000,
     "defaultStart": "2024-01-01",
-    "defaultEnd": "2026-07-13",
+    "defaultEnd": datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat(),
     "dockerImage": DEFAULT_DOCKER_IMAGE,
     "researchImage": DEFAULT_RESEARCH_IMAGE,
     "chartPointLimit": 1000000,
@@ -37,6 +39,8 @@ def get_settings() -> dict[str, Any]:
             import json
 
             values[key] = json.loads(row["value_json"])
+    if values.get("defaultEnd") == "2026-07-13":
+        values["defaultEnd"] = DEFAULT_SETTINGS["defaultEnd"]
     return values
 
 

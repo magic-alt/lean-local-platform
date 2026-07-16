@@ -428,6 +428,17 @@ async function setupApiMocks(page: Page) {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(next) });
     }
 
+    const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
+    if (projectMatch && method === "PUT") {
+      const project = state.projects.find((item: any) => item.id === projectMatch[1]) ?? state.projects[0];
+      Object.assign(project, {
+        name: (body as any).name ?? project.name,
+        config: { ...(project.config ?? {}), ...((body as any).config ?? {}) },
+        updated_at: "2026-07-08T00:00:00Z",
+      });
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(project) });
+    }
+
     if (/^\/api\/projects\/.+$/.test(pathname) && method === "DELETE") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted: true }) });
     }
@@ -444,6 +455,20 @@ async function setupApiMocks(page: Page) {
     if (method === "GET" && runMatch) {
       const run = state.backtests.find((item: any) => item.id === runMatch[1]);
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(run ?? state.backtests[0]) });
+    }
+
+    if (method === "POST" && pathname === "/api/backtests/preflight") {
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          ready: true,
+          market: (body as any).market,
+          assetClass: (body as any).assetClass,
+          effectiveSource: (body as any).source || "tushare",
+          repaired: [],
+          items: [],
+        }),
+      });
     }
 
     if (method === "POST" && pathname === "/api/backtests") {

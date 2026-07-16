@@ -142,3 +142,82 @@ def test_api_clone_project_with_files(tmp_path, monkeypatch):
     assert changed_clone["config"]["templateKey"] == "rsi_reversion"
     assert "self.rsi = self.rsi" in changed_source
     assert "self.fast = self.ema" not in changed_source
+
+
+def test_consolidate_automatic_copies_preserves_run_and_task_history(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    import app.services.projects as projects
+
+    base = projects.create_project("macd", template_key="macd", market="china")
+    copied = projects.clone_project(base["id"], "macd (copy 20260716-225730)")
+    copied_path = Path(copied["project_path"])
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into tasks
+                (id, kind, status, title, project_id, parameters_json, log_path, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("task-copy", "backtest", "failed", "copied run", copied["id"], "{}", str(tmp_path / "task.log"), "2026-07-16T00:00:00+00:00"),
+        )
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id, task_id, project_id, symbol, asset_class, venue, resolution, data_type,
+                 parameters_json, status, docker_image, results_dir, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "run-copy",
+                "task-copy",
+                copied["id"],
+                "600460",
+                "equity",
+                "china",
+                "daily",
+                "trade",
+                '{"ticker":"600460","start":"2024-01-01","end":"2024-01-02","cash":100000}',
+                "failed",
+                "lean:test",
+                str(tmp_path / "runs" / "run-copy" / "results"),
+                "2026-07-16T00:00:00+00:00",
+            ),
+        )
+
+    result = projects.consolidate_automatic_copies()
+
+    assert result["merged"] == [{"source": copied["id"], "target": base["id"]}]
+    assert not copied_path.exists()
+    with db_module.db() as connection:
+        assert connection.execute("select project_id from tasks where id = 'task-copy'").fetchone()["project_id"] == base["id"]
+        assert connection.execute("select project_id from backtest_runs where id = 'run-copy'").fetchone()["project_id"] == base["id"]
+        assert connection.execute("select count(*) as count from projects").fetchone()["count"] == 1
+
+
+def test_backtest_uses_immutable_project_snapshot(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    import app.services.backtest_service as backtest_service
+    import app.services.projects as projects
+    import app.services.tasks as task_service
+
+    monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+    project = projects.create_project("snapshot-project", template_key="ema_cross")
+    original = (Path(project["project_path"]) / project["main_file"]).read_text(encoding="utf-8")
+
+    job = backtest_service.create_backtest_job(
+        {
+            "symbol": "AAPL",
+            "assetClass": "equity",
+            "market": "usa",
+            "start": "2024-01-02",
+            "end": "2024-01-04",
+            "cash": 100000,
+            "projectId": project["id"],
+        }
+    )
+    snapshot = Path(str(job["parameters"]["strategySnapshotDir"])) / project["main_file"]
+    projects.write_file(project["id"], project["main_file"], "# changed after queue\n")
+
+    assert snapshot.read_text(encoding="utf-8") == original
+    assert (Path(project["project_path"]) / project["main_file"]).read_text(encoding="utf-8") == "# changed after queue\n"

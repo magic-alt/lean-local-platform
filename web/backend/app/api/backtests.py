@@ -18,6 +18,7 @@ from ..services.backtest_service import (
     mark_backtest_queued,
     query_backtests,
 )
+from ..services.backtest_preflight import prepare_backtest_request
 from ..services.experiments import get_experiment_versions
 from ..services.result_service import result_for_job
 from ..services.strategy_admission import admission_for_run
@@ -90,6 +91,24 @@ def create_backtest(request: BacktestRequest):
         fail_backtest_queue(run["id"], str(exc.detail))
         raise
     return detail(run["id"])
+
+
+@router.post("/preflight")
+def preflight_backtest(request: BacktestRequest):
+    payload = request.model_dump()
+    payload["extra"] = request.model_extra or {}
+    try:
+        return prepare_backtest_request(payload, repair=True)["preflight"]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "stage": "preflight",
+                "code": str(exc).split(":", 1)[0].lower().replace(" ", "_"),
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
 
 
 @router.get("/{run_id}")

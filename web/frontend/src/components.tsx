@@ -77,6 +77,8 @@ function lineWithOrdersOption(
 }
 
 export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: string) => void }) {
+  const trusted = (run: BacktestRun) =>
+    ["success", "succeeded"].includes(run.status) && run.validation?.passed !== false;
   return (
     <Table
       data-testid="runs-table"
@@ -92,9 +94,10 @@ export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: 
         { title: "Asset", render: (_, run) => run.asset_class ?? run.parameters.assetClass ?? "equity" },
         { title: "Venue", render: (_, run) => run.venue ?? run.parameters.venue ?? run.parameters.market ?? "-" },
         { title: "Status", dataIndex: "status", render: (status: RunStatus) => <StatusTag status={status} /> },
+        { title: "Failure", render: (_, run) => run.failure ? `${run.failure.stage}: ${run.failure.code}` : "-" },
         { title: "Period", render: (_, run) => `${run.parameters.start} -> ${run.parameters.end}` },
-        { title: "Net Profit", render: (_, run) => run.statistics?.["Net Profit"] ?? "-" },
-        { title: "Sharpe", render: (_, run) => run.statistics?.["Sharpe Ratio"] ?? "-" },
+        { title: "Net Profit", render: (_, run) => trusted(run) ? run.statistics?.["Net Profit"] ?? "-" : "untrusted" },
+        { title: "Sharpe", render: (_, run) => trusted(run) ? run.statistics?.["Sharpe Ratio"] ?? "-" : "untrusted" },
         { title: "Duration", render: (_, run) => run.duration_seconds == null ? "-" : `${run.duration_seconds}s` },
         { title: "Action", render: (_, run) => <a data-testid={`open-run-${run.id}`} onClick={() => onOpen(run.id)}>Open</a> }
       ]}

@@ -20,6 +20,7 @@ from ..services.data import fetch_and_import_symbol
 from ..services.ashare_multisource import quality_gate_range
 from ..services.ashare_repository import assert_ashare_ready, assert_benchmark_ready
 from ..services.backtest_validation import build_backtest_validation, build_experiment_record
+from ..services.backtest_service import failure_metadata
 from ..services.backtest_execution_validation import (
     audit_backtest_execution,
     execution_failure_message,
@@ -101,7 +102,18 @@ def _update_table(table: str, row_id: str, **fields):
         connection.execute(f"update {table} set {assignments} where id = ?", values)
 
 
-def _task_project(task):
+def _task_project(task, run: dict[str, Any] | None = None):
+    parameters = task.get("parameters") or (run or {}).get("parameters") or {}
+    snapshot_dir = parameters.get("strategySnapshotDir")
+    if snapshot_dir and Path(snapshot_dir).is_dir():
+        return {
+            "id": task.get("project_id"),
+            "project_path": snapshot_dir,
+            "main_file": parameters.get("strategySnapshotMainFile") or "main.py",
+            "algorithm_class": parameters.get("strategySnapshotAlgorithmClass") or "Algorithm",
+            "language": parameters.get("strategySnapshotLanguage") or "Python",
+            "snapshot": True,
+        }
     project_id = task.get("project_id")
     return get_project(project_id) if project_id else None
 
@@ -175,8 +187,8 @@ def fetch_data_batch_task(task_id: str):
 def run_backtest_task(self, task_id: str, run_id: str):
     task = get_task(task_id)
     parameters = task["parameters"]
-    project = _task_project(task)
     existing_run = get_backtest(run_id)
+    project = _task_project(task, existing_run)
     if existing_run and existing_run.get("status") == CANCELLED:
         append_log(task_id, "Backtest was cancelled before the worker started it.")
         update_task(task_id, status=CANCELLED, error="Cancellation requested by user.", finished_at=utc_now())
@@ -345,6 +357,16 @@ def run_backtest_task(self, task_id: str, run_id: str):
             exit_code=output["exit_code"],
             error=error,
             error_message=error,
+            failure_json=(
+                None
+                if status == "success"
+                else failure_metadata(
+                    "validation" if raw_success else "execution",
+                    error,
+                    retryable=not raw_success,
+                    details={"executionValidation": execution_validation or {}},
+                )
+            ),
             container_name=output.get("container_name"),
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
@@ -388,7 +410,24 @@ def run_backtest_task(self, task_id: str, run_id: str):
             _record_task_metric("backtest", CANCELLED)
             _record_backtest_metric(CANCELLED)
             return {"status": CANCELLED, "run_id": run_id}
-        update_backtest(run_id, status="failed", error=str(exc), error_message=str(exc), exit_code=-1, finished_at=finished_at)
+        analysis_failed = bool(
+            latest_run
+            and latest_run.get("exit_code") == 0
+            and latest_run.get("result_json_path")
+        )
+        update_backtest(
+            run_id,
+            status="failed",
+            error=str(exc),
+            error_message=str(exc),
+            failure_json=failure_metadata(
+                "analysis" if analysis_failed else "execution",
+                str(exc),
+                retryable=not analysis_failed,
+            ),
+            exit_code=latest_run.get("exit_code") if analysis_failed else -1,
+            finished_at=finished_at,
+        )
         update_fingerprint()
         update_task(task_id, status="failed", error=str(exc), finished_at=finished_at)
         _record_task_metric("backtest", "failed")

@@ -20,7 +20,12 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     let message = response.statusText;
     try {
       const body = await response.json();
-      message = body.detail ?? message;
+      const detail = body.detail;
+      message = typeof detail === "string"
+        ? detail
+        : typeof detail?.message === "string"
+          ? detail.message
+          : message;
     } catch {
       // Keep status text when the response is not JSON.
     }
