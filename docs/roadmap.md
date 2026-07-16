@@ -64,8 +64,8 @@ Required:
 
 Current status:
 
-- Paper session APIs and replay code exist.
-- This is not yet production-grade simulated trading.
+- A-share daily LEAN Paper runs frozen Project snapshots through the standard worker and reconciles historical orders.
+- Legacy fixed-signal replay sessions are retained read-only; intraday live data is not enabled.
 - Broker/QMT integration should remain isolated behind adapters.
 
 ## P0: Main Chain Stability

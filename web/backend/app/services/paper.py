@@ -1,15 +1,21 @@
 import hashlib
 import json
 import uuid
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
+from ..core.config import RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.assets import asset_request
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
+from ..repositories.backtest_repository import get_backtest, get_result
 from .ashare_repository import is_tradeable
 from .ashare_multisource import quality_gate
+from .backtest_service import create_backtest_job, mark_backtest_queued
 from .data_coverage import ashare_coverage
+from .experiments import get_experiment_versions
 from .source_gate import apply_source_context, resolve_source_context
 from .trading_config import ashare_trading_config
 
@@ -24,13 +30,193 @@ def _side(value: str) -> str:
 def list_sessions() -> list[dict[str, Any]]:
     with db() as connection:
         rows = connection.execute("select * from paper_sessions order by created_at desc").fetchall()
-    return rows_to_dicts(rows)
+    return [_session_api_item(item) for item in rows_to_dicts(rows)]
 
 
 def get_session(session_id: str) -> dict[str, Any] | None:
     with db() as connection:
         row = connection.execute("select * from paper_sessions where id = ?", (session_id,)).fetchone()
+    item = row_to_dict(row)
+    return _session_api_item(item) if item else None
+
+
+def _session_api_item(item: dict[str, Any]) -> dict[str, Any]:
+    item["mode"] = item.get("mode") or "legacy_replay"
+    item["legacy_read_only"] = bool(item.get("legacy_read_only", item["mode"] == "legacy_replay"))
+    item["auto_advance"] = bool(item.get("auto_advance"))
+    if item["mode"] == "lean_walkforward":
+        item["next_trade_date"] = (
+            _next_china_trade_date(str(item["last_processed_date"]))
+            if item.get("last_processed_date")
+            else item.get("start_date")
+        )
+    return item
+
+
+def list_walkforward_runs(session_id: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            "select * from paper_walkforward_runs where session_id = ? order by trade_date desc",
+            (session_id,),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def get_walkforward_run(paper_run_id: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            "select * from paper_walkforward_runs where id = ?",
+            (paper_run_id,),
+        ).fetchone()
     return row_to_dict(row)
+
+
+def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select br.*, experiment.strategy_version_id, experiment.parameter_hash,
+                   (
+                       select admission.current_stage
+                       from strategy_admissions admission
+                       where admission.strategy_id = br.project_id
+                         and admission.parameters_sha256 = experiment.parameter_hash
+                         and admission.profile_name = 'institutional'
+                       order by admission.updated_at desc
+                       limit 1
+                   ) as admission_stage
+            from backtest_runs br
+            left join experiments experiment on experiment.run_id = br.id
+            where br.project_id = ? and br.status = 'success'
+            order by br.finished_at desc, br.created_at desc
+            """,
+            (project_id,),
+        ).fetchall()
+    candidates = []
+    for raw in rows:
+        item = row_to_dict(raw) or {}
+        validation = item.get("validation") or {}
+        parameters = item.get("parameters") or {}
+        snapshot = Path(str(parameters.get("strategySnapshotDir") or ""))
+        if validation.get("passed") is not True or not snapshot.is_dir() or not get_result(str(item["id"])):
+            continue
+        data_validation = validation.get("data") or {}
+        if data_validation.get("truncated") is True or parameters.get("allowTruncatedData"):
+            continue
+        candidates.append(
+            {
+                "id": item["id"],
+                "name": item.get("name"),
+                "symbol": item.get("symbol"),
+                "start": parameters.get("start"),
+                "end": parameters.get("end"),
+                "cash": parameters.get("cash"),
+                "finishedAt": item.get("finished_at"),
+                "strategyVersionId": item.get("strategy_version_id"),
+                "parameterHash": item.get("parameter_hash"),
+                "admissionStage": item.get("admission_stage"),
+                "validation": validation,
+            }
+        )
+    return candidates
+
+
+def _next_china_trade_date(value: str) -> str:
+    current = parse_date(value)
+    with db() as connection:
+        row = connection.execute(
+            """
+            select trade_date from trade_calendar
+            where market = 'china' and is_open = 1 and trade_date > ?
+            order by trade_date asc limit 1
+            """,
+            (current.isoformat(),),
+        ).fetchone()
+    if row:
+        return str(row["trade_date"])
+    candidate = current + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate.isoformat()
+
+
+def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
+    project_id = str(parameters.get("projectId") or "").strip()
+    source_backtest_id = str(parameters.get("sourceBacktestId") or "").strip()
+    if not project_id or not source_backtest_id:
+        raise ValueError("LEAN Paper requires projectId and sourceBacktestId.")
+    source_run = get_backtest(source_backtest_id)
+    if not source_run or source_run.get("project_id") != project_id:
+        raise ValueError("The selected backtest does not belong to this project.")
+    if source_run.get("status") != "success" or (source_run.get("validation") or {}).get("passed") is not True:
+        raise ValueError("The selected backtest has not passed execution validation.")
+    if not get_result(source_backtest_id):
+        raise ValueError("The selected backtest result ledger is unavailable.")
+    source_parameters = dict(source_run.get("parameters") or {})
+    snapshot_dir = Path(str(source_parameters.get("strategySnapshotDir") or ""))
+    if not snapshot_dir.is_dir():
+        raise ValueError("The selected backtest strategy snapshot is unavailable.")
+    if source_parameters.get("allowTruncatedData") or ((source_run.get("validation") or {}).get("data") or {}).get("truncated"):
+        raise ValueError("Truncated backtests cannot seed LEAN Paper.")
+    versions = get_experiment_versions(source_backtest_id) or {}
+    experiment = versions.get("experiment") or {}
+    request = asset_request(
+        str(source_run["symbol"]),
+        str(source_run.get("asset_class") or source_parameters.get("assetClass") or "equity"),
+        venue=str(source_run.get("venue") or source_parameters.get("venue") or source_parameters.get("market") or "china"),
+        market=str(source_parameters.get("market") or source_run.get("venue") or "china"),
+        resolution=str(source_run.get("resolution") or source_parameters.get("resolution") or "daily"),
+        data_type=str(source_run.get("data_type") or source_parameters.get("dataType") or "trade"),
+    )
+    if request.asset_class != "equity" or request.venue != "china" or request.resolution != "daily":
+        raise ValueError("LEAN Paper currently supports China A-share daily projects only.")
+    cash = float(source_parameters.get("cash") or source_parameters.get("initialCash") or 100000)
+    start_date = str(parameters.get("startDate") or _next_china_trade_date(str(source_parameters["end"])))
+    if parse_date(start_date) <= parse_date(str(source_parameters["end"])):
+        raise ValueError("Paper startDate must be after the source backtest end date.")
+    session_id = str(uuid.uuid4())
+    now = utc_now()
+    frozen = {
+        **source_parameters,
+        "sourceBacktestId": source_backtest_id,
+        "strategySnapshotDir": str(snapshot_dir),
+        "strategySnapshotMainFile": source_parameters.get("strategySnapshotMainFile"),
+        "strategySnapshotAlgorithmClass": source_parameters.get("strategySnapshotAlgorithmClass"),
+        "strategySnapshotLanguage": source_parameters.get("strategySnapshotLanguage"),
+    }
+    with db() as connection:
+        connection.execute(
+            """
+            insert into paper_sessions
+                (id, project_id, name, status, symbol, asset_class, venue, resolution, cash, equity,
+                 parameters_json, created_at, updated_at, mode, legacy_read_only, source_backtest_id,
+                 strategy_version_id, parameter_hash, start_date, auto_advance)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                project_id,
+                parameters.get("name") or f"{request.symbol} LEAN Paper",
+                "created",
+                request.symbol,
+                request.asset_class,
+                request.venue,
+                request.resolution,
+                cash,
+                cash,
+                json_dump(frozen),
+                now,
+                now,
+                "lean_walkforward",
+                0,
+                source_backtest_id,
+                experiment.get("strategy_version_id"),
+                experiment.get("parameter_hash"),
+                start_date,
+                1 if parameters.get("autoAdvance", True) else 0,
+            ),
+        )
+    return get_session(session_id) or {}
 
 
 def list_signals(session_id: str) -> list[dict[str, Any]]:
@@ -143,6 +329,8 @@ def _daily_report_api_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
+    if parameters.get("sourceBacktestId") or parameters.get("mode") == "lean_walkforward":
+        return _create_lean_session(parameters)
     raw_symbols = parameters.get("symbols") or parameters.get("paperSymbols") or []
     if isinstance(raw_symbols, str):
         raw_symbols = [item.strip() for item in raw_symbols.split(",") if item.strip()]
@@ -207,8 +395,9 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
         connection.execute(
             """
             insert into paper_sessions
-                (id, project_id, name, status, symbol, asset_class, venue, resolution, cash, equity, parameters_json, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, project_id, name, status, symbol, asset_class, venue, resolution, cash, equity,
+                 parameters_json, created_at, updated_at, mode, legacy_read_only)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -224,6 +413,8 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
                 json_dump(clean),
                 now,
                 now,
+                "legacy_replay",
+                0,
             ),
         )
     return get_session(session_id) or {}
@@ -232,6 +423,13 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
 def update_session_status(session_id: str, status: str) -> dict[str, Any]:
     if status not in {"created", "running", "paused", "stopped"}:
         raise ValueError("Paper session status must be created, running, paused, or stopped.")
+    session = get_session(session_id)
+    if not session:
+        raise KeyError("Paper session not found.")
+    if session.get("legacy_read_only"):
+        raise ValueError("Legacy Paper Replay sessions are read-only.")
+    if session.get("status") == "stopped" and status != "stopped":
+        raise ValueError("Stopped LEAN Paper sessions are immutable.")
     now = utc_now()
     finished_at = now if status == "stopped" else None
     with db() as connection:
@@ -240,6 +438,376 @@ def update_session_status(session_id: str, status: str) -> dict[str, Any]:
             (status, now, finished_at, session_id),
         )
     return get_session(session_id) or {}
+
+
+def _order_event_key(order: dict[str, Any]) -> str:
+    payload = {
+        "time": str(order.get("time") or order.get("lastFillTime") or ""),
+        "symbol": str(order.get("symbol") or ""),
+        "side": str(order.get("side") or "").upper(),
+        "quantity": round(float(order.get("quantity") or 0), 8),
+        "price": round(float(order.get("price") or order.get("fillPrice") or 0), 8),
+        "status": str(order.get("status") or "").lower(),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _order_trade_date(order: dict[str, Any]) -> str:
+    value = str(order.get("time") or order.get("lastFillTime") or "")
+    return value[:10] if len(value) >= 10 else ""
+
+
+def _orders_through(result: dict[str, Any] | None, end_date: str) -> list[dict[str, Any]]:
+    orders = (result or {}).get("orders") or []
+    return [dict(item) for item in orders if isinstance(item, dict) and _order_trade_date(item) <= end_date]
+
+
+def _orders_fingerprint(orders: list[dict[str, Any]]) -> str:
+    keys = sorted(_order_event_key(item) for item in orders)
+    return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()
+
+
+def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise KeyError("Paper session not found.")
+    if session.get("mode") != "lean_walkforward" or session.get("legacy_read_only"):
+        raise ValueError("This session is not an active LEAN Paper session.")
+    if session.get("status") == "stopped":
+        raise ValueError("Stopped LEAN Paper sessions cannot run.")
+    date_value = parse_date(trade_date).isoformat()
+    if date_value < str(session.get("start_date") or ""):
+        raise ValueError("tradeDate is before the Paper start date.")
+    last_date = session.get("last_processed_date")
+    expected = str(session.get("start_date")) if not last_date else _next_china_trade_date(str(last_date))
+    if date_value != expected:
+        raise ValueError(f"The next eligible Paper trade date is {expected}.")
+    with db() as connection:
+        existing = connection.execute(
+            "select * from paper_walkforward_runs where session_id = ? and trade_date = ?",
+            (session_id, date_value),
+        ).fetchone()
+    if existing:
+        item = row_to_dict(existing) or {}
+        if item.get("status") == "success":
+            return item
+        if item.get("status") in {"queued", "running"}:
+            raise ValueError("This Paper trade date is already queued or running.")
+    parameters = dict(session.get("parameters") or {})
+    source_backtest_id = str(session.get("source_backtest_id") or parameters.get("sourceBacktestId") or "")
+    source_run = get_backtest(source_backtest_id)
+    if not source_run:
+        raise ValueError("Source backtest is unavailable.")
+    request_parameters = {
+        key: value
+        for key, value in parameters.items()
+        if key not in {
+            "ticker", "start", "end", "cash", "initialCash", "initial_cash",
+            "strategySnapshotDir", "strategySnapshotMainFile",
+            "strategySnapshotAlgorithmClass", "strategySnapshotLanguage",
+        }
+    }
+    child = create_backtest_job(
+        {
+            "symbol": session["symbol"],
+            "name": f"Paper {session['name']} through {date_value}",
+            "assetClass": session["asset_class"],
+            "market": session["venue"],
+            "venue": session["venue"],
+            "resolution": session["resolution"],
+            "dataType": parameters.get("dataType", "trade"),
+            "start": parameters["start"],
+            "end": date_value,
+            "cash": session["cash"],
+            "dockerImage": source_run.get("docker_image"),
+            "projectId": session["project_id"],
+            "benchmarkSymbol": parameters.get("benchmarkSymbol"),
+            "source": parameters.get("source"),
+            "strategySnapshotSourceDir": parameters["strategySnapshotDir"],
+            "strategySnapshotMainFile": parameters.get("strategySnapshotMainFile"),
+            "strategySnapshotAlgorithmClass": parameters.get("strategySnapshotAlgorithmClass"),
+            "strategySnapshotLanguage": parameters.get("strategySnapshotLanguage"),
+            "parameters": request_parameters,
+        }
+    )
+    mark_backtest_queued(child["id"])
+    paper_run_id = str(uuid.uuid4())
+    now = utc_now()
+    with db() as connection:
+        if existing:
+            paper_run_id = str(existing["id"])
+            connection.execute(
+                """
+                update paper_walkforward_runs
+                set backtest_run_id = ?, task_id = ?, status = 'queued', failure_json = null,
+                    reconciliation_json = null, started_at = null, finished_at = null
+                where id = ?
+                """,
+                (child["id"], child["task_id"], paper_run_id),
+            )
+        else:
+            connection.execute(
+                """
+                insert into paper_walkforward_runs
+                    (id, session_id, trade_date, backtest_run_id, task_id, status, created_at)
+                values (?, ?, ?, ?, ?, 'queued', ?)
+                """,
+                (paper_run_id, session_id, date_value, child["id"], child["task_id"], now),
+            )
+        connection.execute(
+            "update paper_sessions set status = 'running', failure_json = null, updated_at = ? where id = ?",
+            (now, session_id),
+        )
+    return get_walkforward_run(paper_run_id) or {}
+
+
+def mark_walkforward_running(paper_run_id: str) -> None:
+    with db() as connection:
+        connection.execute(
+            "update paper_walkforward_runs set status = 'running', started_at = ? where id = ?",
+            (utc_now(), paper_run_id),
+        )
+
+
+def record_session_warning(session_id: str, code: str, message: str) -> None:
+    failure = {"code": code, "message": message}
+    with db() as connection:
+        connection.execute(
+            "update paper_sessions set failure_json = ?, updated_at = ? where id = ?",
+            (json_dump(failure), utc_now(), session_id),
+        )
+
+
+def fail_walkforward_run(paper_run_id: str, error: str) -> dict[str, Any]:
+    item = get_walkforward_run(paper_run_id)
+    if not item:
+        raise KeyError("Paper run not found.")
+    failure = {"code": str(error).split(":", 1)[0], "message": str(error)}
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            "update paper_walkforward_runs set status = 'failed', failure_json = ?, finished_at = ? where id = ?",
+            (json_dump(failure), now, paper_run_id),
+        )
+        connection.execute(
+            "update paper_sessions set status = 'paused', failure_json = ?, updated_at = ? where id = ?",
+            (json_dump(failure), now, item["session_id"]),
+        )
+    return get_walkforward_run(paper_run_id) or {}
+
+
+def _last_equity(result: dict[str, Any], fallback: float) -> float:
+    curve = result.get("equity_curve") or []
+    if curve:
+        latest = curve[-1]
+        if isinstance(latest, dict):
+            for key in ("value", "y", "close"):
+                if latest.get(key) is not None:
+                    return float(latest[key])
+        if isinstance(latest, (list, tuple)) and len(latest) >= 2:
+            return float(latest[1])
+    for key in ("End Equity", "EndEquity", "Final Equity"):
+        raw = (result.get("statistics") or {}).get(key)
+        if raw is not None:
+            try:
+                return float(str(raw).replace("$", "").replace(",", ""))
+            except ValueError:
+                pass
+    return fallback
+
+
+def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
+    paper_run = get_walkforward_run(paper_run_id)
+    if not paper_run:
+        raise KeyError("Paper run not found.")
+    session = get_session(str(paper_run["session_id"]))
+    child = get_backtest(str(paper_run["backtest_run_id"]))
+    if not session or not child:
+        return fail_walkforward_run(paper_run_id, "paper_run_context_missing")
+    if child.get("status") != "success" or (child.get("validation") or {}).get("passed") is not True:
+        return fail_walkforward_run(
+            paper_run_id,
+            f"child_backtest_failed:{child.get('error_message') or child.get('error') or child.get('status')}",
+        )
+    result = get_result(child["id"])
+    if not result:
+        return fail_walkforward_run(paper_run_id, "child_backtest_result_missing")
+    parameters = session.get("parameters") or {}
+    baseline_date = str(session.get("last_processed_date") or (get_backtest(str(session["source_backtest_id"])) or {}).get("parameters", {}).get("end") or "")
+    baseline_run_id = str(session.get("source_backtest_id"))
+    if session.get("last_processed_date"):
+        previous_runs = [
+            item for item in list_walkforward_runs(session["id"])
+            if item.get("status") == "success" and item.get("trade_date") == session.get("last_processed_date")
+        ]
+        if previous_runs:
+            baseline_run_id = str(previous_runs[0]["backtest_run_id"])
+    baseline_result = get_result(baseline_run_id)
+    expected_orders = _orders_through(baseline_result, baseline_date)
+    actual_prior_orders = _orders_through(result, baseline_date)
+    expected_hash = _orders_fingerprint(expected_orders)
+    actual_hash = _orders_fingerprint(actual_prior_orders)
+    reconciliation = {
+        "throughDate": baseline_date,
+        "expectedOrderFingerprint": expected_hash,
+        "actualOrderFingerprint": actual_hash,
+        "passed": expected_hash == actual_hash,
+    }
+    if expected_hash != actual_hash:
+        with db() as connection:
+            connection.execute(
+                "update paper_walkforward_runs set reconciliation_json = ? where id = ?",
+                (json_dump(reconciliation), paper_run_id),
+            )
+        return fail_walkforward_run(paper_run_id, "history_reconciliation_failed")
+    trade_date = str(paper_run["trade_date"])
+    new_orders = [
+        item for item in _orders_through(result, trade_date)
+        if _order_trade_date(item) > baseline_date
+    ]
+    order_fingerprint = _orders_fingerprint(new_orders)
+    equity = _last_equity(result, float(session["equity"]))
+    holdings = [dict(item) for item in (result.get("holdings") or []) if isinstance(item, dict)]
+    now = utc_now()
+    with db() as connection:
+        for order in new_orders:
+            event_key = _order_event_key(order)
+            event_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                insert into paper_lean_order_events
+                    (id, session_id, paper_run_id, backtest_run_id, event_key, trade_date, event_json, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(session_id, event_key) do update set event_key = excluded.event_key
+                """,
+                (event_id, session["id"], paper_run_id, child["id"], event_key, _order_trade_date(order), json_dump(order), now),
+            )
+            side = str(order.get("side") or "").lower()
+            quantity = abs(float(order.get("quantity") or 0))
+            price = float(order.get("price") or order.get("fillPrice") or 0)
+            connection.execute(
+                """
+                insert into paper_orders
+                    (id, session_id, trade_date, symbol, side, quantity, order_price, fill_price,
+                     fee, status, reason, created_at, filled_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                on conflict(id) do update set id = excluded.id
+                """,
+                (
+                    event_key,
+                    session["id"],
+                    _order_trade_date(order),
+                    order.get("symbol") or session["symbol"],
+                    side,
+                    quantity,
+                    price,
+                    price,
+                    order.get("status") or "filled",
+                    order.get("tag"),
+                    now,
+                    str(order.get("time") or now),
+                ),
+            )
+        connection.execute("delete from paper_positions where session_id = ?", (session["id"],))
+        for holding in holdings:
+            symbol = str(holding.get("symbol") or holding.get("Symbol") or session["symbol"])
+            quantity = float(holding.get("quantity") or holding.get("Quantity") or 0)
+            if quantity == 0:
+                continue
+            average = float(holding.get("averagePrice") or holding.get("AveragePrice") or holding.get("average_price") or 0)
+            market_price = float(holding.get("price") or holding.get("Price") or holding.get("marketPrice") or 0)
+            connection.execute(
+                """
+                insert into paper_positions
+                    (session_id, symbol, quantity, average_price, market_price, market_value, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (session["id"], symbol, quantity, average, market_price, quantity * market_price, now),
+            )
+        snapshot = {
+            "source": "lean_walkforward",
+            "paperRunId": paper_run_id,
+            "backtestRunId": child["id"],
+            "positions": holdings,
+        }
+        connection.execute(
+            """
+            insert into paper_portfolio_snapshots
+                (id, session_id, trade_date, cash, market_value, equity, positions_json,
+                 benchmark_symbol, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(session_id, trade_date) do update set
+                cash = excluded.cash, market_value = excluded.market_value, equity = excluded.equity,
+                positions_json = excluded.positions_json, benchmark_symbol = excluded.benchmark_symbol
+            """,
+            (
+                str(uuid.uuid4()),
+                session["id"],
+                trade_date,
+                max(0.0, equity - sum(float(item.get("marketValue") or item.get("market_value") or 0) for item in holdings)),
+                sum(float(item.get("marketValue") or item.get("market_value") or 0) for item in holdings),
+                equity,
+                json_dump(holdings),
+                parameters.get("benchmarkSymbol"),
+                now,
+            ),
+        )
+        report = {
+            "schemaVersion": 2,
+            "mode": "lean_walkforward",
+            "sessionId": session["id"],
+            "tradeDate": trade_date,
+            "NAV": equity,
+            "orders": new_orders,
+            "positions": holdings,
+            "statistics": result.get("statistics") or {},
+            "summaryMetrics": result.get("summary_metrics") or {},
+            "fingerprint": order_fingerprint,
+            "reconciliation": reconciliation,
+            "backtestRunId": child["id"],
+            "qa": {"passed": True, "severity": "ok"},
+        }
+        connection.execute(
+            """
+            insert into paper_daily_reports
+                (id, session_id, trade_date, report_json, signals_json, orders_json, trades_json,
+                 rejects_json, positions_json, snapshot_json, benchmark_json, qa_json, created_at)
+            values (?, ?, ?, ?, '[]', ?, ?, '[]', ?, ?, '{}', ?, ?)
+            on conflict(session_id, trade_date) do update set
+                report_json = excluded.report_json, orders_json = excluded.orders_json,
+                trades_json = excluded.trades_json, positions_json = excluded.positions_json,
+                snapshot_json = excluded.snapshot_json, qa_json = excluded.qa_json
+            """,
+            (
+                str(uuid.uuid4()),
+                session["id"],
+                trade_date,
+                json_dump(report),
+                json_dump(new_orders),
+                json_dump(new_orders),
+                json_dump(holdings),
+                json_dump(snapshot),
+                json_dump(report["qa"]),
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            update paper_walkforward_runs
+            set status = 'success', order_fingerprint = ?, reconciliation_json = ?, finished_at = ?
+            where id = ?
+            """,
+            (order_fingerprint, json_dump(reconciliation), now, paper_run_id),
+        )
+        connection.execute(
+            """
+            update paper_sessions
+            set equity = ?, last_processed_date = ?, status = 'running', failure_json = null, updated_at = ?
+            where id = ?
+            """,
+            (equity, trade_date, now, session["id"]),
+        )
+    return get_walkforward_run(paper_run_id) or {}
 
 
 def _ashare_bar(symbol: str, trade_date: str, source: str | None = None) -> dict[str, Any] | None:
@@ -315,6 +883,10 @@ def create_signal(
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
+    if session.get("legacy_read_only"):
+        raise ValueError("Legacy Paper Replay sessions are read-only.")
+    if session.get("mode") == "lean_walkforward":
+        raise ValueError("LEAN Paper orders must originate from the frozen project strategy.")
     signal_symbol = _normalize_session_symbol(session, symbol or session["symbol"])
     signal_id = str(uuid.uuid4())
     now = utc_now()
@@ -896,6 +1468,8 @@ def run_replay(session_id: str, start_date: str, end_date: str, auto_signal: boo
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
+    if session.get("mode") == "lean_walkforward":
+        raise ValueError("LEAN Paper replay must be queued through the walk-forward runner.")
     dates = _replay_dates(session, start_date, end_date)
     update_session_status(session_id, "running")
     days = []

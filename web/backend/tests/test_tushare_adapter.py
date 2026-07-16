@@ -140,6 +140,32 @@ class StockBasicPro:
         )
 
 
+class SectorFallbackPro:
+    def dc_index(self, **kwargs):
+        return FakeFrame(
+            [
+                {"ts_code": "DC001", "name": "半导体概念"},
+                {"ts_code": "DC002", "name": "存储芯片"},
+                {"ts_code": "DC003", "name": "CPO概念"},
+                {"ts_code": "DC004", "name": "PCB概念"},
+            ]
+        )
+
+    def ths_index(self, **kwargs):
+        return FakeFrame([{"ts_code": "886044.TI", "name": "液冷服务器"}])
+
+    def dc_daily(self, ts_code, **kwargs):
+        return FakeFrame(
+            [{"trade_date": "20260716", "open": 100, "high": 102, "low": 99, "close": 101, "vol": 10, "amount": 20}]
+        )
+
+    def ths_daily(self, ts_code, **kwargs):
+        assert ts_code == "886044.TI"
+        return FakeFrame(
+            [{"trade_date": "20260716", "open": 200, "high": 205, "low": 198, "close": 203, "vol": 15}]
+        )
+
+
 def test_tushare_stock_basic_marks_st_and_delisted():
     from app.services.tushare_adapter import TushareAdapter
 
@@ -150,6 +176,25 @@ def test_tushare_stock_basic_marks_st_and_delisted():
     assert by_symbol["000002"]["is_st"] is True
     assert by_symbol["000003"]["status"] == "delisted"
     assert by_symbol["000003"]["delisted_date"] == "2020-01-01"
+
+
+def test_sector_topics_continue_from_dc_to_ths_and_preserve_canonical_keyword():
+    from app.services.ashare_tech_insights import SECTOR_TOPICS
+    from app.services.tushare_adapter import TushareAdapter
+
+    rows = TushareAdapter(pro=SectorFallbackPro()).sector_daily_rows(
+        SECTOR_TOPICS,
+        "2026-07-01",
+        "2026-07-16",
+    )
+
+    by_keyword = {item["keyword"]: item for item in rows}
+    assert set(by_keyword) == {"半导体", "存储", "CPO", "PCB", "AI服务器"}
+    assert by_keyword["AI服务器"]["code"] == "886044.TI"
+    assert by_keyword["AI服务器"]["matchedName"] == "液冷服务器"
+    assert by_keyword["AI服务器"]["matchedKeyword"] == "液冷服务器"
+    assert by_keyword["AI服务器"]["matchRule"] == "alias"
+    assert by_keyword["AI服务器"]["source"] == "tushare:ths_daily"
 
 
 def test_tushare_daily_rows_degrades_when_only_pro_daily_is_allowed():

@@ -504,6 +504,54 @@ export interface PaperSession {
   created_at: string;
   updated_at: string;
   finished_at?: string | null;
+  mode?: "legacy_replay" | "lean_walkforward";
+  legacy_read_only?: boolean;
+  source_backtest_id?: string | null;
+  strategy_version_id?: string | null;
+  parameter_hash?: string | null;
+  start_date?: string | null;
+  last_processed_date?: string | null;
+  next_trade_date?: string | null;
+  auto_advance?: boolean;
+  failure?: { code?: string; message?: string } | null;
+  runs?: PaperWalkforwardRun[];
+  orders?: Array<Record<string, unknown>>;
+  positions?: Array<Record<string, unknown>>;
+  snapshots?: Array<Record<string, unknown>>;
+}
+
+export interface PaperBacktestCandidate {
+  id: string;
+  name?: string | null;
+  symbol: string;
+  start: string;
+  end: string;
+  cash: number;
+  finishedAt?: string | null;
+  strategyVersionId?: string | null;
+  parameterHash?: string | null;
+  admissionStage?: string | null;
+  validation?: BacktestValidation;
+}
+
+export interface PaperWalkforwardRun {
+  id: string;
+  session_id: string;
+  trade_date: string;
+  backtest_run_id?: string | null;
+  task_id?: string | null;
+  status: string;
+  order_fingerprint?: string | null;
+  reconciliation?: {
+    throughDate?: string;
+    expectedOrderFingerprint?: string;
+    actualOrderFingerprint?: string;
+    passed?: boolean;
+  } | null;
+  failure?: { code?: string; message?: string } | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface PaperDailyReport {
@@ -721,6 +769,12 @@ export interface AshareTechMarketEnvironmentItem {
   name: string;
   category?: "sector";
   keyword?: string;
+  matchedName?: string;
+  matchedKeyword?: string;
+  matchRule?: "canonical" | "alias";
+  unresolved?: boolean;
+  attemptedAliases?: string[];
+  attemptedSources?: string[];
   date?: string;
   close?: number | null;
   changePct?: number | null;

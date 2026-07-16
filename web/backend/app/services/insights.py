@@ -7,6 +7,7 @@ import statistics
 import time
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -35,6 +36,10 @@ class InsightError(ValueError):
 
 
 class InsightConfigurationError(InsightError):
+    pass
+
+
+class InsightDeleteConflict(InsightError):
     pass
 
 
@@ -476,6 +481,40 @@ def list_reports(*, asset_class: str | None = None, symbol: str | None = None, s
             [*values, bounded_limit, bounded_offset],
         ).fetchall()
     return {"items": rows_to_dicts(rows), "count": count, "limit": bounded_limit, "offset": bounded_offset}
+
+
+def delete_report(report_id: str) -> dict[str, Any]:
+    with db() as connection:
+        report_row = connection.execute("select * from insight_reports where id = ?", (report_id,)).fetchone()
+        task_rows = connection.execute("select id, status, log_path from tasks where related_id = ?", (report_id,)).fetchall()
+        signal_row = connection.execute(
+            "select paper_session_id, paper_signal_id from decision_signals where insight_report_id = ?",
+            (report_id,),
+        ).fetchone()
+    report = row_to_dict(report_row)
+    if not report:
+        raise KeyError("Insight report not found.")
+    tasks = rows_to_dicts(task_rows)
+    active_statuses = {"created", "queued", "running", "interrupted"}
+    if str(report.get("status")) in active_statuses or any(str(item.get("status")) in active_statuses for item in tasks):
+        raise InsightDeleteConflict("Cancel or wait for the Insight report to finish before deleting it.")
+    with db() as connection:
+        connection.execute("delete from decision_signals where insight_report_id = ?", (report_id,))
+        connection.execute("delete from insight_reports where id = ?", (report_id,))
+        connection.execute("delete from tasks where related_id = ?", (report_id,))
+    for task in tasks:
+        try:
+            Path(str(task.get("log_path") or "")).unlink(missing_ok=True)
+        except OSError:
+            pass
+    signal = row_to_dict(signal_row)
+    return {
+        "deleted": True,
+        "id": report_id,
+        "deletedTasks": len(tasks),
+        "deletedDecisionSignal": bool(signal_row),
+        "paperAuditPreserved": bool(signal and signal.get("paper_signal_id")),
+    }
 
 
 def run_report(task_id: str, report_id: str) -> dict[str, Any]:

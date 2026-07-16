@@ -107,6 +107,7 @@ GET    /api/insights/capabilities
 GET    /api/insights
 POST   /api/insights
 GET    /api/insights/{report_id}
+DELETE /api/insights/{report_id}
 POST   /api/insights/{report_id}/paper-signals
 ```
 
@@ -222,6 +223,7 @@ These are useful research APIs but are not yet the core Level 3 acceptance chain
 ```text
 GET    /api/paper
 POST   /api/paper
+GET    /api/paper/candidates?projectId={project_id}
 POST   /api/paper/{session_id}/status
 GET    /api/paper/{session_id}
 GET    /api/paper/{session_id}/signals
@@ -233,9 +235,10 @@ GET    /api/paper/{session_id}/reports
 GET    /api/paper/{session_id}/reports/{trade_date}
 POST   /api/paper/{session_id}/run-day
 POST   /api/paper/{session_id}/replay
+GET    /api/paper/{session_id}/runs
 ```
 
-Paper trading is P3-oriented. It must stay isolated from backtest execution until consistency validation is complete.
+Creating a LEAN Paper session requires `projectId` and `sourceBacktestId`. The source run must belong to the project, have passed execution validation, contain complete data, and retain its strategy snapshot. Each A-share trading day runs that frozen project through the standard LEAN backtest worker and reconciles historical order fingerprints before the Paper ledger advances. Legacy replay sessions remain readable but cannot be resumed.
 
 ## Insights and A-share Technology Daily Report
 
@@ -244,12 +247,14 @@ GET  /api/insights/capabilities
 GET  /api/insights
 POST /api/insights
 GET  /api/insights/{report_id}
+DELETE /api/insights/{report_id}
 POST /api/insights/{report_id}/paper-signals
 
 GET    /api/ashare-tech-insights/capabilities
 GET    /api/ashare-tech-insights/reports
 POST   /api/ashare-tech-insights/reports
 GET    /api/ashare-tech-insights/reports/{report_id}
+DELETE /api/ashare-tech-insights/reports/{report_id}
 GET    /api/ashare-tech-insights/watchlist
 POST   /api/ashare-tech-insights/watchlist/items
 PATCH  /api/ashare-tech-insights/watchlist/items/{code}

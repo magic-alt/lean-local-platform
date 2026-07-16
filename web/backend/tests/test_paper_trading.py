@@ -506,3 +506,90 @@ def test_paper_api_preserves_strategy_extra_parameters(tmp_path, monkeypatch):
     assert parameters["fast"] == 3
     assert parameters["slow"] == 5
     assert parameters["strategy"] == "ema_cross"
+
+
+def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, json_dump
+    from app.services.paper import create_session, trusted_backtest_candidates
+
+    snapshot_dir = tmp_path / "runs" / "trusted-run" / "strategy"
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "main.py").write_text("# frozen strategy\n", encoding="utf-8")
+    parameters = {
+        "ticker": "600460",
+        "assetClass": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": "2024-01-01",
+        "end": "2026-07-13",
+        "cash": 50000,
+        "benchmarkSymbol": "000300",
+        "strategySnapshotDir": str(snapshot_dir),
+        "strategySnapshotMainFile": "main.py",
+        "strategySnapshotAlgorithmClass": "MacdAlgorithm",
+        "strategySnapshotLanguage": "Python",
+    }
+    now = "2026-07-16T00:00:00+00:00"
+    with db() as connection:
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id, project_id, symbol, asset_class, venue, resolution, data_type, parameters_json,
+                 status, docker_image, results_dir, created_at, finished_at, validation_json)
+            values (?, ?, ?, 'equity', 'china', 'daily', 'trade', ?, 'success', ?, ?, ?, ?, ?)
+            """,
+            (
+                "trusted-run",
+                "project-macd",
+                "600460",
+                json_dump(parameters),
+                "lean:test",
+                str(tmp_path / "runs" / "trusted-run" / "results"),
+                now,
+                now,
+                json_dump({"passed": True, "data": {"truncated": False}}),
+            ),
+        )
+        connection.execute(
+            """
+            insert into experiments
+                (id, run_id, strategy_version_id, dataset_version_id, parameter_hash, fingerprint_json,
+                 validation_json, experiment_json, created_at, updated_at)
+            values (?, ?, ?, ?, ?, '{}', '{}', '{}', ?, ?)
+            """,
+            ("experiment-1", "trusted-run", "strategy-v1", "dataset-v1", "params-v1", now, now),
+        )
+        connection.execute(
+            """
+            insert into backtest_results
+                (id, job_id, summary_metrics_json, equity_curve_json, drawdown_curve_json,
+                 orders_json, trades_json, holdings_json, statistics_json, created_at)
+            values (?, ?, '{}', '[]', '[]', '[]', '[]', '[]', '{}', ?)
+            """,
+            ("result-1", "trusted-run", now),
+        )
+
+    candidates = trusted_backtest_candidates("project-macd")
+    assert [item["id"] for item in candidates] == ["trusted-run"]
+
+    session = create_session(
+        {
+            "mode": "lean_walkforward",
+            "name": "MACD paper",
+            "projectId": "project-macd",
+            "sourceBacktestId": "trusted-run",
+            "startDate": "2026-07-14",
+            "autoAdvance": True,
+        }
+    )
+
+    assert session["mode"] == "lean_walkforward"
+    assert session["legacy_read_only"] is False
+    assert session["source_backtest_id"] == "trusted-run"
+    assert session["strategy_version_id"] == "strategy-v1"
+    assert session["parameter_hash"] == "params-v1"
+    assert session["cash"] == 50000
+    assert session["parameters"]["strategySnapshotDir"] == str(snapshot_dir)

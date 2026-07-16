@@ -1,9 +1,16 @@
 from typing import Any
 
+from celery import chain
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services import paper as paper_service
+from ..tasks.worker import (
+    fail_paper_walkforward_task,
+    finalize_paper_walkforward_task,
+    mark_paper_walkforward_running_task,
+    run_backtest_task,
+)
 
 router = APIRouter(prefix="/api/paper", tags=["paper"])
 
@@ -13,7 +20,7 @@ class PaperSessionCreate(BaseModel):
 
     name: str | None = None
     projectId: str | None = None
-    symbol: str
+    symbol: str | None = None
     symbols: list[str] | str | None = None
     assetClass: str = "equity"
     market: str = "usa"
@@ -32,6 +39,9 @@ class PaperSessionCreate(BaseModel):
     observeOnlySymbols: list[str] | str | None = None
     allowStBuy: bool = False
     parameters: dict[str, Any] = Field(default_factory=dict)
+    sourceBacktestId: str | None = None
+    startDate: str | None = None
+    autoAdvance: bool = True
 
 
 class PaperStatusUpdate(BaseModel):
@@ -67,9 +77,21 @@ def list_sessions():
 @router.post("")
 def create_session(request: PaperSessionCreate):
     try:
-        return paper_service.create_session(request.model_dump())
+        payload = request.model_dump()
+        if request.sourceBacktestId or request.projectId:
+            if not request.sourceBacktestId or not request.projectId:
+                raise ValueError("LEAN Paper requires both a Project and a trusted Backtest.")
+            payload["mode"] = "lean_walkforward"
+        else:
+            payload["mode"] = "legacy_replay"
+        return paper_service.create_session(payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/candidates")
+def candidates(projectId: str):
+    return paper_service.trusted_backtest_candidates(projectId)
 
 
 @router.post("/{session_id}/status")
@@ -94,6 +116,7 @@ def detail(session_id: str):
         "orders": paper_service.list_orders(session_id),
         "positions": paper_service.list_positions(session_id),
         "snapshots": paper_service.list_snapshots(session_id),
+        "runs": paper_service.list_walkforward_runs(session_id),
     }
 
 
@@ -176,6 +199,18 @@ def report(session_id: str, trade_date: str):
 @router.post("/{session_id}/run-day")
 def run_day(session_id: str, request: PaperRunDayRequest):
     try:
+        session = paper_service.get_session(session_id)
+        if not session:
+            raise KeyError("Paper session not found.")
+        if session.get("mode") == "lean_walkforward":
+            paper_run = paper_service.create_walkforward_run(session_id, request.tradeDate)
+            workflow = chain(
+                mark_paper_walkforward_running_task.si(paper_run["id"]),
+                run_backtest_task.si(paper_run["task_id"], paper_run["backtest_run_id"]),
+                finalize_paper_walkforward_task.si(paper_run["id"]),
+            )
+            workflow.apply_async(link_error=fail_paper_walkforward_task.s(paper_run["id"]))
+            return paper_run
         return paper_service.match_daily_orders(session_id, request.tradeDate, auto_signal=request.autoSignal)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Paper session not found.") from exc
@@ -186,8 +221,20 @@ def run_day(session_id: str, request: PaperRunDayRequest):
 @router.post("/{session_id}/replay")
 def replay(session_id: str, request: PaperReplayRequest):
     try:
+        session = paper_service.get_session(session_id)
+        if session and session.get("mode") == "lean_walkforward":
+            if request.startDate != request.endDate:
+                raise ValueError("LEAN Paper replay is sequential; queue one trading day at a time.")
+            return run_day(session_id, PaperRunDayRequest(tradeDate=request.startDate, autoSignal=False))
         return paper_service.run_replay(session_id, request.startDate, request.endDate, auto_signal=request.autoSignal)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Paper session not found.") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{session_id}/runs")
+def walkforward_runs(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.list_walkforward_runs(session_id)

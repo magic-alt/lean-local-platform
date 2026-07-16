@@ -36,6 +36,8 @@ import type {
   ObjectStoreItem,
   PaperSession,
   PaperDailyReport,
+  PaperBacktestCandidate,
+  PaperWalkforwardRun,
   ChartPoint,
   ChartData,
   DataQueryRow,
@@ -158,7 +160,7 @@ export const api = {
       `/api/data/files?assetClass=${encodeURIComponent(assetClass ?? "")}&venue=${encodeURIComponent(venue ?? "")}`
     ),
   queryData: (params: {
-    symbol: string;
+    symbol?: string;
     assetClass?: string;
     market?: string;
     venue?: string;
@@ -383,6 +385,9 @@ export const api = {
   deleteObjectStoreItem: (key: string) =>
     request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
   paperSessions: () => request<PaperSession[]>("/api/paper"),
+  paperSession: (id: string) => request<PaperSession>(`/api/paper/${encodeURIComponent(id)}`),
+  paperCandidates: (projectId: string) =>
+    request<PaperBacktestCandidate[]>(`/api/paper/candidates?projectId=${encodeURIComponent(projectId)}`),
   createPaperSession: (payload: {
     name?: string;
     projectId?: string;
@@ -404,6 +409,9 @@ export const api = {
     observeOnlySymbols?: string;
     allowStBuy?: boolean;
     parameters?: Record<string, unknown>;
+    sourceBacktestId: string;
+    startDate?: string;
+    autoAdvance?: boolean;
   }) =>
     request<PaperSession>("/api/paper", {
       method: "POST",
@@ -411,6 +419,13 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
+  paperRuns: (id: string) => request<PaperWalkforwardRun[]>(`/api/paper/${encodeURIComponent(id)}/runs`),
+  runPaperDay: (id: string, tradeDate: string) =>
+    request<PaperWalkforwardRun>(`/api/paper/${encodeURIComponent(id)}/run-day`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tradeDate, autoSignal: false })
+    }),
   insightCapabilities: () => request<InsightCapabilities>("/api/insights/capabilities"),
   insights: (filters?: { assetClass?: string; symbol?: string; status?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();
@@ -436,6 +451,11 @@ export const api = {
     body: JSON.stringify(payload)
   }),
   insight: (id: string) => request<InsightReport>(`/api/insights/${encodeURIComponent(id)}`),
+  deleteInsight: (id: string) =>
+    request<{ deleted: boolean; id: string; deletedTasks: number; deletedDecisionSignal: boolean; paperAuditPreserved: boolean }>(
+      `/api/insights/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    ),
   handoffInsightToPaper: (id: string, payload: { sessionId: string; targetPercent?: number }) =>
     request<{ created: boolean; paperSignal?: Record<string, unknown>; report: InsightReport }>(
       `/api/insights/${encodeURIComponent(id)}/paper-signals`,
@@ -448,6 +468,11 @@ export const api = {
   ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/ashare-tech-insights/capabilities"),
   ashareTechReports: () => request<AshareTechReportList>("/api/ashare-tech-insights/reports"),
   ashareTechReport: (id: string) => request<AshareTechReport>(`/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`),
+  deleteAshareTechReport: (id: string) =>
+    request<{ deleted: boolean; id: string; deletedTasks: number }>(
+      `/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    ),
   createAshareTechReport: (payload: { requestedDate?: string; force?: boolean }) =>
     request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/ashare-tech-insights/reports", {
       method: "POST",

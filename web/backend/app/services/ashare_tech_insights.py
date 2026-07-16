@@ -8,6 +8,7 @@ import re
 import statistics
 import uuid
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
@@ -61,7 +62,17 @@ MAX_WATCHLIST_SIZE = 60
 INDEX_POOL = (
     ("000001", "上证指数"), ("399001", "深证成指"), ("399006", "创业板指"), ("000688", "科创50"),
 )
-SECTOR_KEYWORDS = ["半导体", "存储", "CPO", "PCB", "AI服务器"]
+SECTOR_TOPICS = [
+    {"keyword": "半导体", "aliases": ["半导体"]},
+    {"keyword": "存储", "aliases": ["存储"]},
+    {"keyword": "CPO", "aliases": ["CPO"]},
+    {"keyword": "PCB", "aliases": ["PCB"]},
+    {
+        "keyword": "AI服务器",
+        "aliases": ["AI服务器", "液冷服务器", "液冷概念", "算力概念", "东数西算(算力)", "数据中心"],
+    },
+]
+SECTOR_KEYWORDS = [item["keyword"] for item in SECTOR_TOPICS]
 POLICY_PAGES = (
     ("工业和信息化部", "https://www.miit.gov.cn/zwgk/zcwj/wjfb/index.html"),
     ("中国证监会", "https://www.csrc.gov.cn/csrc/c100028/common_list.shtml"),
@@ -71,6 +82,10 @@ RISK_KEYWORDS = ("减持", "解禁", "问询", "监管", "诉讼", "停产", "�
 
 
 class AshareTechReportError(ValueError):
+    pass
+
+
+class AshareTechReportDeleteConflict(AshareTechReportError):
     pass
 
 
@@ -575,7 +590,7 @@ def _official_policy_evidence(start_date: str, end_date: str) -> list[dict[str, 
     return sorted(unique.values(), key=lambda item: (item["date"], item["source"]), reverse=True)
 
 
-def _eastmoney_sector_rows(keywords: list[str], start_date: str, end_date: str) -> list[dict[str, Any]]:
+def _eastmoney_sector_rows(topics: list[dict[str, Any]] | list[str], start_date: str, end_date: str) -> list[dict[str, Any]]:
     """Website fallback used only when TuShare DC/THS sector permissions are unavailable."""
     list_query = urlencode({
         "pn": 1, "pz": 500, "po": 1, "np": 1, "fltt": 2, "invt": 2,
@@ -585,9 +600,28 @@ def _eastmoney_sector_rows(keywords: list[str], start_date: str, end_date: str) 
     with urlopen(request, timeout=15) as response:  # noqa: S310 - fixed Eastmoney host
         catalogue_payload = json.loads(response.read().decode("utf-8"))
     catalogue = ((catalogue_payload.get("data") or {}).get("diff") or [])
+    normalized = [
+        item if isinstance(item, dict) else {"keyword": str(item), "aliases": [str(item)]}
+        for item in topics
+    ]
     output: list[dict[str, Any]] = []
-    for keyword in keywords:
-        match = next((item for item in catalogue if keyword.lower() in str(item.get("f14") or "").lower()), None)
+    used_codes: set[str] = set()
+    for topic in normalized:
+        keyword = str(topic["keyword"])
+        matched_alias = None
+        match = None
+        for alias in topic.get("aliases") or [keyword]:
+            match = next(
+                (
+                    item for item in catalogue
+                    if str(item.get("f12") or "") not in used_codes
+                    and str(alias).lower() in str(item.get("f14") or "").lower()
+                ),
+                None,
+            )
+            if match:
+                matched_alias = str(alias)
+                break
         if not match:
             continue
         code = str(match.get("f12") or "")
@@ -610,8 +644,12 @@ def _eastmoney_sector_rows(keywords: list[str], start_date: str, end_date: str) 
                 "amount": _finite(fields[6]), "turnover_rate": _finite(fields[10]), "adj_factor": 1.0,
             })
         if rows:
+            used_codes.add(code)
             output.append({
                 "keyword": keyword, "code": code, "name": match.get("f14") or keyword,
+                "matchedName": match.get("f14") or keyword,
+                "matchedKeyword": matched_alias or keyword,
+                "matchRule": "canonical" if matched_alias == keyword else "alias",
                 "source": "eastmoney:sector_kline_fallback", "rows": rows,
             })
     return output
@@ -628,14 +666,16 @@ def _market_environment(adapter: TushareAdapter, start_date: str, end_date: str)
         except Exception as exc:
             result.append({"code": code, "name": name, "error": str(exc), "source": "tushare:index_daily"})
     try:
-        sector_items = adapter.sector_daily_rows(SECTOR_KEYWORDS, start_date, end_date)
+        sector_items = adapter.sector_daily_rows(SECTOR_TOPICS, start_date, end_date)
     except Exception:
         sector_items = []
-    if not sector_items and hasattr(adapter, "sector_daily_rows"):
+    resolved = {str(item.get("keyword")) for item in sector_items}
+    unresolved_topics = [item for item in SECTOR_TOPICS if item["keyword"] not in resolved]
+    if unresolved_topics and hasattr(adapter, "sector_daily_rows"):
         try:
-            sector_items = _eastmoney_sector_rows(SECTOR_KEYWORDS, start_date, end_date)
+            sector_items.extend(_eastmoney_sector_rows(unresolved_topics, start_date, end_date))
         except Exception:
-            sector_items = []
+            pass
     for item in sector_items:
         metrics = calculate_metrics(item["rows"])
         closes = [_finite(row.get("close")) for row in item["rows"]]
@@ -648,9 +688,27 @@ def _market_environment(adapter: TushareAdapter, start_date: str, end_date: str)
                 break
         result.append({
             "code": item["code"], "name": item["name"], "category": "sector", "keyword": item["keyword"],
+            "matchedName": item.get("matchedName") or item["name"],
+            "matchedKeyword": item.get("matchedKeyword") or item["keyword"],
+            "matchRule": item.get("matchRule") or "canonical",
             **{key: metrics.get(key) for key in ("date", "close", "changePct", "volumeRatio20", "amountRatio20", "turnoverRate")},
             "source": item["source"],
             "pullbackDays": pullback_days,
+        })
+    resolved = {str(item.get("keyword")) for item in sector_items}
+    for topic in SECTOR_TOPICS:
+        if topic["keyword"] in resolved:
+            continue
+        result.append({
+            "code": "",
+            "name": topic["keyword"],
+            "category": "sector",
+            "keyword": topic["keyword"],
+            "unresolved": True,
+            "attemptedAliases": topic["aliases"],
+            "attemptedSources": ["tushare:dc_daily", "tushare:ths_daily", "eastmoney:sector_kline_fallback"],
+            "source": "unresolved",
+            "error": "No verifiable sector index matched the canonical topic.",
         })
     return result
 
@@ -867,6 +925,28 @@ def list_reports(limit: int = 50, offset: int = 0) -> dict[str, Any]:
     return {"items": rows_to_dicts(rows), "count": count, "limit": limit, "offset": offset}
 
 
+def delete_report(report_id: str) -> dict[str, Any]:
+    with db() as connection:
+        report_row = connection.execute("select * from ashare_tech_reports where id = ?", (report_id,)).fetchone()
+        task_rows = connection.execute("select id, status, log_path from tasks where related_id = ?", (report_id,)).fetchall()
+    report = row_to_dict(report_row)
+    if not report:
+        raise KeyError("A-share technology report not found.")
+    tasks = rows_to_dicts(task_rows)
+    active_statuses = {"created", "queued", "running", "waiting_data", "interrupted"}
+    if str(report.get("status")) in active_statuses or any(str(item.get("status")) in active_statuses for item in tasks):
+        raise AshareTechReportDeleteConflict("请先等待报告完成或取消关联任务，再删除该报告。")
+    with db() as connection:
+        connection.execute("delete from ashare_tech_reports where id = ?", (report_id,))
+        connection.execute("delete from tasks where related_id = ?", (report_id,))
+    for task in tasks:
+        try:
+            Path(str(task.get("log_path") or "")).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"deleted": True, "id": report_id, "deletedTasks": len(tasks)}
+
+
 def fail_report(report_id: str, error: str) -> None:
     with db() as connection:
         connection.execute(
@@ -1051,7 +1131,7 @@ def _finish_report(
     fingerprint = hashlib.sha256(json_dump({"report": report, "promptVersion": PROMPT_VERSION}).encode("utf-8")).hexdigest()
     sector_sources = sorted({
         str(item.get("source")) for item in report.get("marketEnvironment", [])
-        if item.get("category") == "sector" and item.get("source")
+        if item.get("category") == "sector" and item.get("source") and not item.get("unresolved")
     })
     sector_source = ",".join(sector_sources) if sector_sources else "观察池等权代理（正式板块数据缺失）"
     with db() as connection:

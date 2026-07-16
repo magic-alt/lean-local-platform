@@ -71,6 +71,16 @@ def report_detail(report_id: str):
         raise HTTPException(status_code=404, detail="A-share technology report not found.") from exc
 
 
+@router.delete("/reports/{report_id}")
+def delete_report(report_id: str):
+    try:
+        return service.delete_report(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="A-share technology report not found.") from exc
+    except service.AshareTechReportDeleteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/watchlist")
 def read_watchlist():
     return service.get_watchlist()

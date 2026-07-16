@@ -56,7 +56,9 @@ import type {
   MarketInfo,
   OptimizationRun,
   PaperDailyReport,
+  PaperBacktestCandidate,
   PaperSession,
+  PaperWalkforwardRun,
   Project,
   ProjectFile,
   ReportRecord,
@@ -89,33 +91,43 @@ import {
 export function PaperPage() {
   const sessions = useAsyncData(api.paperSessions, []);
   const projects = useAsyncData(api.projects, []);
-  const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const [form] = Form.useForm();
-  const assetClass = Form.useWatch("assetClass", form) || "equity";
-  const market = Form.useWatch("market", form) || "usa";
-  const venue = Form.useWatch("venue", form) || defaultVenueFor(assetClass, assetClasses.data, market);
-  const resolution = Form.useWatch("resolution", form) || "daily";
-  const dataType = Form.useWatch("dataType", form) || "trade";
-  const [symbols, setSymbols] = useState<string[]>([]);
-  const selectedAssetInfo = assetClasses.data.find((item) => item.key === assetClass);
-  const [reportSession, setReportSession] = useState<PaperSession | null>(null);
+  const projectId = Form.useWatch("projectId", form);
+  const sourceBacktestId = Form.useWatch("sourceBacktestId", form);
+  const [candidates, setCandidates] = useState<PaperBacktestCandidate[]>([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<PaperSession | null>(null);
   const [paperReports, setPaperReports] = useState<PaperDailyReport[]>([]);
-  const [paperReportsLoading, setPaperReportsLoading] = useState(false);
+  const [paperRuns, setPaperRuns] = useState<PaperWalkforwardRun[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [runDate, setRunDate] = useState("");
 
   useEffect(() => {
-    api.symbols(market, assetClass, venue, resolution, dataType)
-      .then((result) => setSymbols(result.symbols))
-      .catch((error) => message.error((error as Error).message));
-  }, [assetClass, dataType, market, resolution, venue]);
+    if (!projectId) {
+      setCandidates([]);
+      form.setFieldValue("sourceBacktestId", undefined);
+      return;
+    }
+    setCandidatesLoading(true);
+    api.paperCandidates(projectId)
+      .then(setCandidates)
+      .catch((error) => message.error((error as Error).message))
+      .finally(() => setCandidatesLoading(false));
+  }, [form, projectId]);
 
   async function submit(values: any) {
     await api.createPaperSession({
-      ...values,
-      venue: assetClass === "equity" ? values.market : values.venue,
+      name: values.name,
+      projectId: values.projectId,
+      sourceBacktestId: values.sourceBacktestId,
+      symbol: candidates.find((item) => item.id === values.sourceBacktestId)?.symbol || "",
+      startDate: values.startDate || undefined,
+      autoAdvance: values.autoAdvance !== false,
       parameters: {}
     });
-    message.success("Paper session created");
+    message.success("LEAN Paper session created from the frozen backtest snapshot");
     form.resetFields();
+    setCandidates([]);
     sessions.reload();
   }
 
@@ -124,44 +136,84 @@ export function PaperPage() {
     await sessions.reload();
   }
 
-  async function loadReports(session: PaperSession) {
-    setReportSession(session);
-    setPaperReportsLoading(true);
+  async function loadDetail(session: PaperSession) {
+    setSelectedSession(session);
+    setRunDate(session.next_trade_date || session.start_date || "");
+    setDetailLoading(true);
     try {
-      setPaperReports(await api.paperReports(session.id));
+      const [detail, reports, runs] = await Promise.all([
+        api.paperSession(session.id),
+        api.paperReports(session.id),
+        session.mode === "lean_walkforward" ? api.paperRuns(session.id) : Promise.resolve([])
+      ]);
+      setSelectedSession(detail);
+      setRunDate(detail.next_trade_date || detail.start_date || "");
+      setPaperReports(reports);
+      setPaperRuns(runs);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
-      setPaperReportsLoading(false);
+      setDetailLoading(false);
     }
   }
 
+  async function runDay() {
+    if (!selectedSession || !runDate) return;
+    await api.runPaperDay(selectedSession.id, runDate);
+    message.success(`LEAN Paper ${runDate} 已进入执行队列`);
+    await Promise.all([sessions.reload(), loadDetail(selectedSession)]);
+  }
+
+  const selectedCandidate = candidates.find((item) => item.id === sourceBacktestId);
+  const equityPoints = paperReports
+    .map((item) => [item.tradeDate || item.trade_date, item.NAV])
+    .filter((item) => item[0] && typeof item[1] === "number");
+
   return (
     <>
-      <div className="toolbar"><h1 className="page-title">Paper Replay</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
-      <Alert style={{ marginBottom: 16 }} type="info" showIcon message="Paper Replay is a local simulated session registry. It does not connect to brokers or place real orders." />
-      <Card title="Create Paper Session">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", cash: 300000, executionPolicy: "next_open", benchmarkSymbol: "000300", maxPositions: 10, maxPositionWeight: 0.2, minCash: 0, allowStBuy: false }}>
-          <div className="field-grid six">
-            <Form.Item name="name" label="Name"><Input placeholder="BTCUSDT paper replay" /></Form.Item>
-            <Form.Item name="projectId" label="Project"><Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.name }))} /></Form.Item>
-            <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} onChange={(value) => form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, market))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} onChange={(value) => { if (assetClass === "equity") form.setFieldValue("venue", value); }} /></Form.Item>
-            <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={assetClass} market={market} localSymbols={symbols} /></Form.Item>
-            <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="executionPolicy" label="Execution"><Select options={[{ value: "next_open", label: "Next Open" }, { value: "next_close", label: "Next Close" }, { value: "next_vwap", label: "Next VWAP" }]} /></Form.Item>
-            <Form.Item name="benchmarkSymbol" label="Benchmark"><Input /></Form.Item>
-            <Form.Item name="maxPositions" label="Max Positions"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="maxPositionWeight" label="Max Weight"><InputNumber min={0} max={1} step={0.05} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="minCash" label="Min Cash"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="blacklist" label="Blacklist"><Input /></Form.Item>
-            <Form.Item name="watchlist" label="Watchlist"><Input /></Form.Item>
-            <Form.Item name="observeOnlySymbols" label="Observe Only"><Input /></Form.Item>
-            <Form.Item name="allowStBuy" valuePropName="checked"><Checkbox>Allow ST Buy</Checkbox></Form.Item>
+      <div className="toolbar"><h1 className="page-title">LEAN Paper</h1><Button icon={<ReloadOutlined />} onClick={sessions.reload}>Refresh</Button></div>
+      <Alert
+        style={{ marginBottom: 16 }}
+        type="info"
+        showIcon
+        message="Projects 管理策略源码；Backtests 验证一个冻结版本；LEAN Paper 每个交易日用同一冻结版本运行到当日。"
+        description="当前支持 A 股日线 Walk-forward。它使用真实 LEAN 策略和 A 股交易规则，但不是实时行情或券商委托。"
+      />
+      <Card title="Create LEAN Paper">
+        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ autoAdvance: true }}>
+          <div className="field-grid four">
+            <Form.Item name="name" label="Name"><Input placeholder="600460 MACD daily paper" /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+              <Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} />
+            </Form.Item>
+            <Form.Item name="sourceBacktestId" label="Trusted Backtest" rules={[{ required: true }]}>
+              <Select
+                loading={candidatesLoading}
+                disabled={!projectId}
+                placeholder={projectId ? "Select a validation-passed run" : "Select Project first"}
+                options={candidates.map((item) => ({
+                  value: item.id,
+                  label: `${item.name || item.symbol} · ${item.start} → ${item.end}`
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="startDate" label="First Paper Date">
+              <DateStringPicker placeholder="Default: next trading day after backtest" />
+            </Form.Item>
+            <Form.Item name="autoAdvance" valuePropName="checked"><Checkbox>工作日收盘后自动推进</Checkbox></Form.Item>
           </div>
+          {projectId && !candidatesLoading && candidates.length === 0 && (
+            <Alert type="warning" showIcon message="该 Project 暂无验证通过且数据未截断的 Backtest。" style={{ marginBottom: 16 }} />
+          )}
+          {selectedCandidate && (
+            <Alert
+              type="success"
+              showIcon
+              message={`冻结 ${selectedCandidate.symbol} · ${selectedCandidate.start} → ${selectedCandidate.end} · ¥${selectedCandidate.cash}`}
+              description={`Strategy version: ${selectedCandidate.strategyVersionId || "-"} · Parameter fingerprint: ${(selectedCandidate.parameterHash || "-").slice(0, 16)} · Admission: ${selectedCandidate.admissionStage || "not registered（仅警告）"}`}
+              style={{ marginBottom: 16 }}
+            />
+          )}
           <Button type="primary" htmlType="submit">Create</Button>
         </Form>
       </Card>
@@ -173,35 +225,71 @@ export function PaperPage() {
           columns={[
             { title: "Name", dataIndex: "name" },
             { title: "Symbol", dataIndex: "symbol" },
-            { title: "Asset", dataIndex: "asset_class" },
-            { title: "Venue", dataIndex: "venue" },
+            { title: "Mode", render: (_, session) => session.mode === "lean_walkforward" ? <Tag color="blue">LEAN Walk-forward</Tag> : <Tag>Legacy / 只读</Tag> },
+            { title: "Last Date", dataIndex: "last_processed_date", render: (value) => value || "-" },
             { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
             { title: "Equity", dataIndex: "equity" },
             { title: "Created", dataIndex: "created_at" },
-            { title: "Actions", render: (_, session) => <Space><Button size="small" onClick={() => status(session, "running")}>Run</Button><Button size="small" onClick={() => status(session, "paused")}>Pause</Button><Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button><Button size="small" onClick={() => loadReports(session)}>Reports</Button></Space> }
+            { title: "Actions", render: (_, session) => <Space>
+              {!session.legacy_read_only && <Button size="small" onClick={() => status(session, "running")}>Enable</Button>}
+              {!session.legacy_read_only && <Button size="small" onClick={() => status(session, "paused")}>Pause</Button>}
+              {!session.legacy_read_only && <Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button>}
+              <Button size="small" onClick={() => loadDetail(session)}>Details</Button>
+            </Space> }
           ]}
         />
       </Card>
-      {reportSession && (
-        <Card title={`Daily Reports - ${reportSession.name}`} style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => loadReports(reportSession)}>Refresh</Button>}>
-          <Table<PaperDailyReport>
-            rowKey="id"
-            dataSource={paperReports}
-            loading={paperReportsLoading}
-            size="small"
-            columns={[
-              { title: "Date", render: (_, report) => report.tradeDate || report.trade_date },
-              { title: "Execution", dataIndex: "executionPolicy" },
-              { title: "NAV", dataIndex: "NAV" },
-              { title: "Cash", dataIndex: "cash" },
-              { title: "Benchmark", render: (_, report) => report.benchmark?.symbol ? `${report.benchmark.symbol} ${report.benchmark.close ?? "-"}` : "-" },
-              { title: "Excess", dataIndex: "excessReturn" },
-              { title: "QA", render: (_, report) => <Tag color={report.qa?.passed === false ? "red" : "green"}>{report.qa?.severity || "ok"}</Tag> },
-              { title: "Rejects", render: (_, report) => (report.rejectionReasons || []).join(", ") || "-" },
-              { title: "Warnings", render: (_, report) => (report.warnings || []).join(", ") || "-" },
-              { title: "Fingerprint", render: (_, report) => report.fingerprint ? report.fingerprint.slice(0, 12) : "-" }
-            ]}
-          />
+      {selectedSession && (
+        <Card title={`${selectedSession.name} · ${selectedSession.mode === "lean_walkforward" ? "LEAN Paper" : "Legacy Replay"}`} loading={detailLoading} style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => loadDetail(selectedSession)}>Refresh</Button>}>
+          {selectedSession.failure && <Alert type="error" showIcon message={selectedSession.failure.code || "Paper failed"} description={selectedSession.failure.message} style={{ marginBottom: 16 }} />}
+          {selectedSession.mode === "lean_walkforward" && !selectedSession.legacy_read_only && (
+            <Space style={{ marginBottom: 16 }}>
+              <Input value={runDate} onChange={(event) => setRunDate(event.target.value)} placeholder="YYYY-MM-DD next eligible trading date" style={{ width: 260 }} />
+              <Button type="primary" icon={<PlayCircleOutlined />} onClick={runDay}>Run Trading Day</Button>
+              <Tag>source {selectedSession.source_backtest_id}</Tag>
+              <Tag>strategy {(selectedSession.strategy_version_id || "-").slice(0, 12)}</Tag>
+            </Space>
+          )}
+          {equityPoints.length > 0 && <ReactECharts style={{ height: 280 }} option={{
+            tooltip: { trigger: "axis" },
+            xAxis: { type: "category", data: equityPoints.map((item) => item[0]) },
+            yAxis: { type: "value", scale: true },
+            series: [{ name: "Equity", type: "line", showSymbol: false, data: equityPoints.map((item) => item[1]) }]
+          }} />}
+          <Tabs items={[
+            {
+              key: "runs",
+              label: "Daily Runs",
+              children: <Table<PaperWalkforwardRun> rowKey="id" size="small" dataSource={paperRuns} columns={[
+                { title: "Date", dataIndex: "trade_date" },
+                { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
+                { title: "Backtest", dataIndex: "backtest_run_id", render: (value) => value || "-" },
+                { title: "Reconciliation", render: (_, item) => item.reconciliation ? <Tag color={item.reconciliation.passed ? "green" : "red"}>{item.reconciliation.passed ? "pass" : "failed"}</Tag> : "-" },
+                { title: "Fingerprint", render: (_, item) => item.order_fingerprint?.slice(0, 12) || "-" },
+                { title: "Error", render: (_, item) => item.failure?.message || "-" }
+              ]} />
+            },
+            {
+              key: "reports",
+              label: "Daily Reports",
+              children: <Table<PaperDailyReport> rowKey="id" dataSource={paperReports} size="small" columns={[
+                { title: "Date", render: (_, report) => report.tradeDate || report.trade_date },
+                { title: "NAV", dataIndex: "NAV" },
+                { title: "QA", render: (_, report) => <Tag color={report.qa?.passed === false ? "red" : "green"}>{report.qa?.severity || "ok"}</Tag> },
+                { title: "Fingerprint", render: (_, report) => report.fingerprint?.slice(0, 12) || "-" }
+              ]} />
+            },
+            {
+              key: "orders",
+              label: `Orders (${selectedSession.orders?.length || 0})`,
+              children: <pre style={{ maxHeight: 420, overflow: "auto" }}>{JSON.stringify(selectedSession.orders || [], null, 2)}</pre>
+            },
+            {
+              key: "positions",
+              label: `Positions (${selectedSession.positions?.length || 0})`,
+              children: <pre style={{ maxHeight: 420, overflow: "auto" }}>{JSON.stringify(selectedSession.positions || [], null, 2)}</pre>
+            }
+          ]} />
         </Card>
       )}
     </>

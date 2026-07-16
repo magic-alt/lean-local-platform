@@ -7,6 +7,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -14,7 +15,7 @@ import {
   Tabs,
   message
 } from "antd";
-import { ReloadOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
+import { DeleteOutlined, ReloadOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
@@ -62,6 +63,7 @@ function GenericInsightsPage() {
   const [selected, setSelected] = useState<InsightReport | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
@@ -117,9 +119,25 @@ function GenericInsightsPage() {
     }
   }
 
+  async function deleteReport(item: InsightReport) {
+    setDeletingId(item.id);
+    try {
+      const result = await api.deleteInsight(item.id);
+      if (selected?.id === item.id) setSelected(null);
+      message.success(result.paperAuditPreserved ? "Insight 已删除；已进入 Paper 的审计记录继续保留" : "Insight 历史报告已删除");
+      await reports.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const finalSignal = selected?.signal?.finalSignal;
   const compatibleSessions = paperSessions.data.filter(
-    (session) => session.asset_class === selected?.asset_class
+    (session) => session.mode !== "lean_walkforward"
+      && !session.legacy_read_only
+      && session.asset_class === selected?.asset_class
       && session.venue === selected?.venue
       && ((session.parameters?.symbols as string[] | undefined) || [session.symbol]).includes(selected?.symbol || "")
   );
@@ -176,7 +194,19 @@ function GenericInsightsPage() {
             { title: "Symbol", dataIndex: "symbol" },
             { title: "As Of", dataIndex: "as_of_date" },
             { title: "Status", render: (_, item) => <Tag color={statusColor(item.status)}>{item.status}</Tag> },
-            { title: "Action", render: (_, item) => <Button size="small" onClick={() => void loadDetail(item.id)}>View</Button> }
+            { title: "Action", render: (_, item) => <Space>
+              <Button size="small" onClick={() => void loadDetail(item.id)}>View</Button>
+              <Popconfirm
+                title={`Delete ${item.asset_class}/${item.symbol} insight?`}
+                description="The report, guarded signal, task, and task log will be deleted. Paper audit records are preserved."
+                okText="Delete"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void deleteReport(item)}
+                disabled={["created", "queued", "running", "interrupted"].includes(item.status)}
+              >
+                <Button danger size="small" icon={<DeleteOutlined />} loading={deletingId === item.id} disabled={["created", "queued", "running", "interrupted"].includes(item.status)}>Delete</Button>
+              </Popconfirm>
+            </Space> }
           ]}
         />
       </Card>

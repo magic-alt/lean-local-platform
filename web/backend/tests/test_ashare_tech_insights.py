@@ -265,3 +265,29 @@ def test_watchlist_api_validates_and_manages_items(tmp_path, monkeypatch):
     removed = client.delete("/api/ashare-tech-insights/watchlist/items/603019")
     assert removed.status_code == 200
     assert client.post("/api/ashare-tech-insights/watchlist/reset").json()["count"] == 26
+
+
+def test_ashare_tech_history_report_delete_cleans_task_and_blocks_active_report(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import db
+    from app.services import ashare_tech_insights as service
+    from app.services.tasks import create_task, update_task
+
+    report = service.create_report("2026-07-14")
+    task = create_task("ashare_tech_report", "A股科技股日报", {}, related_id=report["id"])
+    service.attach_task(report["id"], task["id"])
+    client = TestClient(app)
+
+    assert client.delete(f"/api/ashare-tech-insights/reports/{report['id']}").status_code == 409
+
+    service.fail_report(report["id"], "fixture complete")
+    update_task(task["id"], status="failed", finished_at="2026-07-14T10:00:00+00:00")
+    deleted = client.delete(f"/api/ashare-tech-insights/reports/{report['id']}")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deletedTasks"] == 1
+    assert client.get(f"/api/ashare-tech-insights/reports/{report['id']}").status_code == 404
+    with db() as connection:
+        assert connection.execute("select count(*) as count from tasks where related_id = ?", (report["id"],)).fetchone()["count"] == 0

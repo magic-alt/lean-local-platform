@@ -580,56 +580,85 @@ class TushareAdapter:
                 })
         return sorted(rows, key=lambda row: (row["date"], str(row.get("title") or "")))
 
-    def sector_daily_rows(self, keywords: list[str], start_date: str, end_date: str) -> list[dict[str, Any]]:
-        """Resolve DC first, then THS industry/concept indexes, and return matched index bars."""
+    def sector_daily_rows(
+        self,
+        topics: list[dict[str, Any]] | list[str],
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        """Resolve every canonical topic independently across DC and THS catalogues."""
         matches: list[dict[str, Any]] = []
         providers = (
             ("dc", lambda: self.pro.dc_index(fields="ts_code,name,publisher,category")),
             ("ths", lambda: self.pro.ths_index(exchange="A", type="N", fields="ts_code,name,count,exchange,list_date,type")),
         )
+        normalized = [
+            item if isinstance(item, dict) else {"keyword": str(item), "aliases": [str(item)]}
+            for item in topics
+        ]
+        catalogues: dict[str, list[dict[str, Any]]] = {}
         for provider, catalogue_call in providers:
             try:
-                catalogue = _records(catalogue_call())
+                catalogues[provider] = _records(catalogue_call())
             except Exception:
-                continue
-            for keyword in keywords:
-                found = next((item for item in catalogue if keyword.lower() in str(item.get("name") or "").lower()), None)
-                if not found:
-                    continue
-                ts_code = str(found.get("ts_code") or "")
-                try:
-                    if provider == "dc":
-                        frame = self.pro.dc_daily(
-                            ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
-                            end_date=_compact_date(end_date, "end_date"),
-                            fields="ts_code,trade_date,open,high,low,close,change,pct_change,vol,amount,turnover_rate",
-                        )
-                    else:
-                        frame = self.pro.ths_daily(
-                            ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
-                            end_date=_compact_date(end_date, "end_date"),
-                            fields="ts_code,trade_date,open,high,low,close,pct_change,vol,turnover_rate,total_mv,float_mv",
-                        )
-                except Exception:
-                    continue
-                bars = []
-                for item in _records(frame):
-                    trade_date = _iso_date(item.get("trade_date"))
-                    if not trade_date:
+                catalogues[provider] = []
+        used_codes: set[str] = set()
+        for topic in normalized:
+            keyword = str(topic["keyword"])
+            resolved = False
+            for alias in topic.get("aliases") or [keyword]:
+                for provider, _ in providers:
+                    catalogue = catalogues.get(provider) or []
+                    found = next(
+                        (
+                            item for item in catalogue
+                            if str(item.get("ts_code") or "") not in used_codes
+                            and str(alias).lower() in str(item.get("name") or "").lower()
+                        ),
+                        None,
+                    )
+                    if not found:
                         continue
-                    bars.append({
-                        "date": trade_date, "open": item.get("open"), "high": item.get("high"), "low": item.get("low"),
-                        "close": item.get("close"), "volume": (_float(item.get("vol")) or 0) * 100,
-                        "amount": (_float(item.get("amount")) or 0) * 1000,
-                        "turnover_rate": item.get("turnover_rate"), "adj_factor": 1.0,
-                    })
-                if bars:
-                    matches.append({
-                        "keyword": keyword, "code": ts_code, "name": found.get("name") or keyword,
-                        "source": f"tushare:{provider}_daily", "rows": sorted(bars, key=lambda row: row["date"]),
-                    })
-            if matches:
-                break
+                    ts_code = str(found.get("ts_code") or "")
+                    try:
+                        if provider == "dc":
+                            frame = self.pro.dc_daily(
+                                ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
+                                end_date=_compact_date(end_date, "end_date"),
+                                fields="ts_code,trade_date,open,high,low,close,change,pct_change,vol,amount,turnover_rate",
+                            )
+                        else:
+                            frame = self.pro.ths_daily(
+                                ts_code=ts_code, start_date=_compact_date(start_date, "start_date"),
+                                end_date=_compact_date(end_date, "end_date"),
+                                fields="ts_code,trade_date,open,high,low,close,pct_change,vol,turnover_rate,total_mv,float_mv",
+                            )
+                    except Exception:
+                        continue
+                    bars = []
+                    for item in _records(frame):
+                        trade_date = _iso_date(item.get("trade_date"))
+                        if not trade_date:
+                            continue
+                        bars.append({
+                            "date": trade_date, "open": item.get("open"), "high": item.get("high"), "low": item.get("low"),
+                            "close": item.get("close"), "volume": (_float(item.get("vol")) or 0) * 100,
+                            "amount": (_float(item.get("amount")) or 0) * 1000,
+                            "turnover_rate": item.get("turnover_rate"), "adj_factor": 1.0,
+                        })
+                    if bars:
+                        used_codes.add(ts_code)
+                        matches.append({
+                            "keyword": keyword, "code": ts_code, "name": found.get("name") or keyword,
+                            "matchedName": found.get("name") or keyword,
+                            "matchedKeyword": str(alias),
+                            "matchRule": "canonical" if str(alias) == keyword else "alias",
+                            "source": f"tushare:{provider}_daily", "rows": sorted(bars, key=lambda row: row["date"]),
+                        })
+                        resolved = True
+                        break
+                if resolved:
+                    break
         return matches
 
 

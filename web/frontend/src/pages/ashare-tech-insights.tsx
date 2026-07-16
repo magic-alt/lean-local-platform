@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Checkbox, Col, Descriptions, Divider, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, message } from "antd";
-import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
@@ -62,8 +62,9 @@ const marketColumns = [
 ];
 
 const sectorColumns = [
-  { title: "板块", dataIndex: "name", width: 150 },
-  { title: "匹配主题", dataIndex: "keyword", width: 100 },
+  { title: "规范主题", dataIndex: "keyword", width: 110 },
+  { title: "实际板块", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.matchedName || item.name, width: 150 },
+  { title: "匹配方式", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.matchRule === "alias" ? <Tag color="blue">别名：{item.matchedKeyword}</Tag> : <Tag>精确</Tag>, width: 150 },
   { title: "代码", dataIndex: "code", width: 120 },
   { title: "涨跌幅", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => changeValue(item.changePct), width: 100 },
   { title: "量比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.volumeRatio20), width: 90 },
@@ -214,10 +215,22 @@ export function AshareTechInsights() {
     finally { setMutating(false); }
   }
 
+  async function deleteReport(item: AshareTechReport) {
+    setMutating(true);
+    try {
+      await api.deleteAshareTechReport(item.id);
+      if (selected?.id === item.id) setSelected(null);
+      message.success(`已删除 ${item.requested_date} 的历史报告`);
+      await reports.reload();
+    } catch (error) { message.error((error as Error).message); }
+    finally { setMutating(false); }
+  }
+
   const report = selected?.report;
   const marketEnvironment = report?.marketEnvironment || [];
   const indexEnvironment = marketEnvironment.filter((item) => item.category !== "sector");
-  const sectorEnvironment = marketEnvironment.filter((item) => item.category === "sector");
+  const sectorEnvironment = marketEnvironment.filter((item) => item.category === "sector" && !item.unresolved);
+  const unresolvedSectorEnvironment = marketEnvironment.filter((item) => item.category === "sector" && item.unresolved);
   const expectedSectorKeywords = ["半导体", "存储", "CPO", "PCB", "AI服务器"];
   const coveredSectorKeywords = new Set(sectorEnvironment.map((item) => item.keyword).filter(Boolean));
   const missingSectorKeywords = expectedSectorKeywords.filter((keyword) => !coveredSectorKeywords.has(keyword));
@@ -279,7 +292,19 @@ export function AshareTechInsights() {
           { title: "市场状态", dataIndex: "market_status" },
           { title: "状态", render: (_, item) => <Tag color={statusColor(item.status)}>{item.status}</Tag> },
           { title: "尝试", dataIndex: "attempt_count" },
-          { title: "操作", render: (_, item) => <Button size="small" onClick={() => void loadDetail(item.id)}>查看</Button> }
+          { title: "操作", render: (_, item) => <Space>
+            <Button size="small" onClick={() => void loadDetail(item.id)}>查看</Button>
+            <Popconfirm
+              title={`删除 ${item.requested_date} 的历史报告？`}
+              description="报告及关联任务日志会被删除，此操作不可撤销。"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void deleteReport(item)}
+              disabled={["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status)}
+            >
+              <Button danger size="small" icon={<DeleteOutlined />} loading={mutating} disabled={["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status)}>删除</Button>
+            </Popconfirm>
+          </Space> }
         ]} />
       </Card>
       {selected && <Card title={report?.title || `报告 ${selected.requested_date}`} style={{ marginTop: 16 }}>
@@ -322,7 +347,9 @@ export function AshareTechInsights() {
           {missingSectorKeywords.length > 0 && <Alert
             type="warning" showIcon style={{ marginBottom: 12 }}
             message={`板块数据缺失：${missingSectorKeywords.join("、")}`}
-            description="TuShare DC/THS及东方财富回退源均未匹配到可核验板块，本期不补造数据。"
+            description={unresolvedSectorEnvironment.map((item) =>
+              `${item.keyword}：已尝试 ${(item.attemptedAliases || []).join("、")}；来源 ${(item.attemptedSources || []).join("、")}`
+            ).join("；") || "所有可核验来源均未匹配，本期不补造数据。"}
           />}
           <Table<AshareTechMarketEnvironmentItem>
             rowKey={(item) => `${item.source}:${item.code}`} size="small" dataSource={sectorEnvironment}

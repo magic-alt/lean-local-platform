@@ -160,6 +160,17 @@ def test_insight_can_be_explicitly_handed_to_compatible_paper_session(tmp_path, 
     assert handoff["paperSignal"]["source"] == f"insight:{report['id']}"
     assert insights.get_report(report["id"])["signal"]["status"] == "handed_off"
 
+    deleted = insights.delete_report(report["id"])
+    assert deleted["deleted"] is True
+    assert deleted["deletedDecisionSignal"] is True
+    assert deleted["paperAuditPreserved"] is True
+    with pytest.raises(KeyError, match="Insight report not found"):
+        insights.get_report(report["id"])
+    assert paper.list_signals(session["id"])[0]["id"] == handoff["paperSignal"]["id"]
+    from app.db import db
+    with db() as connection:
+        assert connection.execute("select count(*) as count from tasks where related_id = ?", (report["id"],)).fetchone()["count"] == 0
+
 
 def test_capabilities_never_return_api_key(monkeypatch):
     insights = configure_llm(monkeypatch)
@@ -225,6 +236,7 @@ def test_insights_api_is_opt_in_and_queues_configured_requests(tmp_path, monkeyp
     payload = accepted.json()
     assert payload["status"] == "queued"
     assert client.get(f"/api/insights/{payload['id']}").json()["task_id"] == payload["taskId"]
+    assert client.delete(f"/api/insights/{payload['id']}").status_code == 409
 
 
 def test_cancelling_insight_task_updates_linked_report(tmp_path, monkeypatch):

@@ -56,11 +56,25 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     results_dir.mkdir(parents=True, exist_ok=True)
     if project_id:
         snapshot_dir = run_dir / "strategy"
-        shutil.copytree(Path(project["project_path"]), snapshot_dir)
+        snapshot_source = request_data.get("strategySnapshotSourceDir")
+        source_path = Path(snapshot_source).resolve() if snapshot_source else Path(project["project_path"]).resolve()
+        if snapshot_source:
+            allowed_root = RUNS_DIR.resolve()
+            if source_path != allowed_root and allowed_root not in source_path.parents:
+                raise LeanPlatformError("Paper strategy snapshot must be stored under the managed runs directory.")
+            if not source_path.is_dir():
+                raise LeanPlatformError("Paper strategy snapshot directory is missing.")
+        shutil.copytree(source_path, snapshot_dir)
         parameters["strategySnapshotDir"] = str(snapshot_dir)
-        parameters["strategySnapshotMainFile"] = project["main_file"]
-        parameters["strategySnapshotAlgorithmClass"] = project["algorithm_class"]
-        parameters["strategySnapshotLanguage"] = project["language"]
+        parameters["strategySnapshotMainFile"] = (
+            request_data.get("strategySnapshotMainFile") if snapshot_source else None
+        ) or project["main_file"]
+        parameters["strategySnapshotAlgorithmClass"] = (
+            request_data.get("strategySnapshotAlgorithmClass") if snapshot_source else None
+        ) or project["algorithm_class"]
+        parameters["strategySnapshotLanguage"] = (
+            request_data.get("strategySnapshotLanguage") if snapshot_source else None
+        ) or project["language"]
     task = create_task("backtest", f"Backtest {parameters['ticker']}", parameters, project_id, run_id, status=CREATED)
     now = utc_now()
     name = request_data.get("name") or f"{parameters['ticker']} {parameters['start']} -> {parameters['end']}"

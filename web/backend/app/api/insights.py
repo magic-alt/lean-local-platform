@@ -84,6 +84,16 @@ def insight_detail(report_id: str):
         raise HTTPException(status_code=404, detail="Insight report not found.") from exc
 
 
+@router.delete("/{report_id}")
+def delete_insight(report_id: str):
+    try:
+        return insight_service.delete_report(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Insight report not found.") from exc
+    except insight_service.InsightDeleteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/{report_id}/paper-signals")
 def handoff_to_paper(report_id: str, request: PaperHandoffRequest):
     try:

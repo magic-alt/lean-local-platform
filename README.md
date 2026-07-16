@@ -222,17 +222,9 @@ web/backend/.venv/bin/python scripts/import_ashare_free_sample.py \
 POST /api/data/free/ashare/daily/import-sample
 ```
 
-Paper Replay 支持连续交易日回放；如果 `data_quality_reports` 中存在覆盖当天的 `critical` 报告，撮合会拒单并记录 `qa_failed:{report_id}`：
+旧版 Paper Replay 仅作为只读历史记录保留。新的 A 股 `LEAN Paper` 必须选择同一 Project 下验证通过、数据未截断的 Backtest；系统冻结该 Backtest 的策略源码和参数，并按交易日创建标准 LEAN 子回测：
 
-```bash
-web/backend/.venv/bin/python scripts/run_paper_replay.py <session-id> \
-  --start-date 2026-06-01 \
-  --end-date 2026-06-30
-```
-
-A 股 Paper 默认使用显式成交口径 `executionPolicy=next_open`，信号日和成交日分离；也支持 `next_close`、`next_vwap`。`same_close` 属于高风险口径，必须显式设置 `allowSameDayClose=true` 才允许使用。Paper 快照会记录 `benchmarkSymbol`、benchmark close 和 benchmark return；A 股默认 benchmark 为 `000300`。Paper 与 backtest 通过共享 A 股交易配置统一默认成本、滑点、交易日历、benchmark 和组合约束参数，策略层不应直接绕过这些配置。
-
-Paper 每日撮合会持久化 `paper_daily_reports`，日报内容包含当日信号、待执行信号、订单、成交、拒单、拒单原因、持仓、NAV、benchmark 和 QA gate 状态。Paper 组合约束支持 `maxPositions`、`maxPositionWeight`、`minCash`、`blacklist`、`watchlist`、`observeOnlySymbols`，并默认禁止买入 ST，除非显式设置 `allowStBuy=true`。
+LEAN Paper 与 Backtests 共享相同的 A 股现金账户、T+1、禁止卖空、整手、涨跌停、佣金和执行验证。每日运行会核对之前所有 LEAN 订单指纹，只在历史一致时写入新增订单、持仓、净值和日报。它是收盘后日线 Walk-forward，不连接实时行情或券商。
 
 导入沪深300 benchmark 行情并生成 LEAN cache：
 
@@ -448,7 +440,7 @@ Web 端支持：
 - Binance spot 日线 crypto OHLCV 导入
 - 选择项目、市场、股票、日期、资金和策略参数并运行 Docker 回测
 - 参数网格优化
-- Paper Replay 会话管理：本地模拟会话登记、启动/暂停/停止状态管理，不连接真实券商、不发真实订单
+- LEAN Paper：从可信 Backtest 冻结真实 Project，按 A 股交易日执行 LEAN Walk-forward、历史订单对账和账户跟踪
 - Research 容器启动
 - Object Store 文件管理
 - 后台任务和日志查看

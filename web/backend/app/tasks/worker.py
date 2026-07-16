@@ -38,6 +38,7 @@ from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
 from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
+from ..services import paper as paper_service
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
 
@@ -92,6 +93,65 @@ def schedule_ashare_tech_report_task():
     result = generate_ashare_tech_report_task.apply_async(args=[task["id"], report["id"]])
     update_task(task["id"], celery_task_id=result.id)
     return {"id": report["id"], "taskId": task["id"], "status": "queued"}
+
+
+@celery_app.task(name="lean_web.mark_paper_walkforward_running")
+def mark_paper_walkforward_running_task(paper_run_id: str):
+    paper_service.mark_walkforward_running(paper_run_id)
+    return {"paperRunId": paper_run_id, "status": "running"}
+
+
+@celery_app.task(name="lean_web.finalize_paper_walkforward")
+def finalize_paper_walkforward_task(paper_run_id: str):
+    return paper_service.finalize_walkforward_run(paper_run_id)
+
+
+@celery_app.task(name="lean_web.fail_paper_walkforward")
+def fail_paper_walkforward_task(request, exc, traceback, paper_run_id: str):  # pragma: no cover - Celery errback
+    return paper_service.fail_walkforward_run(paper_run_id, str(exc))
+
+
+@celery_app.task(name="lean_web.schedule_paper_walkforward", bind=True, max_retries=2)
+def schedule_paper_walkforward_task(self):
+    from celery import chain
+
+    scheduled = []
+    retry_errors = []
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    for session in paper_service.list_sessions():
+        if (
+            session.get("mode") != "lean_walkforward"
+            or session.get("status") != "running"
+            or not session.get("auto_advance")
+        ):
+            continue
+        next_date = session.get("start_date")
+        if session.get("last_processed_date"):
+            next_date = paper_service._next_china_trade_date(str(session["last_processed_date"]))
+        if not next_date or str(next_date) > today:
+            continue
+        current_runs = paper_service.list_walkforward_runs(session["id"])
+        if any(
+            item.get("trade_date") == str(next_date) and item.get("status") in {"queued", "running", "success"}
+            for item in current_runs
+        ):
+            continue
+        try:
+            paper_run = paper_service.create_walkforward_run(session["id"], str(next_date))
+            workflow = chain(
+                mark_paper_walkforward_running_task.si(paper_run["id"]),
+                run_backtest_task.si(paper_run["task_id"], paper_run["backtest_run_id"]),
+                finalize_paper_walkforward_task.si(paper_run["id"]),
+            )
+            workflow.apply_async(link_error=fail_paper_walkforward_task.s(paper_run["id"]))
+            scheduled.append(paper_run["id"])
+        except Exception as exc:
+            paper_service.record_session_warning(session["id"], "paper_schedule_waiting", str(exc))
+            retry_errors.append(str(exc))
+            continue
+    if retry_errors:
+        raise self.retry(exc=RuntimeError("; ".join(retry_errors[:3])), countdown=30 * 60)
+    return {"scheduled": scheduled}
 
 
 def _update_table(table: str, row_id: str, **fields):

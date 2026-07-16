@@ -221,3 +221,26 @@ def test_backtest_uses_immutable_project_snapshot(tmp_path, monkeypatch):
 
     assert snapshot.read_text(encoding="utf-8") == original
     assert (Path(project["project_path"]) / project["main_file"]).read_text(encoding="utf-8") == "# changed after queue\n"
+
+    frozen_source = tmp_path / "runs" / "trusted-source" / "strategy"
+    frozen_source.mkdir(parents=True)
+    (frozen_source / "frozen.py").write_text("class FrozenAlgorithm: pass\n", encoding="utf-8")
+    paper_job = backtest_service.create_backtest_job(
+        {
+            "symbol": "AAPL",
+            "assetClass": "equity",
+            "market": "usa",
+            "start": "2024-01-02",
+            "end": "2024-01-05",
+            "cash": 100000,
+            "projectId": project["id"],
+            "strategySnapshotSourceDir": str(frozen_source),
+            "strategySnapshotMainFile": "frozen.py",
+            "strategySnapshotAlgorithmClass": "FrozenAlgorithm",
+            "strategySnapshotLanguage": "Python",
+        }
+    )
+    paper_snapshot = Path(str(paper_job["parameters"]["strategySnapshotDir"]))
+    assert (paper_snapshot / "frozen.py").read_text(encoding="utf-8") == "class FrozenAlgorithm: pass\n"
+    assert paper_job["parameters"]["strategySnapshotMainFile"] == "frozen.py"
+    assert paper_job["parameters"]["strategySnapshotAlgorithmClass"] == "FrozenAlgorithm"
