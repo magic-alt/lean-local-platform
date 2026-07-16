@@ -53,6 +53,58 @@ class DailyOnlyPro:
         raise RuntimeError("no permission")
 
 
+class WindowedDailyPro:
+    def __init__(self):
+        self.daily_calls = []
+        self.adjustment_calls = []
+        self.limit_calls = []
+
+    def daily(self, **kwargs):
+        self.daily_calls.append(kwargs)
+        trade_date = kwargs["start_date"]
+        return FakeFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": trade_date,
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.8,
+                    "close": 10.2,
+                    "pre_close": 10.0,
+                    "pct_chg": 2.0,
+                    "vol": 10.0,
+                    "amount": 100.0,
+                }
+            ]
+        )
+
+    def adj_factor(self, **kwargs):
+        self.adjustment_calls.append(kwargs)
+        return FakeFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": kwargs["start_date"],
+                    "adj_factor": 1.0,
+                }
+            ]
+        )
+
+    def stk_limit(self, **kwargs):
+        self.limit_calls.append(kwargs)
+        return FakeFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": kwargs["start_date"],
+                    "up_limit": 11.0,
+                    "down_limit": 9.0,
+                }
+            ]
+        )
+
+
 class StockBasicPro:
     def stock_basic(self, **kwargs):
         return FakeFrame(
@@ -115,6 +167,24 @@ def test_tushare_daily_rows_degrades_when_only_pro_daily_is_allowed():
     assert rows[0]["adj_factor"] == 1.0
     assert rows[0]["limitUp"] is None
     assert rows[0]["canBuy"] is None
+
+
+def test_tushare_full_history_is_downloaded_in_bounded_date_windows():
+    from app.services.tushare_adapter import TushareAdapter
+
+    pro = WindowedDailyPro()
+    rows = TushareAdapter(pro=pro).daily_rows("000001", "1990-01-01", "2026-07-16")
+
+    assert len(pro.daily_calls) == 4
+    assert len(pro.adjustment_calls) == 4
+    assert len(pro.limit_calls) == 4
+    assert pro.daily_calls[0]["start_date"] == "19900101"
+    assert pro.daily_calls[-1]["end_date"] == "20260716"
+    assert [row["date"] for row in rows] == [
+        call["start_date"][:4] + "-" + call["start_date"][4:6] + "-" + call["start_date"][6:]
+        for call in pro.daily_calls
+    ]
+    assert all(row["adj_factor_verified"] for row in rows)
 
 
 def test_tushare_rejects_qfq_hfq_to_avoid_adjustment_mixing():

@@ -1,4 +1,5 @@
 import type { AppSettings } from "../api";
+import dayjs from "dayjs";
 
 export const defaultSettings: AppSettings = {
   defaultAssetClass: "equity",
@@ -31,7 +32,7 @@ export const defaultBarPreviewValues = {
   providerSource: "tushare",
   providerMode: "strict",
   adjust: "raw",
-  startDate: "2024-01-01",
-  endDate: "2026-07-13",
-  limit: 200
+  startDate: "1990-01-01",
+  endDate: dayjs().format("YYYY-MM-DD"),
+  limit: 0
 };

@@ -453,7 +453,7 @@ function MarketDataDownloader({
     }
   }
 
-  async function queryLocalBars(values: any, symbol: string) {
+  async function queryLocalBars(values: any, symbol: string, providerOverride?: string) {
     return api.queryData({
       source: values.source ?? "database",
       symbol,
@@ -462,6 +462,8 @@ function MarketDataDownloader({
       venue: selectedVenue,
       resolution: selectedResolution,
       dataType: selectedDataType,
+      providerSource: providerOverride ?? values.provider,
+      providerMode: "strict",
       adjust: values.adjust,
       startDate: values.startDate,
       endDate: values.endDate,
@@ -482,8 +484,8 @@ function MarketDataDownloader({
       setSecurityInfo(security);
       let result = await queryLocalBars(values, symbol);
       if (requestId !== previewRequestId.current) return;
-      if (result.enabled && result.items.length === 0 && selectedMarket === "china" && values.provider === "tushare") {
-        message.info(`No local MySQL bars for ${symbol}; fetching from TuShare Pro and saving locally.`);
+      if (result.enabled && result.items.length === 0 && selectedMarket === "china") {
+        message.info(`No local ${values.provider ?? "provider"} bars for ${symbol}; fetching its full history from TuShare Pro and saving locally.`);
         await api.fetchData({
           symbol,
           assetClass: selectedAssetClass,
@@ -493,14 +495,15 @@ function MarketDataDownloader({
           dataType: selectedDataType,
           provider: "tushare",
           apiKey: values.apiKey,
-          outputsize: values.outputsize ?? "compact",
-          startDate: values.startDate,
-          endDate: values.endDate,
+          outputsize: "full",
+          startDate: defaultBarPreviewValues.startDate,
+          endDate: dayjs().format(ISO_DATE_FORMAT),
           adjust: values.adjust,
           overwrite: Boolean(values.overwrite)
         });
         if (requestId !== previewRequestId.current) return;
-        result = await queryLocalBars(values, symbol);
+        setSecurityInfo((current) => current ? { ...current, hasLocalData: true, source: "tushare" } : current);
+        result = await queryLocalBars(values, symbol, "tushare");
         if (requestId !== previewRequestId.current) return;
       }
       setQueryResult(result);
@@ -1138,7 +1141,7 @@ export function DataPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Data Library</h1></div>
-      <MarketDataDownloader />
+      <MarketDataDownloader unboundedPreview showLimitInput={false} />
       <Card title="Import CSV" style={{ marginTop: 16 }}>
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>
           <div className="field-grid three">

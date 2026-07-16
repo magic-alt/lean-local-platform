@@ -293,6 +293,15 @@ function mockState() {
   };
 }
 
+function localDateString() {
+  const value = new Date();
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, "0"),
+    String(value.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 async function waitForJson(route: any) {
   try {
     return await route.request().json();
@@ -706,8 +715,20 @@ test.describe("Frontend page coverage", () => {
     const previewReq = page.waitForRequest((req) => req.url().includes("/api/data/query") && req.method() === "GET");
     const fallbackReq = page.waitForRequest((req) => req.url().includes("/api/data/fetch") && req.method() === "POST");
     await page.getByTestId("market-data-preview-button").click();
-    await previewReq;
-    await fallbackReq;
+    const preview = await previewReq;
+    const previewUrl = new URL(preview.url());
+    expect(previewUrl.searchParams.get("startDate")).toBe("1990-01-01");
+    expect(previewUrl.searchParams.get("endDate")).toBe(localDateString());
+    expect(previewUrl.searchParams.get("limit")).toBe("0");
+    expect(previewUrl.searchParams.get("providerSource")).toBe("tushare");
+    expect(previewUrl.searchParams.get("providerMode")).toBe("strict");
+    const fallback = await fallbackReq;
+    expect(fallback.postDataJSON()).toMatchObject({
+      provider: "tushare",
+      outputsize: "full",
+      startDate: "1990-01-01",
+      endDate: localDateString()
+    });
     await expect(page.getByText("Company Info")).toBeVisible();
     const fetchReq = page.waitForRequest((req) => req.url().includes("/api/data/fetch-batch") && req.method() === "POST");
     await page.getByTestId("market-data-fetch-button").click();

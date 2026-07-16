@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..core.errors import LeanWebError
@@ -42,6 +42,20 @@ def _compact_date(value: str | None, field: str) -> str:
 
 def _optional_compact_date(value: str | None) -> str | None:
     return _compact_date(value, "date") if value else None
+
+
+def _date_windows(start_date: str, end_date: str, *, max_days: int = 3650) -> list[tuple[str, str]]:
+    start = datetime.strptime(_compact_date(start_date, "start_date"), "%Y%m%d").date()
+    end = datetime.strptime(_compact_date(end_date, "end_date"), "%Y%m%d").date()
+    if end < start:
+        raise LeanWebError("end_date must be on or after start_date.")
+    windows: list[tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        window_end = min(cursor + timedelta(days=max_days - 1), end)
+        windows.append((cursor.strftime("%Y%m%d"), window_end.strftime("%Y%m%d")))
+        cursor = window_end + timedelta(days=1)
+    return windows
 
 
 def _first_non_blank(*values: Any) -> Any:
@@ -253,18 +267,19 @@ class TushareAdapter:
         return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
 
     def adjustment_factors(self, symbol: str, start_date: str, end_date: str) -> dict[str, float]:
-        frame = self.pro.adj_factor(
-            ts_code=to_tushare_stock_code(symbol),
-            start_date=_compact_date(start_date, "start_date"),
-            end_date=_compact_date(end_date, "end_date"),
-            fields="ts_code,trade_date,adj_factor",
-        )
         result: dict[str, float] = {}
-        for item in _records(frame):
-            trade_date = _iso_date(item.get("trade_date"))
-            factor = _float(item.get("adj_factor"))
-            if trade_date and factor and factor > 0:
-                result[trade_date] = factor
+        for window_start, window_end in _date_windows(start_date, end_date):
+            frame = self.pro.adj_factor(
+                ts_code=to_tushare_stock_code(symbol),
+                start_date=window_start,
+                end_date=window_end,
+                fields="ts_code,trade_date,adj_factor",
+            )
+            for item in _records(frame):
+                trade_date = _iso_date(item.get("trade_date"))
+                factor = _float(item.get("adj_factor"))
+                if trade_date and factor and factor > 0:
+                    result[trade_date] = factor
         return result
 
     def suspend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
@@ -293,24 +308,49 @@ class TushareAdapter:
         return sorted(rows, key=lambda row: (row["suspend_date"], row["symbol"]))
 
     def limit_prices(self, symbol: str, start_date: str, end_date: str) -> dict[str, dict[str, float | None]]:
+        result: dict[str, dict[str, float | None]] = {}
         try:
-            frame = self.pro.stk_limit(
-                ts_code=to_tushare_stock_code(symbol),
-                start_date=_compact_date(start_date, "start_date"),
-                end_date=_compact_date(end_date, "end_date"),
-                fields="ts_code,trade_date,up_limit,down_limit",
-            )
+            for window_start, window_end in _date_windows(start_date, end_date):
+                frame = self.pro.stk_limit(
+                    ts_code=to_tushare_stock_code(symbol),
+                    start_date=window_start,
+                    end_date=window_end,
+                    fields="ts_code,trade_date,up_limit,down_limit",
+                )
+                for item in _records(frame):
+                    trade_date = _iso_date(item.get("trade_date"))
+                    if trade_date:
+                        result[trade_date] = {
+                            "limitUp": _float(item.get("up_limit")),
+                            "limitDown": _float(item.get("down_limit")),
+                        }
         except Exception:
             return {}
-        result: dict[str, dict[str, float | None]] = {}
-        for item in _records(frame):
-            trade_date = _iso_date(item.get("trade_date"))
-            if trade_date:
-                result[trade_date] = {
-                    "limitUp": _float(item.get("up_limit")),
-                    "limitDown": _float(item.get("down_limit")),
-                }
         return result
+
+    def _daily_market_records(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        *,
+        index: bool = False,
+    ) -> list[dict[str, Any]]:
+        endpoint = self.pro.index_daily if index else self.pro.daily
+        code = to_tushare_index_code(symbol) if index else to_tushare_stock_code(symbol)
+        records_by_date: dict[str, dict[str, Any]] = {}
+        for window_start, window_end in _date_windows(start_date, end_date):
+            frame = endpoint(
+                ts_code=code,
+                start_date=window_start,
+                end_date=window_end,
+                fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+            )
+            for item in _records(frame):
+                trade_date = _iso_date(item.get("trade_date"))
+                if trade_date:
+                    records_by_date[trade_date] = item
+        return [records_by_date[key] for key in sorted(records_by_date)]
 
     def dividend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         frame = self.pro.dividend(
@@ -443,25 +483,11 @@ class TushareAdapter:
     ) -> list[dict[str, Any]]:
         if adjust and adjust.lower() not in {"", "raw"}:
             raise LeanWebError("TuShare adapter imports raw daily bars plus adj_factor; do not request qfq/hfq here.")
-        start = _compact_date(start_date, "start_date")
-        end = _compact_date(end_date, "end_date")
-        frame = self.pro.daily(
-            ts_code=to_tushare_stock_code(symbol),
-            start_date=start,
-            end_date=end,
-            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
-        )
         is_index = False
-        records = _records(frame)
+        records = self._daily_market_records(symbol, start_date, end_date)
         if not records:
             try:
-                frame = self.pro.index_daily(
-                    ts_code=to_tushare_index_code(symbol),
-                    start_date=start,
-                    end_date=end,
-                    fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
-                )
-                records = _records(frame)
+                records = self._daily_market_records(symbol, start_date, end_date, index=True)
                 is_index = True
             except Exception:
                 records = []
