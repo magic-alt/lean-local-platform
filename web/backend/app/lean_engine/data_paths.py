@@ -132,11 +132,14 @@ def write_equity_factor_file(
     symbol: str,
     factor_rows: list[dict[str, Any]],
     market: str | None = None,
+    *,
+    price_rows: list[dict[str, Any]] | None = None,
+    require_reference_prices: bool = False,
 ) -> dict[str, Any]:
     market = market_key(market)
     ticker = symbol_key(normalize_symbol(symbol, market))
     ensure_equity_dirs(market)
-    clean_rows = []
+    factor_by_date: dict[date, float] = {}
     for row in factor_rows:
         raw_date = row.get("trade_date") or row.get("date")
         raw_factor = row.get("adj_factor") or row.get("factor")
@@ -145,18 +148,70 @@ def write_equity_factor_file(
         factor = float(raw_factor)
         if factor <= 0 or not math.isfinite(factor):
             raise LeanPlatformError(f"Invalid adjustment factor for {ticker}: {raw_factor!r}")
-        clean_rows.append((parse_date(str(raw_date)[:10]), factor))
-    clean_rows = sorted(set(clean_rows), key=lambda item: item[0])
+        factor_by_date[parse_date(str(raw_date)[:10])] = factor
+    clean_rows = sorted(factor_by_date.items(), key=lambda item: item[0])
     if not clean_rows:
         raise LeanPlatformError(f"No adjustment factors found for {ticker}.")
+
+    # A cumulative adjustment factor cannot legitimately change for one session
+    # and immediately return to the prior value. TuShare occasionally publishes
+    # this transient shape; LEAN interprets it as a dividend and requires a
+    # non-zero reference price, so smooth only these isolated reversals.
+    normalized_rows = list(clean_rows)
+    sanitized_dates: list[str] = []
+    for index in range(1, len(normalized_rows) - 1):
+        previous_factor = normalized_rows[index - 1][1]
+        item_date, current_factor = normalized_rows[index]
+        next_factor = normalized_rows[index + 1][1]
+        scale = max(abs(previous_factor), abs(current_factor), abs(next_factor), 1.0)
+        current_changed = abs(current_factor - previous_factor) > scale * 1e-10
+        next_restores_previous = abs(next_factor - previous_factor) <= scale * 1e-10
+        if current_changed and next_restores_previous:
+            normalized_rows[index] = (item_date, previous_factor)
+            sanitized_dates.append(item_date.isoformat())
+    clean_rows = normalized_rows
+
+    prices: list[tuple[date, float]] = []
+    for row in price_rows or []:
+        raw_date = row.get("trade_date") or row.get("date")
+        raw_close = row.get("close")
+        if raw_date in (None, "") or raw_close in (None, ""):
+            continue
+        close = float(raw_close)
+        if close > 0 and math.isfinite(close):
+            prices.append((parse_date(str(raw_date)[:10]), close))
+    prices.sort(key=lambda item: item[0])
+
+    def previous_close(event_date: date) -> float | None:
+        value = None
+        for price_date, close in prices:
+            if price_date >= event_date:
+                break
+            value = close
+        return value
 
     latest_factor = clean_rows[-1][1]
     if latest_factor <= 0:
         raise LeanPlatformError(f"Invalid latest adjustment factor for {ticker}.")
-    lines = []
+    lines: list[str] = []
+    event_dates: list[str] = []
+    previous_factor = None
     for item_date, factor in clean_rows:
+        if previous_factor is not None and abs(factor - previous_factor) <= max(abs(factor), abs(previous_factor), 1.0) * 1e-10:
+            continue
         price_factor = factor / latest_factor
-        lines.append(f"{item_date:%Y%m%d},{price_factor:.10f},1,0")
+        if previous_factor is None:
+            reference_price = 1.0
+        else:
+            reference_price = previous_close(item_date)
+            if reference_price is None and require_reference_prices:
+                raise LeanPlatformError(
+                    f"Missing previous close for {ticker} factor event on {item_date.isoformat()}."
+                )
+            reference_price = reference_price or 1.0
+            event_dates.append(item_date.isoformat())
+        lines.append(f"{item_date:%Y%m%d},{price_factor:.10f},1,{reference_price:.10f}")
+        previous_factor = factor
     if clean_rows[-1][0] != date(2050, 12, 31):
         lines.append("20501231,1.0000000000,1,0")
 
@@ -170,4 +225,42 @@ def write_equity_factor_file(
         "first_date": clean_rows[0][0].isoformat(),
         "last_date": clean_rows[-1][0].isoformat(),
         "latest_factor": latest_factor,
+        "source_rows": len(clean_rows),
+        "event_dates": event_dates,
+        "sanitized_transient_dates": sanitized_dates,
     }
+
+
+def validate_equity_factor_file(path: Path) -> dict[str, Any]:
+    errors: list[str] = []
+    rows: list[tuple[str, float, float, float]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return {"passed": False, "errors": [str(exc)], "rows": 0}
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        fields = [item.strip() for item in line.split(",")]
+        if len(fields) < 4:
+            errors.append(f"line_{line_number}:expected_4_fields")
+            continue
+        try:
+            row = (fields[0], float(fields[1]), float(fields[2]), float(fields[3]))
+        except ValueError:
+            errors.append(f"line_{line_number}:invalid_numeric_value")
+            continue
+        if row[1] <= 0 or row[2] <= 0 or not all(math.isfinite(value) for value in row[1:]):
+            errors.append(f"line_{line_number}:invalid_factor_value")
+        rows.append(row)
+    for index in range(1, len(rows)):
+        _, previous_price_factor, previous_split_factor, _ = rows[index - 1]
+        item_date, price_factor, split_factor, reference_price = rows[index]
+        changed = (
+            abs(price_factor - previous_price_factor) > max(abs(price_factor), abs(previous_price_factor), 1.0) * 1e-10
+            or abs(split_factor - previous_split_factor) > max(abs(split_factor), abs(previous_split_factor), 1.0) * 1e-10
+        )
+        is_terminal = item_date == "20501231"
+        if changed and not is_terminal and reference_price <= 0:
+            errors.append(f"{item_date}:zero_reference_price")
+    return {"passed": not errors, "errors": errors, "rows": len(rows)}

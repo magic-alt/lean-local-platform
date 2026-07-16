@@ -163,10 +163,14 @@ export function StrategyAdmissionPanel({ value }: { value?: BacktestAdmissionRes
   if (!admission) {
     return (
       <Alert
-        type="warning"
+        type="info"
         showIcon
-        message="This parameter set has not passed strategy admission."
-        description={`Parameter fingerprint: ${shortHash(value.parametersSha256)}`}
+        message={value.registrationStatus === "not_applicable"
+          ? "Strategy admission does not apply to this standalone run."
+          : "This parameter set has not been registered for strategy admission."}
+        description={value.registrationStatus === "not_applicable"
+          ? `Parameter fingerprint: ${shortHash(value.parametersSha256)}`
+          : `Parameter fingerprint: ${shortHash(value.parametersSha256)}. Register a baseline and evaluate the required market-regime runs before treating this as admitted.`}
       />
     );
   }

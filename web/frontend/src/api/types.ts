@@ -371,6 +371,7 @@ export interface BacktestAdmissionResponse {
   strategyId?: string | null;
   parametersSha256: string;
   profile: string;
+  registrationStatus?: "registered" | "not_registered" | "not_applicable";
   admission?: StrategyAdmission | null;
 }
 

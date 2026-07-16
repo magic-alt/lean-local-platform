@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import zipfile
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +10,15 @@ from ..db import db, row_to_dict, rows_to_dicts
 from ..lean_engine import data_paths
 from ..lean_engine.data_writers import write_lean_daily_zip
 from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.providers import fetch_yahoo_rows
+from ..lean_engine.symbols import parse_date
 from ..lean_engine.symbols import normalize_symbol, symbol_key
 from .db_object_store import put_file, restore_to_path
 
 
 LEAN_DATA_NAMESPACE = "lean-data-files"
+RESULTS_ANALYZER_REFERENCE_SYMBOL = "SPY"
+RESULTS_ANALYZER_REFERENCE_MARKET = "usa"
 
 
 def _data_relative(path: Path) -> str:
@@ -53,6 +59,107 @@ def _lean_factor_path(symbol: str, market: str = "china") -> Path:
 def _lean_map_path(symbol: str, market: str = "china") -> Path:
     ticker = symbol_key(normalize_symbol(symbol, market))
     return data_paths.DATA_DIR / "equity" / market / "map_files" / f"{ticker}.csv"
+
+
+def _daily_zip_coverage(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"passed": False, "firstDate": None, "lastDate": None, "rows": 0}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = [name for name in archive.namelist() if name.lower().endswith(".csv")]
+            if not names:
+                return {"passed": False, "firstDate": None, "lastDate": None, "rows": 0}
+            lines = archive.read(names[0]).decode("utf-8", errors="replace").splitlines()
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return {"passed": False, "firstDate": None, "lastDate": None, "rows": 0}
+    dates = [line[:8] for line in lines if len(line) >= 8 and line[:8].isdigit()]
+    if not dates:
+        return {"passed": False, "firstDate": None, "lastDate": None, "rows": 0}
+    return {
+        "passed": True,
+        "firstDate": f"{dates[0][:4]}-{dates[0][4:6]}-{dates[0][6:8]}",
+        "lastDate": f"{dates[-1][:4]}-{dates[-1][4:6]}-{dates[-1][6:8]}",
+        "rows": len(dates),
+    }
+
+
+def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[str, Any]:
+    """Ensure LEAN's built-in ResultsAnalyzer can load its hard-coded SPY history."""
+    requested_start = parse_date(start) - timedelta(days=3)
+    requested_end = parse_date(end)
+    zip_path = _lean_daily_path(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
+    coverage = _daily_zip_coverage(zip_path)
+    if (
+        coverage["passed"]
+        and coverage["firstDate"] <= requested_start.isoformat()
+        and coverage["lastDate"] >= requested_end.isoformat()
+    ):
+        return {
+            "symbol": RESULTS_ANALYZER_REFERENCE_SYMBOL,
+            "market": RESULTS_ANALYZER_REFERENCE_MARKET,
+            "source": "local-cache",
+            "coverage": coverage,
+            "refreshed": False,
+        }
+
+    fetch_start = min(requested_start, parse_date("1993-01-29"))
+    fetch_end = requested_end + timedelta(days=2)
+    try:
+        rows = fetch_yahoo_rows(
+            RESULTS_ANALYZER_REFERENCE_SYMBOL,
+            start=fetch_start.isoformat(),
+            end=fetch_end.isoformat(),
+        )
+    except Exception as exc:
+        raise LeanPlatformError(
+            "LEAN results analyzer reference data is missing or stale for SPY and refresh failed: "
+            f"{exc}"
+        ) from exc
+    rows = [row for row in rows if parse_date(row["date"][:10]) <= requested_end]
+    if not rows:
+        raise LeanPlatformError("LEAN results analyzer SPY refresh returned no rows in the requested window.")
+
+    metadata = write_lean_daily_zip(
+        RESULTS_ANALYZER_REFERENCE_SYMBOL,
+        rows,
+        "yahoo",
+        overwrite=True,
+        market=RESULTS_ANALYZER_REFERENCE_MARKET,
+    )
+    ticker = symbol_key(
+        normalize_symbol(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
+    )
+    factor_path = _lean_factor_path(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
+    map_path = _lean_map_path(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
+    first_date = str(rows[0]["date"])[:10].replace("-", "")
+    factor_path.write_text(
+        f"{first_date},1,1,0\n20501231,1,1,0\n",
+        encoding="utf-8",
+    )
+    map_path.write_text(
+        f"{first_date},{ticker},P\n20501231,{ticker},P\n",
+        encoding="utf-8",
+    )
+    refreshed_coverage = _daily_zip_coverage(zip_path)
+    if (
+        not refreshed_coverage["passed"]
+        or refreshed_coverage["firstDate"] > requested_start.isoformat()
+        or refreshed_coverage["lastDate"] < requested_end.isoformat()
+    ):
+        raise LeanPlatformError(
+            "LEAN results analyzer SPY refresh did not cover the requested backtest window: "
+            f"{refreshed_coverage}"
+        )
+    return {
+        "symbol": RESULTS_ANALYZER_REFERENCE_SYMBOL,
+        "market": RESULTS_ANALYZER_REFERENCE_MARKET,
+        "source": "yahoo",
+        "coverage": refreshed_coverage,
+        "refreshed": True,
+        "daily": metadata,
+        "factorFile": str(factor_path),
+        "mapFile": str(map_path),
+    }
 
 
 def _rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -124,7 +231,13 @@ def rebuild_ashare_lean_cache_from_db(
         raise LeanPlatformError(f"No canonical A-share rows found for {symbol} source={source} adjust={adjust or 'raw'}.")
     metadata = write_lean_daily_zip(symbol, _rows_for_lean(rows), source, overwrite=True, market=market)
     factor_rows = _query_adjustment_rows(symbol, source=source) or rows
-    factor_metadata = data_paths.write_equity_factor_file(symbol, factor_rows, market=market)
+    factor_metadata = data_paths.write_equity_factor_file(
+        symbol,
+        factor_rows,
+        market=market,
+        price_rows=rows,
+        require_reference_prices=True,
+    )
     zip_path = _lean_daily_path(symbol, market)
     factor_path = _lean_factor_path(symbol, market)
     map_path = _lean_map_path(symbol, market)
@@ -278,14 +391,24 @@ def ensure_ashare_lean_cache(
             kind="map",
         ),
     }
-    if all(restored.values()):
-        return {"symbol": normalize_symbol(symbol, market), "source": source, "adjust": adjust, "files": restored}
+    factor_validation = data_paths.validate_equity_factor_file(factor_path)
+    if all(restored.values()) and factor_validation["passed"]:
+        return {
+            "symbol": normalize_symbol(symbol, market),
+            "source": source,
+            "adjust": adjust,
+            "files": restored,
+            "factorValidation": factor_validation,
+        }
     rebuilt = rebuild_ashare_lean_cache_from_db(symbol, source=source, adjust=adjust, market=market)
     return {
         "symbol": normalize_symbol(symbol, market),
         "source": source,
         "adjust": adjust,
         "rebuilt": True,
+        "rebuildReason": None if factor_validation["passed"] else {
+            "factorValidation": factor_validation,
+        },
         "files": {
             "daily": {
                 "object_id": rebuilt.get("lean_object_id"),

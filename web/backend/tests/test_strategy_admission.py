@@ -182,7 +182,55 @@ def test_backtest_admission_endpoint_returns_parameter_fingerprint():
 
     assert response.status_code == 200
     assert response.json()["parametersSha256"] == baseline["parameters_sha256"]
+    assert response.json()["registrationStatus"] == "registered"
     assert response.json()["admission"]["current_stage"] == "baseline_registered"
+
+
+def test_admission_parameter_fingerprint_ignores_run_specific_snapshot_metadata():
+    from app.services.strategy_admission import parameters_sha256
+
+    first = {
+        "ticker": "600460",
+        "start": "2024-01-01",
+        "end": "2026-07-13",
+        "cash": 50000,
+        "initial_cash": 50000,
+        "fast": 10,
+        "slow": 120,
+        "feeModel": "default",
+        "slippageModel": "default",
+        "strategySnapshotDir": "/runtime/runs/run-1/strategy",
+        "strategySnapshotMainFile": "main.py",
+        "datasetVersion": "batch-1",
+    }
+    second = {
+        **first,
+        "ticker": "000300",
+        "start": "2023-01-01",
+        "end": "2024-01-01",
+        "cash": 100000,
+        "initial_cash": 100000,
+        "strategySnapshotDir": "/runtime/runs/run-2/strategy",
+        "datasetVersion": "batch-2",
+    }
+    second.pop("feeModel")
+    second.pop("slippageModel")
+
+    assert parameters_sha256(first) == parameters_sha256(second)
+
+
+def test_backtest_admission_endpoint_distinguishes_unregistered_parameters():
+    from app import db as db_module
+    from app.main import app
+
+    db_module.init_db()
+    run_ids, _ = _seed_runs(db_module)
+
+    response = TestClient(app).get(f"/api/backtests/{run_ids[0]}/admission")
+
+    assert response.status_code == 200
+    assert response.json()["registrationStatus"] == "not_registered"
+    assert response.json()["admission"] is None
 
 
 def test_stopped_clean_paper_session_promotes_admission():

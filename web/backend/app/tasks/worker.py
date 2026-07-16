@@ -29,7 +29,7 @@ from ..services.backtest_execution_validation import (
 from ..services.experiments import record_experiment_versions
 from ..services.projects import get_project
 from ..services.result_service import persist_result
-from ..services.lean_cache import ensure_ashare_lean_cache
+from ..services.lean_cache import ensure_ashare_lean_cache, ensure_lean_results_analyzer_reference_data
 from ..services.optimization import best_candidate, candidate_suffix, parameter_combinations
 from ..services.run_fingerprint import build_run_fingerprint
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
@@ -297,6 +297,10 @@ def run_backtest_task(self, task_id: str, run_id: str):
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
             if benchmark_symbol:
                 lean_cache["benchmark"] = ensure_ashare_lean_cache(benchmark_symbol, source=source, adjust=adjust)
+        lean_cache["resultsAnalyzerReference"] = ensure_lean_results_analyzer_reference_data(
+            parameters["start"],
+            parameters["end"],
+        )
         update_fingerprint()
         if project:
             project_path = Path(project["project_path"])

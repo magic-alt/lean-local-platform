@@ -75,8 +75,12 @@ PROFILES = {
 
 _SCOPE_PARAMETERS = {
     "ticker", "symbol", "start", "end", "dockerImage", "benchmarkSymbol",
-    "assetClass", "market", "venue", "resolution", "dataType", "source", "providerSource",
-    "initialCash", "cash", "name", "projectId", "ashareStatusFile",
+    "assetClass", "market", "venue", "resolution", "dataType", "source", "provider",
+    "providerSource", "initialCash", "initial_cash", "cash", "name", "projectId",
+    "ashareStatusFile", "strategySnapshotDir", "strategySnapshotMainFile",
+    "strategySnapshotAlgorithmClass", "strategySnapshotLanguage", "datasetVersion",
+    "datasetCertified", "datasetProduction", "datasetEnvironment", "datasetQaStatus",
+    "datasetQaReportId", "allowResearchSource", "preflight",
 }
 
 
@@ -102,6 +106,8 @@ def admission_config() -> dict[str, Any]:
 
 def parameters_sha256(parameters: dict[str, Any]) -> str:
     strategy_parameters = {key: parameters[key] for key in sorted(parameters) if key not in _SCOPE_PARAMETERS}
+    strategy_parameters.setdefault("feeModel", "default")
+    strategy_parameters.setdefault("slippageModel", "default")
     payload = json.dumps(strategy_parameters, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -455,5 +461,12 @@ def admission_for_run(run_id: str, profile_name: str = "institutional") -> dict[
         "strategyId": strategy_id,
         "parametersSha256": parameter_hash,
         "profile": profile_name,
+        "registrationStatus": (
+            "not_applicable"
+            if not strategy_id
+            else "not_registered"
+            if not admission
+            else "registered"
+        ),
         "admission": admission,
     }

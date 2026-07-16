@@ -21,6 +21,7 @@ from ..services.backtest_service import (
 from ..services.backtest_preflight import prepare_backtest_request
 from ..services.experiments import get_experiment_versions
 from ..services.result_service import result_for_job
+from ..services.run_paths import run_directory, run_file
 from ..services.strategy_admission import admission_for_run
 from ..services.tasks import task_logs
 from ..tasks.worker import run_backtest_task
@@ -50,7 +51,7 @@ class BacktestRequest(BaseModel):
 
 def _with_artifacts(run: dict[str, Any]) -> dict[str, Any]:
     run["job_id"] = run["id"]
-    path = Path(run["results_dir"])
+    path = run_directory(run["id"], run.get("results_dir"), relative="results")
     run["artifacts"] = sorted(child.name for child in path.iterdir() if child.is_file()) if path.exists() else []
     return run
 
@@ -141,8 +142,13 @@ def result(run_id: str):
             result_path = run.get("result_json_path")
             if result_path:
                 try:
+                    resolved_result_path = run_file(
+                        run_id,
+                        result_path,
+                        f"results/{run_id}.json",
+                    )
                     chart_data = extract_chart_data(
-                        Path(result_path),
+                        resolved_result_path,
                         symbol=run.get("symbol"),
                         benchmark_symbol=(run.get("parameters") or {}).get("benchmarkSymbol"),
                         market=(run.get("parameters") or {}).get("market"),
@@ -226,14 +232,20 @@ def logs(run_id: str):
 @router.get("/{run_id}/chart-data")
 def chart_data(run_id: str):
     run = detail(run_id)
-    result_path = run.get("result_json_path")
-    if not result_path or not Path(result_path).exists():
+    result_path = run_file(
+        run_id,
+        run.get("result_json_path"),
+        f"results/{run_id}.json",
+    )
+    if not result_path.is_file():
         raise HTTPException(status_code=404, detail="Result JSON not found.")
     parameters = run.get("parameters") or {}
     return extract_chart_data(
-        Path(result_path),
+        result_path,
         symbol=run.get("symbol"),
+        benchmark_symbol=parameters.get("benchmarkSymbol"),
         market=parameters.get("market"),
+        benchmark_market=parameters.get("benchmarkMarket"),
         start=parameters.get("start"),
         end=parameters.get("end"),
         asset_class=parameters.get("assetClass"),
@@ -248,7 +260,8 @@ def artifact(run_id: str, name: str):
     run = detail(run_id)
     if "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid artifact name.")
-    path = Path(run["results_dir"]) / name
+    results_dir = run_directory(run_id, run.get("results_dir"), relative="results")
+    path = results_dir / name
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
     return FileResponse(path)

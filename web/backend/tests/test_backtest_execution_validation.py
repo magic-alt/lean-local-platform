@@ -83,6 +83,8 @@ def test_execution_audit_rejects_negative_equity_short_oversell_and_lean_errors(
         "ashare_no_oversell",
     } <= failed
     assert audit["ledger"]["negativePositions"] == {"600460": -30100.0}
+    log_gate = next(gate for gate in audit["gates"] if gate["name"] == "lean_log_errors")
+    assert log_gate["details"]["errorCodes"] == ["lean_error"]
 
 
 def test_execution_audit_accepts_completed_cash_only_ashare_run(tmp_path):
@@ -146,3 +148,28 @@ def test_execution_validation_merge_replaces_previous_execution_gates():
 
     assert merged["passed"] is True
     assert [gate["name"] for gate in merged["gates"]] == ["data", "new_execution"]
+
+
+def test_execution_audit_classifies_factor_file_and_analysis_errors(tmp_path):
+    from app.services.backtest_execution_validation import audit_backtest_execution
+
+    result_path = _write_result(
+        tmp_path,
+        statistics={"End Equity": "50000", "Drawdown": "0%"},
+        events=[],
+        log_lines=[
+            "ERROR:: Subscription worker task exception. Zero reference price for 600460 dividend at 6/25/2024",
+            "ERROR:: BacktestingResultHandler.SendFinalResult(): Error running backtest analysis",
+            "Debug: AShare execution account type: cash; short selling disabled.",
+            "Debug: 2026-07-13 03:00:00 Algorithm Id:(run) completed in 1 seconds.",
+        ],
+    )
+
+    audit = audit_backtest_execution(result_path, _parameters())
+    gate = next(item for item in audit["gates"] if item["name"] == "lean_log_errors")
+
+    assert gate["passed"] is False
+    assert gate["details"]["errorCodes"] == [
+        "factor_file_zero_reference_price",
+        "lean_result_analysis_error",
+    ]

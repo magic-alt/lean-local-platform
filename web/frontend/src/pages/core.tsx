@@ -1400,6 +1400,7 @@ export function RunDetailPage() {
   const { id } = useParams();
   const [run, setRun] = useState<BacktestRun>();
   const [chart, setChart] = useState<ChartData>();
+  const [chartError, setChartError] = useState<string>();
   const [result, setResult] = useState<BacktestResult>();
   const [trust, setTrust] = useState<BacktestValidationResponse>();
   const [admission, setAdmission] = useState<BacktestAdmissionResponse>();
@@ -1423,9 +1424,14 @@ export function RunDetailPage() {
     if (next.result_json_path) {
       try {
         setChart(await api.chartData(id));
-      } catch {
+        setChartError(undefined);
+      } catch (error) {
         setChart(undefined);
+        setChartError(error instanceof Error ? error.message : "Chart data could not be loaded.");
       }
+    } else {
+      setChart(undefined);
+      setChartError(undefined);
     }
     if (next.result_json_path) {
       try {
@@ -1691,7 +1697,18 @@ export function RunDetailPage() {
             label: "Admission",
             children: <StrategyAdmissionPanel value={admission} />
           },
-          { key: "charts", label: "Charts", children: chart ? <BacktestCharts chartData={chart} /> : <Alert type="info" message="Charts are available after a successful run." /> },
+          {
+            key: "charts",
+            label: "Charts",
+            children: chart
+              ? <BacktestCharts chartData={chart} />
+              : <Alert
+                  type={chartError ? "error" : "info"}
+                  showIcon={Boolean(chartError)}
+                  message={chartError ? "Chart data failed to load." : "Charts are generated after the result artifact is ready."}
+                  description={chartError}
+                />
+          },
           {
             key: "records",
             label: "Records",

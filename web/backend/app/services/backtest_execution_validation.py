@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..core.config import PLATFORM_DIR
 from ..db import db, json_dump, utc_now
 from ..repositories.backtest_repository import get_backtest, update_backtest
+from .run_paths import run_file
 
 
 def _number(value: Any, *, percent: bool = False) -> float | None:
@@ -105,7 +105,17 @@ def _log_evidence(result_path: Path) -> dict[str, Any]:
             lines.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
         except OSError:
             continue
-    error_lines = [line.strip() for line in lines if "ERROR::" in line]
+    error_lines = list(dict.fromkeys(line.strip() for line in lines if "ERROR::" in line))
+    error_codes: list[str] = []
+    for line in error_lines:
+        if "Zero reference price" in line and "dividend" in line:
+            error_codes.append("factor_file_zero_reference_price")
+        elif "Subscription worker task exception" in line:
+            error_codes.append("subscription_worker_exception")
+        elif "Error running backtest analysis" in line:
+            error_codes.append("lean_result_analysis_error")
+        else:
+            error_codes.append("lean_error")
     completed_date = None
     for line in lines:
         match = re.search(r"Debug:\s+(\d{4}-\d{2}-\d{2}).*Algorithm Id:.*completed", line)
@@ -114,6 +124,7 @@ def _log_evidence(result_path: Path) -> dict[str, Any]:
     return {
         "errorLines": error_lines[:20],
         "errorCount": len(error_lines),
+        "errorCodes": list(dict.fromkeys(error_codes)),
         "completedDate": completed_date,
         "cashAccountConfigured": any("AShare execution account type: cash" in line for line in lines),
     }
@@ -163,7 +174,13 @@ def audit_backtest_execution(
     result_analysis_complete = end_equity is not None and drawdown is not None
     gates = [
         _gate("lean_runtime_error", not runtime_error, runtimeError=runtime_error or None),
-        _gate("lean_log_errors", logs["errorCount"] == 0, errorCount=logs["errorCount"], errorLines=logs["errorLines"]),
+        _gate(
+            "lean_log_errors",
+            logs["errorCount"] == 0,
+            errorCount=logs["errorCount"],
+            errorCodes=logs["errorCodes"],
+            errorLines=logs["errorLines"],
+        ),
         _gate(
             "result_analysis_complete",
             result_analysis_complete,
@@ -231,16 +248,7 @@ def execution_failure_message(execution: dict[str, Any]) -> str | None:
 
 
 def _host_result_path(path_value: Any, run_id: str) -> Path:
-    original = Path(str(path_value or ""))
-    candidates = [original]
-    try:
-        relative = original.relative_to("/workspace")
-    except ValueError:
-        pass
-    else:
-        candidates.append(PLATFORM_DIR / relative)
-    candidates.append(PLATFORM_DIR / "web" / "runtime" / "runs" / run_id / "results" / f"{run_id}.json")
-    return next((candidate for candidate in candidates if candidate.is_file()), original)
+    return run_file(run_id, path_value, f"results/{run_id}.json")
 
 
 def revalidate_persisted_backtest(run_id: str) -> dict[str, Any]:

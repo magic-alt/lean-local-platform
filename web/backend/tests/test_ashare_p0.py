@@ -869,7 +869,7 @@ def test_adjustment_factors_write_factor_file_and_corporate_actions(tmp_path, mo
     assert result["factorFiles"]["600001"]["rows"] == 3
     factor_file = tmp_path / "Data" / "equity" / "china" / "factor_files" / "600001.csv"
     text = factor_file.read_text(encoding="utf-8")
-    assert "20240102,0.8333333333,1,0" in text
+    assert "20240102,0.8333333333,1,1.0000000000" in text
     assert "20501231,1.0000000000,1,0" in text
 
     upsert_corporate_actions(
