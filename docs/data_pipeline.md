@@ -99,6 +99,16 @@ Current quality checks include:
 - missing trade status
 - critical multi-source discrepancy reports
 - benchmark row coverage
+- provider permission discovery and per-dataset synchronization checkpoints
+- quarantine and audited replacement of untrusted legacy partitions
+
+The Data page exposes a one-click TuShare Pro update backed by
+`provider_dataset_catalog`, `provider_raw_records`, `data_sync_runs`,
+`data_sync_items`, and `data_record_issues`. The checked-in low-frequency
+registry covers the locally configured 5,000-point entitlement across equities,
+indices, funds, convertible bonds, futures, options, HK/US equities, FX, macro,
+and reference events. Raw payloads are retained generically, while supported
+datasets are also normalized into canonical research and LEAN tables.
 
 Important services:
 

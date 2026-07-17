@@ -200,17 +200,22 @@ class TushareAdapter:
             frame = self.pro.stock_basic(exchange="", list_status=status, fields=fields)
             for item in _records(frame):
                 symbol = from_tushare_code(item.get("ts_code") or item.get("symbol"))
+                if len(symbol) != 6 or not symbol.isdigit():
+                    continue
                 delisted_date = _iso_date(item.get("delist_date"))
+                raw_name = item.get("name")
+                raw_industry = item.get("industry")
+                name = symbol if _blank(raw_name) else str(raw_name)
                 records.append(
                     {
                         "symbol": symbol,
-                        "name": item.get("name") or symbol,
+                        "name": name,
                         "exchange": infer_exchange(symbol),
                         "listed_date": _iso_date(item.get("list_date")),
                         "delisted_date": delisted_date,
                         "status": "delisted" if delisted_date else _status(item.get("list_status")),
-                        "is_st": _is_st_name(item.get("name")),
-                        "industry": item.get("industry"),
+                        "is_st": _is_st_name(name),
+                        "industry": None if _blank(raw_industry) else str(raw_industry),
                         "source": "tushare:stock_basic",
                     }
                 )
@@ -226,12 +231,17 @@ class TushareAdapter:
             return None
         item = records[0]
         code = from_tushare_code(item.get("ts_code") or symbol)
+        if len(code) != 6 or not code.isdigit():
+            return None
         delisted_date = _iso_date(item.get("delist_date"))
+        raw_name = item.get("name")
+        raw_industry = item.get("industry")
+        name = code if _blank(raw_name) else str(raw_name)
         return {
-            "symbol": code, "name": item.get("name") or code, "exchange": infer_exchange(code),
+            "symbol": code, "name": name, "exchange": infer_exchange(code),
             "listed_date": _iso_date(item.get("list_date")), "delisted_date": delisted_date,
             "status": "delisted" if delisted_date else _status(item.get("list_status")),
-            "is_st": _is_st_name(item.get("name")), "industry": item.get("industry"),
+            "is_st": _is_st_name(name), "industry": None if _blank(raw_industry) else str(raw_industry),
             "source": "tushare:stock_basic",
         }
 

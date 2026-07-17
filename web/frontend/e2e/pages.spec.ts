@@ -592,6 +592,13 @@ async function setupApiMocks(page: Page) {
       return route.fulfill({ contentType: "application/json", body: [] });
     }
 
+    if (method === "GET" && pathname === "/api/paper/candidates") {
+      return route.fulfill({ contentType: "application/json", body: [{
+        id: "run-1", name: "Trusted A-share Backtest", symbol: "600460", start: "2024-01-01", end: "2026-07-16",
+        cash: 50000, strategyVersionId: "strategy-v1", parameterHash: "params-v1", validation: { passed: true }
+      }] });
+    }
+
     if (method === "POST" && pathname === "/api/paper") {
       return route.fulfill({ contentType: "application/json", body: { id: `paper-${Date.now()}`, status: "running", name: (body as any).name ?? "Paper", project_id: (body as any).projectId, symbol: (body as any).symbol ?? "AAPL", asset_class: (body as any).assetClass ?? "equity", venue: "usa", resolution: "daily", cash: (body as any).cash ?? 100000, equity: 100000, parameters: {}, created_at: "2026-07-08T00:00:00Z", updated_at: "2026-07-08T00:00:00Z" } });
     }
@@ -642,6 +649,30 @@ async function setupApiMocks(page: Page) {
 
     if (method === "POST" && pathname === "/api/data/fetch-batch") {
       return route.fulfill({ contentType: "application/json", body: { id: "task-fetch", kind: "data.fetch-batch", status: "queued", title: "data.fetch", created_at: "2026-07-08T00:00:00Z", parameters: {}, log_path: "/tmp/task.log" } });
+    }
+
+    if (method === "GET" && pathname === "/api/data/catalog") {
+      return route.fulfill({ contentType: "application/json", body: {
+        provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", count: 2, available: 1, activeRun: null,
+        items: [
+          { provider: "tushare", dataset_key: "daily", api_name: "daily", category: "A股/行情", scope_type: "instrument", cadence: "daily", permission_status: "available", row_count: 1000 },
+          { provider: "tushare", dataset_key: "fund_daily", api_name: "fund_daily", category: "基金", scope_type: "window", cadence: "daily", permission_status: "denied", row_count: 0, permission_reason: "permission denied" }
+        ]
+      } });
+    }
+
+    if (method === "POST" && pathname === "/api/data/sync-runs") {
+      return route.fulfill({ contentType: "application/json", body: {
+        id: "sync-1", provider: "tushare", mode: "incremental_repair", scope: "all_entitled_low_frequency", status: "queued",
+        created_at: "2026-07-17T00:00:00Z", items: [{ id: "item-1", run_id: "sync-1", dataset_key: "daily", status: "queued", processed: 0, inserted: 0, updated: 0, failed: 0 }]
+      } });
+    }
+
+    if (method === "GET" && pathname === "/api/data/sync-runs/sync-1") {
+      return route.fulfill({ contentType: "application/json", body: {
+        id: "sync-1", provider: "tushare", mode: "incremental_repair", scope: "all_entitled_low_frequency", status: "running",
+        created_at: "2026-07-17T00:00:00Z", items: [{ id: "item-1", run_id: "sync-1", dataset_key: "daily", status: "running", processed: 1, inserted: 2, updated: 0, failed: 0 }]
+      } });
     }
 
     if (method === "POST" && pathname === "/api/data/fetch") {
@@ -760,6 +791,15 @@ test.describe("Frontend page coverage", () => {
     await fetchReq;
   });
 
+  test("Data page can queue the full MySQL update", async ({ page }) => {
+    await gotoRoute(page, "/data");
+    const syncReq = page.waitForRequest((req) => req.method() === "POST" && req.url().includes("/api/data/sync-runs"));
+    await page.getByTestId("sync-all-data-button").click();
+    await page.getByRole("button", { name: "开始更新" }).click();
+    await syncReq;
+    await expect(page.getByText("daily").first()).toBeVisible();
+  });
+
   test("Backtests page loads and opens list", async ({ page }) => {
     await gotoRoute(page, "/backtests");
     await expect(page.getByRole("heading", { level: 1, name: "Backtests" })).toBeVisible();
@@ -792,12 +832,14 @@ test.describe("Frontend page coverage", () => {
 
   test("Paper page can create and refresh", async ({ page }) => {
     await gotoRoute(page, "/paper");
-    await expect(page.getByRole("heading", { level: 1, name: "Paper Replay" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "LEAN Paper" })).toBeVisible();
     await page.getByLabel("Name").fill("Smoke Paper");
-    await page.getByLabel("Symbol").click();
+    await page.getByLabel("Project").click();
+    await chooseFirstSelectOption(page);
+    await page.getByLabel("Trusted Backtest").click();
     await chooseFirstSelectOption(page);
     const createReq = page.waitForRequest((req) => req.method() === "POST" && req.url().includes("/api/paper"));
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByTestId("create-paper-button").click();
     await createReq;
   });
 

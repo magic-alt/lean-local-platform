@@ -39,6 +39,7 @@ from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import paper as paper_service
+from ..services import data_sync
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
 
@@ -240,6 +241,26 @@ def fetch_data_batch_task(task_id: str):
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
         _record_task_metric("data_fetch", "failed")
+        raise
+
+
+@celery_app.task(name="lean_web.sync_all_data")
+def sync_all_data_task(task_id: str, run_id: str):
+    update_task(task_id, status="running", started_at=utc_now(), error=None)
+    append_log(task_id, "Discovering TuShare Pro 5,000-point low-frequency entitlements.")
+    try:
+        result = data_sync.run_sync(run_id)
+        run_status = str(result.get("status") or ("cancelled" if result.get("cancelled") else "success"))
+        status = "cancelled" if run_status == "cancelled" else "success"
+        error = "One or more datasets require retry." if run_status == "partial" else None
+        update_task(task_id, status=status, artifacts_json=[], error=error, finished_at=utc_now())
+        append_log(task_id, f"Data synchronization finished: {run_status}.")
+        _record_task_metric("data_sync", run_status)
+        return result
+    except Exception as exc:
+        append_log(task_id, f"error: {exc}")
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("data_sync", "failed")
         raise
 
 
@@ -690,29 +711,41 @@ def start_research_task(task_id: str, session_id: str):
     if not project:
         raise LeanPlatformError("Research requires a project.")
     port = int(task["parameters"].get("port", 8888))
+    with db() as connection:
+        session_row = connection.execute("select workspace_path from research_sessions where id=?", (session_id,)).fetchone()
+    workspace_path = session_row["workspace_path"] if session_row and session_row["workspace_path"] else project["project_path"]
     update_task(task_id, status="running", started_at=utc_now())
-    _update_table("research_sessions", session_id, status="running", started_at=utc_now())
+    _update_table(
+        "research_sessions", session_id, status="starting", readiness_status="starting",
+        container_status="creating", started_at=utc_now(), last_checked_at=utc_now(),
+    )
     try:
         output = run_detached_research(
             session_id,
-            Path(project["project_path"]),
+            Path(workspace_path),
             port,
             lambda line: append_log(task_id, line),
         )
         _update_table(
             "research_sessions",
             session_id,
-            status="success",
+            status="running",
             container_id=output["container_id"],
             url=output["url"],
-            finished_at=utc_now(),
+            readiness_status=output.get("readiness_status") or "ready",
+            container_status=output.get("container_status") or "running",
+            last_checked_at=utc_now(),
+            finished_at=None,
         )
         update_task(task_id, status="success", artifacts_json=[output["url"]], finished_at=utc_now())
         _record_task_metric("research", "success")
         return output
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
-        _update_table("research_sessions", session_id, status="failed", error=str(exc), finished_at=utc_now())
+        _update_table(
+            "research_sessions", session_id, status="failed", readiness_status="failed",
+            container_status="failed", error=str(exc), last_checked_at=utc_now(), finished_at=utc_now(),
+        )
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
         _record_task_metric("research", "failed")
         raise

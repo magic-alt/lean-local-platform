@@ -3,6 +3,8 @@ import type {
   RunStatus,
   DataAsset,
   DataProvider,
+  DataSyncCatalog,
+  DataSyncRun,
   MarketInfo,
   AssetClassInfo,
   LocalDataFile,
@@ -182,6 +184,19 @@ export const api = {
     return request<DataQueryResult>(`/api/data/query?${query.toString()}`);
   },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
+  dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
+  dataSyncRuns: () => request<{ items: DataSyncRun[]; limit: number }>("/api/data/sync-runs"),
+  dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
+  createDataSyncRun: (datasets?: string[]) =>
+    request<DataSyncRun>("/api/data/sync-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datasets: datasets?.length ? datasets : null })
+    }),
+  cancelDataSyncRun: (id: string) =>
+    request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  resumeDataSyncRun: (id: string) =>
+    request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/resume`, { method: "POST" }),
   fetchData: (payload: {
     symbol: string;
     assetClass?: string;
@@ -359,7 +374,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   researchSessions: () => request<ResearchSession[]>("/api/research"),
-  startResearch: (payload: { projectId: string; port: number }) =>
+  startResearch: (payload: { projectId: string; port?: number }) =>
     request<ResearchSession>("/api/research", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -367,6 +382,15 @@ export const api = {
     }),
   stopResearch: (id: string) =>
     request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/stop`, { method: "POST" }),
+  restartResearch: (id: string) =>
+    request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/restart`, { method: "POST" }),
+  researchLogs: (id: string) =>
+    request<{ logs: string; sessionId: string }>(`/api/research/${encodeURIComponent(id)}/logs`),
+  deleteResearch: (id: string, purgeWorkspace = false) =>
+    request<{ deleted: boolean; id: string; workspacePurged: boolean }>(
+      `/api/research/${encodeURIComponent(id)}?purgeWorkspace=${purgeWorkspace ? "true" : "false"}`,
+      { method: "DELETE" }
+    ),
   reports: () => request<ReportRecord[]>("/api/reports"),
   createReport: (payload: { runId: string }) =>
     request<ReportRecord>("/api/reports", {

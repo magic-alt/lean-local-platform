@@ -96,6 +96,7 @@ export function PaperPage() {
   const sourceBacktestId = Form.useWatch("sourceBacktestId", form);
   const [candidates, setCandidates] = useState<PaperBacktestCandidate[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [selectedSession, setSelectedSession] = useState<PaperSession | null>(null);
   const [paperReports, setPaperReports] = useState<PaperDailyReport[]>([]);
   const [paperRuns, setPaperRuns] = useState<PaperWalkforwardRun[]>([]);
@@ -116,19 +117,27 @@ export function PaperPage() {
   }, [form, projectId]);
 
   async function submit(values: any) {
-    await api.createPaperSession({
-      name: values.name,
-      projectId: values.projectId,
-      sourceBacktestId: values.sourceBacktestId,
-      symbol: candidates.find((item) => item.id === values.sourceBacktestId)?.symbol || "",
-      startDate: values.startDate || undefined,
-      autoAdvance: values.autoAdvance !== false,
-      parameters: {}
-    });
-    message.success("LEAN Paper session created from the frozen backtest snapshot");
-    form.resetFields();
-    setCandidates([]);
-    sessions.reload();
+    if (creating) return;
+    setCreating(true);
+    try {
+      await api.createPaperSession({
+        name: values.name,
+        projectId: values.projectId,
+        sourceBacktestId: values.sourceBacktestId,
+        symbol: candidates.find((item) => item.id === values.sourceBacktestId)?.symbol || "",
+        startDate: values.startDate || undefined,
+        autoAdvance: values.autoAdvance !== false,
+        parameters: {}
+      });
+      message.success("LEAN Paper session created from the frozen backtest snapshot");
+      form.resetFields();
+      setCandidates([]);
+      await sessions.reload();
+    } catch (error) {
+      message.error(`创建 LEAN Paper 失败：${(error as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
   }
 
   async function status(session: PaperSession, nextStatus: string) {
@@ -180,7 +189,13 @@ export function PaperPage() {
         description="当前支持 A 股日线 Walk-forward。它使用真实 LEAN 策略和 A 股交易规则，但不是实时行情或券商委托。"
       />
       <Card title="Create LEAN Paper">
-        <Form form={form} layout="vertical" onFinish={submit} initialValues={{ autoAdvance: true }}>
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={submit}
+          onFinishFailed={() => message.warning("请先选择 Project 和验证通过的 Backtest")}
+          initialValues={{ autoAdvance: true }}
+        >
           <div className="field-grid four">
             <Form.Item name="name" label="Name"><Input placeholder="600460 MACD daily paper" /></Form.Item>
             <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
@@ -203,7 +218,13 @@ export function PaperPage() {
             <Form.Item name="autoAdvance" valuePropName="checked"><Checkbox>工作日收盘后自动推进</Checkbox></Form.Item>
           </div>
           {projectId && !candidatesLoading && candidates.length === 0 && (
-            <Alert type="warning" showIcon message="该 Project 暂无验证通过且数据未截断的 Backtest。" style={{ marginBottom: 16 }} />
+            <Alert
+              type="warning"
+              showIcon
+              message="该 Project 暂无可用于 Paper 的 Backtest。"
+              description="需要状态成功、执行验证通过、数据未截断、结果账本存在，并保留冻结策略快照。"
+              style={{ marginBottom: 16 }}
+            />
           )}
           {selectedCandidate && (
             <Alert
@@ -214,7 +235,7 @@ export function PaperPage() {
               style={{ marginBottom: 16 }}
             />
           )}
-          <Button type="primary" htmlType="submit">Create</Button>
+          <Button data-testid="create-paper-button" type="primary" htmlType="submit" loading={creating} disabled={creating || candidatesLoading || !selectedCandidate}>Create</Button>
         </Form>
       </Card>
       <Card title="Sessions" style={{ marginTop: 16 }}>

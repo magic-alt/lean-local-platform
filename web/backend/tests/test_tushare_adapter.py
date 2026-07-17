@@ -113,7 +113,7 @@ class StockBasicPro:
                     "ts_code": "000001.SZ",
                     "symbol": "000001",
                     "name": "平安银行",
-                    "industry": "Bank",
+                    "industry": float("nan"),
                     "list_date": "19910403",
                     "delist_date": "",
                     "list_status": "L",
@@ -131,6 +131,15 @@ class StockBasicPro:
                     "ts_code": "000003.SZ",
                     "symbol": "000003",
                     "name": "退市样本",
+                    "industry": "Other",
+                    "list_date": "19910114",
+                    "delist_date": "20200101",
+                    "list_status": "D",
+                },
+                {
+                    "ts_code": "T600018.SH",
+                    "symbol": "T600018",
+                    "name": "历史无效代码",
                     "industry": "Other",
                     "list_date": "19910114",
                     "delist_date": "20200101",
@@ -172,7 +181,9 @@ def test_tushare_stock_basic_marks_st_and_delisted():
     rows = TushareAdapter(pro=StockBasicPro()).stock_basic(["L"])
 
     by_symbol = {row["symbol"]: row for row in rows}
+    assert "T600018" not in by_symbol
     assert by_symbol["000001"]["is_st"] is False
+    assert by_symbol["000001"]["industry"] is None
     assert by_symbol["000002"]["is_st"] is True
     assert by_symbol["000003"]["status"] == "delisted"
     assert by_symbol["000003"]["delisted_date"] == "2020-01-01"

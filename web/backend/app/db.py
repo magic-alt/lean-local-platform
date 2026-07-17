@@ -84,6 +84,8 @@ JSON_COLUMNS = {
     "source_manifest_json": "sourceManifest",
     "pool_snapshot_json": "poolSnapshot",
     "rule_tags_json": "ruleTags",
+    "checkpoint_json": "checkpoint",
+    "requested_datasets_json": "requestedDatasets",
 }
 
 
@@ -139,6 +141,8 @@ LONG_TEXT_COLUMNS = {
     "source_manifest_json",
     "pool_snapshot_json",
     "rule_tags_json",
+    "checkpoint_json",
+    "requested_datasets_json",
     "error",
     "error_message",
 }
@@ -159,6 +163,7 @@ PATH_TEXT_COLUMNS = {
     "source_path",
     "root_path",
     "strategy_path",
+    "workspace_path",
 }
 MYSQL_RESERVED_COLUMNS = {"rows", "key"}
 ID_TEXT_COLUMNS = {
@@ -452,6 +457,14 @@ def _translate_mysql_sql(sql: str) -> str:
         translated = re.sub(r"create\s+view\s+if\s+not\s+exists", "create or replace view", translated, count=1, flags=re.IGNORECASE)
     if re.match(r"create\s+table", translated, flags=re.IGNORECASE):
         translated = _translate_mysql_create_table(translated)
+    alter_text = re.match(
+        r"(?P<prefix>alter\s+table\s+`?[A-Za-z0-9_]+`?\s+add\s+column\s+`?(?P<column>[A-Za-z0-9_]+)`?\s+)text(?P<suffix>\b.*)",
+        translated,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if alter_text:
+        column = alter_text.group("column")
+        translated = f"{alter_text.group('prefix')}{_mysql_text_type(column)}{alter_text.group('suffix')}"
     translated = _translate_mysql_upsert(translated)
     translated = re.sub(r"(?<![\w`])rows(?![\w`])", "`rows`", translated, flags=re.IGNORECASE)
     translated = re.sub(r"(?<![\w`])key(?![\w`])", "`key`", translated, flags=re.IGNORECASE)

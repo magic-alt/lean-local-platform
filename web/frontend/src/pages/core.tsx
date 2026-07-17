@@ -50,6 +50,8 @@ import type {
   ChartData,
   DataQueryResult,
   DataProvider,
+  DataSyncCatalog,
+  DataSyncRun,
   DatabaseHealth,
   DependencyHealth,
   FactorEvaluationResult,
@@ -1149,9 +1151,78 @@ export function ProjectsPage() {
 
 export function DataPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
+  const catalog = useAsyncData<DataSyncCatalog>(api.dataCatalog, {
+    provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0, activeRun: null
+  }, false);
+  const [syncRun, setSyncRun] = useState<DataSyncRun>();
+  const [syncActionLoading, setSyncActionLoading] = useState(false);
   const [csvForm] = Form.useForm();
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
+
+  const activeSync = syncRun && ["queued", "running", "cancelling"].includes(syncRun.status);
+
+  useEffect(() => {
+    const activeId = syncRun?.id || catalog.data.activeRun?.id;
+    if (!activeId) return;
+    let cancelled = false;
+    const refresh = () => api.dataSyncRun(activeId).then((next) => {
+      if (!cancelled) setSyncRun(next);
+    }).catch(() => undefined);
+    refresh();
+    if (!["queued", "running", "cancelling"].includes(syncRun?.status || catalog.data.activeRun?.status || "")) return () => { cancelled = true; };
+    const timer = window.setInterval(refresh, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [catalog.data.activeRun?.id, catalog.data.activeRun?.status, syncRun?.id, syncRun?.status]);
+
+  async function startFullSync() {
+    setSyncActionLoading(true);
+    try {
+      const run = await api.createDataSyncRun();
+      setSyncRun(run);
+      message.success("TuShare Pro 全库更新已进入后台队列");
+      catalog.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSyncActionLoading(false);
+    }
+  }
+
+  function confirmFullSync() {
+    Modal.confirm({
+      title: "更新本地全部市场与研究数据？",
+      content: "将按当前 5000 积分权限扫描低频接口，增量更新并修复缺口。首次全 A 回填可能持续较长时间，可安全取消和续跑。",
+      okText: "开始更新",
+      onOk: startFullSync
+    });
+  }
+
+  async function cancelFullSync() {
+    if (!syncRun) return;
+    setSyncActionLoading(true);
+    try {
+      setSyncRun(await api.cancelDataSyncRun(syncRun.id));
+      message.info("已请求在当前数据分片结束后停止");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSyncActionLoading(false);
+    }
+  }
+
+  async function resumeFullSync() {
+    if (!syncRun) return;
+    setSyncActionLoading(true);
+    try {
+      setSyncRun(await api.resumeDataSyncRun(syncRun.id));
+      message.success("数据更新已从检查点恢复");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSyncActionLoading(false);
+    }
+  }
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
@@ -1178,6 +1249,68 @@ export function DataPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Data Library</h1></div>
+      <Card
+        title="Local MySQL · TuShare Pro 全库更新"
+        style={{ marginBottom: 16 }}
+        extra={<Space>
+          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); if (syncRun) api.dataSyncRun(syncRun.id).then(setSyncRun); }}>刷新</Button>
+          {activeSync
+            ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>停止</Button>
+            : syncRun && ["failed", "cancelled", "partial"].includes(syncRun.status)
+              ? <Button type="primary" loading={syncActionLoading} onClick={resumeFullSync}>继续</Button>
+              : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>一键更新全部数据</Button>}
+        </Space>}
+      >
+        {catalog.error && <Alert type="warning" showIcon message="同步目录尚未初始化" description={catalog.error.message} style={{ marginBottom: 12 }} />}
+        <div className="grid">
+          <Card size="small"><Statistic title="TuShare 权限" value={`${catalog.data.entitlementPoints} 积分`} /></Card>
+          <Card size="small"><Statistic title="低频数据集" value={catalog.data.count} /></Card>
+          <Card size="small"><Statistic title="已验证可用" value={catalog.data.available} /></Card>
+          <Card size="small"><Statistic title="同步状态" value={syncRun?.status || catalog.data.activeRun?.status || "idle"} /></Card>
+        </div>
+        <Alert
+          type="info"
+          showIcon
+          style={{ margin: "12px 0" }}
+          message="实际接口探测优先于积分推断"
+          description="同步基础、日/周/月行情、财务、基金、衍生品、港美股、外汇、宏观和事件数据；不采集实时、Tick、分钟及资讯流。"
+        />
+        {syncRun?.error && <Alert type="error" showIcon message={syncRun.error} style={{ marginBottom: 12 }} />}
+        {syncRun?.items && syncRun.items.length > 0 && (
+          <Table
+            size="small"
+            rowKey="dataset_key"
+            dataSource={syncRun.items}
+            pagination={{ pageSize: 10 }}
+            columns={[
+              { title: "Dataset", dataIndex: "dataset_key" },
+              { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
+              { title: "Processed", dataIndex: "processed" },
+              { title: "Inserted", dataIndex: "inserted" },
+              { title: "Updated", dataIndex: "updated" },
+              { title: "Failed", dataIndex: "failed", render: (value) => value ? <Tag color="error">{value}</Tag> : 0 },
+              { title: "Checkpoint", render: (_, item) => item.checkpoint?.symbol ? `${item.checkpoint.symbol} · ${item.checkpoint.index}/${item.checkpoint.total}` : "-" },
+              { title: "Error", dataIndex: "error", ellipsis: true, render: (value) => value || "-" }
+            ]}
+          />
+        )}
+        {!syncRun && catalog.data.items.length > 0 && (
+          <Table
+            size="small"
+            rowKey="dataset_key"
+            dataSource={catalog.data.items}
+            pagination={{ pageSize: 8 }}
+            columns={[
+              { title: "Category", dataIndex: "category" },
+              { title: "Dataset", dataIndex: "dataset_key" },
+              { title: "Permission", dataIndex: "permission_status", render: (value) => <StatusTag status={value} /> },
+              { title: "Rows", dataIndex: "row_count" },
+              { title: "Coverage", render: (_, item) => item.first_data_date ? `${item.first_data_date} → ${item.last_data_date || "-"}` : "-" },
+              { title: "Reason", dataIndex: "permission_reason", ellipsis: true, render: (value) => value || "-" }
+            ]}
+          />
+        )}
+      </Card>
       <MarketDataDownloader unboundedPreview showLimitInput={false} />
       <Card title="Import CSV" style={{ marginTop: 16 }}>
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>

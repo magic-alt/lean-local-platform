@@ -34,6 +34,7 @@ import Editor from "@monaco-editor/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
+import dayjs from "dayjs";
 
 import { api } from "../api";
 import type {
@@ -121,6 +122,18 @@ export function ResearchPage() {
   const [cbondRisk, setCbondRisk] = useState<{ asOfDate: string; count: number; items: CBondRiskItem[] }>();
   const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
   const [pitMembers, setPitMembers] = useState<IndexMembersResult>();
+  const [sessionBusy, setSessionBusy] = useState<string>();
+  const [toolBusy, setToolBusy] = useState<string>();
+  const [researchLogs, setResearchLogs] = useState("");
+  const [logsOpen, setLogsOpen] = useState(false);
+  const today = dayjs().format("YYYY-MM-DD");
+  const researchStart = dayjs().subtract(2, "year").format("YYYY-MM-DD");
+
+  useEffect(() => {
+    if (!sessions.data.some((item) => ["queued", "starting", "running", "success"].includes(item.status))) return;
+    const timer = window.setInterval(sessions.reload, 4000);
+    return () => window.clearInterval(timer);
+  }, [sessions.data, sessions.reload]);
 
   const databaseDetail = databaseHealth.data.detail;
   const databaseDetailRecord = typeof databaseDetail === "object" && databaseDetail !== null && !Array.isArray(databaseDetail)
@@ -145,26 +158,51 @@ export function ResearchPage() {
     quantiles: number;
     engine?: string;
   }) {
-    const result = await api.evaluateFactor({ ...values, persist: true });
-    setFactorResult(result);
-    evaluations.reload();
-    message.success("Factor evaluation saved");
+    setToolBusy("factor");
+    try {
+      const result = await api.evaluateFactor({ ...values, persist: true });
+      setFactorResult(result);
+      evaluations.reload();
+      message.success("Factor evaluation saved");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setToolBusy(undefined);
+    }
   }
 
   async function queryCbond(values: { date: string; maxDoubleLow: number; excludeCallRisk: boolean }) {
-    const [pool, risk] = await Promise.all([
-      api.cbondDoubleLow({ ...values, limit: 100 }),
-      api.cbondCallRisk(values.date)
-    ]);
-    setCbondPool(pool);
-    setCbondRisk(risk);
+    setToolBusy("cbond");
+    try {
+      const [pool, risk] = await Promise.all([
+        api.cbondDoubleLow({ ...values, limit: 100 }),
+        api.cbondCallRisk(values.date)
+      ]);
+      setCbondPool(pool);
+      setCbondRisk(risk);
+      if (!pool.count) message.info("该日期没有符合条件的可转债数据，请先在 Data 页同步 TuShare 数据。");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setToolBusy(undefined);
+    }
   }
 
   async function queryFutures(values: { date: string; products?: string }) {
-    setFuturesMonitor(await api.futuresAgriMain(values));
+    setToolBusy("futures");
+    try {
+      const result = await api.futuresAgriMain(values);
+      setFuturesMonitor(result);
+      if (!result.count) message.info("该日期没有期货主力数据，请先在 Data 页同步 TuShare 数据。");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setToolBusy(undefined);
+    }
   }
 
   async function queryPit(values: { universeCode: string; asOfDate: string }) {
+    setToolBusy("pit");
     try {
       const result = await api.indexMembersFromTushareAsOf(values.universeCode, values.asOfDate);
       setPitMembers(result);
@@ -172,13 +210,66 @@ export function ResearchPage() {
     } catch (error) {
       message.warning(`TuShare Pro query failed; showing local PIT data. ${(error as Error).message}`);
       setPitMembers(await api.indexMembersAsOf(values.universeCode, values.asOfDate));
+    } finally {
+      setToolBusy(undefined);
     }
   }
 
-  async function startResearchSession(values: { projectId: string; port: number }) {
-    await api.startResearch(values);
-    message.success("Research task queued");
-    sessions.reload();
+  async function startResearchSession(values: { projectId: string; port?: number }) {
+    setSessionBusy("start");
+    try {
+      await api.startResearch(values);
+      message.success("Research 工作台正在启动，Jupyter 就绪后会显示 Running");
+      sessions.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSessionBusy(undefined);
+    }
+  }
+
+  async function sessionAction(session: ResearchSession, action: "stop" | "restart") {
+    setSessionBusy(`${action}:${session.id}`);
+    try {
+      if (action === "stop") await api.stopResearch(session.id);
+      else await api.restartResearch(session.id);
+      message.success(action === "stop" ? "Research 已停止" : "Research 正在重新启动");
+      sessions.reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSessionBusy(undefined);
+    }
+  }
+
+  async function showLogs(session: ResearchSession) {
+    setSessionBusy(`logs:${session.id}`);
+    try {
+      setResearchLogs((await api.researchLogs(session.id)).logs || "No logs yet.");
+      setLogsOpen(true);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSessionBusy(undefined);
+    }
+  }
+
+  function deleteSession(session: ResearchSession) {
+    Modal.confirm({
+      title: "删除 Research 记录？",
+      content: "容器会停止，研究工作区默认保留，方便恢复笔记。",
+      okText: "删除记录",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await api.deleteResearch(session.id, false);
+          message.success("Research 记录已删除，工作区已保留");
+          sessions.reload();
+        } catch (error) {
+          message.error((error as Error).message);
+        }
+      }
+    });
   }
 
   return (
@@ -187,6 +278,9 @@ export function ResearchPage() {
         <h1 className="page-title">Research</h1>
         <Button icon={<ReloadOutlined />} onClick={() => { sessions.reload(); engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
       </div>
+      <Modal title="Research Logs" open={logsOpen} onCancel={() => setLogsOpen(false)} footer={<Button onClick={() => setLogsOpen(false)}>Close</Button>} width={900}>
+        <pre style={{ maxHeight: 520, overflow: "auto", whiteSpace: "pre-wrap" }}>{researchLogs}</pre>
+      </Modal>
       <Tabs
         items={[
           {
@@ -195,16 +289,16 @@ export function ResearchPage() {
             children: (
               <>
                 <Card title="Start Research">
-                  <Form layout="vertical" onFinish={startResearchSession} initialValues={{ port: 8888 }}>
+                  <Form layout="vertical" onFinish={startResearchSession}>
                     <div className="field-grid">
                       <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
                         <Select placeholder="Project" options={projects.data.map((p) => ({ value: p.id, label: p.name }))} />
                       </Form.Item>
-                      <Form.Item name="port" label="Port">
+                      <Form.Item name="port" label="Preferred Port (optional)">
                         <InputNumber min={1024} max={65535} style={{ width: "100%" }} />
                       </Form.Item>
                     </div>
-                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit">Start</Button>
+                    <Button data-testid="start-research-button" type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={sessionBusy === "start"}>Start</Button>
                   </Form>
                 </Card>
                 <Card title="Sessions" style={{ marginTop: 16 }}>
@@ -213,10 +307,18 @@ export function ResearchPage() {
                     dataSource={sessions.data}
                     size="small"
                     columns={[
-                      { title: "ID", dataIndex: "id", ellipsis: true },
+                      { title: "Project", render: (_, session) => session.project_name || projects.data.find((item) => item.id === session.project_id)?.name || session.project_id },
                       { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> },
-                      { title: "URL", render: (_, session) => session.url ? <a href={session.url} target="_blank">{session.url}</a> : "-" },
-                      { title: "Action", render: (_, session) => <Button size="small" onClick={() => api.stopResearch(session.id).then(sessions.reload)}>Stop</Button> }
+                      { title: "Ready", dataIndex: "readiness_status", render: (status) => <StatusTag status={status || "pending"} /> },
+                      { title: "Port", dataIndex: "port" },
+                      { title: "URL", render: (_, session) => session.url && session.status === "running" ? <a href={session.url} target="_blank" rel="noreferrer">Open Jupyter</a> : "-" },
+                      { title: "Error", dataIndex: "error", ellipsis: true, render: (value) => value || "-" },
+                      { title: "Action", render: (_, session) => <Space>
+                        {session.status === "running" && <Button size="small" loading={sessionBusy === `stop:${session.id}`} onClick={() => sessionAction(session, "stop")}>Stop</Button>}
+                        {["stopped", "failed", "cancelled"].includes(session.status) && <Button size="small" loading={sessionBusy === `restart:${session.id}`} onClick={() => sessionAction(session, "restart")}>Restart</Button>}
+                        <Button size="small" loading={sessionBusy === `logs:${session.id}`} onClick={() => showLogs(session)}>Logs</Button>
+                        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteSession(session)} />
+                      </Space> }
                     ]}
                   />
                 </Card>
@@ -247,12 +349,12 @@ export function ResearchPage() {
                   )}
                 </Card>
                 <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
-                  <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: "2026-07-03" }}>
+                  <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: today }}>
                     <Form.Item name="universeCode" rules={[{ required: true }]}>
                       <Select style={{ width: 220 }} options={A_SHARE_INDEX_OPTIONS} />
                     </Form.Item>
                     <Form.Item name="asOfDate" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                    <Button type="primary" htmlType="submit">Query</Button>
+                    <Button type="primary" htmlType="submit" loading={toolBusy === "pit"}>Query</Button>
                   </Form>
                   <Alert
                     style={{ marginTop: 12 }}
@@ -294,7 +396,7 @@ export function ResearchPage() {
             children: (
               <>
                 <Card title="Factor Evaluation">
-                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: "2024-01-02", endDate: "2026-07-13", forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
+                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: researchStart, endDate: today, forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
                     <div className="field-grid six">
                       <Form.Item name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
                       <Form.Item name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
@@ -312,7 +414,7 @@ export function ResearchPage() {
                         />
                       </Form.Item>
                     </div>
-                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit">Evaluate</Button>
+                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={toolBusy === "factor"}>Evaluate</Button>
                   </Form>
                 </Card>
                 {factorResult && (
@@ -361,11 +463,11 @@ export function ResearchPage() {
             children: (
               <>
                 <Card title="Double-Low Pool">
-                  <Form layout="inline" onFinish={queryCbond} initialValues={{ date: "2024-01-03", maxDoubleLow: 130, excludeCallRisk: true }}>
+                  <Form layout="inline" onFinish={queryCbond} initialValues={{ date: today, maxDoubleLow: 130, excludeCallRisk: true }}>
                     <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Form.Item name="maxDoubleLow"><InputNumber min={0} /></Form.Item>
                     <Form.Item name="excludeCallRisk" valuePropName="checked"><Checkbox>Exclude Call Risk</Checkbox></Form.Item>
-                    <Button type="primary" htmlType="submit">Query</Button>
+                    <Button type="primary" htmlType="submit" loading={toolBusy === "cbond"}>Query</Button>
                   </Form>
                 </Card>
                 <Card title="Pool" style={{ marginTop: 16 }}>
@@ -408,10 +510,10 @@ export function ResearchPage() {
             children: (
               <>
                 <Card title="Agricultural Main Contracts">
-                  <Form layout="inline" onFinish={queryFutures} initialValues={{ date: "2024-01-03", products: "A,M,Y,P,C,CS,JD,LH,SR,CF,RM,OI,AP,CJ,PK" }}>
+                  <Form layout="inline" onFinish={queryFutures} initialValues={{ date: today, products: "A,M,Y,P,C,CS,JD,LH,SR,CF,RM,OI,AP,CJ,PK" }}>
                     <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                     <Form.Item name="products"><Input style={{ width: 360 }} /></Form.Item>
-                    <Button type="primary" htmlType="submit">Query</Button>
+                    <Button type="primary" htmlType="submit" loading={toolBusy === "futures"}>Query</Button>
                   </Form>
                 </Card>
                 <div className="grid" style={{ marginTop: 16 }}>

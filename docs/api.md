@@ -194,7 +194,21 @@ GET    /api/ashare/reference-data/coverage
 GET    /api/ashare/universe/{universe_code}
 GET    /api/ashare/universe/{universe_code}/tradable
 GET    /api/ashare/securities/{symbol}/status
+
+GET    /api/data/catalog
+GET    /api/data/sync-runs
+POST   /api/data/sync-runs
+GET    /api/data/sync-runs/{run_id}
+POST   /api/data/sync-runs/{run_id}/cancel
+POST   /api/data/sync-runs/{run_id}/resume
 ```
+
+The Data page full-update workflow probes the configured TuShare Pro token at
+runtime. The local entitlement hint is 5,000 points, while successful endpoint
+probes remain authoritative because some datasets require separate grants. The
+sync boundary is low-frequency research data; real-time, minute, Tick, and news
+streams are excluded. Runs are incremental, idempotent, cancellable, and
+resumable from per-dataset checkpoints.
 
 ## Research, Optimization, Factors
 
@@ -207,6 +221,9 @@ GET    /api/research
 POST   /api/research
 GET    /api/research/{session_id}
 POST   /api/research/{session_id}/stop
+POST   /api/research/{session_id}/restart
+GET    /api/research/{session_id}/logs
+DELETE /api/research/{session_id}
 
 GET    /api/factors/engines
 POST   /api/factors/values

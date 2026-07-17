@@ -510,6 +510,7 @@ def test_paper_api_preserves_strategy_extra_parameters(tmp_path, monkeypatch):
 
 def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
+    from app.core import config
     from app.db import db, json_dump
     from app.services.paper import create_session, trusted_backtest_candidates
 
@@ -527,12 +528,13 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
         "end": "2026-07-13",
         "cash": 50000,
         "benchmarkSymbol": "000300",
-        "strategySnapshotDir": str(snapshot_dir),
+        "strategySnapshotDir": "/workspace/web/runtime/runs/trusted-run/strategy",
         "strategySnapshotMainFile": "main.py",
         "strategySnapshotAlgorithmClass": "MacdAlgorithm",
         "strategySnapshotLanguage": "Python",
     }
     now = "2026-07-16T00:00:00+00:00"
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "runs")
     with db() as connection:
         connection.execute(
             """

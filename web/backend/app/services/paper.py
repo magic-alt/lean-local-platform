@@ -18,6 +18,7 @@ from .data_coverage import ashare_coverage
 from .experiments import get_experiment_versions
 from .source_gate import apply_source_context, resolve_source_context
 from .trading_config import ashare_trading_config
+from .run_paths import run_directory
 
 
 def _side(value: str) -> str:
@@ -97,7 +98,7 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
         item = row_to_dict(raw) or {}
         validation = item.get("validation") or {}
         parameters = item.get("parameters") or {}
-        snapshot = Path(str(parameters.get("strategySnapshotDir") or ""))
+        snapshot = run_directory(str(item["id"]), parameters.get("strategySnapshotDir"), relative="strategy")
         if validation.get("passed") is not True or not snapshot.is_dir() or not get_result(str(item["id"])):
             continue
         data_validation = validation.get("data") or {}
@@ -153,7 +154,7 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     if not get_result(source_backtest_id):
         raise ValueError("The selected backtest result ledger is unavailable.")
     source_parameters = dict(source_run.get("parameters") or {})
-    snapshot_dir = Path(str(source_parameters.get("strategySnapshotDir") or ""))
+    snapshot_dir = run_directory(source_backtest_id, source_parameters.get("strategySnapshotDir"), relative="strategy")
     if not snapshot_dir.is_dir():
         raise ValueError("The selected backtest strategy snapshot is unavailable.")
     if source_parameters.get("allowTruncatedData") or ((source_run.get("validation") or {}).get("data") or {}).get("truncated"):

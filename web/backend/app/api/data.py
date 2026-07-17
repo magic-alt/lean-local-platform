@@ -42,7 +42,8 @@ from ..services.db_object_store import put_file
 from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, require_source_allowed, source_certification
 from ..services.security_search import search_securities as search_security_catalog
 from ..services.tasks import create_task
-from ..tasks.worker import fetch_data_batch_task
+from ..services import data_sync
+from ..tasks.worker import fetch_data_batch_task, sync_all_data_task
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -168,6 +169,10 @@ class IntradayImportRequest(BaseModel):
     records: list[dict[str, Any]] = Field(min_length=1)
 
 
+class DataSyncRequest(BaseModel):
+    datasets: list[str] | None = None
+
+
 @router.get("/symbols")
 def symbols(
     market: str = "usa",
@@ -225,6 +230,65 @@ def providers(includeAvailability: bool = False):
 @router.get("/data/providers/availability")
 def data_provider_availability(provider: str | None = None):
     return provider_availability(provider)
+
+
+@router.get("/data/catalog")
+def data_catalog():
+    return data_sync.catalog_payload()
+
+
+@router.get("/data/sync-runs")
+def data_sync_runs(limit: int = 20):
+    return {"items": data_sync.list_sync_runs(limit), "limit": limit}
+
+
+@router.post("/data/sync-runs")
+def create_data_sync_run(request: DataSyncRequest):
+    try:
+        run = data_sync.create_sync_run(requested=request.datasets)
+        task = create_task(
+            "data_sync",
+            "Update all TuShare data",
+            {"runId": run["id"], "datasets": request.datasets or []},
+            related_id=run["id"],
+        )
+        with db() as connection:
+            connection.execute("update data_sync_runs set task_id=? where id=?", (task["id"], run["id"]))
+        dispatch_task(sync_all_data_task.s(task["id"], run["id"]), task["id"])
+        return data_sync.sync_run(run["id"])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/data/sync-runs/{run_id}")
+def data_sync_run(run_id: str):
+    item = data_sync.sync_run(run_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Data sync run not found.")
+    return item
+
+
+@router.post("/data/sync-runs/{run_id}/cancel")
+def cancel_data_sync_run(run_id: str):
+    try:
+        return data_sync.request_cancel(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/data/sync-runs/{run_id}/resume")
+def resume_data_sync_run(run_id: str):
+    try:
+        run = data_sync.prepare_resume(run_id)
+        task = create_task("data_sync", "Resume TuShare data update", {"runId": run_id}, related_id=run_id)
+        with db() as connection:
+            connection.execute("update data_sync_runs set task_id=? where id=?", (task["id"], run_id))
+        dispatch_task(sync_all_data_task.s(task["id"], run_id), task["id"])
+        return data_sync.sync_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/asset-classes")

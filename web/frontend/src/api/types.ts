@@ -32,6 +32,63 @@ export interface DataProvider {
   notes: string;
 }
 
+export interface DataSyncCatalogItem {
+  provider: string;
+  dataset_key: string;
+  api_name: string;
+  category: string;
+  scope_type: string;
+  cadence: string;
+  permission_status: "unknown" | "available" | "empty" | "denied" | "retryable";
+  permission_reason?: string | null;
+  row_count: number;
+  first_data_date?: string | null;
+  last_data_date?: string | null;
+  last_checked_at?: string | null;
+  last_synced_at?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DataSyncItem {
+  id: string;
+  run_id: string;
+  dataset_key: string;
+  status: string;
+  processed: number;
+  inserted: number;
+  updated: number;
+  failed: number;
+  checkpoint?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+export interface DataSyncRun {
+  id: string;
+  task_id?: string | null;
+  provider: string;
+  mode: string;
+  scope: string;
+  status: string;
+  requestedDatasets?: string[];
+  summary?: Record<string, unknown>;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  cancel_requested?: boolean | number;
+  items?: DataSyncItem[];
+}
+
+export interface DataSyncCatalog {
+  provider: string;
+  entitlementPoints: number;
+  boundary: string;
+  items: DataSyncCatalogItem[];
+  count: number;
+  available: number;
+  activeRun?: DataSyncRun | null;
+}
+
 export interface MarketInfo {
   key: string;
   name: string;
@@ -460,6 +517,13 @@ export interface ResearchSession {
   container_id?: string | null;
   url?: string | null;
   error?: string | null;
+  project_name?: string | null;
+  readiness_status?: string | null;
+  container_status?: string | null;
+  workspace_path?: string | null;
+  last_checked_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
   created_at: string;
 }
 
