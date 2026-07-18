@@ -34,6 +34,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
+import Editor from "@monaco-editor/react";
 
 import { api } from "../api";
 import dayjs from "dayjs";
@@ -77,6 +78,7 @@ import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from 
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
+import { buildBacktestRequest, marketCostParameters } from "../domain/backtest-request";
 import { asRecord, detailText, shortValue } from "../utils/display";
 import {
   defaultTemplateFor,
@@ -142,12 +144,18 @@ function dateRule(fieldLabel: string) {
 }
 
 function defaultBacktestSource(nextMarket: string) {
-  return nextMarket === "china" ? "tushare" : "";
+  return nextMarket === "china" || nextMarket === "hongkong" ? "tushare" : "";
+}
+
+function defaultBenchmark(nextMarket: string) {
+  if (nextMarket === "china") return "000300";
+  if (nextMarket === "hongkong") return "02800";
+  return "SPY";
 }
 
 function defaultProviderForMarket(nextMarket: string, markets: MarketInfo[]) {
   return markets.find((item) => item.key === nextMarket)?.defaultProvider ??
-    (nextMarket === "china" ? "tushare" : nextMarket === "hongkong" ? "akshare" : "yfinance");
+    (nextMarket === "china" || nextMarket === "hongkong" ? "tushare" : "yfinance");
 }
 
 function defaultSymbolText(assetClass: string, nextMarket: string) {
@@ -156,18 +164,6 @@ function defaultSymbolText(assetClass: string, nextMarket: string) {
   if (nextMarket === "china") return "000001";
   if (nextMarket === "hongkong") return "00700";
   return "AAPL";
-}
-
-function marketCostParameters(nextMarket: string, feeModel?: string, slippageModel?: string) {
-  if (nextMarket !== "china") return {};
-  const zeroFees = feeModel === "zero";
-  return {
-    commissionRate: zeroFees ? 0 : 0.0001,
-    minCommission: zeroFees ? 0 : 5,
-    stampTaxSell: zeroFees ? 0 : 0.0005,
-    transferFeeRate: zeroFees ? 0 : 0.00001,
-    slippageBps: slippageModel === "zero" ? 0 : 5.0
-  };
 }
 
 function projectConfigForRun(values: any, selectedTemplate?: StrategyTemplate) {
@@ -219,7 +215,7 @@ function projectFormDefaults(project?: Project, templates: StrategyTemplate[] = 
     symbol: String(project?.config?.symbol || defaultSymbolText(assetClass, market).split(",")[0]),
     start: start ? normalizeDateInput(start) : start,
     end: end ? normalizeDateInput(end) : end,
-    benchmarkSymbol: String(project?.config?.benchmarkSymbol ?? (market === "china" ? "000300" : "SPY")),
+    benchmarkSymbol: String(project?.config?.benchmarkSymbol ?? defaultBenchmark(market)),
     cash,
     feeModel: String(project?.config?.feeModel ?? "default"),
     slippageModel: String(project?.config?.slippageModel ?? "default"),
@@ -743,6 +739,10 @@ export function ProjectsPage() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [preflight, setPreflight] = useState<BacktestPreflight>();
+  const [sourcePath, setSourcePath] = useState("");
+  const [sourceCode, setSourceCode] = useState("");
+  const [sourceDirty, setSourceDirty] = useState(false);
+  const [sourceLoading, setSourceLoading] = useState(false);
   const selectedAssetClass = Form.useWatch("assetClass", form) || settings.data.defaultAssetClass;
   const selectedAssetInfo = assetClasses.data.find((item) => item.key === selectedAssetClass);
   const selectedMarket = Form.useWatch("market", form) || settings.data.defaultMarket;
@@ -774,6 +774,24 @@ export function ProjectsPage() {
     setDirty(false);
     setPreflight(undefined);
   }, [form, selectedProject, settings.data, templates.data, selectedProject?.id]);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      setSourcePath("");
+      setSourceCode("");
+      return;
+    }
+    const path = selectedProject.main_file || String(selectedProject.config?.mainFile || "main.py");
+    setSourceLoading(true);
+    api.readProjectFile(selectedProject.id, path)
+      .then((file) => {
+        setSourcePath(file.path);
+        setSourceCode(file.content);
+        setSourceDirty(false);
+      })
+      .catch((error) => message.error((error as Error).message))
+      .finally(() => setSourceLoading(false));
+  }, [selectedProject?.id]);
 
   useEffect(() => {
     api.symbols(selectedMarket, selectedAssetClass, selectedVenue, selectedResolution, selectedDataType)
@@ -827,6 +845,20 @@ export function ProjectsPage() {
       message.error((error as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveSource() {
+    if (!selectedProject || !sourcePath) return;
+    setSourceLoading(true);
+    try {
+      await api.writeProjectFile(selectedProject.id, sourcePath, sourceCode);
+      setSourceDirty(false);
+      message.success("Strategy source saved");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSourceLoading(false);
     }
   }
 
@@ -893,7 +925,7 @@ export function ProjectsPage() {
         config: nextConfig,
       });
       setDirty(false);
-      const payload = {
+      const payload = buildBacktestRequest({
         symbol: request.symbol,
         name: request.runName,
         assetClass: request.assetClass,
@@ -911,7 +943,7 @@ export function ProjectsPage() {
         dockerImage: request.dockerImage,
         projectId: selectedProject.id,
         parameters: request.parameters,
-      };
+      });
       const readiness = await api.preflightBacktest(payload);
       setPreflight(readiness);
       if (readiness.repaired.length > 0) {
@@ -1004,6 +1036,7 @@ export function ProjectsPage() {
         </Form>
       </Card>
       {selectedProject && (
+        <>
         <Card title="Project Configuration" style={{ marginTop: 16 }}>
           <div className="toolbar" style={{ marginBottom: 12 }}>
             <h2 className="page-title" style={{ margin: 0 }}>Current Project: {selectedProject.display_name || selectedProject.name}</h2>
@@ -1044,7 +1077,7 @@ export function ProjectsPage() {
                   options={markets.data.map((item) => ({ value: item.key, label: item.name }))}
                   onChange={(value) => {
                     form.setFieldValue("source", defaultBacktestSource(value));
-                    form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY");
+                    form.setFieldValue("benchmarkSymbol", defaultBenchmark(value));
                   }}
                 />
               </Form.Item>
@@ -1112,6 +1145,21 @@ export function ProjectsPage() {
           </div>
           <Card title="Project Backtests" style={{ marginTop: 16 }}><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
         </Card>
+        <Card
+          title="Strategy Source"
+          style={{ marginTop: 16 }}
+          extra={<Space><Tag>{sourcePath || "main.py"}</Tag><Button data-testid="save-project-source" type="primary" loading={sourceLoading} disabled={!sourceDirty} onClick={saveSource}>Save Source</Button></Space>}
+        >
+          <Editor
+            height="520px"
+            language={sourcePath.endsWith(".cs") ? "csharp" : "python"}
+            value={sourceCode}
+            loading="Loading strategy source..."
+            onChange={(value?: string) => { setSourceCode(value || ""); setSourceDirty(true); }}
+            options={{ minimap: { enabled: false }, automaticLayout: true }}
+          />
+        </Card>
+        </>
       )}
       <Card title="Projects" style={{ marginTop: 16 }}>
         <Table
@@ -1160,20 +1208,31 @@ export function DataPage() {
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
 
-  const activeSync = syncRun && ["queued", "running", "cancelling"].includes(syncRun.status);
+  const catalogSync = catalog.data.activeRun || undefined;
+  const currentSync = catalogSync && catalogSync.id !== syncRun?.id ? catalogSync : (syncRun || catalogSync);
+  const activeSync = Boolean(currentSync && ["queued", "running", "cancelling"].includes(currentSync.status));
+  const syncModeLabel = ({
+    initial_full: "首次全量建库",
+    incremental: "增量更新",
+    resume_checkpoint: "从检查点继续",
+    full_rebuild: "显式全量重建"
+  } as Record<string, string>)[currentSync?.mode || ""] || currentSync?.mode || "自动判断";
 
   useEffect(() => {
-    const activeId = syncRun?.id || catalog.data.activeRun?.id;
+    const activeId = currentSync?.id;
     if (!activeId) return;
     let cancelled = false;
     const refresh = () => api.dataSyncRun(activeId).then((next) => {
-      if (!cancelled) setSyncRun(next);
+      if (!cancelled) {
+        setSyncRun(next);
+        if (!["queued", "running", "cancelling"].includes(next.status)) catalog.reload();
+      }
     }).catch(() => undefined);
     refresh();
-    if (!["queued", "running", "cancelling"].includes(syncRun?.status || catalog.data.activeRun?.status || "")) return () => { cancelled = true; };
+    if (!["queued", "running", "cancelling"].includes(currentSync?.status || "")) return () => { cancelled = true; };
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [catalog.data.activeRun?.id, catalog.data.activeRun?.status, syncRun?.id, syncRun?.status]);
+  }, [currentSync?.id, currentSync?.status]);
 
   async function startFullSync() {
     setSyncActionLoading(true);
@@ -1199,11 +1258,12 @@ export function DataPage() {
   }
 
   async function cancelFullSync() {
-    if (!syncRun) return;
+    if (!currentSync) return;
     setSyncActionLoading(true);
     try {
-      setSyncRun(await api.cancelDataSyncRun(syncRun.id));
-      message.info("已请求在当前数据分片结束后停止");
+      setSyncRun(await api.cancelDataSyncRun(currentSync.id));
+      await catalog.reload();
+      message.info("数据更新已停止，可从检查点继续");
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -1212,10 +1272,10 @@ export function DataPage() {
   }
 
   async function resumeFullSync() {
-    if (!syncRun) return;
+    if (!currentSync) return;
     setSyncActionLoading(true);
     try {
-      setSyncRun(await api.resumeDataSyncRun(syncRun.id));
+      setSyncRun(await api.resumeDataSyncRun(currentSync.id));
       message.success("数据更新已从检查点恢复");
     } catch (error) {
       message.error((error as Error).message);
@@ -1253,10 +1313,10 @@ export function DataPage() {
         title="Local MySQL · TuShare Pro 全库更新"
         style={{ marginBottom: 16 }}
         extra={<Space>
-          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); if (syncRun) api.dataSyncRun(syncRun.id).then(setSyncRun); }}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); if (currentSync) api.dataSyncRun(currentSync.id).then(setSyncRun); }}>刷新</Button>
           {activeSync
-            ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>停止</Button>
-            : syncRun && ["failed", "cancelled", "partial"].includes(syncRun.status)
+            ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
+            : currentSync && ["failed", "cancelled", "partial"].includes(currentSync.status)
               ? <Button type="primary" loading={syncActionLoading} onClick={resumeFullSync}>继续</Button>
               : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>一键更新全部数据</Button>}
         </Space>}
@@ -1266,7 +1326,8 @@ export function DataPage() {
           <Card size="small"><Statistic title="TuShare 权限" value={`${catalog.data.entitlementPoints} 积分`} /></Card>
           <Card size="small"><Statistic title="低频数据集" value={catalog.data.count} /></Card>
           <Card size="small"><Statistic title="已验证可用" value={catalog.data.available} /></Card>
-          <Card size="small"><Statistic title="同步状态" value={syncRun?.status || catalog.data.activeRun?.status || "idle"} /></Card>
+          <Card size="small"><Statistic title="更新模式" value={syncModeLabel} /></Card>
+          <Card size="small"><Statistic title="同步状态" value={currentSync?.status || "idle"} /></Card>
         </div>
         <Alert
           type="info"
@@ -1275,12 +1336,12 @@ export function DataPage() {
           message="实际接口探测优先于积分推断"
           description="同步基础、日/周/月行情、财务、基金、衍生品、港美股、外汇、宏观和事件数据；不采集实时、Tick、分钟及资讯流。"
         />
-        {syncRun?.error && <Alert type="error" showIcon message={syncRun.error} style={{ marginBottom: 12 }} />}
-        {syncRun?.items && syncRun.items.length > 0 && (
+        {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
+        {currentSync?.items && currentSync.items.length > 0 && (
           <Table
             size="small"
             rowKey="dataset_key"
-            dataSource={syncRun.items}
+            dataSource={currentSync.items}
             pagination={{ pageSize: 10 }}
             columns={[
               { title: "Dataset", dataIndex: "dataset_key" },
@@ -1377,24 +1438,9 @@ export function BacktestsPage() {
     if (submitting) return;
     setSubmitting(true);
     try {
-      const payload = {
+      const payload = buildBacktestRequest({
         ...values,
-        symbol: String(values.symbol ?? "").trim().toUpperCase(),
-        assetClass,
-        market,
-        venue,
-        resolution,
-        dataType,
-        projectId: values.projectId,
-        parameters: {
-          ...(values.parameters ?? {}),
-          ...marketCostParameters(market, values.feeModel, values.slippageModel),
-          benchmarkSymbol: values.benchmarkSymbol,
-          feeModel: values.feeModel,
-          slippageModel: values.slippageModel,
-          source: values.source
-        }
-      };
+      }, { assetClass, market, venue, resolution, dataType, projectId: values.projectId });
       const readiness = await api.preflightBacktest(payload);
       setPreflight(readiness);
       const run = await api.createBacktest(payload);
@@ -1434,7 +1480,7 @@ export function BacktestsPage() {
             start: settings.data.defaultStart,
             end: settings.data.defaultEnd,
             cash: settings.data.defaultCash,
-            benchmarkSymbol: settings.data.defaultMarket === "china" ? "000300" : "SPY",
+            benchmarkSymbol: defaultBenchmark(settings.data.defaultMarket),
             feeModel: "default",
             slippageModel: "default",
             source: defaultBacktestSource(settings.data.defaultMarket),
@@ -1443,10 +1489,10 @@ export function BacktestsPage() {
           }}
         >
           <div className="field-grid six">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: nextMarket === "china" ? "000300" : "SPY", source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
+            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: defaultBenchmark(nextMarket), source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
             <Form.Item name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
             <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", value === "china" ? "000300" : "SPY"); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
+            <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", defaultBenchmark(value)); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>

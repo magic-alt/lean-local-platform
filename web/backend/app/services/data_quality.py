@@ -170,6 +170,9 @@ def validate_ashare_daily_rows(
     rows: list[dict[str, Any]],
     *,
     calendar_dates: list[str] | None = None,
+    suspended_trade_dates: set[str] | None = None,
+    listed_date: str | None = None,
+    delisted_date: str | None = None,
     source: str,
     batch_id: str,
 ) -> dict[str, Any]:
@@ -224,13 +227,23 @@ def validate_ashare_daily_rows(
         errors.append(f"invalid_adj_factor={adj_factor_errors[:10]}")
 
     missing_trade_dates: list[str] = []
+    resolved_suspension_dates: list[str] = []
+    lifecycle_excluded_dates: list[str] = []
     if calendar_dates and row_dates:
         first_date = min(row_dates)
         last_date = max(row_dates)
-        expected = {item for item in calendar_dates if first_date <= item <= last_date}
-        missing_trade_dates = sorted(expected - row_dates)
+        window_start = max(first_date, listed_date) if listed_date else first_date
+        window_end = min(last_date, delisted_date) if delisted_date else last_date
+        calendar_window = {item for item in calendar_dates if first_date <= item <= last_date}
+        expected = {item for item in calendar_window if window_start <= item <= window_end}
+        lifecycle_excluded_dates = sorted(calendar_window - expected)
+        raw_missing = expected - row_dates
+        resolved_suspension_dates = sorted(raw_missing & set(suspended_trade_dates or set()))
+        missing_trade_dates = sorted(raw_missing - set(resolved_suspension_dates))
         if missing_trade_dates:
             errors.append(f"missing_trade_dates={missing_trade_dates[:10]}")
+        if resolved_suspension_dates:
+            warnings.append(f"suspended_trade_dates={resolved_suspension_dates[:10]}")
     else:
         warnings.append("trade_calendar_inferred_from_import_rows")
     if volume_zero_rows:
@@ -245,6 +258,10 @@ def validate_ashare_daily_rows(
         "warnings": warnings,
         "duplicate_dates": duplicate_dates,
         "missing_trade_dates": missing_trade_dates,
+        "resolved_suspension_dates": resolved_suspension_dates,
+        "lifecycle_excluded_dates": lifecycle_excluded_dates,
+        "expected_session_count": len(expected) if calendar_dates and row_dates else len(row_dates),
+        "bar_count": len(row_dates),
         "ohlc_errors": ohlc_errors[:100],
         "negative_or_zero_price_rows": negative_or_zero_price_rows,
         "negative_volume_rows": negative_volume_rows,

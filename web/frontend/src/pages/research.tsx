@@ -254,6 +254,22 @@ export function ResearchPage() {
     }
   }
 
+  async function checkSession(session: ResearchSession) {
+    setSessionBusy(`check:${session.id}`);
+    try {
+      const result = await api.runResearchChecks(session.id);
+      Modal.info({
+        title: result.passed ? "Research checks passed" : "Research checks failed",
+        width: 860,
+        content: <pre style={{ maxHeight: 480, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(result, null, 2)}</pre>
+      });
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSessionBusy(undefined);
+    }
+  }
+
   function deleteSession(session: ResearchSession) {
     Modal.confirm({
       title: "删除 Research 记录？",
@@ -317,6 +333,7 @@ export function ResearchPage() {
                         {session.status === "running" && <Button size="small" loading={sessionBusy === `stop:${session.id}`} onClick={() => sessionAction(session, "stop")}>Stop</Button>}
                         {["stopped", "failed", "cancelled"].includes(session.status) && <Button size="small" loading={sessionBusy === `restart:${session.id}`} onClick={() => sessionAction(session, "restart")}>Restart</Button>}
                         <Button size="small" loading={sessionBusy === `logs:${session.id}`} onClick={() => showLogs(session)}>Logs</Button>
+                        <Button size="small" loading={sessionBusy === `check:${session.id}`} onClick={() => checkSession(session)}>Check</Button>
                         <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteSession(session)} />
                       </Space> }
                     ]}

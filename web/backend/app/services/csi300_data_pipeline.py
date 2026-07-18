@@ -116,6 +116,8 @@ def _suspend_trade_dates(suspend_rows: list[dict[str, Any]], trade_dates: list[s
     available = {item for item in trade_dates if start_date <= item <= end_date}
     suspended: set[str] = set()
     for row in suspend_rows:
+        if row.get("is_full_day") is False:
+            continue
         suspend_start = max(_date(row["suspend_date"], "suspend_date"), start_date)
         resume_date = row.get("resume_date")
         suspend_end = end_date
@@ -148,25 +150,7 @@ def _merge_suspensions(
             by_date[trade_date]["canBuy"] = False
             by_date[trade_date]["canSell"] = False
             continue
-        prev_close = _previous_close(symbol, trade_date, list(by_date.values()))
-        if prev_close is None:
-            warnings.append(f"{symbol}:{trade_date}:suspended_bar_missing_previous_close")
-            continue
-        by_date[trade_date] = {
-            "date": trade_date,
-            "open": prev_close,
-            "high": prev_close,
-            "low": prev_close,
-            "close": prev_close,
-            "volume": 0,
-            "amount": 0,
-            "prev_close": prev_close,
-            "pct_change": 0,
-            "adj_factor": 1.0,
-            "isSuspended": True,
-            "canBuy": False,
-            "canSell": False,
-        }
+        warnings.append(f"{symbol}:{trade_date}:full_day_suspension_no_bar")
     return [by_date[item] for item in sorted(by_date)], warnings
 
 
@@ -378,7 +362,7 @@ def run_csi300_research_import(config: dict[str, Any]) -> dict[str, Any]:
                         end_date=end_date,
                     )
                     warnings.extend(suspend_warnings)
-                    suspended_count += len({str(row["date"]) for row in rows if row.get("isSuspended")})
+                    suspended_count += len(_suspend_trade_dates(suspend_rows, trade_dates, start_date, end_date))
                 if not dry_run:
                     asset = import_ashare_research_data(
                         symbol=symbol,
@@ -395,6 +379,7 @@ def run_csi300_research_import(config: dict[str, Any]) -> dict[str, Any]:
                         data_type="trade",
                         start_date=start_date,
                         end_date=end_date,
+                        suspension_evidence_rows=suspend_rows,
                     )
                     successes.append({"symbol": symbol, "rows": asset.get("rows"), "batchId": asset.get("batch_id")})
                 else:

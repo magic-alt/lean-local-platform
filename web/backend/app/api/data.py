@@ -171,6 +171,7 @@ class IntradayImportRequest(BaseModel):
 
 class DataSyncRequest(BaseModel):
     datasets: list[str] | None = None
+    mode: str = "auto"
 
 
 @router.get("/symbols")
@@ -245,7 +246,7 @@ def data_sync_runs(limit: int = 20):
 @router.post("/data/sync-runs")
 def create_data_sync_run(request: DataSyncRequest):
     try:
-        run = data_sync.create_sync_run(requested=request.datasets)
+        run = data_sync.create_sync_run(requested=request.datasets, mode=request.mode)
         task = create_task(
             "data_sync",
             "Update all TuShare data",
@@ -626,6 +627,8 @@ def fetch_data(request: DataFetchRequest):
             end_date=request.endDate,
             adjust=request.adjust,
         )
+    except LeanWebError:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -17,7 +17,7 @@ from .backtest_service import create_backtest_job, mark_backtest_queued
 from .data_coverage import ashare_coverage
 from .experiments import get_experiment_versions
 from .source_gate import apply_source_context, resolve_source_context
-from .trading_config import ashare_trading_config
+from .trading_config import ashare_trading_config, hk_trading_config
 from .run_paths import run_directory
 
 
@@ -43,11 +43,13 @@ def get_session(session_id: str) -> dict[str, Any] | None:
 
 def _session_api_item(item: dict[str, Any]) -> dict[str, Any]:
     item["mode"] = item.get("mode") or "legacy_replay"
+    if item["mode"] == "legacy_replay" and not bool(item.get("legacy_read_only")):
+        item["mode"] = "signal_simulation"
     item["legacy_read_only"] = bool(item.get("legacy_read_only", item["mode"] == "legacy_replay"))
     item["auto_advance"] = bool(item.get("auto_advance"))
     if item["mode"] == "lean_walkforward":
         item["next_trade_date"] = (
-            _next_china_trade_date(str(item["last_processed_date"]))
+            _next_trade_date(str(item["venue"]), str(item["last_processed_date"]))
             if item.get("last_processed_date")
             else item.get("start_date")
         )
@@ -122,16 +124,17 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
     return candidates
 
 
-def _next_china_trade_date(value: str) -> str:
+def _next_trade_date(market: str, value: str) -> str:
     current = parse_date(value)
+    market_value = str(market or "china").lower()
     with db() as connection:
         row = connection.execute(
             """
             select trade_date from trade_calendar
-            where market = 'china' and is_open = 1 and trade_date > ?
+            where market = ? and is_open = 1 and trade_date > ?
             order by trade_date asc limit 1
             """,
-            (current.isoformat(),),
+            (market_value, current.isoformat()),
         ).fetchone()
     if row:
         return str(row["trade_date"])
@@ -169,10 +172,10 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
         resolution=str(source_run.get("resolution") or source_parameters.get("resolution") or "daily"),
         data_type=str(source_run.get("data_type") or source_parameters.get("dataType") or "trade"),
     )
-    if request.asset_class != "equity" or request.venue != "china" or request.resolution != "daily":
-        raise ValueError("LEAN Paper currently supports China A-share daily projects only.")
+    if request.asset_class != "equity" or request.venue not in {"china", "hongkong"} or request.resolution != "daily":
+        raise ValueError("LEAN Paper supports China and Hong Kong daily equity projects.")
     cash = float(source_parameters.get("cash") or source_parameters.get("initialCash") or 100000)
-    start_date = str(parameters.get("startDate") or _next_china_trade_date(str(source_parameters["end"])))
+    start_date = str(parameters.get("startDate") or _next_trade_date(request.venue, str(source_parameters["end"])))
     if parse_date(start_date) <= parse_date(str(source_parameters["end"])):
         raise ValueError("Paper startDate must be after the source backtest end date.")
     session_id = str(uuid.uuid4())
@@ -391,6 +394,24 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
             )
             clean = apply_source_context(clean, source_context)
         clean.update(ashare_trading_config(clean, parameters))
+    elif request.asset_class == "equity" and request.venue == "hongkong":
+        explicit_source = (
+            parameters.get("source")
+            or parameters.get("providerSource")
+            or parameters.get("provider")
+            or parameters.get("parameters", {}).get("source")
+            or "tushare"
+        )
+        source_context = resolve_source_context(
+            {**clean, **parameters},
+            source=str(explicit_source),
+            allow_research_source=bool(parameters.get("allowResearchSource")),
+            asset_class=request.asset_class,
+            market="hongkong",
+            venue=request.venue,
+        )
+        clean = apply_source_context(clean, source_context)
+        clean.update(hk_trading_config(clean, parameters))
     clean["executionPolicy"] = _validate_execution_policy_parameters(clean)
     with db() as connection:
         connection.execute(
@@ -414,7 +435,7 @@ def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
                 json_dump(clean),
                 now,
                 now,
-                "legacy_replay",
+                "signal_simulation",
                 0,
             ),
         )
@@ -480,7 +501,7 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
     if date_value < str(session.get("start_date") or ""):
         raise ValueError("tradeDate is before the Paper start date.")
     last_date = session.get("last_processed_date")
-    expected = str(session.get("start_date")) if not last_date else _next_china_trade_date(str(last_date))
+    expected = str(session.get("start_date")) if not last_date else _next_trade_date(str(session.get("venue") or "china"), str(last_date))
     if date_value != expected:
         raise ValueError(f"The next eligible Paper trade date is {expected}.")
     with db() as connection:
@@ -870,6 +891,33 @@ def _latest_ashare_bars(symbol: str, trade_date: str, limit: int, source: str | 
     return list(reversed(rows_to_dicts(rows)))
 
 
+def _latest_market_bars(
+    symbol: str,
+    trade_date: str,
+    limit: int,
+    *,
+    market: str,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    source_clause = "and source = ?" if source else ""
+    params: list[Any] = [symbol, market, trade_date]
+    if source:
+        params.append(source)
+    params.append(limit)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select * from market_daily_bars
+            where symbol = ? and asset_class = 'equity' and market = ?
+              and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
+              and trade_date <= ? {source_clause}
+            order by trade_date desc limit ?
+            """,
+            params,
+        ).fetchall()
+    return list(reversed(rows_to_dicts(rows)))
+
+
 def create_signal(
     session_id: str,
     *,
@@ -941,7 +989,12 @@ def generate_daily_signal_for_symbol(session_id: str, symbol: str, trade_date: s
     slow = int(parameters.get("slow") or parameters.get("parameters", {}).get("slow") or 20)
     if fast >= slow:
         slow = fast + 1
-    bars = _latest_ashare_bars(symbol, date_value, slow, source=parameters.get("source"))
+    market = str(session.get("venue") or "china")
+    bars = (
+        _latest_ashare_bars(symbol, date_value, slow, source=parameters.get("source"))
+        if market == "china"
+        else _latest_market_bars(symbol, date_value, slow, market=market, source=parameters.get("source"))
+    )
     if len(bars) < slow:
         return create_signal(
             session_id,
@@ -1102,30 +1155,31 @@ def _execution_policy(session: dict[str, Any]) -> str:
     return _validate_execution_policy_parameters(parameters)
 
 
-def _next_trade_date(symbol: str, trade_date: str) -> str | None:
+def _next_symbol_trade_date(session: dict[str, Any], symbol: str, trade_date: str) -> str | None:
     date_value = parse_date(trade_date).isoformat()
+    market = str(session.get("venue") or "china")
     with db() as connection:
         row = connection.execute(
             """
             select trade_date
             from trade_calendar
-            where market = 'china' and is_open = 1 and trade_date > ?
+            where market = ? and is_open = 1 and trade_date > ?
             order by trade_date asc
             limit 1
             """,
-            (date_value,),
+            (market, date_value),
         ).fetchone()
         if row:
             return row["trade_date"]
         row = connection.execute(
             """
             select distinct trade_date
-            from ashare_daily_bars
-            where symbol = ? and trade_date > ?
+            from market_daily_bars
+            where symbol = ? and market = ? and trade_date > ?
             order by trade_date asc
             limit 1
             """,
-            (symbol, date_value),
+            (symbol, market, date_value),
         ).fetchone()
     return row["trade_date"] if row else None
 
@@ -1134,7 +1188,7 @@ def _signal_execution_date(session: dict[str, Any], signal: dict[str, Any], poli
     signal_date = parse_date(signal["trade_date"]).isoformat()
     if policy == "same_close":
         return signal_date
-    return _next_trade_date(signal["symbol"], signal_date)
+    return _next_symbol_trade_date(session, signal["symbol"], signal_date)
 
 
 def _open_signals_due(session: dict[str, Any], execution_date: str, policy: str) -> list[dict[str, Any]]:
@@ -1156,7 +1210,11 @@ def _open_signals_due(session: dict[str, Any], execution_date: str, policy: str)
 
 
 def _execution_bar(session: dict[str, Any], symbol: str, execution_date: str) -> dict[str, Any] | None:
-    return _ashare_bar(symbol, execution_date, source=(_session_parameters(session).get("source")))
+    source = _session_parameters(session).get("source")
+    market = str(session.get("venue") or "china")
+    if market == "china":
+        return _ashare_bar(symbol, execution_date, source=source)
+    return _market_bar(symbol, execution_date, asset_class=str(session.get("asset_class") or "equity"), market=market, source=source)
 
 
 def _execution_price(bar: dict[str, Any], policy: str) -> float:
@@ -1183,10 +1241,25 @@ def _float_parameter(parameters: dict[str, Any], key: str, default: float) -> fl
 def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
-    commission = max(value * _float_parameter(parameters, "commissionRate", 0.0001), _float_parameter(parameters, "minCommission", 5.0)) if value else 0
+    is_hongkong = str(session.get("venue") or "") == "hongkong"
+    commission = max(
+        value * _float_parameter(parameters, "commissionRate", 0.0003 if is_hongkong else 0.0001),
+        _float_parameter(parameters, "minCommission", 3.0 if is_hongkong else 5.0),
+    ) if value else 0
+    if is_hongkong:
+        stamp_tax = value * _float_parameter(parameters, "stampTaxBuy" if side == "buy" else "stampTaxSell", 0.001)
+        statutory = value * sum(
+            _float_parameter(parameters, key, default)
+            for key, default in (
+                ("sfcLevyRate", 0.000027),
+                ("afrcLevyRate", 0.0000015),
+                ("exchangeTradingFeeRate", 0.0000565),
+                ("settlementFeeRate", 0.000042),
+            )
+        )
+        return commission + stamp_tax + statutory
     stamp_tax = value * _float_parameter(parameters, "stampTaxSell", 0.0005) if side == "sell" else 0
-    transfer = value * _float_parameter(parameters, "transferFeeRate", 0.00001)
-    return commission + stamp_tax + transfer
+    return commission + stamp_tax + value * _float_parameter(parameters, "transferFeeRate", 0.00001)
 
 
 def _round_lot(quantity: float, lot_size: int = 100) -> int:
@@ -1361,23 +1434,25 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
         if side == "hold":
             _update_signal(signal["id"], "processed")
             continue
-        gate = quality_gate(signal["symbol"], date_value)
-        if not gate["passed"]:
-            report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
-            reason = f"qa_failed:{report_id}" if report_id else "qa_failed"
-            orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", reason))
-            _update_signal(signal["id"], "rejected")
-            continue
+        if session.get("venue") == "china":
+            gate = quality_gate(signal["symbol"], date_value)
+            if not gate["passed"]:
+                report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
+                reason = f"qa_failed:{report_id}" if report_id else "qa_failed"
+                orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", reason))
+                _update_signal(signal["id"], "rejected")
+                continue
         bar = _execution_bar(session, signal["symbol"], date_value)
         if not bar:
             orders.append(_record_order(session_id, signal, side, 0, date_value, None, None, 0, "rejected", "bar_missing"))
             _update_signal(signal["id"], "rejected")
             continue
-        can_trade, reason = is_tradeable(signal["symbol"], date_value, side)
-        if not can_trade:
-            orders.append(_record_order(session_id, signal, side, 0, date_value, float(bar["close"]), None, 0, "rejected", reason))
-            _update_signal(signal["id"], "rejected")
-            continue
+        if session.get("venue") == "china":
+            can_trade, reason = is_tradeable(signal["symbol"], date_value, side)
+            if not can_trade:
+                orders.append(_record_order(session_id, signal, side, 0, date_value, float(bar["close"]), None, 0, "rejected", reason))
+                _update_signal(signal["id"], "rejected")
+                continue
         session = get_session(session_id) or session
         position = _position(session_id, signal["symbol"])
         current_quantity = float((position or {}).get("quantity") or 0)
@@ -1409,7 +1484,7 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
                 _update_signal(signal["id"], "rejected")
                 continue
         else:
-            if (position or {}).get("last_buy_date") == date_value:
+            if session.get("venue") == "china" and (position or {}).get("last_buy_date") == date_value:
                 orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", "t_plus_1"))
                 _update_signal(signal["id"], "rejected")
                 continue
@@ -1437,29 +1512,31 @@ def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> li
     start = parse_date(start_date).isoformat()
     end = parse_date(end_date).isoformat()
     symbols = _session_symbols(session)
-    if session.get("asset_class") == "equity" and session.get("venue") == "china":
+    if session.get("asset_class") == "equity" and session.get("venue") in {"china", "hongkong"}:
+        market = str(session.get("venue"))
         with db() as connection:
             calendar_rows = connection.execute(
                 """
                 select trade_date
                 from trade_calendar
-                where market = 'china' and is_open = 1 and trade_date between ? and ?
+                where market = ? and is_open = 1 and trade_date between ? and ?
                 order by trade_date asc
                 """,
-                (start, end),
+                (market, start, end),
             ).fetchall()
         dates = [row["trade_date"] for row in calendar_rows]
         if dates:
             return dates
+        placeholders = ",".join("?" for _ in symbols)
         with db() as connection:
             rows = connection.execute(
-                """
+                f"""
                 select distinct trade_date
-                from ashare_daily_bars
-                where symbol in ({",".join("?" for _ in symbols)}) and trade_date between ? and ?
+                from market_daily_bars
+                where symbol in ({placeholders}) and market = ? and trade_date between ? and ?
                 order by trade_date asc
                 """,
-                (*symbols, start, end),
+                (*symbols, market, start, end),
             ).fetchall()
         return [row["trade_date"] for row in rows]
     return []

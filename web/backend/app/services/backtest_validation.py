@@ -5,6 +5,7 @@ from typing import Any
 from ..db import utc_now
 from .ashare_multisource import quality_gate_range
 from .ashare_repository import data_coverage, end_coverage_status, latest_batch_for_symbol
+from .market_repository import market_data_coverage
 
 
 P1_RULE_VERSION = 1
@@ -22,6 +23,13 @@ def _is_china_equity(parameters: dict[str, Any]) -> bool:
     market = str(parameters.get("market") or parameters.get("venue") or "").lower()
     venue = str(parameters.get("venue") or parameters.get("market") or "").lower()
     return asset_class == "equity" and (market == "china" or venue == "china")
+
+
+def _is_hongkong_equity(parameters: dict[str, Any]) -> bool:
+    asset_class = str(parameters.get("assetClass") or "equity").lower()
+    market = str(parameters.get("market") or parameters.get("venue") or "").lower()
+    venue = str(parameters.get("venue") or parameters.get("market") or "").lower()
+    return asset_class == "equity" and (market == "hongkong" or venue == "hongkong")
 
 
 def _gate(name: str, passed: bool, *, severity: str | None = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -63,6 +71,37 @@ def _ashare_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
         "shortSellingAllowed": False,
         "minCash": parameters.get("minCash"),
         "allowStBuy": parameters.get("allowStBuy"),
+        "constraintVersion": parameters.get("constraintVersion"),
+    }
+
+
+def _hongkong_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schemaVersion": P1_RULE_VERSION,
+        "enabled": True,
+        "market": "hongkong",
+        "assetClass": "equity",
+        "sameDaySellAllowed": True,
+        "benchmarkRequired": True,
+        "feeModel": {
+            "commissionRate": parameters.get("commissionRate"),
+            "minCommission": parameters.get("minCommission"),
+            "stampTaxBuy": parameters.get("stampTaxBuy"),
+            "stampTaxSell": parameters.get("stampTaxSell"),
+            "sfcLevyRate": parameters.get("sfcLevyRate"),
+            "afrcLevyRate": parameters.get("afrcLevyRate"),
+            "exchangeTradingFeeRate": parameters.get("exchangeTradingFeeRate"),
+            "settlementFeeRate": parameters.get("settlementFeeRate"),
+            "scheduleVersion": parameters.get("feeScheduleVersion"),
+            "currency": "HKD",
+        },
+        "slippageModel": {"type": "constant_bps", "slippageBps": parameters.get("slippageBps")},
+        "lotSize": parameters.get("lotSize"),
+        "executionPolicy": parameters.get("executionPolicy"),
+        "cashBuffer": parameters.get("cashBuffer"),
+        "nextOpenGapBufferBps": parameters.get("nextOpenGapBufferBps"),
+        "cashAccount": True,
+        "shortSellingAllowed": False,
         "constraintVersion": parameters.get("constraintVersion"),
     }
 
@@ -115,6 +154,44 @@ def build_backtest_validation(
         "passed": True,
         "severity": "ok",
     }
+    if _is_hongkong_equity(parameters):
+        coverage = market_data_coverage(
+            symbol,
+            start,
+            end,
+            asset_class="equity",
+            market="hongkong",
+            venue="hongkong",
+            resolution=str(parameters.get("resolution") or "daily"),
+            data_type=str(parameters.get("dataType") or "trade"),
+            adjust=adjust,
+            source=source,
+        )
+        benchmark = _benchmark_snapshot(parameters, fingerprint)
+        end_coverage = end_coverage_status("hongkong", end, coverage.get("last_date"))
+        benchmark_end_coverage = end_coverage_status("hongkong", end, benchmark.get("lastDate"))
+        gates = [
+            _gate("hongkong_data_coverage", _int_value(coverage.get("bar_count")) > 0, details=coverage),
+            _gate("hongkong_end_date_coverage", bool(end_coverage.get("passed")), details=end_coverage),
+            _gate("benchmark_data", bool(benchmark.get("passed")), details=benchmark),
+            _gate("benchmark_end_date_coverage", bool(benchmark_end_coverage.get("passed")), details=benchmark_end_coverage),
+        ]
+        passed = all(item["passed"] for item in gates)
+        result.update(
+            {
+                "marketRules": _hongkong_market_rules(parameters),
+                "data": {
+                    "coverage": coverage,
+                    "endCoverage": end_coverage,
+                    "benchmark": benchmark,
+                    "benchmarkEndCoverage": benchmark_end_coverage,
+                },
+                "gates": gates,
+                "passed": passed,
+                "severity": "ok" if passed else "critical",
+            }
+        )
+        return result
     if not _is_china_equity(parameters):
         return result
 

@@ -10,7 +10,8 @@ from .benchmark import fetch_and_import_benchmark
 from .data import fetch_and_import_symbol
 from .data_provider_manager import DATA_PROVIDER_MANAGER
 from .source_gate import DEFAULT_PRODUCTION_SOURCE, apply_source_context, resolve_source_context
-from .trading_config import merge_ashare_trading_config
+from .market_repository import get_instrument, market_data_coverage
+from .trading_config import merge_ashare_trading_config, merge_hk_trading_config
 
 
 def _parameters(request_data: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +39,28 @@ def _parameters(request_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _coverage(symbol: str, parameters: dict[str, Any], source: str) -> dict[str, Any]:
+    market = str(parameters.get("market") or parameters.get("venue") or "china").lower()
+    if market != "china":
+        value = market_data_coverage(
+            symbol,
+            parameters["start"],
+            parameters["end"],
+            asset_class=str(parameters.get("assetClass") or "equity"),
+            market=market,
+            venue=str(parameters.get("venue") or market),
+            resolution=str(parameters.get("resolution") or "daily"),
+            data_type=str(parameters.get("dataType") or "trade"),
+            adjust=str(parameters.get("adjust") or "raw"),
+            source=source,
+        )
+        return {
+            "symbol": symbol,
+            "source": source,
+            "rows": int(value.get("bar_count") or 0),
+            "statusRows": 0,
+            "firstDate": value.get("first_date"),
+            "lastDate": value.get("last_date"),
+        }
     value = data_coverage(
         symbol,
         parameters["start"],
@@ -86,6 +109,22 @@ def _source(request_data: dict[str, Any], parameters: dict[str, Any]) -> tuple[s
 
 
 def _target_gate(parameters: dict[str, Any], source: str) -> None:
+    market = str(parameters.get("market") or parameters.get("venue") or "china").lower()
+    if market != "china":
+        assert_benchmark_ready(
+            str(parameters["ticker"]).upper(),
+            parameters["start"],
+            parameters["end"],
+            asset_class=str(parameters.get("assetClass") or "equity"),
+            market=market,
+            venue=str(parameters.get("venue") or market),
+            resolution=str(parameters.get("resolution") or "daily"),
+            data_type=str(parameters.get("dataType") or "trade"),
+            adjust=str(parameters.get("adjust") or "raw"),
+            source=source,
+            allow_truncated=bool(parameters.get("allowTruncatedData")),
+        )
+        return
     assert_ashare_ready(
         str(parameters["ticker"]).upper(),
         parameters["start"],
@@ -113,7 +152,8 @@ def _benchmark_gate(parameters: dict[str, Any], source: str) -> None:
 
 
 def _repair_symbol(symbol: str, parameters: dict[str, Any], source: str, role: str) -> dict[str, Any]:
-    if role == "benchmark":
+    market = str(parameters.get("market") or "china").lower()
+    if role == "benchmark" and market == "china":
         return fetch_and_import_benchmark(
             symbol,
             source,
@@ -182,9 +222,10 @@ def _ensure_ready(
 
 def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = True) -> dict[str, Any]:
     parameters = _parameters(request_data)
-    is_china_equity = (
+    market = str(parameters.get("market") or parameters.get("venue") or "").lower()
+    is_supported_equity = (
         parameters.get("assetClass") == "equity"
-        and (parameters.get("market") or parameters.get("venue")) == "china"
+        and market in {"china", "hongkong"}
     )
     report: dict[str, Any] = {
         "ready": True,
@@ -193,10 +234,14 @@ def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = Tru
         "repaired": [],
         "items": [],
     }
-    if not is_china_equity:
+    if not is_supported_equity:
         return {"parameters": parameters, "preflight": report}
 
-    parameters = merge_ashare_trading_config(parameters, request_data)
+    parameters = (
+        merge_ashare_trading_config(parameters, request_data)
+        if market == "china"
+        else merge_hk_trading_config(parameters, request_data)
+    )
     source, context = _source(request_data, parameters)
     parameters = apply_source_context(parameters, context)
     parameters["source"] = source
@@ -220,12 +265,22 @@ def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = Tru
             repair=repair,
         ),
     ]
-    for symbol in (target, benchmark):
-        quality = quality_gate_range(symbol, parameters["start"], parameters["end"])
-        if not quality["passed"]:
-            report_id = quality["blockingReports"][0].get("id") if quality["blockingReports"] else None
-            detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
-            raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
+    if market == "hongkong":
+        instrument = get_instrument(
+            target,
+            asset_class=str(parameters.get("assetClass") or "equity"),
+            market=market,
+            venue=str(parameters.get("venue") or market),
+        )
+        if instrument and instrument.get("lot_size"):
+            parameters["lotSize"] = max(1, int(float(instrument["lot_size"])))
+    if market == "china":
+        for symbol in (target, benchmark):
+            quality = quality_gate_range(symbol, parameters["start"], parameters["end"])
+            if not quality["passed"]:
+                report_id = quality["blockingReports"][0].get("id") if quality["blockingReports"] else None
+                detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
+                raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
     report.update(
         {
             "effectiveSource": source,

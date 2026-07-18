@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.db import init_db
 from app.main import app
 from app.services.ashare_repository import upsert_security
-from app.services.market_repository import upsert_instrument
+from app.services.market_repository import get_instrument, upsert_instrument
 
 
 def test_security_search_matches_company_alias_pinyin_and_market_labels(monkeypatch):
@@ -20,6 +20,9 @@ def test_security_search_matches_company_alias_pinyin_and_market_labels(monkeypa
         metadata={"aliases": ["腾讯"]},
         source="test",
     )
+    instrument = get_instrument("00700", market="hongkong", venue="hongkong")
+    assert instrument is not None
+    assert instrument["currency"] == "HKD"
     upsert_instrument(
         symbol="AAPL",
         name="Apple Inc.",

@@ -1,8 +1,9 @@
+import json
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .common import dispatch_task
@@ -17,6 +18,7 @@ from ..lean_engine.research import (
 )
 from ..services.projects import get_project
 from ..services.tasks import create_task, task_logs
+from ..services.workflows import record_workflow_event
 from ..tasks.worker import start_research_task
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -25,6 +27,12 @@ router = APIRouter(prefix="/api/research", tags=["research"])
 class ResearchRequest(BaseModel):
     projectId: str
     port: int | None = Field(default=None, ge=1024, le=65535)
+
+
+class ResearchCheckRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=100)
+    startDate: str | None = None
+    endDate: str | None = None
 
 
 def _workspace(session_id: str, project: dict) -> Path:
@@ -120,6 +128,103 @@ def logs(session_id: str):
     worker = task_logs(item["task_id"]) if item.get("task_id") else ""
     docker = container_logs(str(item.get("container_id") or ""))
     return {"logs": "\n\n".join(part for part in (worker, docker) if part), "sessionId": session_id}
+
+
+@router.post("/{session_id}/checks")
+def run_checks(session_id: str, payload: ResearchCheckRequest, request: Request):
+    item = detail(session_id)
+    project = get_project(str(item["project_id"]))
+    workspace = Path(str(item.get("workspace_path") or ""))
+    main_file = workspace / str(project.get("main_file") or "main.py")
+    requested_symbols = sorted({str(value).strip().upper() for value in payload.symbols if str(value).strip()})
+    with db() as connection:
+        recent = rows_to_dicts(
+            connection.execute(
+                """
+                select symbol, asset_class, venue, resolution, data_type, parameters_json
+                from backtest_runs where project_id = ?
+                order by created_at desc limit 20
+                """,
+                (item["project_id"],),
+            ).fetchall()
+        )
+    if requested_symbols:
+        recent = [row for row in recent if str(row.get("symbol") or "").upper() in requested_symbols]
+    checks: list[dict] = []
+    checks.append({"name": "workspace_exists", "passed": workspace.is_dir(), "detail": str(workspace)})
+    checks.append({"name": "strategy_main_exists", "passed": main_file.is_file(), "detail": str(main_file)})
+    if main_file.is_file() and main_file.suffix == ".py":
+        try:
+            compile(main_file.read_text(encoding="utf-8"), str(main_file), "exec")
+            checks.append({"name": "strategy_python_syntax", "passed": True})
+        except Exception as exc:
+            checks.append({"name": "strategy_python_syntax", "passed": False, "detail": str(exc)})
+    for row in recent:
+        parameters = row.get("parameters") or {}
+        symbol = str(row.get("symbol") or "").upper()
+        market = str(row.get("venue") or parameters.get("market") or "china").lower()
+        start = payload.startDate or parameters.get("start")
+        end = payload.endDate or parameters.get("end")
+        source = parameters.get("source")
+        source_clause = "and source = ?" if source else ""
+        values = [symbol, str(row.get("asset_class") or "equity"), market, market]
+        if start and end:
+            date_clause = "and trade_date between ? and ?"
+            values.extend([start, end])
+        else:
+            date_clause = ""
+        if source:
+            values.append(source)
+        with db() as connection:
+            coverage = connection.execute(
+                f"""
+                select count(distinct trade_date) as rows, min(trade_date) as first_date, max(trade_date) as last_date
+                from market_daily_bars
+                where symbol = ? and asset_class = ? and market = ? and venue = ?
+                  {date_clause} {source_clause}
+                """,
+                values,
+            ).fetchone()
+        coverage_item = dict(coverage) if coverage else {}
+        checks.append(
+            {
+                "name": f"market_data:{market}:{symbol}",
+                "passed": int(coverage_item.get("rows") or 0) > 0,
+                "detail": {**coverage_item, "start": start, "end": end, "source": source},
+            }
+        )
+    if not recent:
+        checks.append({"name": "project_backtest_scope", "passed": False, "detail": "No project backtest scope is available to verify."})
+    passed = all(bool(check.get("passed")) for check in checks)
+    now = utc_now()
+    result = {
+        "sessionId": session_id,
+        "projectId": item["project_id"],
+        "generatedAt": now,
+        "passed": passed,
+        "status": item.get("status"),
+        "checks": checks,
+    }
+    evidence_dir = workspace / ".lean-platform"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = evidence_dir / "research-check-latest.json"
+    evidence_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    result["evidencePath"] = str(evidence_path)
+    trace_id = str(getattr(request.state, "trace_id", ""))
+    workflow_id = str(getattr(request.state, "workflow_id", ""))
+    record_workflow_event(
+        workflow_id=workflow_id,
+        trace_id=trace_id,
+        stage="research",
+        action="run_checks",
+        status="success" if passed else "failed",
+        resource_type="research_session",
+        resource_id=session_id,
+        error_code=None if passed else "research_check_failed",
+        message="Research checks passed." if passed else "Research checks found blocking issues.",
+        details={"evidencePath": str(evidence_path), "checks": checks},
+    )
+    return result
 
 
 @router.post("/{session_id}/stop")

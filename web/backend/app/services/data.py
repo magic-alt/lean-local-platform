@@ -9,6 +9,7 @@ from ..lean_engine.data_writers import (
     write_lean_crypto_daily_zip,
     write_lean_daily_zip,
 )
+from ..lean_engine.data_paths import write_equity_symbol_properties
 from ..lean_engine.providers import (
     fetch_binance_crypto_rows,
 )
@@ -28,17 +29,19 @@ from ..domain.assets import (
 from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
-from .market_repository import upsert_market_daily_bars
-from .data_provider_manager import DATA_PROVIDER_MANAGER, provider_requirements
+from .market_repository import upsert_instrument, upsert_market_daily_bars
+from .data_provider_manager import DATA_PROVIDER_MANAGER, ProviderExhaustedError, provider_requirements
 from .source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .ashare_repository import (
     create_import_batch,
     finish_import_batch,
+    get_security,
     infer_exchange,
     trade_dates_between,
     upsert_adjustment_factors,
     upsert_daily_bars,
+    upsert_data_gap_resolutions,
     upsert_security,
     upsert_trade_calendar,
     upsert_trade_status,
@@ -51,6 +54,7 @@ from .data_quality import (
     normalize_ashare_daily_rows,
     validate_ashare_daily_rows,
 )
+from .tushare_adapter import TushareAdapter
 
 
 DJIA_AS_OF = "2026-06-29"
@@ -112,8 +116,8 @@ def markets() -> list[dict[str, Any]]:
             "key": "hongkong",
             "name": "Hong Kong",
             "currency": "HKD",
-            "defaultProvider": "akshare",
-            "providers": ["akshare", "sina", "eastmoney", "yfinance"],
+            "defaultProvider": "tushare",
+            "providers": ["tushare", "akshare", "sina", "eastmoney", "yfinance"],
         },
     ]
 
@@ -400,6 +404,55 @@ def _repair_ohlc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return repaired
 
 
+def _classify_suspension_dates(
+    suspension_rows: list[dict[str, Any]],
+    calendar_dates: list[str],
+) -> tuple[set[str], dict[str, dict[str, Any]]]:
+    """Expand full-day suspension evidence without inventing market bars."""
+    calendar = set(calendar_dates)
+    suspended: set[str] = set()
+    evidence: dict[str, dict[str, Any]] = {}
+    for row in suspension_rows:
+        if row.get("is_full_day") is False:
+            continue
+        start = str(row.get("suspend_date") or "")[:10]
+        resume = str(row.get("resume_date") or "")[:10] or None
+        if not start:
+            continue
+        dates = {
+            item
+            for item in calendar
+            if item == start or (item > start and (resume is None or item < resume))
+        }
+        # Some legacy records use the same date for suspend and resume.  Treat
+        # that as a one-day event only when the price row is actually absent.
+        if resume and resume <= start:
+            dates = {start} & calendar
+        for trade_date in dates:
+            suspended.add(trade_date)
+            evidence[trade_date] = {
+                "classification": "full_day_suspension",
+                "status": "resolved",
+                "evidence_source": row.get("source"),
+                "evidence": row,
+            }
+    return suspended, evidence
+
+
+def _suspension_status_rows(symbol: str, dates: set[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "symbol": symbol,
+            "trade_date": trade_date,
+            "is_suspended": True,
+            "can_buy": False,
+            "can_sell": False,
+            "is_st": False,
+        }
+        for trade_date in sorted(dates)
+    ]
+
+
 def _format_source_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return attempts
 
@@ -452,6 +505,7 @@ def import_ashare_research_data(
     end_date: str | None,
     allow_missing_trade_dates: bool = False,
     repair_ohlc_errors: bool = False,
+    suspension_evidence_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     batch = create_import_batch(
         provider,
@@ -486,13 +540,38 @@ def import_ashare_research_data(
         if not calendar_dates and row_dates:
             upsert_trade_calendar(market, row_dates, source=f"{source}:inferred", batch_id=batch_id)
             calendar_dates = row_dates
+        security = get_security(symbol) or {}
+        preliminary_report = validate_ashare_daily_rows(
+            normalized_rows,
+            calendar_dates=calendar_dates,
+            listed_date=security.get("listed_date"),
+            delisted_date=security.get("delisted_date"),
+            source=source,
+            batch_id=batch_id,
+        )
+        suspension_dates: set[str] = set()
+        gap_classifications: dict[str, dict[str, Any]] = {}
+        suspension_lookup_error: str | None = None
+        if provider == "tushare" and preliminary_report.get("missing_trade_dates"):
+            try:
+                suspension_rows = suspension_evidence_rows
+                if suspension_rows is None:
+                    suspension_rows = TushareAdapter().suspend_rows(symbol, min(row_dates), max(row_dates))
+                suspension_dates, gap_classifications = _classify_suspension_dates(suspension_rows, calendar_dates)
+            except Exception as exc:  # noqa: BLE001 - unresolved gaps must remain blocking.
+                suspension_lookup_error = str(exc)
         qa_report = validate_ashare_daily_rows(
             normalized_rows,
             calendar_dates=calendar_dates,
+            suspended_trade_dates=suspension_dates,
+            listed_date=security.get("listed_date"),
+            delisted_date=security.get("delisted_date"),
             source=source,
             batch_id=batch_id,
         )
         warnings = qa_report.setdefault("warnings", [])
+        if suspension_lookup_error:
+            warnings.append(f"suspension_lookup_failed={suspension_lookup_error[:300]}")
         has_official_trade_status = _has_official_trade_status(normalized_rows)
         if has_official_trade_status:
             warnings.append("trade_status_official_fields_used")
@@ -500,12 +579,22 @@ def import_ashare_research_data(
             warnings.append("trade_status_inferred_from_ohlcv")
         if repaired_ohlc_rows:
             warnings.append(f"ohlc_rows_repaired={repaired_ohlc_rows[:10]}")
-        if allow_missing_trade_dates and qa_report.get("missing_trade_dates"):
-            remaining_errors = [error for error in qa_report.get("errors", []) if not str(error).startswith("missing_trade_dates=")]
-            if len(remaining_errors) != len(qa_report.get("errors", [])):
-                qa_report["errors"] = remaining_errors
-                qa_report["passed"] = not remaining_errors
-                warnings.append(f"missing_trade_dates_allowed={qa_report['missing_trade_dates'][:10]}")
+        if allow_missing_trade_dates:
+            warnings.append("allow_missing_trade_dates_deprecated_and_ignored")
+        for trade_date in qa_report.get("missing_trade_dates") or []:
+            gap_classifications[trade_date] = {
+                "classification": "unresolved_source_gap",
+                "status": "open",
+                "evidence_source": source,
+                "evidence": {"provider": provider, "batch_id": batch_id},
+            }
+        if gap_classifications:
+            upsert_data_gap_resolutions(
+                market=market,
+                symbol=symbol,
+                classifications=gap_classifications,
+                batch_id=batch_id,
+            )
         assert_quality_passed(qa_report)
         first_date = normalized_rows[0]["trade_date"]
         last_date = normalized_rows[-1]["trade_date"]
@@ -521,6 +610,12 @@ def import_ashare_research_data(
         status_source = f"{source}:official_status" if has_official_trade_status else f"{source}:ohlcv_inferred"
         upsert_daily_bars(normalized_rows, source=source, batch_id=batch_id, adjust=adjust or "raw")
         upsert_trade_status(trade_status, source=status_source, batch_id=batch_id)
+        if suspension_dates:
+            upsert_trade_status(
+                _suspension_status_rows(symbol, suspension_dates),
+                source="tushare:suspension_evidence",
+                batch_id=batch_id,
+            )
         upsert_adjustment_factors(normalized_rows, source=source, batch_id=batch_id)
         upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
 
@@ -600,6 +695,7 @@ def fetch_and_import_symbol(
                 asset_class=asset_class,
                 start_date=start_date,
                 end_date=end_date,
+                strict=provider == "tushare" and market in {"china", "hongkong"},
             ),
         }
         provider_error: Exception | None = None
@@ -643,10 +739,7 @@ def fetch_and_import_symbol(
                 provider_error = exc
                 source_attempts.append(_build_source_attempt(source, "failed", rows=0, error=str(exc), duration_ms=(time.perf_counter() - t0) * 1000))
         if selected_rows is None:
-            raise ValueError(
-                "No active source returned data; attempted: "
-                + ", ".join(f"{item['source']}:{item['status']}" for item in source_attempts)
-            ) from provider_error
+            raise ProviderExhaustedError(source_attempts) from provider_error
         rows = selected_rows
         provider = selected_provider or provider
         source_policy["effectiveSource"] = provider
@@ -705,6 +798,66 @@ def fetch_and_import_symbol(
         result["sourcePolicy"] = source_policy
         result["sourceAttempts"] = source_attempts
         return result
+    hk_quality: dict[str, Any] | None = None
+    hk_security: dict[str, Any] | None = None
+    hk_reference_warnings: list[str] = []
+    if asset_class == "equity" and market == "hongkong":
+        try:
+            hk_security = TushareAdapter(api_key).hk_security(symbol)
+        except Exception as exc:  # noqa: BLE001
+            # Daily bars may legitimately come from a public fallback when the
+            # 5000-point hk_daily quota is exhausted. Preserve the bars and
+            # make missing reference enrichment visible instead of silently
+            # inventing a board lot.
+            hk_reference_warnings.append(f"hk_security_reference_unavailable:{exc}")
+    if asset_class == "equity" and market == "hongkong" and provider == "tushare":
+        adapter = TushareAdapter(api_key)
+        security = hk_security
+        calendar_rows = adapter.hk_trade_calendar(
+            start_date or min(str(item.get("date") or item.get("trade_date"))[:10] for item in rows),
+            end_date or max(str(item.get("date") or item.get("trade_date"))[:10] for item in rows),
+        )
+        open_dates = [str(item["trade_date"]) for item in calendar_rows if item.get("is_open")]
+        row_dates = {str(item.get("date") or item.get("trade_date"))[:10] for item in rows}
+        comparable_dates = {item for item in open_dates if min(row_dates) <= item <= max(row_dates)}
+        missing_dates = sorted(comparable_dates - row_dates)
+        hk_quality = {
+            "coverageStatus": "complete" if not missing_dates else "unresolved_gaps",
+            "expectedSessionCount": len(comparable_dates),
+            "barCount": len(row_dates),
+            "unresolvedGapDates": missing_dates,
+            "provenance": ["tushare:hk_basic", "tushare:hk_tradecal", "tushare:hk_daily"],
+        }
+        if missing_dates:
+            upsert_data_gap_resolutions(
+                market="hongkong",
+                symbol=security["symbol"] if security else symbol,
+                classifications={
+                    item: {"classification": "unresolved_source_gap", "status": "open",
+                           "evidence_source": "tushare:hk_daily", "evidence": {"provider": "tushare"}}
+                    for item in missing_dates
+                },
+                batch_id="direct-fetch",
+            )
+            raise DataQualityError({"passed": False,
+                                    "errors": [f"missing_trade_dates={missing_dates[:10]}"],
+                                    "missing_trade_dates": missing_dates, "market": "hongkong", "symbol": symbol})
+        if open_dates:
+            upsert_trade_calendar("hongkong", open_dates, source="tushare:hk_tradecal")
+    if hk_security:
+        upsert_instrument(
+            symbol=hk_security["symbol"], asset_class="equity", market="hongkong", venue="hongkong",
+            name=hk_security.get("name"), exchange="HKEX", currency=hk_security.get("currency") or "HKD",
+            listed_date=hk_security.get("listed_date"), delisted_date=hk_security.get("delisted_date"),
+            status="delisted" if hk_security.get("status") == "delisted" else "active",
+            lot_size=hk_security.get("lot_size") or 1, tick_size=0.01,
+            metadata={"provider": "tushare", "boardLot": hk_security.get("lot_size") or 1},
+            source="tushare:hk_basic",
+        )
+        write_equity_symbol_properties(
+            hk_security["symbol"], market="hongkong", currency=hk_security.get("currency") or "HKD",
+            lot_size=int(hk_security.get("lot_size") or 1), tick_size=0.01,
+        )
     if asset_class == "crypto":
         metadata = write_lean_crypto_daily_zip(symbol, rows, source, overwrite=overwrite, venue=venue or market, data_type=data_type)
     else:
@@ -721,6 +874,10 @@ def fetch_and_import_symbol(
     metadata["data_type"] = data_type
     metadata["adjust"] = adjust or "raw"
     metadata["outputsize"] = outputsize if provider == "alpha_vantage" else None
+    if hk_quality is not None:
+        metadata["quality"] = hk_quality
+    if hk_reference_warnings:
+        metadata["referenceWarnings"] = hk_reference_warnings
     if source_attempts:
         metadata["sourceAttempts"] = source_attempts
     if asset_class == "equity" and locals().get("source_policy"):

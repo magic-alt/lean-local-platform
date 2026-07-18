@@ -23,6 +23,19 @@ from .symbols import market_key, normalize_symbol, parse_date, symbol_key
 def lean_price(value: str | float) -> str:
     return str(int(round(float(value) * 10000)))
 
+
+def _clamp_ohlc_float_noise(open_price: float, high: float, low: float, close: float) -> tuple[float, float]:
+    """Clamp provider serialization noise without repairing genuine bad bars."""
+    scale = max(abs(open_price), abs(high), abs(low), abs(close), 1.0)
+    tolerance = scale * 1e-6
+    required_high = max(open_price, close)
+    required_low = min(open_price, close)
+    if high < required_high and required_high - high <= tolerance:
+        high = required_high
+    if low > required_low and low - required_low <= tolerance:
+        low = required_low
+    return high, low
+
 def normalize_rows(rows: list[dict[str, str]]) -> list[tuple[date, float, float, float, float, int]]:
     normalized: list[tuple[date, float, float, float, float, int]] = []
     seen_dates: set[date] = set()
@@ -43,6 +56,7 @@ def normalize_rows(rows: list[dict[str, str]]) -> list[tuple[date, float, float,
             raise LeanPlatformError(f"OHLCV row has non-positive price: {row}")
         if volume < 0:
             raise LeanPlatformError(f"OHLCV row has negative volume: {row}")
+        high, low = _clamp_ohlc_float_noise(open_price, high, low, close)
         if high < low or open_price > high or open_price < low or close > high or close < low:
             raise LeanPlatformError(f"OHLCV row violates high/low bounds: {row}")
         normalized.append((item_date, open_price, high, low, close, volume))

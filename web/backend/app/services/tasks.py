@@ -170,6 +170,36 @@ def _cancel_ashare_tech_report(task: dict[str, Any]) -> None:
         )
 
 
+def _cancel_data_sync(task: dict[str, Any]) -> None:
+    run_id = task.get("related_id")
+    if not run_id:
+        return
+    now = utc_now()
+    message = "Cancellation requested by user."
+    with db() as connection:
+        connection.execute(
+            """
+            update data_sync_runs
+            set cancel_requested = 1,
+                status = 'cancelled',
+                error = coalesce(error, ?),
+                finished_at = coalesce(finished_at, ?)
+            where id = ? and status in ('queued', 'running', 'cancelling')
+            """,
+            (message, now, run_id),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set status = 'cancelled',
+                error = coalesce(error, ?),
+                finished_at = coalesce(finished_at, ?)
+            where run_id = ? and status in ('queued', 'running', 'checking', 'cancelling')
+            """,
+            (message, now, run_id),
+        )
+
+
 def cancel_task(task_id: str) -> dict[str, Any]:
     task = get_task(task_id)
     if is_terminal(task.get("status")):
@@ -193,6 +223,8 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         _cancel_insight(task)
     elif task.get("kind") == "ashare_tech_report":
         _cancel_ashare_tech_report(task)
+    elif task.get("kind") == "data_sync":
+        _cancel_data_sync(task)
 
     update_task(
         task_id,

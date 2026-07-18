@@ -110,7 +110,7 @@ class FakeCsi300Adapter:
         return []
 
 
-def test_csi300_pipeline_imports_core_research_data_and_synthesizes_suspend_bar(tmp_path, monkeypatch):
+def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend_bar(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
     from app.db import db
@@ -148,8 +148,7 @@ def test_csi300_pipeline_imports_core_research_data_and_synthesizes_suspend_bar(
             "select close, volume from ashare_daily_bars where symbol = '600519' and trade_date = '2024-01-03'"
         ).fetchone()
     assert factor["value"] == 20.0
-    assert suspended_bar["close"] == 10.0
-    assert suspended_bar["volume"] == 0
+    assert suspended_bar is None
 
 
 def test_csi300_pipeline_dry_run_does_not_write_database(tmp_path, monkeypatch):

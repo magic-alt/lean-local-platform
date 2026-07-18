@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ..core.errors import LeanWebError
@@ -117,6 +117,11 @@ def to_tushare_index_code(symbol: str) -> str:
     return f"{ticker}.{suffix}"
 
 
+def to_tushare_hk_code(symbol: str) -> str:
+    raw = normalize_symbol(symbol, "hongkong")
+    return f"{raw}.HK"
+
+
 def from_tushare_code(ts_code: str) -> str:
     return str(ts_code).strip().upper().split(".")[0]
 
@@ -221,6 +226,106 @@ class TushareAdapter:
                 )
         return records
 
+    def hk_basic(self, list_statuses: list[str] | None = None) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        fields = "ts_code,name,fullname,enname,market,list_status,list_date,delist_date,trade_unit,curr_type"
+        for status in list_statuses or ["L", "D", "P"]:
+            frame = self.pro.hk_basic(list_status=status, fields=fields)
+            for item in _records(frame):
+                symbol = from_tushare_code(item.get("ts_code"))
+                if not symbol.isdigit():
+                    continue
+                symbol = symbol.zfill(5)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "name": item.get("name") or symbol,
+                        "full_name": item.get("fullname"),
+                        "english_name": item.get("enname"),
+                        "exchange": "HKEX",
+                        "market": "hongkong",
+                        "currency": item.get("curr_type") or "HKD",
+                        "listed_date": _iso_date(item.get("list_date")),
+                        "delisted_date": _iso_date(item.get("delist_date")),
+                        "status": _status(item.get("list_status")),
+                        "lot_size": int(_float(item.get("trade_unit")) or 1),
+                        "source": "tushare:hk_basic",
+                    }
+                )
+        return records
+
+    def hk_security(self, symbol: str) -> dict[str, Any] | None:
+        frame = self.pro.hk_basic(
+            ts_code=to_tushare_hk_code(symbol),
+            fields="ts_code,name,fullname,enname,market,list_status,list_date,delist_date,trade_unit,curr_type",
+        )
+        records = _records(frame)
+        if not records:
+            return None
+        item = records[0]
+        return {
+            "symbol": from_tushare_code(item.get("ts_code") or symbol).zfill(5),
+            "name": item.get("name") or normalize_symbol(symbol, "hongkong"),
+            "exchange": "HKEX",
+            "market": "hongkong",
+            "currency": item.get("curr_type") or "HKD",
+            "listed_date": _iso_date(item.get("list_date")),
+            "delisted_date": _iso_date(item.get("delist_date")),
+            "status": _status(item.get("list_status")),
+            "lot_size": int(_float(item.get("trade_unit")) or 1),
+            "source": "tushare:hk_basic",
+        }
+
+    def hk_trade_calendar(self, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        frame = self.pro.hk_tradecal(
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+        )
+        return [
+            {
+                "exchange": "HKEX",
+                "trade_date": _iso_date(item.get("cal_date") or item.get("trade_date")),
+                "is_open": bool(int(item.get("is_open") or 0)),
+                "prev_trade_date": _iso_date(item.get("pretrade_date") or item.get("pre_trade_date")),
+                "source": "tushare:hk_tradecal",
+            }
+            for item in _records(frame)
+            if _iso_date(item.get("cal_date") or item.get("trade_date"))
+        ]
+
+    def hk_daily_rows(self, symbol: str, start_date: str, end_date: str, adjust: str = "raw") -> list[dict[str, Any]]:
+        api_name = "hk_daily_adj" if str(adjust or "raw").lower() not in {"", "raw"} else "hk_daily"
+        api = getattr(self.pro, api_name)
+        rows: list[dict[str, Any]] = []
+        for window_start, window_end in _date_windows(start_date, end_date):
+            frame = api(
+                ts_code=to_tushare_hk_code(symbol),
+                start_date=window_start,
+                end_date=window_end,
+            )
+            for item in _records(frame):
+                trade_date = _iso_date(item.get("trade_date"))
+                if not trade_date:
+                    continue
+                rows.append(
+                    {
+                        "date": trade_date,
+                        "open": item.get("open"),
+                        "high": item.get("high"),
+                        "low": item.get("low"),
+                        "close": item.get("close"),
+                        "volume": _first_non_blank(item.get("vol"), item.get("volume"), 0),
+                        "amount": item.get("amount"),
+                        "prev_close": item.get("pre_close"),
+                        "pct_change": _first_non_blank(item.get("pct_chg"), item.get("pct_change")),
+                        "turnover_rate": item.get("turnover_rate"),
+                        "adj_factor": _first_non_blank(item.get("adj_factor"), 1.0),
+                        "source": f"tushare:{api_name}",
+                    }
+                )
+        unique = {str(row["date"]): row for row in rows}
+        return [unique[key] for key in sorted(unique)]
+
     def stock_by_code(self, symbol: str) -> dict[str, Any] | None:
         frame = self.pro.stock_basic(
             ts_code=to_tushare_stock_code(symbol),
@@ -293,29 +398,74 @@ class TushareAdapter:
         return result
 
     def suspend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Return full-day suspension intervals with auditable TuShare provenance.
+
+        ``suspend_d`` is an event/daily-status endpoint.  Its current schema is
+        ``trade_date/suspend_type/suspend_timing``; older code incorrectly asked
+        it for the legacy ``suspend_date/resume_date`` fields and consequently
+        normalized every response to an empty list.  The legacy ``suspend``
+        endpoint is still useful for long historical intervals, so both sources
+        are combined here.
+        """
         frame = self.pro.suspend_d(
             ts_code=to_tushare_stock_code(symbol),
             start_date=_compact_date(start_date, "start_date"),
             end_date=_compact_date(end_date, "end_date"),
-            fields="ts_code,suspend_date,resume_date,ann_date,suspend_reason,reason_type",
+            fields="ts_code,trade_date,suspend_timing,suspend_type",
         )
         rows: list[dict[str, Any]] = []
         for item in _records(frame):
-            suspend_date = _iso_date(item.get("suspend_date"))
-            if not suspend_date:
+            trade_date = _iso_date(item.get("trade_date"))
+            if not trade_date or str(item.get("suspend_type") or "S").upper() != "S":
                 continue
+            timing = str(item.get("suspend_timing") or "").strip() or None
+            next_calendar_date = (date.fromisoformat(trade_date) + timedelta(days=1)).isoformat()
             rows.append(
                 {
                     "symbol": from_tushare_code(item.get("ts_code") or symbol),
-                    "suspend_date": suspend_date,
-                    "resume_date": _iso_date(item.get("resume_date")),
-                    "announce_date": _iso_date(item.get("ann_date")),
-                    "reason": item.get("suspend_reason"),
-                    "reason_type": item.get("reason_type"),
+                    "suspend_date": trade_date,
+                    "resume_date": next_calendar_date,
+                    "suspend_timing": timing,
+                    "is_full_day": timing is None,
+                    "reason": "daily_suspend_event",
+                    "reason_type": "S",
                     "source": "tushare:suspend_d",
                 }
             )
-        return sorted(rows, key=lambda row: (row["suspend_date"], row["symbol"]))
+
+        legacy = getattr(self.pro, "suspend", None)
+        if callable(legacy):
+            legacy_frame = legacy(
+                ts_code=to_tushare_stock_code(symbol),
+                fields="ts_code,suspend_date,resume_date,ann_date,suspend_reason,reason_type",
+            )
+            for item in _records(legacy_frame):
+                suspend_date = _iso_date(item.get("suspend_date"))
+                resume_date = _iso_date(item.get("resume_date"))
+                if not suspend_date:
+                    continue
+                interval_end = resume_date or end_date
+                if interval_end < start_date or suspend_date > end_date:
+                    continue
+                rows.append(
+                    {
+                        "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                        "suspend_date": suspend_date,
+                        "resume_date": resume_date,
+                        "announce_date": _iso_date(item.get("ann_date")),
+                        "suspend_timing": None,
+                        "is_full_day": True,
+                        "reason": item.get("suspend_reason"),
+                        "reason_type": item.get("reason_type"),
+                        "source": "tushare:suspend",
+                    }
+                )
+
+        unique: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+        for row in rows:
+            key = (str(row["suspend_date"]), row.get("resume_date"), str(row.get("source") or ""))
+            unique[key] = row
+        return sorted(unique.values(), key=lambda row: (row["suspend_date"], row["symbol"], row["source"]))
 
     def limit_prices(self, symbol: str, start_date: str, end_date: str) -> dict[str, dict[str, float | None]]:
         result: dict[str, dict[str, float | None]] = {}
@@ -683,6 +833,19 @@ def fetch_tushare_rows(
     if not start_date or not end_date:
         raise LeanWebError("TuShare imports require startDate and endDate.")
     return TushareAdapter(token=token).daily_rows(symbol, start_date, end_date, adjust=adjust)
+
+
+def fetch_tushare_hk_rows(
+    symbol: str,
+    start_date: str | None,
+    end_date: str | None,
+    *,
+    token: str | None = None,
+    adjust: str = "raw",
+) -> list[dict[str, Any]]:
+    if not start_date or not end_date:
+        raise LeanWebError("TuShare Hong Kong imports require startDate and endDate.")
+    return TushareAdapter(token=token).hk_daily_rows(symbol, start_date, end_date, adjust=adjust)
 
 
 def import_tushare_stock_basic(

@@ -106,6 +106,10 @@ def run_docker_backtest(
         from ..services.ashare_execution import write_ashare_execution_artifacts
 
         write_ashare_execution_artifacts(run_dir, parameters)
+    if parameters.get("hkRules"):
+        from ..services.hk_execution import write_hk_execution_artifacts
+
+        write_hk_execution_artifacts(run_dir, parameters)
     config_path = run_dir / "config.json"
     algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
     config_path.write_text(
@@ -129,7 +133,7 @@ def run_docker_backtest(
         algorithm_path=algorithm_path,
         algorithm_container_path=algorithm_container_path,
         project_dir=project_dir,
-        support_dir=run_dir if parameters.get("ashareRules") else None,
+        support_dir=run_dir if parameters.get("ashareRules") or parameters.get("hkRules") else None,
     )
     exit_code = run_command_stream(command, output_callback)
 

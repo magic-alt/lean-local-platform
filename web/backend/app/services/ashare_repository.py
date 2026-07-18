@@ -228,6 +228,47 @@ def get_security(symbol: str) -> dict[str, Any] | None:
     return row_to_dict(row)
 
 
+def upsert_data_gap_resolutions(
+    *,
+    market: str,
+    symbol: str,
+    classifications: dict[str, dict[str, Any]],
+    batch_id: str,
+) -> None:
+    """Persist the evidence used to accept or reject each expected-session gap."""
+    now = utc_now()
+    with db() as connection:
+        for trade_date, item in classifications.items():
+            connection.execute(
+                """
+                insert into data_gap_resolutions
+                    (id, market, symbol, trade_date, classification, status,
+                     evidence_source, evidence_json, batch_id, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(market, symbol, trade_date) do update set
+                    classification=excluded.classification,
+                    status=excluded.status,
+                    evidence_source=excluded.evidence_source,
+                    evidence_json=excluded.evidence_json,
+                    batch_id=excluded.batch_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(uuid.uuid4()),
+                    market,
+                    symbol,
+                    trade_date,
+                    str(item.get("classification") or "unresolved_source_gap"),
+                    str(item.get("status") or "open"),
+                    item.get("evidence_source"),
+                    json_dump(item.get("evidence") or {}),
+                    batch_id,
+                    now,
+                    now,
+                ),
+            )
+
+
 def upsert_trade_calendar(market: str, trade_dates: list[str], source: str, batch_id: str | None = None) -> None:
     unique_dates = sorted(set(trade_dates))
     with db() as connection:

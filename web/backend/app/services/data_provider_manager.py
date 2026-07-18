@@ -25,10 +25,54 @@ from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
 from .jqdata_adapter import fetch_jqdata_rows
 from .source_gate import DATA_SOURCE_PRIORITY, jqdata_covers_window, resolve_effective_data_source, source_priority_for_window, source_role
-from .tushare_adapter import fetch_tushare_rows
+from .tushare_adapter import fetch_tushare_hk_rows, fetch_tushare_rows
 
 
 CredentialOption = list[str]
+
+
+class ProviderExhaustedError(LeanWebError):
+    """All eligible daily-bar providers failed or returned no rows."""
+
+    error_code = "PROVIDER_EXHAUSTED"
+    category = "data_provider"
+
+    def __init__(self, attempts: list[dict[str, Any]]) -> None:
+        public_attempts = _public_attempts(attempts)
+        retryable = any(
+            any(
+                marker in str(item.get("error") or "").lower()
+                for marker in ("rate", "limit", "频率", "限频", "timeout", "temporar")
+            )
+            for item in public_attempts
+        )
+        summary = ", ".join(f"{item['source']}:{item['status']}" for item in public_attempts)
+        super().__init__(
+            f"No active source returned data; attempted: {summary}",
+            retryable=retryable,
+            status_code=503 if retryable else 400,
+            details={"attempts": public_attempts},
+        )
+
+
+def _public_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    credential_names = {
+        name
+        for spec in PROVIDER_SPECS.values()
+        for option in spec.credentials
+        for name in option
+    }
+    secrets = {value for name in credential_names if (value := os.environ.get(name))}
+    public: list[dict[str, Any]] = []
+    for attempt in attempts:
+        item = dict(attempt)
+        if item.get("error"):
+            error = str(item["error"])
+            for secret in secrets:
+                error = error.replace(secret, "[REDACTED]")
+            item["error"] = error[:1000]
+        public.append(item)
+    return public
 
 
 @dataclass(frozen=True)
@@ -69,7 +113,7 @@ class ProviderSpec:
 
 A_SHARE_PROVIDER_PRIORITY = list(DATA_SOURCE_PRIORITY)
 US_PROVIDER_PRIORITY = ["yfinance", "yahoo", "stooq", "akshare", "sina"]
-HK_PROVIDER_PRIORITY = ["akshare", "sina", "eastmoney", "yfinance"]
+HK_PROVIDER_PRIORITY = ["tushare", "akshare", "sina", "eastmoney", "yfinance"]
 
 
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
@@ -118,8 +162,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         key="tushare",
         name="TuShare Pro",
         priority=0,
-        markets=("china",),
-        venues=("china",),
+        markets=("china", "hongkong"),
+        venues=("china", "hongkong"),
         modules=("tushare",),
         credentials=(["TUSHARE_TOKEN"],),
         production_certified=True,
@@ -753,8 +797,10 @@ class DataProviderManager:
                 raise ValueError("Tencent only supports China A-share imports in this platform.")
             return _fetch_tencent_rows(symbol_value, start_date, end_date, adjust)
         if key == "tushare":
+            if market_value == "hongkong":
+                return fetch_tushare_hk_rows(symbol_value, start_date, end_date, token=api_key, adjust=adjust)
             if market_value != "china":
-                raise ValueError("TuShare Pro only supports China A-share imports in this platform.")
+                raise ValueError("TuShare Pro supports China A-share and Hong Kong equity imports in this platform.")
             return fetch_tushare_rows(symbol_value, start_date, end_date, token=api_key, adjust=adjust)
         if key == "baostock":
             if market_value != "china":
@@ -860,10 +906,7 @@ class DataProviderManager:
                         "durationMs": round((time.perf_counter() - t0) * 1000, 2),
                     }
                 )
-        raise ValueError(
-            "No active source returned data; attempted: "
-            + ", ".join(f"{item['source']}:{item['status']}" for item in attempts)
-        ) from last_error
+        raise ProviderExhaustedError(attempts) from last_error
 
 
 DATA_PROVIDER_MANAGER = DataProviderManager()

@@ -19,6 +19,7 @@ class LeanWebError(Exception):
         category: str | None = None,
         retryable: bool | None = None,
         status_code: int | None = None,
+        details: Any | None = None,
     ) -> None:
         super().__init__(message or self.error_code)
         if error_code is not None:
@@ -29,6 +30,7 @@ class LeanWebError(Exception):
             self.retryable = retryable
         if status_code is not None:
             self.status_code = status_code
+        self.details = details
 
 
 class NotFoundError(LeanWebError):
@@ -46,6 +48,8 @@ def error_payload(
     category: str,
     retryable: bool = False,
     details: Any | None = None,
+    trace_id: str | None = None,
+    workflow_id: str | None = None,
 ) -> dict[str, Any]:
     payload = {
         "detail": message,
@@ -56,6 +60,10 @@ def error_payload(
     }
     if details is not None:
         payload["details"] = details
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if workflow_id:
+        payload["workflow_id"] = workflow_id
     return payload
 
 

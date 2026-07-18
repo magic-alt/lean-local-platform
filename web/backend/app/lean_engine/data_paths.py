@@ -87,7 +87,10 @@ def ensure_market_database(market: str) -> None:
     entries = data.setdefault("entries", {})
     entry_key = f"Equity-{market}-[*]"
     if entry_key not in entries:
-        weekday = [{"start": config["open"], "end": config["close"], "state": "market"}]
+        weekday = [
+            {"start": start, "end": end, "state": "market"}
+            for start, end in config.get("sessions", ((config["open"], config["close"]),))
+        ]
         entries[entry_key] = {
             "dataTimeZone": config["timezone"],
             "exchangeTimeZone": config["timezone"],
@@ -104,6 +107,25 @@ def ensure_market_database(market: str) -> None:
             "regularHolidays": [],
         }
         market_hours.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def write_equity_symbol_properties(
+    symbol: str,
+    *,
+    market: str,
+    currency: str,
+    lot_size: int,
+    tick_size: float = 0.01,
+) -> None:
+    market = market_key(market)
+    ticker = symbol_key(normalize_symbol(symbol, market))
+    ensure_market_database(market)
+    path = DATA_DIR / "symbol-properties" / "symbol-properties-database.csv"
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    prefix = f"{market},{ticker},equity,"
+    lines = [line for line in lines if not line.lower().startswith(prefix.lower())]
+    lines.append(f"{market},{ticker},equity,,{currency},1,{tick_size},{int(lot_size)},,1")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def ensure_equity_dirs(market: str | None = None) -> None:

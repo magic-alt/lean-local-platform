@@ -42,6 +42,7 @@ class PaperSessionCreate(BaseModel):
     sourceBacktestId: str | None = None
     startDate: str | None = None
     autoAdvance: bool = True
+    mode: str | None = None
 
 
 class PaperStatusUpdate(BaseModel):
@@ -78,12 +79,15 @@ def list_sessions():
 def create_session(request: PaperSessionCreate):
     try:
         payload = request.model_dump()
-        if request.sourceBacktestId or request.projectId:
+        requested_mode = str(request.mode or "").strip().lower()
+        if requested_mode not in {"", "lean_walkforward", "signal_simulation"}:
+            raise ValueError("Paper mode must be lean_walkforward or signal_simulation.")
+        if requested_mode == "lean_walkforward" or request.sourceBacktestId or request.projectId:
             if not request.sourceBacktestId or not request.projectId:
                 raise ValueError("LEAN Paper requires both a Project and a trusted Backtest.")
             payload["mode"] = "lean_walkforward"
         else:
-            payload["mode"] = "legacy_replay"
+            payload["mode"] = "signal_simulation"
         return paper_service.create_session(payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

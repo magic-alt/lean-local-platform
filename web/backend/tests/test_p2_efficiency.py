@@ -291,6 +291,16 @@ def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch)
             }
 
     monkeypatch.setattr(worker_module, "LeanRunner", DummyLeanRunner)
+    persisted_while_running: list[bool] = []
+    real_persist_result = worker_module.persist_result
+
+    def assert_non_terminal_persist(job_id, *args, **kwargs):
+        from app.repositories.backtest_repository import get_backtest
+
+        persisted_while_running.append(get_backtest(job_id)["status"] == "running")
+        return real_persist_result(job_id, *args, **kwargs)
+
+    monkeypatch.setattr(worker_module, "persist_result", assert_non_terminal_persist)
     project = create_project("Optimization Unit", template_key="ema_cross")
     parameters = {
         "ticker": "SPY",
@@ -325,6 +335,7 @@ def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch)
         optimization = connection.execute("select * from optimization_runs where id = ?", ("opt-1",)).fetchone()
     assert len(child_runs) == 2
     assert {row["status"] for row in child_runs} == {"success"}
+    assert persisted_while_running == [True, True]
     assert result_count == 2
     assert json.loads(optimization["result_json"])["candidateCount"] == 2
 

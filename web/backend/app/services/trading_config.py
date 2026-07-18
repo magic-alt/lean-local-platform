@@ -29,6 +29,32 @@ ASHARE_DEFAULTS: dict[str, Any] = {
 }
 
 
+HK_DEFAULTS: dict[str, Any] = {
+    "hkRules": True,
+    "benchmarkSymbol": "02800",
+    "benchmarkMarket": "hongkong",
+    "executionPolicy": "next_open",
+    "calendarMarket": "hongkong",
+    "lotSize": 1,
+    "commissionRate": 0.0003,
+    "minCommission": 3.0,
+    "stampTaxBuy": 0.001,
+    "stampTaxSell": 0.001,
+    "sfcLevyRate": 0.000027,
+    "afrcLevyRate": 0.0000015,
+    "exchangeTradingFeeRate": 0.0000565,
+    "settlementFeeRate": 0.000042,
+    "slippageBps": 5.0,
+    # Hong Kong has no mainland-style daily price limit. Reserve the same
+    # conservative overnight capacity used by the A-share next-open path.
+    "nextOpenGapBufferBps": 2000.0,
+    "minCash": 0.0,
+    "cashBuffer": 0.0,
+    "feeScheduleVersion": "hkex-2026",
+    "constraintVersion": 1,
+}
+
+
 def _first_value(primary: dict[str, Any], fallback: dict[str, Any] | None, *keys: str, default: Any = None) -> Any:
     for source in (primary, fallback or {}):
         for key in keys:
@@ -107,4 +133,43 @@ def ashare_trading_config(parameters: dict[str, Any] | None = None, request_data
 def merge_ashare_trading_config(parameters: dict[str, Any], request_data: dict[str, Any] | None = None) -> dict[str, Any]:
     merged = dict(parameters)
     merged.update(ashare_trading_config(merged, request_data))
+    return merged
+
+
+def hk_trading_config(parameters: dict[str, Any] | None = None, request_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    params = dict(parameters or {})
+    request = dict(request_data or {})
+    min_cash = _float_value(params, request, "minCash", "min_cash", "cashFloor", default=HK_DEFAULTS["minCash"])
+    cash_buffer = _float_value(params, request, "cashBuffer", "cash_buffer", default=min_cash or HK_DEFAULTS["cashBuffer"])
+    return {
+        "hkRules": True,
+        "benchmarkSymbol": str(_first_value(params, request, "benchmarkSymbol", default=HK_DEFAULTS["benchmarkSymbol"])).upper(),
+        "benchmarkMarket": "hongkong",
+        "executionPolicy": str(_first_value(params, request, "executionPolicy", "execution_policy", default=HK_DEFAULTS["executionPolicy"])),
+        "calendarMarket": "hongkong",
+        "lotSize": _int_value(params, request, "lotSize", "lot_size", default=HK_DEFAULTS["lotSize"]),
+        "commissionRate": _float_value(params, request, "commissionRate", "commission_rate", default=HK_DEFAULTS["commissionRate"]),
+        "minCommission": _float_value(params, request, "minCommission", "min_commission", default=HK_DEFAULTS["minCommission"]),
+        "stampTaxBuy": _float_value(params, request, "stampTaxBuy", "stamp_tax_buy", default=HK_DEFAULTS["stampTaxBuy"]),
+        "stampTaxSell": _float_value(params, request, "stampTaxSell", "stamp_tax_sell", default=HK_DEFAULTS["stampTaxSell"]),
+        "sfcLevyRate": _float_value(params, request, "sfcLevyRate", "sfc_levy_rate", default=HK_DEFAULTS["sfcLevyRate"]),
+        "afrcLevyRate": _float_value(params, request, "afrcLevyRate", "afrc_levy_rate", default=HK_DEFAULTS["afrcLevyRate"]),
+        "exchangeTradingFeeRate": _float_value(
+            params, request, "exchangeTradingFeeRate", "exchange_trading_fee_rate", default=HK_DEFAULTS["exchangeTradingFeeRate"]
+        ),
+        "settlementFeeRate": _float_value(params, request, "settlementFeeRate", "settlement_fee_rate", default=HK_DEFAULTS["settlementFeeRate"]),
+        "slippageBps": _float_value(params, request, "slippageBps", "slippage_bps", default=HK_DEFAULTS["slippageBps"]),
+        "nextOpenGapBufferBps": _float_value(
+            params, request, "nextOpenGapBufferBps", "next_open_gap_buffer_bps", default=HK_DEFAULTS["nextOpenGapBufferBps"]
+        ),
+        "minCash": min_cash,
+        "cashBuffer": cash_buffer,
+        "feeScheduleVersion": HK_DEFAULTS["feeScheduleVersion"],
+        "constraintVersion": HK_DEFAULTS["constraintVersion"],
+    }
+
+
+def merge_hk_trading_config(parameters: dict[str, Any], request_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    merged = dict(parameters)
+    merged.update(hk_trading_config(merged, request_data))
     return merged

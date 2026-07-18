@@ -678,13 +678,15 @@ def test_lean_cache_restores_missing_zip_from_stored_object(tmp_path, monkeypatc
     from app.services.lean_cache import ensure_ashare_lean_cache
 
     zip_path = tmp_path / "Data" / "equity" / "china" / "daily" / "600519.zip"
-    original = zip_path.read_bytes()
+    with zipfile.ZipFile(zip_path) as archive:
+        original_payload = archive.read(archive.namelist()[0])
     zip_path.unlink()
 
     cache = ensure_ashare_lean_cache("600519", source="akshare", adjust="raw")
 
     assert zip_path.exists()
-    assert zip_path.read_bytes() == original
+    with zipfile.ZipFile(zip_path) as archive:
+        assert archive.read(archive.namelist()[0]) == original_payload
     assert cache["files"]["daily"]["object_id"]
 
 

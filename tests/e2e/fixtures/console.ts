@@ -8,7 +8,7 @@ const IGNORED_CONSOLE_PATTERNS = [
   /\[antd: Upload\].*value.*fileList/i
 ];
 
-export function attachFrontendGuards(page: Page, testInfo: TestInfo) {
+export function attachFrontendGuards(page: Page, testInfo: TestInfo, expectedConsoleErrors: RegExp[] = []) {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
 
@@ -16,6 +16,7 @@ export function attachFrontendGuards(page: Page, testInfo: TestInfo) {
     if (message.type() !== "error") return;
     const text = message.text();
     if (IGNORED_CONSOLE_PATTERNS.some((pattern) => pattern.test(text))) return;
+    if (expectedConsoleErrors.some((pattern) => pattern.test(text))) return;
     consoleErrors.push(text);
   });
   page.on("pageerror", (error) => {

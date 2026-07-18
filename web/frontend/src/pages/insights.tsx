@@ -145,7 +145,7 @@ function GenericInsightsPage() {
   return (
     <>
       <div className="toolbar">
-        <h1 className="page-title">Insights</h1>
+        <span />
         <Button icon={<ReloadOutlined />} onClick={() => { void capabilities.reload(); void reports.reload(); }}>Refresh</Button>
       </div>
       <Alert
@@ -284,8 +284,11 @@ function GenericInsightsPage() {
 }
 
 export function InsightsPage() {
-  return <Tabs defaultActiveKey="ashare-tech" items={[
-    { key: "ashare-tech", label: "A股科技日报", children: <AshareTechInsights /> },
-    { key: "structured", label: "通用结构化 Insight", children: <GenericInsightsPage /> }
-  ]} />;
+  return <>
+    <div className="toolbar"><h1 className="page-title">Insights</h1></div>
+    <Tabs defaultActiveKey="ashare-tech" items={[
+      { key: "ashare-tech", label: "A股科技日报", children: <AshareTechInsights /> },
+      { key: "structured", label: "通用结构化 Insight", children: <GenericInsightsPage /> }
+    ]} />
+  </>;
 }

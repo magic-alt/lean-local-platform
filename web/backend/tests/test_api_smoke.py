@@ -45,6 +45,44 @@ def test_api_errors_include_structured_code(tmp_path, monkeypatch):
     assert payload["error_code"] == "NOT_FOUND"
     assert payload["category"] == "not_found"
     assert payload["retryable"] is False
+    assert payload["trace_id"] == response.headers["X-Trace-ID"]
+    assert payload["workflow_id"] == response.headers["X-Workflow-ID"]
+
+    workflow = TestClient(app).get(f"/api/workflows/{payload['workflow_id']}")
+    assert workflow.status_code == 200
+    assert workflow.json()["events"][0]["error_code"] == "HTTP_404"
+
+
+def test_data_provider_failures_preserve_attempt_evidence(tmp_path, monkeypatch):
+    import app.api.data as data_api
+    import app.db as db_module
+    from app.main import app
+    from app.services.data_provider_manager import ProviderExhaustedError
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
+    db_module.init_db()
+    monkeypatch.setattr(
+        data_api,
+        "fetch_and_import_symbol",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ProviderExhaustedError(
+                [{"source": "tushare", "status": "failed", "rows": 0, "error": "访问频率超限"}]
+            )
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/api/data/fetch",
+        json={"symbol": "00700", "market": "hongkong", "provider": "tushare"},
+    )
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error_code"] == "PROVIDER_EXHAUSTED"
+    assert payload["category"] == "data_provider"
+    assert payload["retryable"] is True
+    assert payload["details"]["attempts"][0]["error"] == "访问频率超限"
 
 
 def test_api_delete_task_accepts_trailing_slash(tmp_path, monkeypatch):

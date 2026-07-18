@@ -271,6 +271,35 @@ export interface Task {
   finished_at?: string | null;
 }
 
+export interface WorkflowSummary {
+  workflow_id: string;
+  started_at: string;
+  updated_at: string;
+  event_count: number;
+  failure_count: number;
+}
+
+export interface WorkflowEvent {
+  id: string;
+  workflow_id: string;
+  trace_id: string;
+  stage: string;
+  action: string;
+  resource_type?: string;
+  resource_id?: string;
+  status: string;
+  error_code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WorkflowDetail {
+  workflow_id: string;
+  status: string;
+  events: WorkflowEvent[];
+}
+
 export interface BacktestRun {
   id: string;
   job_id?: string;
@@ -527,6 +556,16 @@ export interface ResearchSession {
   created_at: string;
 }
 
+export interface ResearchCheckResult {
+  sessionId: string;
+  projectId: string;
+  generatedAt: string;
+  passed: boolean;
+  status: string;
+  evidencePath: string;
+  checks: Array<{ name: string; passed: boolean; detail?: unknown }>;
+}
+
 export interface ReportRecord {
   id: string;
   source?: string;
@@ -568,7 +607,7 @@ export interface PaperSession {
   created_at: string;
   updated_at: string;
   finished_at?: string | null;
-  mode?: "legacy_replay" | "lean_walkforward";
+  mode?: "legacy_replay" | "signal_simulation" | "lean_walkforward";
   legacy_read_only?: boolean;
   source_backtest_id?: string | null;
   strategy_version_id?: string | null;

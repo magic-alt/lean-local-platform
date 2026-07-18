@@ -65,9 +65,12 @@ class {class_name}(QCAlgorithm):
         self.set_end_date(end.year, end.month, end.day)
         self.set_account_currency(account_currency)
         self.set_cash(cash)
-        if market == "china" and self.asset_class == "equity":
+        if market in {{"china", "hongkong"}} and self.asset_class == "equity":
             self.set_brokerage_model(BrokerageName.DEFAULT, AccountType.CASH)
-            self.debug("AShare execution account type: cash; short selling disabled.")
+            if market == "china":
+                self.debug("AShare execution account type: cash; short selling disabled.")
+            else:
+                self.debug("HongKong execution account type: cash; short selling disabled.")
 
         if self.asset_class == "crypto":
             security = self.add_crypto(ticker, self.resolution, venue)
@@ -86,15 +89,10 @@ class {class_name}(QCAlgorithm):
         else:
             security = self.add_equity(ticker, self.resolution, market, data_normalization_mode=DataNormalizationMode.RAW)
             self.symbol = security.symbol
-        if market == "china":
-            try:
-                from ashare_execution import AShareExecutionHelper, apply_ashare_models
-            except Exception as exc:
-                raise ValueError("A-share execution helper is required; unguarded execution is blocked.") from exc
-
+        if market in {{"china", "hongkong"}}:
             benchmark_ticker = self.get_parameter("benchmarkSymbol", "").upper()
             if not benchmark_ticker:
-                raise ValueError("A-share benchmarkSymbol is required; constant benchmark fallback is disabled.")
+                raise ValueError(f"{{market}} benchmarkSymbol is required; constant benchmark fallback is disabled.")
             try:
                 benchmark = self.add_equity(
                     benchmark_ticker,
@@ -105,14 +103,28 @@ class {class_name}(QCAlgorithm):
                 self.benchmark_security = benchmark
                 self.set_benchmark(lambda time: self.benchmark_security.price)
             except Exception as exc:
-                raise ValueError(f"A-share benchmark unavailable: {{benchmark_ticker}}; backtest is blocked.") from exc
+                raise ValueError(f"Benchmark unavailable: {{benchmark_ticker}}; backtest is blocked.") from exc
+        if market == "china":
+            try:
+                from ashare_execution import AShareExecutionHelper, apply_ashare_models
+            except Exception as exc:
+                raise ValueError("A-share execution helper is required; unguarded execution is blocked.") from exc
+        elif market == "hongkong":
+            try:
+                from hk_execution import HongKongExecutionHelper, apply_hk_models
+            except Exception as exc:
+                raise ValueError("Hong Kong execution helper is required; unguarded execution is blocked.") from exc
         else:
-            self.set_benchmark(self.symbol)
+            self.set_benchmark(lambda time: self.securities[self.symbol].price)
         self.ashare_execution = None
         ashare_rules = self.get_parameter("ashareRules", "False").lower() in {{"1", "true", "yes", "on"}}
         if market == "china" and ashare_rules and AShareExecutionHelper is not None:
             apply_ashare_models(self, security)
             self.ashare_execution = AShareExecutionHelper(self, self.get_parameter("ashareStatusFile", "/Lean/Run/ashare_trade_status.json"))
+        hk_rules = self.get_parameter("hkRules", "False").lower() in {{"1", "true", "yes", "on"}}
+        if market == "hongkong" and hk_rules:
+            apply_hk_models(self, security)
+            self.ashare_execution = HongKongExecutionHelper(self)
 '''
 
 

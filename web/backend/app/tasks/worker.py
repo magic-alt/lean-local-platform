@@ -246,10 +246,14 @@ def fetch_data_batch_task(task_id: str):
 
 @celery_app.task(name="lean_web.sync_all_data")
 def sync_all_data_task(task_id: str, run_id: str):
+    task = get_task(task_id)
+    if task.get("status") == CANCELLED:
+        append_log(task_id, "Data synchronization was cancelled before the worker started it.")
+        return {"status": "cancelled", "cancelled": True, "datasets": {}}
     update_task(task_id, status="running", started_at=utc_now(), error=None)
     append_log(task_id, "Discovering TuShare Pro 5,000-point low-frequency entitlements.")
     try:
-        result = data_sync.run_sync(run_id)
+        result = data_sync.run_sync(run_id, task_id=task_id)
         run_status = str(result.get("status") or ("cancelled" if result.get("cancelled") else "success"))
         status = "cancelled" if run_status == "cancelled" else "success"
         error = "One or more datasets require retry." if run_status == "partial" else None
@@ -432,9 +436,12 @@ def run_backtest_task(self, task_id: str, run_id: str):
             or "Docker run failed or did not produce result JSON."
         )
         finished_at = utc_now()
+        # Keep the run non-terminal until the normalized result ledger is
+        # persisted. Paper, Insights and the Web UI use success as the
+        # readiness contract.
         update_backtest(
             run_id,
-            status=status,
+            status="running",
             result_json_path=output["result_json_path"],
             summary_json_path=output["summary_json_path"],
             report_html_path=output["report_html_path"],
@@ -455,7 +462,6 @@ def run_backtest_task(self, task_id: str, run_id: str):
             container_name=output.get("container_name"),
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
-            finished_at=finished_at,
         )
         update_fingerprint(execution_validation)
         if raw_success and output["result_json_path"]:
@@ -466,6 +472,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
                 run,
             )
+        update_backtest(run_id, status=status, finished_at=finished_at)
         update_task(
             task_id,
             status=status,
@@ -630,9 +637,11 @@ def optimize_task(task_id: str, optimization_id: str):
                 strategy_path=str(strategy_path),
                 validation=validation,
             )
+            # Optimization candidates follow the same readiness contract as
+            # regular backtests: success implies a queryable result ledger.
             update_backtest(
                 run_id,
-                status=status,
+                status="running",
                 result_json_path=output["result_json_path"],
                 summary_json_path=output["summary_json_path"],
                 report_html_path=output["report_html_path"],
@@ -643,7 +652,6 @@ def optimize_task(task_id: str, optimization_id: str):
                 container_name=output.get("container_name"),
                 work_dir=output.get("work_dir"),
                 results_dir=output.get("results_dir"),
-                finished_at=finished_at,
                 fingerprint_json=fingerprint,
                 validation_json=validation,
                 experiment_json=experiment,
@@ -662,6 +670,7 @@ def optimize_task(task_id: str, optimization_id: str):
                     Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
                     get_backtest(run_id) or {},
                 )
+            update_backtest(run_id, status=status, finished_at=finished_at)
             candidate_result = {
                 "runId": run_id,
                 "index": index,

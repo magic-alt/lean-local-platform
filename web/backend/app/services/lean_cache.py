@@ -83,8 +83,25 @@ def _daily_zip_coverage(path: Path) -> dict[str, Any]:
     }
 
 
+def ensure_lean_interest_rate_reference_data() -> dict[str, Any]:
+    """Install the minimal valid LEAN risk-free rate series when data is absent.
+
+    LEAN expands sparse observations forward, so a dated seed value is sufficient
+    for deterministic local statistics while avoiding a hidden default-rate error.
+    """
+    path = data_paths.DATA_DIR / "alternative" / "interest-rate" / "usa" / "interest-rate.csv"
+    if path.exists():
+        lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        if len(lines) >= 2:
+            return {"path": str(path), "created": False, "rows": len(lines) - 1}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("date,interest-rate\n1998-01-01,1.0\n", encoding="utf-8")
+    return {"path": str(path), "created": True, "rows": 1}
+
+
 def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[str, Any]:
     """Ensure LEAN's built-in ResultsAnalyzer can load its hard-coded SPY history."""
+    interest_rate = ensure_lean_interest_rate_reference_data()
     requested_start = parse_date(start) - timedelta(days=3)
     requested_end = parse_date(end)
     zip_path = _lean_daily_path(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
@@ -100,6 +117,7 @@ def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[st
             "source": "local-cache",
             "coverage": coverage,
             "refreshed": False,
+            "interestRate": interest_rate,
         }
 
     fetch_start = min(requested_start, parse_date("1993-01-29"))
@@ -159,6 +177,7 @@ def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[st
         "daily": metadata,
         "factorFile": str(factor_path),
         "mapFile": str(map_path),
+        "interestRate": interest_rate,
     }
 
 

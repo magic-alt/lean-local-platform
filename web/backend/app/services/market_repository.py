@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 
 
 INSTRUMENT_NAMESPACE = uuid.UUID("ed487062-bcf1-47c6-8f1a-1973b5f9edb0")
@@ -298,3 +298,64 @@ def list_instruments(asset_class: str | None = None, market: str | None = None, 
     with db() as connection:
         rows = connection.execute(sql, values).fetchall()
     return rows_to_dicts(rows)
+
+
+def get_instrument(symbol: str, *, asset_class: str = "equity", market: str, venue: str | None = None) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select * from instruments
+            where symbol = ? and asset_class = ? and market = ? and venue = ?
+            limit 1
+            """,
+            (symbol.upper(), asset_class.lower(), market.lower(), (venue or market).lower()),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def market_data_coverage(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    asset_class: str = "equity",
+    market: str,
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str | None = None,
+) -> dict[str, Any]:
+    source_clause = "and source = ?" if source else ""
+    values: list[Any] = [
+        symbol.upper(),
+        asset_class.lower(),
+        market.lower(),
+        (venue or market).lower(),
+        resolution.lower(),
+        data_type.lower(),
+        adjust or "raw",
+        start,
+        end,
+    ]
+    if source:
+        values.append(source)
+    with db() as connection:
+        row = connection.execute(
+            f"""
+            select count(distinct trade_date) as row_count,
+                   min(trade_date) as first_date,
+                   max(trade_date) as last_date
+            from market_daily_bars
+            where symbol = ? and asset_class = ? and market = ? and venue = ?
+              and resolution = ? and data_type = ? and adjust = ?
+              and trade_date between ? and ? {source_clause}
+            """,
+            values,
+        ).fetchone()
+    item = row_to_dict(row) or {}
+    return {
+        "bar_count": int(item.get("row_count") or 0),
+        "first_date": item.get("first_date"),
+        "last_date": item.get("last_date"),
+    }

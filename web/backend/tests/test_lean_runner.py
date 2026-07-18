@@ -1,3 +1,5 @@
+import json
+
 from app.lean import base_config, docker_command
 from app.runners.lean_runner import LeanRunner
 
@@ -77,6 +79,33 @@ def test_base_config_adds_python_path_for_ashare_rules():
     config = base_config("job-1", {"ticker": "600519", "assetClass": "equity", "ashareRules": True})
 
     assert config["python-additional-paths"] == ["/Lean/Run"]
+
+
+def test_lean_runner_mounts_hongkong_execution_support(tmp_path, monkeypatch):
+    import app.runners.lean_runner as runner_module
+
+    captured = {}
+
+    def fake_docker_command(*args, **kwargs):
+        captured.update(kwargs)
+        return ["docker", "run", "unit"]
+
+    monkeypatch.setattr(runner_module, "docker_command", fake_docker_command)
+    run_dir = tmp_path / "hk-run"
+    workspace = LeanRunner().prepare(
+        "hk-job",
+        {
+            "ticker": "00700",
+            "assetClass": "equity",
+            "market": "hongkong",
+            "hkRules": True,
+        },
+        run_dir,
+    )
+
+    assert (run_dir / "hk_execution.py").is_file()
+    assert captured["support_dir"] == run_dir
+    assert json.loads(workspace.config_path.read_text(encoding="utf-8"))["python-additional-paths"] == ["/Lean/Run"]
 
 
 def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monkeypatch):

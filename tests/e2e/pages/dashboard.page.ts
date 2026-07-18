@@ -15,7 +15,6 @@ export class DashboardPage extends BasePage {
   async expectShellNavigation() {
     for (const item of [
       "Dashboard",
-      "Workspace",
       "Projects",
       "Data",
       "Backtests",
@@ -23,6 +22,7 @@ export class DashboardPage extends BasePage {
       "Paper",
       "Research",
       "Reports",
+      "Insights",
       "Tasks",
       "Monitoring",
       "Settings"

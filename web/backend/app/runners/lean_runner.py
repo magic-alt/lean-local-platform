@@ -11,6 +11,7 @@ from ..lean_engine.docker import docker_command
 from ..lean_engine.reports import render_report
 from ..lean_engine.results import extract_statistics
 from ..services.ashare_execution import write_ashare_execution_artifacts
+from ..services.hk_execution import write_hk_execution_artifacts
 from .docker_runner import DockerRunResult, DockerRunner
 
 
@@ -76,7 +77,7 @@ class LeanRunner:
         artifacts: list[dict[str, Any]] = []
         if config_path.exists():
             artifacts.append(item(config_path, "input-config"))
-        for support_name in ("ashare_execution.py", "ashare_trade_status.json"):
+        for support_name in ("ashare_execution.py", "ashare_trade_status.json", "hk_execution.py"):
             support_path = run_dir / support_name
             if support_path.exists():
                 artifacts.append(item(support_path, "input-support"))
@@ -107,6 +108,7 @@ class LeanRunner:
         results_dir = run_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         write_ashare_execution_artifacts(run_dir, parameters)
+        write_hk_execution_artifacts(run_dir, parameters)
         config_path = run_dir / "config.json"
         algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
         config_path.write_text(
@@ -129,7 +131,7 @@ class LeanRunner:
             algorithm_path=algorithm_path,
             algorithm_container_path=algorithm_container_path,
             project_dir=project_dir,
-            support_dir=run_dir if parameters.get("ashareRules") else None,
+            support_dir=run_dir if parameters.get("ashareRules") or parameters.get("hkRules") else None,
         )
         return BacktestWorkspace(
             run_id=run_id,

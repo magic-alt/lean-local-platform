@@ -273,11 +273,9 @@ class ResearchPro(DailyOnlyPro):
             [
                 {
                     "ts_code": "600519.SH",
-                    "suspend_date": "20240103",
-                    "resume_date": "20240104",
-                    "ann_date": "20240102",
-                    "suspend_reason": "重大事项",
-                    "reason_type": "event",
+                    "trade_date": "20240103",
+                    "suspend_timing": None,
+                    "suspend_type": "S",
                 }
             ]
         )
@@ -350,6 +348,7 @@ def test_tushare_research_rows_normalize_units_dates_and_fields():
     suspensions = adapter.suspend_rows("600519", "2024-01-02", "2024-01-05")
     assert suspensions[0]["suspend_date"] == "2024-01-03"
     assert suspensions[0]["resume_date"] == "2024-01-04"
+    assert suspensions[0]["source"] == "tushare:suspend_d"
 
     dividends = adapter.dividend_rows("600519", "2024-05-01", "2024-05-31")
     assert dividends[0]["ex_date"] == "2024-05-10"
@@ -372,3 +371,40 @@ def test_tushare_research_rows_normalize_units_dates_and_fields():
     assert financials[0]["report_date"] == "2023-12-31"
     assert financials[0]["effective_date"] == "2024-04-03"
     assert financials[0]["fields"] == {"revenue": 100.0, "n_income": 20.0}
+
+
+class HongKongPro:
+    def hk_basic(self, **kwargs):
+        return FakeFrame([
+            {"ts_code": "00700.HK", "name": "腾讯控股", "list_status": "L", "list_date": "20040616", "trade_unit": 100, "curr_type": "HKD"}
+        ])
+
+    def hk_tradecal(self, **kwargs):
+        return FakeFrame([
+            {"cal_date": "20240102", "is_open": 1, "pretrade_date": "20231229"},
+            {"cal_date": "20240103", "is_open": 0, "pretrade_date": "20240102"},
+        ])
+
+    def hk_daily(self, **kwargs):
+        return FakeFrame([
+            {"ts_code": "00700.HK", "trade_date": "20240102", "open": 290, "high": 300, "low": 288, "close": 299, "pre_close": 292, "vol": 123456, "amount": 36000000}
+        ])
+
+
+def test_tushare_hong_kong_basics_calendar_and_daily_rows():
+    from app.services.tushare_adapter import TushareAdapter
+
+    adapter = TushareAdapter(pro=HongKongPro())
+    basics = adapter.hk_basic(["L"])
+    assert basics[0]["symbol"] == "00700"
+    assert basics[0]["currency"] == "HKD"
+    assert basics[0]["lot_size"] == 100
+
+    calendar = adapter.hk_trade_calendar("2024-01-02", "2024-01-03")
+    assert calendar[0]["trade_date"] == "2024-01-02"
+    assert calendar[0]["is_open"] is True
+
+    rows = adapter.hk_daily_rows("00700", "2024-01-02", "2024-01-02")
+    assert rows[0]["date"] == "2024-01-02"
+    assert rows[0]["volume"] == 123456
+    assert rows[0]["source"] == "tushare:hk_daily"

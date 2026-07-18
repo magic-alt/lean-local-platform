@@ -91,3 +91,46 @@ def test_tushare_benchmark_repair_uses_explicit_index_endpoint(monkeypatch):
 
     assert calls == [("000300", "2024-01-01", "2024-01-31")]
     assert result == {"rows": 1, "source": "tushare", "symbol": "000300"}
+
+
+def test_hongkong_preflight_uses_tushare_and_market_rules(monkeypatch):
+    import app.services.backtest_preflight as preflight
+
+    monkeypatch.setattr(preflight, "_source", lambda request, parameters: ("tushare", {"source": "tushare"}))
+    monkeypatch.setattr(
+        preflight,
+        "_coverage",
+        lambda symbol, parameters, source: {
+            "symbol": symbol,
+            "source": source,
+            "rows": 20,
+            "statusRows": 0,
+            "firstDate": "2024-01-02",
+            "lastDate": "2024-01-31",
+        },
+    )
+    monkeypatch.setattr(preflight, "_target_gate", lambda parameters, source: None)
+    monkeypatch.setattr(preflight, "_benchmark_gate", lambda parameters, source: None)
+    monkeypatch.setattr(preflight, "get_instrument", lambda *args, **kwargs: {"lot_size": 100})
+
+    result = prepare_backtest_request(
+        {
+            "symbol": "00700",
+            "assetClass": "equity",
+            "market": "hongkong",
+            "start": "2024-01-02",
+            "end": "2024-01-31",
+            "cash": 500000,
+            "source": "tushare",
+        },
+        repair=False,
+    )
+
+    parameters = result["parameters"]
+    assert parameters["hkRules"] is True
+    assert parameters["benchmarkSymbol"] == "02800"
+    assert parameters["commissionRate"] == 0.0003
+    assert parameters["minCommission"] == 3.0
+    assert parameters["lotSize"] == 100
+    assert parameters["nextOpenGapBufferBps"] == 2000.0
+    assert result["preflight"]["effectiveSource"] == "tushare"

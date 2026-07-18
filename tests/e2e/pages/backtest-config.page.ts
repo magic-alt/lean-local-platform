@@ -80,7 +80,7 @@ export class BacktestConfigPage extends BasePage {
 
   async runAndCaptureId(): Promise<string> {
     const responsePromise = this.page.waitForResponse((response) =>
-      response.url().includes("/api/backtests") &&
+      new URL(response.url()).pathname === "/api/backtests" &&
       response.request().method() === "POST"
     );
     await this.page.getByTestId("run-backtest-button").click();

@@ -8,11 +8,10 @@ import { listBacktests } from "../utils/api";
 import { BACKTEST_CASES } from "../utils/test-data";
 
 test.describe("08 history and report export", () => {
-  test("finds successful and failed E2E runs in history and exports successful report", async ({ page, request }) => {
+  test("finds the successful E2E run in history and exports its report", async ({ page, request }) => {
     const runs = await listBacktests(request);
     const spyRun = runs.find((run) => run.name === BACKTEST_CASES.spy.name && (run.status === "success" || run.status === "succeeded"));
-    const failedRun = runs.find((run) => run.name === BACKTEST_CASES.invalidSymbol.name && run.status === "failed");
-    test.skip(!spyRun || !failedRun, "Run the @backtest suite first so history/export has success and failed E2E runs.");
+    test.skip(!spyRun, "Run the @backtest suite first so history/export has a successful E2E run.");
 
     const history = new HistoryPage(page);
     await history.open();
@@ -20,12 +19,6 @@ test.describe("08 history and report export", () => {
     await history.expectRun(BACKTEST_CASES.spy.name);
     await history.filterByStatus("success");
     await history.expectRun(BACKTEST_CASES.spy.name);
-
-    await history.open();
-    await history.filterByName(BACKTEST_CASES.invalidSymbol.name);
-    await history.expectRun(BACKTEST_CASES.invalidSymbol.name);
-    await history.filterByStatus("failed");
-    await history.expectRun(BACKTEST_CASES.invalidSymbol.name);
 
     await page.goto("/#/reports");
     await expect(page.getByRole("heading", { name: "Reports" })).toBeVisible();

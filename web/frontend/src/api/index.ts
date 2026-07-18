@@ -21,6 +21,8 @@ import type {
   Project,
   ProjectFile,
   Task,
+  WorkflowDetail,
+  WorkflowSummary,
   BacktestRun,
   BacktestPreflight,
   BacktestStatus,
@@ -34,6 +36,7 @@ import type {
   BacktestCompareResult,
   OptimizationRun,
   ResearchSession,
+  ResearchCheckResult,
   ReportRecord,
   ObjectStoreItem,
   PaperSession,
@@ -66,6 +69,12 @@ export const api = {
   health: () => request<{ status: string; redis: boolean }>("/api/health"),
   dependencyHealth: () => request<DependencyHealth>("/api/health/dependencies"),
   databaseHealth: () => request<DatabaseHealth>("/api/health/database"),
+  workflows: (status?: string, limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set("status", status);
+    return request<WorkflowSummary[]>(`/api/workflows?${query.toString()}`);
+  },
+  workflow: (id: string) => request<WorkflowDetail>(`/api/workflows/${encodeURIComponent(id)}`),
   settings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", {
@@ -187,11 +196,11 @@ export const api = {
   dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
   dataSyncRuns: () => request<{ items: DataSyncRun[]; limit: number }>("/api/data/sync-runs"),
   dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
-  createDataSyncRun: (datasets?: string[]) =>
+  createDataSyncRun: (datasets?: string[], mode: "auto" | "incremental" | "full_rebuild" = "auto") =>
     request<DataSyncRun>("/api/data/sync-runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ datasets: datasets?.length ? datasets : null })
+      body: JSON.stringify({ datasets: datasets?.length ? datasets : null, mode })
     }),
   cancelDataSyncRun: (id: string) =>
     request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
@@ -386,6 +395,12 @@ export const api = {
     request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/restart`, { method: "POST" }),
   researchLogs: (id: string) =>
     request<{ logs: string; sessionId: string }>(`/api/research/${encodeURIComponent(id)}/logs`),
+  runResearchChecks: (id: string, payload: { symbols?: string[]; startDate?: string; endDate?: string } = {}) =>
+    request<ResearchCheckResult>(`/api/research/${encodeURIComponent(id)}/checks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   deleteResearch: (id: string, purgeWorkspace = false) =>
     request<{ deleted: boolean; id: string; workspacePurged: boolean }>(
       `/api/research/${encodeURIComponent(id)}?purgeWorkspace=${purgeWorkspace ? "true" : "false"}`,
@@ -413,6 +428,7 @@ export const api = {
   paperCandidates: (projectId: string) =>
     request<PaperBacktestCandidate[]>(`/api/paper/candidates?projectId=${encodeURIComponent(projectId)}`),
   createPaperSession: (payload: {
+    mode?: "signal_simulation" | "lean_walkforward";
     name?: string;
     projectId?: string;
     symbol: string;
@@ -433,7 +449,7 @@ export const api = {
     observeOnlySymbols?: string;
     allowStBuy?: boolean;
     parameters?: Record<string, unknown>;
-    sourceBacktestId: string;
+    sourceBacktestId?: string;
     startDate?: string;
     autoAdvance?: boolean;
   }) =>
@@ -444,11 +460,11 @@ export const api = {
     }),
   paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
   paperRuns: (id: string) => request<PaperWalkforwardRun[]>(`/api/paper/${encodeURIComponent(id)}/runs`),
-  runPaperDay: (id: string, tradeDate: string) =>
-    request<PaperWalkforwardRun>(`/api/paper/${encodeURIComponent(id)}/run-day`, {
+  runPaperDay: (id: string, tradeDate: string, autoSignal = false) =>
+    request<PaperWalkforwardRun | Record<string, unknown>>(`/api/paper/${encodeURIComponent(id)}/run-day`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tradeDate, autoSignal: false })
+      body: JSON.stringify({ tradeDate, autoSignal })
     }),
   insightCapabilities: () => request<InsightCapabilities>("/api/insights/capabilities"),
   insights: (filters?: { assetClass?: string; symbol?: string; status?: string; limit?: number; offset?: number }) => {

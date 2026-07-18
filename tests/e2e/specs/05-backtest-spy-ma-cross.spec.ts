@@ -17,7 +17,7 @@ test.describe("05 real SPY SMA cross backtest @backtest", () => {
 
     const config = new BacktestConfigPage(page);
     await config.open();
-    const createRequest = page.waitForRequest((item) => item.url().includes("/api/backtests") && item.method() === "POST");
+    const createRequest = page.waitForRequest((item) => new URL(item.url()).pathname === "/api/backtests" && item.method() === "POST");
     await config.fill({
       ...BACKTEST_CASES.spy,
       projectName: E2E_PROJECT.name,

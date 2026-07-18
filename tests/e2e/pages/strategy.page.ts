@@ -28,27 +28,26 @@ export class StrategyPage extends BasePage {
     if (values.strategy) await this.selectByTestId("project-template-select", values.strategy);
     if (values.className) await this.fillByLabel("Class", values.className);
     await this.page.getByRole("button", { name: "Create" }).click();
-    await this.expectHeading("Project Workspace");
+    await expect(this.page.getByRole("heading", { name: new RegExp(`Current Project:.*${values.name}`) })).toBeVisible();
   }
 
   async openWorkspaceFor(projectName: string) {
     await this.openProjects();
     const row = this.page.getByRole("row").filter({ hasText: projectName }).first();
     await expect(row).toBeVisible();
-    await row.getByRole("button", { name: "Workspace" }).click();
-    await this.expectHeading("Project Workspace");
+    await row.getByRole("button", { name: "Open" }).click();
+    await expect(this.page.getByRole("heading", { name: new RegExp(`Current Project:.*${projectName}`) })).toBeVisible();
   }
 
   async expectCodeEditorLoaded() {
-    await this.page.getByRole("tab", { name: "Code" }).click();
     await expect(this.page.locator(".monaco-editor")).toBeVisible();
   }
 
   async saveCodeIfDirty() {
-    const save = this.page.getByRole("button", { name: "Save" });
+    const save = this.page.getByTestId("save-project-source");
     if (await save.isEnabled()) {
       await save.click();
-      await expect(this.page.getByText("Saved")).toBeVisible();
+      await expect(this.page.getByText("Strategy source saved")).toBeVisible();
     }
   }
 }

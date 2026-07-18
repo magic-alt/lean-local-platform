@@ -65,7 +65,8 @@ import type {
   ResearchSession,
   StrategyTemplate,
   Task,
-  Universe
+  Universe,
+  WorkflowSummary
 } from "../api";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
@@ -94,6 +95,7 @@ export function PaperPage() {
   const [form] = Form.useForm();
   const projectId = Form.useWatch("projectId", form);
   const sourceBacktestId = Form.useWatch("sourceBacktestId", form);
+  const paperMode = Form.useWatch("mode", form) || "lean_walkforward";
   const [candidates, setCandidates] = useState<PaperBacktestCandidate[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -104,6 +106,10 @@ export function PaperPage() {
   const [runDate, setRunDate] = useState("");
 
   useEffect(() => {
+    if (paperMode !== "lean_walkforward") {
+      setCandidates([]);
+      return;
+    }
     if (!projectId) {
       setCandidates([]);
       form.setFieldValue("sourceBacktestId", undefined);
@@ -114,27 +120,36 @@ export function PaperPage() {
       .then(setCandidates)
       .catch((error) => message.error((error as Error).message))
       .finally(() => setCandidatesLoading(false));
-  }, [form, projectId]);
+  }, [form, paperMode, projectId]);
 
   async function submit(values: any) {
     if (creating) return;
     setCreating(true);
     try {
       await api.createPaperSession({
+        mode: values.mode,
         name: values.name,
-        projectId: values.projectId,
-        sourceBacktestId: values.sourceBacktestId,
-        symbol: candidates.find((item) => item.id === values.sourceBacktestId)?.symbol || "",
+        projectId: values.mode === "lean_walkforward" ? values.projectId : undefined,
+        sourceBacktestId: values.mode === "lean_walkforward" ? values.sourceBacktestId : undefined,
+        symbol: values.mode === "lean_walkforward"
+          ? candidates.find((item) => item.id === values.sourceBacktestId)?.symbol || ""
+          : values.symbol,
+        market: values.market,
+        venue: values.market,
+        cash: values.cash,
+        resolution: "daily",
         startDate: values.startDate || undefined,
         autoAdvance: values.autoAdvance !== false,
-        parameters: {}
+        parameters: { source: "tushare" }
       });
-      message.success("LEAN Paper session created from the frozen backtest snapshot");
+      message.success(values.mode === "lean_walkforward"
+        ? "LEAN Paper session created from the frozen backtest snapshot"
+        : "Signal simulation session created");
       form.resetFields();
       setCandidates([]);
       await sessions.reload();
     } catch (error) {
-      message.error(`创建 LEAN Paper 失败：${(error as Error).message}`);
+      message.error(`创建 Paper 失败：${(error as Error).message}`);
     } finally {
       setCreating(false);
     }
@@ -168,8 +183,9 @@ export function PaperPage() {
 
   async function runDay() {
     if (!selectedSession || !runDate) return;
-    await api.runPaperDay(selectedSession.id, runDate);
-    message.success(`LEAN Paper ${runDate} 已进入执行队列`);
+    const isSimulation = selectedSession.mode === "signal_simulation";
+    await api.runPaperDay(selectedSession.id, runDate, isSimulation);
+    message.success(isSimulation ? `Signal simulation ${runDate} 已完成` : `LEAN Paper ${runDate} 已进入执行队列`);
     await Promise.all([sessions.reload(), loadDetail(selectedSession)]);
   }
 
@@ -186,38 +202,52 @@ export function PaperPage() {
         type="info"
         showIcon
         message="Projects 管理策略源码；Backtests 验证一个冻结版本；LEAN Paper 每个交易日用同一冻结版本运行到当日。"
-        description="当前支持 A 股日线 Walk-forward。它使用真实 LEAN 策略和 A 股交易规则，但不是实时行情或券商委托。"
+        description="LEAN Walk-forward 支持 A 股与港股日线冻结策略；Signal Simulation 用统一本地行情快速验证信号。两者都不是实时行情或券商委托。"
       />
-      <Card title="Create LEAN Paper">
+      <Card title="Create Paper Session">
         <Form
           form={form}
           layout="vertical"
           onFinish={submit}
           onFinishFailed={() => message.warning("请先选择 Project 和验证通过的 Backtest")}
-          initialValues={{ autoAdvance: true }}
+          initialValues={{ autoAdvance: true, mode: "lean_walkforward", market: "china", cash: 100000 }}
         >
           <div className="field-grid four">
+            <Form.Item name="mode" label="Mode" rules={[{ required: true }]}>
+              <Select options={[
+                { value: "lean_walkforward", label: "LEAN Walk-forward" },
+                { value: "signal_simulation", label: "Signal Simulation" }
+              ]} />
+            </Form.Item>
             <Form.Item name="name" label="Name"><Input placeholder="600460 MACD daily paper" /></Form.Item>
-            <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
-              <Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} />
-            </Form.Item>
-            <Form.Item name="sourceBacktestId" label="Trusted Backtest" rules={[{ required: true }]}>
-              <Select
-                loading={candidatesLoading}
-                disabled={!projectId}
-                placeholder={projectId ? "Select a validation-passed run" : "Select Project first"}
-                options={candidates.map((item) => ({
-                  value: item.id,
-                  label: `${item.name || item.symbol} · ${item.start} → ${item.end}`
-                }))}
-              />
-            </Form.Item>
+            {paperMode === "lean_walkforward" ? <>
+              <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+                <Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} />
+              </Form.Item>
+              <Form.Item name="sourceBacktestId" label="Trusted Backtest" rules={[{ required: true }]}>
+                <Select
+                  loading={candidatesLoading}
+                  disabled={!projectId}
+                  placeholder={projectId ? "Select a validation-passed run" : "Select Project first"}
+                  options={candidates.map((item) => ({
+                    value: item.id,
+                    label: `${item.name || item.symbol} · ${item.start} → ${item.end}`
+                  }))}
+                />
+              </Form.Item>
+            </> : <>
+              <Form.Item name="market" label="Market" rules={[{ required: true }]}>
+                <Select options={[{ value: "china", label: "China A-share" }, { value: "hongkong", label: "Hong Kong" }]} />
+              </Form.Item>
+              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><Input placeholder="600460 / 00700" /></Form.Item>
+              <Form.Item name="cash" label="Initial Cash" rules={[{ required: true }]}><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+            </>}
             <Form.Item name="startDate" label="First Paper Date">
               <DateStringPicker placeholder="Default: next trading day after backtest" />
             </Form.Item>
             <Form.Item name="autoAdvance" valuePropName="checked"><Checkbox>工作日收盘后自动推进</Checkbox></Form.Item>
           </div>
-          {projectId && !candidatesLoading && candidates.length === 0 && (
+          {paperMode === "lean_walkforward" && projectId && !candidatesLoading && candidates.length === 0 && (
             <Alert
               type="warning"
               showIcon
@@ -235,7 +265,7 @@ export function PaperPage() {
               style={{ marginBottom: 16 }}
             />
           )}
-          <Button data-testid="create-paper-button" type="primary" htmlType="submit" loading={creating} disabled={creating || candidatesLoading || !selectedCandidate}>Create</Button>
+          <Button data-testid="create-paper-button" type="primary" htmlType="submit" loading={creating} disabled={creating || (paperMode === "lean_walkforward" && (candidatesLoading || !selectedCandidate))}>Create</Button>
         </Form>
       </Card>
       <Card title="Sessions" style={{ marginTop: 16 }}>
@@ -246,7 +276,7 @@ export function PaperPage() {
           columns={[
             { title: "Name", dataIndex: "name" },
             { title: "Symbol", dataIndex: "symbol" },
-            { title: "Mode", render: (_, session) => session.mode === "lean_walkforward" ? <Tag color="blue">LEAN Walk-forward</Tag> : <Tag>Legacy / 只读</Tag> },
+            { title: "Mode", render: (_, session) => session.mode === "lean_walkforward" ? <Tag color="blue">LEAN Walk-forward</Tag> : session.mode === "signal_simulation" ? <Tag color="green">Signal Simulation</Tag> : <Tag>Legacy / 只读</Tag> },
             { title: "Last Date", dataIndex: "last_processed_date", render: (value) => value || "-" },
             { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
             { title: "Equity", dataIndex: "equity" },
@@ -261,7 +291,7 @@ export function PaperPage() {
         />
       </Card>
       {selectedSession && (
-        <Card title={`${selectedSession.name} · ${selectedSession.mode === "lean_walkforward" ? "LEAN Paper" : "Legacy Replay"}`} loading={detailLoading} style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => loadDetail(selectedSession)}>Refresh</Button>}>
+        <Card title={`${selectedSession.name} · ${selectedSession.mode === "lean_walkforward" ? "LEAN Paper" : selectedSession.mode === "signal_simulation" ? "Signal Simulation" : "Legacy Replay"}`} loading={detailLoading} style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => loadDetail(selectedSession)}>Refresh</Button>}>
           {selectedSession.failure && <Alert type="error" showIcon message={selectedSession.failure.code || "Paper failed"} description={selectedSession.failure.message} style={{ marginBottom: 16 }} />}
           {selectedSession.mode === "lean_walkforward" && !selectedSession.legacy_read_only && (
             <Space style={{ marginBottom: 16 }}>
@@ -269,6 +299,12 @@ export function PaperPage() {
               <Button type="primary" icon={<PlayCircleOutlined />} onClick={runDay}>Run Trading Day</Button>
               <Tag>source {selectedSession.source_backtest_id}</Tag>
               <Tag>strategy {(selectedSession.strategy_version_id || "-").slice(0, 12)}</Tag>
+            </Space>
+          )}
+          {selectedSession.mode === "signal_simulation" && !selectedSession.legacy_read_only && (
+            <Space style={{ marginBottom: 16 }}>
+              <Input value={runDate} onChange={(event) => setRunDate(event.target.value)} placeholder="YYYY-MM-DD trading date" style={{ width: 260 }} />
+              <Button type="primary" icon={<PlayCircleOutlined />} onClick={runDay}>Simulate Trading Day</Button>
             </Space>
           )}
           {equityPoints.length > 0 && <ReactECharts style={{ height: 280 }} option={{
@@ -443,6 +479,7 @@ export function MonitoringPage() {
   });
   const up = health.data.dependencies.filter((item) => item.ok).length;
   const down = Math.max(0, health.data.dependencies.length - up);
+  const workflowFailures = useAsyncData<WorkflowSummary[]>(() => api.workflows("failed", 50), []);
   return (
     <>
       <div className="toolbar">
@@ -488,6 +525,21 @@ export function MonitoringPage() {
         showIcon
         message="Grafana is intended for internal platform monitoring: API latency, task state, dependency health, data import status, and LEAN runtime behavior."
       />
+      <Card title="Recent Workflow Failures" style={{ marginTop: 16 }}>
+        <Table<WorkflowSummary>
+          data-testid="workflow-failures-table"
+          rowKey="workflow_id"
+          size="small"
+          loading={workflowFailures.loading}
+          dataSource={workflowFailures.data}
+          columns={[
+            { title: "Workflow", dataIndex: "workflow_id", ellipsis: true },
+            { title: "Events", dataIndex: "event_count" },
+            { title: "Failures", dataIndex: "failure_count" },
+            { title: "Updated", dataIndex: "updated_at" }
+          ]}
+        />
+      </Card>
     </>
   );
 }

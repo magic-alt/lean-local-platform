@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import time
@@ -177,12 +177,22 @@ def _query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str
     return _records(getattr(pro, spec.api_name)(**params))
 
 
-def probe_permissions(adapter: TushareAdapter, *, only: set[str] | None = None) -> dict[str, int]:
+def probe_permissions(
+    adapter: TushareAdapter,
+    *,
+    only: set[str] | None = None,
+    run_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, int]:
     ensure_catalog()
     counts = {"available": 0, "empty": 0, "denied": 0, "retryable": 0, "unknown": 0}
     for spec in DATASET_REGISTRY:
         if only and spec.key not in only:
             continue
+        if run_id and _cancelled(run_id, task_id):
+            break
+        if run_id:
+            _item(run_id, spec.key, status="checking", error="")
         checked = utc_now()
         try:
             rows = _query(adapter.pro, spec, dict(spec.probe))
@@ -200,6 +210,44 @@ def probe_permissions(adapter: TushareAdapter, *, only: set[str] | None = None) 
                 """,
                 (status, reason, checked, spec.key),
             )
+        if run_id and not _cancelled(run_id, task_id):
+            _item(run_id, spec.key, status="queued")
+    return counts
+
+
+def _permission_probe_keys(selected_keys: set[str], *, max_age: timedelta = timedelta(hours=6)) -> set[str]:
+    cutoff = datetime.now(timezone.utc) - max_age
+    with db() as connection:
+        rows = connection.execute(
+            "select dataset_key, permission_status, last_checked_at from provider_dataset_catalog where provider='tushare'"
+        ).fetchall()
+    result: set[str] = set()
+    for row in rows:
+        key = str(row["dataset_key"])
+        if key not in selected_keys:
+            continue
+        try:
+            checked = datetime.fromisoformat(str(row["last_checked_at"])) if row["last_checked_at"] else None
+            if checked and checked.tzinfo is None:
+                checked = checked.replace(tzinfo=timezone.utc)
+        except ValueError:
+            checked = None
+        if row["permission_status"] == "unknown" or not checked or checked < cutoff:
+            result.add(key)
+    return result
+
+
+def _permission_summary(selected_keys: set[str]) -> dict[str, int]:
+    counts = {"available": 0, "empty": 0, "denied": 0, "retryable": 0, "unknown": 0}
+    with db() as connection:
+        rows = connection.execute(
+            "select dataset_key, permission_status from provider_dataset_catalog where provider='tushare'"
+        ).fetchall()
+    for row in rows:
+        if row["dataset_key"] not in selected_keys:
+            continue
+        status = str(row["permission_status"] or "unknown")
+        counts[status if status in counts else "unknown"] += 1
     return counts
 
 
@@ -254,10 +302,17 @@ def _save_raw(spec: DatasetSpec, rows: list[dict[str, Any]], batch_id: str) -> t
     return inserted, updated
 
 
-def _cancelled(run_id: str) -> bool:
+def _cancelled(run_id: str, task_id: str | None = None) -> bool:
     with db() as connection:
-        row = connection.execute("select cancel_requested from data_sync_runs where id = ?", (run_id,)).fetchone()
-    return bool(row and row["cancel_requested"])
+        row = connection.execute(
+            "select cancel_requested, status, task_id from data_sync_runs where id = ?",
+            (run_id,),
+        ).fetchone()
+    if not row:
+        return True
+    if task_id and row["task_id"] != task_id:
+        return True
+    return bool(row["cancel_requested"] or row["status"] == "cancelled")
 
 
 def audit_existing_data() -> dict[str, int]:
@@ -300,7 +355,25 @@ def audit_existing_data() -> dict[str, int]:
 
 
 def _item(run_id: str, dataset: str, **fields: Any) -> None:
-    fields["checkpoint_json"] = json_dump(fields.pop("checkpoint")) if "checkpoint" in fields else None
+    checkpoint = fields.pop("checkpoint", None)
+    if checkpoint is not None:
+        with db() as connection:
+            existing_row = connection.execute(
+                "select * from data_sync_items where run_id=? and dataset_key=?",
+                (run_id, dataset),
+            ).fetchone()
+        existing = row_to_dict(existing_row) or {}
+        previous_checkpoint = existing.get("checkpoint") or {}
+        previous_index = int(previous_checkpoint.get("index") or 0)
+        next_index = int(checkpoint.get("index") or 0)
+        if previous_index > next_index:
+            return
+        for counter in ("processed", "inserted", "updated", "failed"):
+            if counter in fields:
+                fields[counter] = max(int(existing.get(counter) or 0), int(fields[counter] or 0))
+        fields["checkpoint_json"] = json_dump(checkpoint)
+    else:
+        fields["checkpoint_json"] = None
     clean = {key: value for key, value in fields.items() if value is not None}
     assignments = ", ".join(f"{key} = ?" for key in clean)
     with db() as connection:
@@ -308,6 +381,15 @@ def _item(run_id: str, dataset: str, **fields: Any) -> None:
             f"update data_sync_items set {assignments} where run_id = ? and dataset_key = ?",
             [*clean.values(), run_id, dataset],
         )
+
+
+def _item_state(run_id: str, dataset: str) -> dict[str, Any]:
+    with db() as connection:
+        row = connection.execute(
+            "select * from data_sync_items where run_id=? and dataset_key=?",
+            (run_id, dataset),
+        ).fetchone()
+    return row_to_dict(row) or {}
 
 
 def _listed_securities() -> list[dict[str, Any]]:
@@ -327,6 +409,53 @@ def _latest_bar(symbol: str) -> str | None:
     return str(row["trade_date"]) if row and row["trade_date"] else None
 
 
+def _latest_raw_date(spec: DatasetSpec, symbol: str | None = None) -> str | None:
+    with db() as connection:
+        if symbol:
+            suffix = ".SH" if symbol.startswith(("5", "6", "9")) else ".BJ" if symbol.startswith(("4", "8")) else ".SZ"
+            row = connection.execute(
+                """
+                select max(business_date) as business_date
+                from provider_raw_records
+                where provider='tushare' and dataset_key=?
+                  and instrument_code in (?, ?)
+                """,
+                (spec.key, symbol, f"{symbol}{suffix}"),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                select max(business_date) as business_date
+                from provider_raw_records
+                where provider='tushare' and dataset_key=?
+                """,
+                (spec.key,),
+            ).fetchone()
+    return str(row["business_date"]) if row and row["business_date"] else None
+
+
+def _raw_row_for_symbol(spec: DatasetSpec, row: dict[str, Any], symbol: str | None) -> dict[str, Any]:
+    if spec.normalizer == "index_weight":
+        return {
+            **row,
+            "index_code": "000300.SH",
+            "con_code": row.get("symbol"),
+        }
+    if not symbol or row.get(spec.instrument_field or ""):
+        return row
+    suffix = ".SH" if symbol.startswith(("5", "6", "9")) else ".BJ" if symbol.startswith(("4", "8")) else ".SZ"
+    result = {**row, spec.instrument_field or "ts_code": f"{symbol}{suffix}"}
+    if spec.normalizer == "dividend":
+        result.setdefault("ann_date", (row.get("metadata") or {}).get("announce_date") or row.get("ex_date"))
+        result.setdefault("end_date", row.get("ex_date"))
+        result.setdefault("div_proc", (row.get("metadata") or {}).get("process"))
+    elif spec.normalizer == "financial":
+        result.setdefault("end_date", row.get("report_date"))
+        result.setdefault("ann_date", row.get("announce_date"))
+        result.setdefault("report_type", row.get("statement_type"))
+    return result
+
+
 def _sync_stock_basic(adapter: TushareAdapter, batch_id: str) -> tuple[int, int, int]:
     records = adapter.stock_basic(["L", "D", "P"])
     spec = next(item for item in DATASET_REGISTRY if item.key == "stock_basic")
@@ -338,9 +467,19 @@ def _sync_stock_basic(adapter: TushareAdapter, batch_id: str) -> tuple[int, int,
     return len(records), inserted, updated + int(imported.get("count") or 0)
 
 
-def _sync_calendar(adapter: TushareAdapter, batch_id: str, end_date: str) -> tuple[int, int, int]:
+def _sync_calendar(
+    adapter: TushareAdapter,
+    batch_id: str,
+    end_date: str,
+    *,
+    full_refresh: bool = False,
+) -> tuple[int, int, int]:
     spec = next(item for item in DATASET_REGISTRY if item.key == "trade_cal")
-    rows = adapter.trade_calendar("1990-01-01", end_date, exchange="SSE")
+    latest = None if full_refresh else _latest_raw_date(spec)
+    start_date = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else "1990-01-01"
+    if start_date > end_date:
+        return 0, 0, 0
+    rows = adapter.trade_calendar(start_date, end_date, exchange="SSE")
     raw = [{**item, "cal_date": str(item.get("trade_date") or "").replace("-", ""), "exchange": "SSE"} for item in rows]
     inserted, updated = _save_raw(spec, raw, batch_id)
     from .ashare_repository import upsert_trade_calendar
@@ -349,63 +488,79 @@ def _sync_calendar(adapter: TushareAdapter, batch_id: str, end_date: str) -> tup
     return len(rows), inserted, updated
 
 
-def _sync_daily(adapter: TushareAdapter, run_id: str, batch_id: str, end_date: str) -> tuple[int, int, int, int]:
-    processed = inserted = updated = failed = 0
+def _sync_daily(
+    adapter: TushareAdapter,
+    run_id: str,
+    batch_id: str,
+    end_date: str,
+    task_id: str | None = None,
+    full_refresh: bool = False,
+) -> tuple[int, int, int, int]:
+    state = _item_state(run_id, "daily")
+    checkpoint = state.get("checkpoint") or {}
+    resume_after = max(0, int(checkpoint.get("index") or 0))
+    processed = int(state.get("processed") or 0)
+    inserted = int(state.get("inserted") or 0)
+    updated = int(state.get("updated") or 0)
+    failed = int(state.get("failed") or 0)
     securities = _listed_securities()
     for index, security in enumerate(securities, start=1):
-        if _cancelled(run_id):
+        if index <= resume_after:
+            continue
+        if _cancelled(run_id, task_id):
             break
         symbol = str(security["symbol"])
-        latest = _latest_bar(symbol)
+        latest = None if full_refresh else _latest_bar(symbol)
         start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else str(security.get("listed_date") or "1990-01-01")
-        if start > end_date:
-            processed += 1
-            continue
-        try:
-            rows = adapter.daily_rows(symbol, start, end_date, adjust="raw")
-            if rows:
-                result = import_ashare_research_data(
-                    symbol=symbol, provider="tushare", market="china", rows=rows,
-                    source="tushare", overwrite=True, adjust="raw", outputsize="full",
-                    asset_class="equity", venue="china", resolution="daily", data_type="trade",
-                    start_date=start, end_date=end_date, allow_missing_trade_dates=True,
-                    repair_ohlc_errors=True,
-                )
-                inserted += int(result.get("rows") or len(rows))
+        if start <= end_date:
+            try:
+                rows = adapter.daily_rows(symbol, start, end_date, adjust="raw")
+                if rows:
+                    result = import_ashare_research_data(
+                        symbol=symbol, provider="tushare", market="china", rows=rows,
+                        source="tushare", overwrite=True, adjust="raw", outputsize="full",
+                        asset_class="equity", venue="china", resolution="daily", data_type="trade",
+                        start_date=start, end_date=end_date,
+                        repair_ohlc_errors=True,
+                    )
+                    inserted += int(result.get("rows") or len(rows))
+                    with db() as connection:
+                        connection.execute(
+                            """
+                            update data_record_issues
+                            set status='resolved', resolved_at=?, resolution_batch_id=?
+                            where dataset_key='daily' and instrument_code=? and status='open'
+                              and issue_code in ('untrusted_source','sync_failed')
+                            """,
+                            (utc_now(), str(result.get("batch_id") or batch_id), symbol),
+                        )
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
                 with db() as connection:
                     connection.execute(
                         """
-                        update data_record_issues
-                        set status='resolved', resolved_at=?, resolution_batch_id=?
-                        where dataset_key='daily' and instrument_code=? and status='open'
-                          and issue_code in ('untrusted_source','sync_failed')
+                        insert into data_record_issues
+                            (id,dataset_key,source,instrument_code,start_date,end_date,issue_code,severity,status,details_json,detected_at)
+                        values (?, 'daily', 'tushare', ?, ?, ?, 'sync_failed', 'error', 'open', ?, ?)
                         """,
-                        (utc_now(), str(result.get("batch_id") or batch_id), symbol),
+                        (str(uuid.uuid4()), symbol, start, end_date, json_dump({"error": str(exc)}), utc_now()),
                     )
-            processed += 1
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            with db() as connection:
-                connection.execute(
-                    """
-                    insert into data_record_issues
-                        (id,dataset_key,source,instrument_code,start_date,end_date,issue_code,severity,status,details_json,detected_at)
-                    values (?, 'daily', 'tushare', ?, ?, ?, 'sync_failed', 'error', 'open', ?, ?)
-                    """,
-                    (str(uuid.uuid4()), symbol, start, end_date, json_dump({"error": str(exc)}), utc_now()),
-                )
+        processed += 1
         _item(run_id, "daily", processed=processed, inserted=inserted, failed=failed, checkpoint={"symbol": symbol, "index": index, "total": len(securities)})
         time.sleep(0.05)
     return processed, inserted, updated, failed
 
 
-def _generic_params(spec: DatasetSpec, end_date: str, symbol: str | None = None) -> dict[str, Any]:
-    end = date.fromisoformat(end_date)
-    start = end - timedelta(days=40 if spec.cadence == "daily" else 400)
+def _generic_params(
+    spec: DatasetSpec,
+    start_date: str,
+    end_date: str,
+    symbol: str | None = None,
+) -> dict[str, Any]:
     params = dict(spec.probe)
     for key in list(params):
         if key == "start_date":
-            params[key] = _compact(start)
+            params[key] = _compact(date.fromisoformat(start_date))
         elif key in {"end_date", "trade_date", "ann_date"}:
             params[key] = _compact(end)
     if symbol and spec.instrument_field:
@@ -443,21 +598,47 @@ def _normalize_optional(spec: DatasetSpec, rows: list[dict[str, Any]], batch_id:
         upsert_index_weights(rows, source="tushare:index_weight", batch_id=batch_id)
 
 
-def _sync_generic(adapter: TushareAdapter, spec: DatasetSpec, run_id: str, batch_id: str, end_date: str) -> tuple[int, int, int, int]:
-    processed = inserted = updated = failed = 0
+def _sync_generic(
+    adapter: TushareAdapter,
+    spec: DatasetSpec,
+    run_id: str,
+    batch_id: str,
+    end_date: str,
+    task_id: str | None = None,
+    full_refresh: bool = False,
+) -> tuple[int, int, int, int]:
+    state = _item_state(run_id, spec.key)
+    checkpoint = state.get("checkpoint") or {}
+    resume_after = max(0, int(checkpoint.get("index") or 0))
+    processed = int(state.get("processed") or 0)
+    inserted = int(state.get("inserted") or 0)
+    updated = int(state.get("updated") or 0)
+    failed = int(state.get("failed") or 0)
     symbols = _listed_securities() if spec.scope == "instrument" else [None]
-    start = (date.fromisoformat(end_date) - timedelta(days=400)).isoformat()
     for index, item in enumerate(symbols, start=1):
-        if _cancelled(run_id):
+        if index <= resume_after:
+            continue
+        if _cancelled(run_id, task_id):
             break
         symbol = str(item["symbol"]) if item else None
+        latest = None if full_refresh else _latest_raw_date(spec, symbol)
+        initial_start = str(item.get("listed_date") or "1990-01-01") if item else "1990-01-01"
+        start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else initial_start
         try:
-            if spec.normalizer == "index_weight":
+            if spec.date_field and start > end_date:
+                rows = []
+            elif spec.normalizer == "index_weight":
                 normalized = adapter.index_weight_rows("000300", start, end_date)
+                rows = normalized
             else:
                 normalized = _normalized_rows(adapter, spec, symbol, start, end_date) if symbol else None
-            rows = normalized if normalized is not None else _query(adapter.pro, spec, _generic_params(spec, end_date, symbol))
-            add, change = _save_raw(spec, rows, batch_id)
+                rows = normalized if normalized is not None else _query(
+                    adapter.pro,
+                    spec,
+                    _generic_params(spec, start, end_date, symbol),
+                )
+            raw_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
+            add, change = _save_raw(spec, raw_rows, batch_id)
             _normalize_optional(spec, rows, batch_id)
             inserted += add
             updated += change
@@ -489,44 +670,95 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
         )
 
 
-def run_sync(run_id: str, *, adapter: TushareAdapter | None = None) -> dict[str, Any]:
-    adapter = adapter or TushareAdapter()
+def run_sync(
+    run_id: str,
+    *,
+    adapter: TushareAdapter | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     batch_id = run_id
     end_date = date.today().isoformat()
     with db() as connection:
-        connection.execute("update data_sync_runs set status='running', started_at=?, error=null where id=?", (utc_now(), run_id))
+        run_row = connection.execute("select * from data_sync_runs where id=?", (run_id,)).fetchone()
+        if not run_row:
+            raise KeyError("Data sync run not found.")
+        if task_id and run_row["task_id"] != task_id:
+            return {"status": "cancelled", "cancelled": True, "superseded": True, "datasets": {}}
+        if run_row["cancel_requested"] or run_row["status"] == "cancelled":
+            return {"status": "cancelled", "cancelled": True, "datasets": {}}
+        if run_row["status"] not in {"queued", "running"}:
+            return {"status": str(run_row["status"]), "cancelled": False, "datasets": {}}
+        if task_id:
+            connection.execute(
+                "update data_sync_runs set status='running', started_at=coalesce(started_at,?), error=null where id=? and task_id=?",
+                (utc_now(), run_id, task_id),
+            )
+        else:
+            connection.execute(
+                "update data_sync_runs set status='running', started_at=coalesce(started_at,?), error=null where id=?",
+                (utc_now(), run_id),
+            )
         run_row = connection.execute("select * from data_sync_runs where id=?", (run_id,)).fetchone()
     run_record = row_to_dict(run_row) or {}
+    adapter = adapter or TushareAdapter()
     selected_keys = set(run_record.get("requestedDatasets") or [spec.key for spec in DATASET_REGISTRY])
+    sync_mode = str(run_record.get("mode") or "incremental")
+    resume_base_mode = str((run_record.get("summary") or {}).get("resumeBaseMode") or "")
+    full_refresh = sync_mode in {"initial_full", "full_rebuild"} or resume_base_mode in {"initial_full", "full_rebuild"}
     try:
         audit = audit_existing_data()
-        permissions = probe_permissions(adapter, only=selected_keys)
+        probe_keys = _permission_probe_keys(selected_keys)
+        if probe_keys:
+            probe_permissions(adapter, only=probe_keys, run_id=run_id, task_id=task_id)
+        permissions = _permission_summary(selected_keys)
         with db() as connection:
             allowed_rows = connection.execute(
                 "select dataset_key from provider_dataset_catalog where provider='tushare' and permission_status in ('available','empty')"
             ).fetchall()
+            item_rows = connection.execute(
+                "select dataset_key, status from data_sync_items where run_id=?",
+                (run_id,),
+            ).fetchall()
         allowed = {row["dataset_key"] for row in allowed_rows}
+        completed = {row["dataset_key"] for row in item_rows if row["status"] == "success"}
         summaries: dict[str, Any] = {}
         for spec in DATASET_REGISTRY:
             if spec.key not in selected_keys:
                 continue
+            if _cancelled(run_id, task_id):
+                break
+            if spec.key in completed:
+                continue
             if spec.key not in allowed:
                 _item(run_id, spec.key, status="skipped", finished_at=utc_now(), error="Permission unavailable or not verified.")
                 continue
-            if _cancelled(run_id):
-                break
             _item(run_id, spec.key, status="running", started_at=utc_now(), error="")
             try:
                 if spec.key == "stock_basic":
                     values = _sync_stock_basic(adapter, batch_id)
                     result = (*values, 0)
                 elif spec.key == "trade_cal":
-                    values = _sync_calendar(adapter, batch_id, end_date)
+                    values = _sync_calendar(adapter, batch_id, end_date, full_refresh=full_refresh)
                     result = (*values, 0)
                 elif spec.key == "daily":
-                    result = _sync_daily(adapter, run_id, batch_id, end_date)
+                    result = _sync_daily(
+                        adapter,
+                        run_id,
+                        batch_id,
+                        end_date,
+                        task_id,
+                        full_refresh=full_refresh,
+                    )
                 else:
-                    result = _sync_generic(adapter, spec, run_id, batch_id, end_date)
+                    result = _sync_generic(
+                        adapter,
+                        spec,
+                        run_id,
+                        batch_id,
+                        end_date,
+                        task_id,
+                        full_refresh=full_refresh,
+                    )
                 processed, inserted, updated, failed = result
                 status = "success" if failed == 0 else "partial"
                 _item(run_id, spec.key, status=status, processed=processed, inserted=inserted, updated=updated, failed=failed, finished_at=utc_now())
@@ -535,33 +767,61 @@ def run_sync(run_id: str, *, adapter: TushareAdapter | None = None) -> dict[str,
             except Exception as exc:  # noqa: BLE001
                 _item(run_id, spec.key, status="failed", failed=1, error=str(exc), finished_at=utc_now())
                 summaries[spec.key] = {"error": str(exc)}
-        cancelled = _cancelled(run_id)
+        cancelled = _cancelled(run_id, task_id)
         degraded = any(item.get("error") or int(item.get("failed") or 0) > 0 for item in summaries.values())
         final_status = "cancelled" if cancelled else "partial" if degraded else "success"
         summary = {
             "status": final_status, "permissions": permissions, "audit": audit,
             "datasets": summaries, "endDate": end_date, "cancelled": cancelled,
+            "mode": sync_mode, "resumeBaseMode": resume_base_mode or None,
         }
         with db() as connection:
-            connection.execute(
-                "update data_sync_runs set status=?, summary_json=?, finished_at=? where id=?",
-                (final_status, json_dump(summary), utc_now(), run_id),
-            )
+            if task_id:
+                connection.execute(
+                    "update data_sync_runs set status=?, summary_json=?, finished_at=? where id=? and task_id=?",
+                    (final_status, json_dump(summary), utc_now(), run_id, task_id),
+                )
+            else:
+                connection.execute(
+                    "update data_sync_runs set status=?, summary_json=?, finished_at=? where id=?",
+                    (final_status, json_dump(summary), utc_now(), run_id),
+                )
         return summary
     except Exception as exc:
         with db() as connection:
-            connection.execute("update data_sync_runs set status='failed', error=?, finished_at=? where id=?", (str(exc), utc_now(), run_id))
+            if task_id:
+                connection.execute(
+                    "update data_sync_runs set status='failed', error=?, finished_at=? where id=? and task_id=?",
+                    (str(exc), utc_now(), run_id, task_id),
+                )
+            else:
+                connection.execute(
+                    "update data_sync_runs set status='failed', error=?, finished_at=? where id=?",
+                    (str(exc), utc_now(), run_id),
+                )
         raise
 
 
-def create_sync_run(*, requested: list[str] | None = None) -> dict[str, Any]:
+def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -> dict[str, Any]:
     ensure_catalog()
+    if mode not in {"auto", "incremental", "full_rebuild"}:
+        raise ValueError("Data sync mode must be auto, incremental, or full_rebuild.")
     with db() as connection:
         active = connection.execute(
             "select * from data_sync_runs where status in ('queued','running','cancelling') order by created_at desc limit 1"
         ).fetchone()
         if active:
             raise ValueError("A full database update is already queued or running.")
+        existing = connection.execute(
+            """
+            select
+                (select count(*) from ashare_daily_bars) +
+                (select count(*) from provider_raw_records) as row_count
+            """
+        ).fetchone()
+    resolved_mode = mode
+    if mode == "auto":
+        resolved_mode = "incremental" if existing and int(existing["row_count"] or 0) > 0 else "initial_full"
     known = {spec.key for spec in DATASET_REGISTRY}
     unknown = sorted(set(requested or []) - known)
     if unknown:
@@ -574,9 +834,9 @@ def create_sync_run(*, requested: list[str] | None = None) -> dict[str, Any]:
             """
             insert into data_sync_runs
                 (id,provider,mode,scope,status,requested_datasets_json,created_at)
-            values (?,'tushare','incremental_repair','all_entitled_low_frequency','queued',?,?)
+            values (?,'tushare',?,'all_entitled_low_frequency','queued',?,?)
             """,
-            (run_id, json_dump([item.key for item in selected]), now),
+            (run_id, resolved_mode, json_dump([item.key for item in selected]), now),
         )
         for spec in selected:
             connection.execute(
@@ -603,15 +863,48 @@ def list_sync_runs(limit: int = 20) -> list[dict[str, Any]]:
 
 
 def request_cancel(run_id: str) -> dict[str, Any]:
-    with db() as connection:
-        connection.execute(
-            "update data_sync_runs set cancel_requested=1,status=case when status='queued' then 'cancelled' else 'cancelling' end where id=? and status in ('queued','running')",
-            (run_id,),
-        )
     item = sync_run(run_id)
     if not item:
         raise KeyError("Data sync run not found.")
-    return item
+    if item["status"] not in {"queued", "running", "cancelling"}:
+        return item
+
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set cancel_requested=1,status='cancelling' where id=? and status in ('queued','running','cancelling')",
+            (run_id,),
+        )
+    task_id = item.get("task_id")
+    if task_id:
+        try:
+            from .tasks import cancel_task
+
+            cancel_task(str(task_id))
+        except KeyError:
+            pass
+
+    now = utc_now()
+    message = "Cancellation requested by user."
+    with db() as connection:
+        connection.execute(
+            """
+            update data_sync_runs
+            set status='cancelled', cancel_requested=1,
+                error=coalesce(error, ?), finished_at=coalesce(finished_at, ?)
+            where id=? and status in ('queued','running','cancelling')
+            """,
+            (message, now, run_id),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set status='cancelled', error=coalesce(error, ?),
+                finished_at=coalesce(finished_at, ?)
+            where run_id=? and status in ('queued','running','checking','cancelling')
+            """,
+            (message, now, run_id),
+        )
+    return sync_run(run_id) or {}
 
 
 def prepare_resume(run_id: str) -> dict[str, Any]:
@@ -620,10 +913,36 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
         raise KeyError("Data sync run not found.")
     if item["status"] not in {"failed", "cancelled", "partial"}:
         raise ValueError("Only failed or cancelled data updates can be resumed.")
+    summary = dict(item.get("summary") or {})
+    summary["resumeBaseMode"] = summary.get("resumeBaseMode") or item.get("mode") or "incremental"
     with db() as connection:
         active = connection.execute("select id from data_sync_runs where id<>? and status in ('queued','running','cancelling') limit 1", (run_id,)).fetchone()
         if active:
             raise ValueError("Another full database update is active.")
-        connection.execute("update data_sync_runs set status='queued',cancel_requested=0,error=null,finished_at=null where id=?", (run_id,))
-        connection.execute("update data_sync_items set status='queued',error=null where run_id=? and status in ('failed','partial','cancelled')", (run_id,))
+        connection.execute(
+            """
+            update data_sync_runs
+            set status='queued', mode='resume_checkpoint', cancel_requested=0,
+                summary_json=?, error=null, started_at=null, finished_at=null
+            where id=?
+            """,
+            (json_dump(summary), run_id),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set status='queued', error=null, finished_at=null
+            where run_id=? and status='cancelled'
+            """,
+            (run_id,),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set status='queued', processed=0, inserted=0, updated=0, failed=0,
+                checkpoint_json=null, error=null, started_at=null, finished_at=null
+            where run_id=? and status in ('failed','partial')
+            """,
+            (run_id,),
+        )
     return sync_run(run_id) or {}

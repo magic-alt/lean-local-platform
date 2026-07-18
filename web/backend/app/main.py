@@ -5,12 +5,14 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
+import uuid
 
-from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, factors, futures, health, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes
+from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, factors, futures, health, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
 from .services.projects import consolidate_automatic_copies
+from .services.workflows import record_workflow_event
 from .observability.metrics import metrics_middleware
 
 
@@ -36,6 +38,32 @@ app.add_middleware(
 logger = logging.getLogger(__name__)
 
 
+@app.middleware("http")
+async def trace_workflow_middleware(request: Request, call_next):
+    trace_id = request.headers.get("X-Trace-ID") or str(uuid.uuid4())
+    workflow_id = request.headers.get("X-Workflow-ID") or trace_id
+    request.state.trace_id = trace_id
+    request.state.workflow_id = workflow_id
+    response = await call_next(request)
+    response.headers["X-Trace-ID"] = trace_id
+    response.headers["X-Workflow-ID"] = workflow_id
+    if response.status_code >= 400 and request.url.path.startswith("/api/"):
+        try:
+            record_workflow_event(
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                stage=request.url.path.split("/", 3)[2],
+                action=request.method.lower(),
+                status="failed",
+                error_code=f"HTTP_{response.status_code}",
+                message=f"{request.method} {request.url.path}",
+                details={"path": request.url.path, "status_code": response.status_code},
+            )
+        except Exception:
+            logger.exception("Unable to persist workflow failure event")
+    return response
+
+
 @app.on_event("startup")
 def startup() -> None:
     try:
@@ -48,7 +76,7 @@ def startup() -> None:
 
 
 @app.exception_handler(LeanWebError)
-async def lean_web_error_handler(_request: Request, exc: LeanWebError) -> JSONResponse:
+async def lean_web_error_handler(request: Request, exc: LeanWebError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
         content=error_payload(
@@ -56,12 +84,15 @@ async def lean_web_error_handler(_request: Request, exc: LeanWebError) -> JSONRe
             error_code=exc.error_code,
             category=exc.category,
             retryable=exc.retryable,
+            details=exc.details,
+            trace_id=getattr(request.state, "trace_id", None),
+            workflow_id=getattr(request.state, "workflow_id", None),
         ),
     )
 
 
 @app.exception_handler(StarletteHTTPException)
-async def http_error_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     message = exc.detail if isinstance(exc.detail, str) else "HTTP request failed."
     code, category, retryable = http_error_code(exc.status_code)
     return JSONResponse(
@@ -72,12 +103,14 @@ async def http_error_handler(_request: Request, exc: StarletteHTTPException) -> 
             category=category,
             retryable=retryable,
             details=None if isinstance(exc.detail, str) else exc.detail,
+            trace_id=getattr(request.state, "trace_id", None),
+            workflow_id=getattr(request.state, "workflow_id", None),
         ),
     )
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
         content=error_payload(
@@ -86,6 +119,8 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
             category="validation",
             retryable=False,
             details=exc.errors(),
+            trace_id=getattr(request.state, "trace_id", None),
+            workflow_id=getattr(request.state, "workflow_id", None),
         ),
     )
 
@@ -116,6 +151,7 @@ app.include_router(ashare_tech_insights.legacy_router)
 app.include_router(insights.router)
 app.include_router(object_store.router)
 app.include_router(maintenance.router)
+app.include_router(workflows.router)
 
 if FRONTEND_DIST.exists():
     app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

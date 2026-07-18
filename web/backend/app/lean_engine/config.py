@@ -32,7 +32,7 @@ def base_config(
     algorithm_location: str = "/Lean/DockerDemoAlgorithm.py",
     language: str = "Python",
 ) -> dict[str, Any]:
-    python_paths = ["/Lean/Run"] if parameters.get("ashareRules") else []
+    python_paths = ["/Lean/Run"] if parameters.get("ashareRules") or parameters.get("hkRules") else []
     return {
         "environment": "backtesting",
         "algorithm-id": algorithm_id,
@@ -118,7 +118,8 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
         requested_resolution,
         requested_data_type,
     )
-    if not (requested_asset_class == "equity" and market == "china") and not has_lean_data(data_request):
+    repairable_equity_market = requested_asset_class == "equity" and market in {"china", "hongkong"}
+    if not repairable_equity_market and not has_lean_data(data_request):
         raise LeanPlatformError(
             f"Missing LEAN {requested_resolution} {requested_data_type} data for "
             f"{ticker} ({requested_asset_class}/{venue})."

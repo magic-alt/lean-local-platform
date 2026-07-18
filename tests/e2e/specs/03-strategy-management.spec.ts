@@ -19,7 +19,7 @@ test.describe("03 strategy/project management", () => {
     await expect(page.getByText(E2E_PROJECT.name).first()).toBeVisible();
     await strategies.expectCodeEditorLoaded();
     await page.reload();
-    await strategies.expectHeading("Project Workspace");
+    await strategies.expectHeading("Projects");
     await expect(page.getByText(E2E_PROJECT.name).first()).toBeVisible();
     await assertNoFrontendErrors();
   });
