@@ -138,12 +138,16 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
 
     with db_module.db() as connection:
         for index, run_id in enumerate(("run-a", "run-b"), start=1):
+            report_path = tmp_path / run_id / "report.html"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(f"<html><body>Report {run_id}</body></html>", encoding="utf-8")
             connection.execute(
                 """
                 insert into backtest_runs
                     (id, symbol, asset_class, venue, resolution, data_type, parameters_json, status,
-                     docker_image, results_dir, result_json_path, statistics_json, validation_json, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     docker_image, results_dir, result_json_path, report_html_path,
+                     statistics_json, validation_json, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -157,6 +161,7 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
                     "lean:test",
                     str(tmp_path / run_id),
                     str(tmp_path / run_id / "result.json"),
+                    str(report_path),
                     json_dump(
                         {
                             "Sharpe Ratio": str(index),
@@ -214,15 +219,18 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
     markdown = client.get("/api/reports/backtest:run-a/export", params={"format": "markdown"})
     assert markdown.status_code == 200
     assert "Backtest Report" in markdown.text
-    csv_response = client.get("/api/reports/backtest:run-a/export", params={"format": "csv"})
-    assert csv_response.status_code == 200
-    assert "metrics,Sharpe Ratio,1" in csv_response.text
-    json_response = client.get("/api/reports/backtest:run-a/export", params={"format": "json"})
-    assert json_response.status_code == 200
-    assert json_response.json()["runId"] == "run-a"
-    pdf_response = client.get("/api/reports/backtest:run-a/export", params={"format": "pdf"})
-    assert pdf_response.status_code == 200
-    assert pdf_response.content.startswith(b"%PDF-1.4")
+    assert markdown.headers["content-type"].startswith("text/plain")
+    assert markdown.headers["content-disposition"].startswith("inline;")
+    assert 'filename="backtest-report-run-a.md"' in markdown.headers["content-disposition"]
+    html = client.get("/api/reports/backtest:run-a/export", params={"format": "html"})
+    assert html.status_code == 200
+    assert "Report run-a" in html.text
+    assert html.headers["content-disposition"].startswith("inline;")
+    assert 'filename="backtest-report-run-a.html"' in html.headers["content-disposition"]
+    for unsupported in ("pdf", "csv", "json"):
+        response = client.get("/api/reports/backtest:run-a/export", params={"format": unsupported})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Unsupported report export format."
 
 
 def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch):

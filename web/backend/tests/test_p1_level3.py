@@ -115,7 +115,7 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
                 "china",
                 "daily",
                 "trade",
-                json_dump({"benchmarkSymbol": "000300"}),
+                json_dump({"benchmarkSymbol": "000300", "source": "akshare"}),
                 "completed",
                 "lean:test",
                 str(tmp_path / "runs" / "run-1"),
@@ -157,6 +157,9 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
     payload = reports.json()
     item = next(report for report in payload if report["id"] == "backtest:run-1")
     assert item["type"] == "backtest"
+    assert item["source"] == "backtest_run"
+    assert item["dataSource"] == "akshare"
+    assert item["benchmark"] == "000300"
     assert item["hasStoredObjects"] is True
     assert item["summaryMetrics"]["Alpha"] == "0.1"
     assert "result" not in item

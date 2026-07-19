@@ -3,13 +3,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..services.db_object_store import get_object, read_bytes
-from ..services.report_export import csv_report, json_report, markdown_report, pdf_report, report_payload
+from ..services.report_export import markdown_report, report_payload
 from ..services.tasks import create_task
 from ..tasks.worker import generate_report_task
 
@@ -108,18 +108,16 @@ def _light_report(item: dict[str, Any]) -> dict[str, Any]:
     parameters = item.get("parameters") or result.get("parameters") or {}
     summary = result.get("summary_metrics") or item.get("summary_metrics") or {}
     fingerprint = item.get("fingerprint") or {}
-    source = (
-        item.get("source")
-        if item.get("source") not in {"backtest_run", "reports"}
-        else parameters.get("source") or fingerprint.get("source") or (fingerprint.get("data") or {}).get("scope", {}).get("source")
-    )
+    is_backtest = item.get("source") == "backtest_run"
+    data_source = parameters.get("source") or fingerprint.get("source") or (fingerprint.get("data") or {}).get("scope", {}).get("source")
     run_id = item.get("run_id") or item.get("id")
     return {
         "id": item.get("id"),
         "runId": run_id,
         "run_id": run_id,
-        "type": "backtest" if item.get("source") == "backtest_run" else "report",
-        "source": source or item.get("source"),
+        "type": "backtest" if is_backtest else "report",
+        "source": "backtest_run" if is_backtest else "generated_report",
+        "dataSource": data_source,
         "status": item.get("status"),
         "symbol": item.get("symbol") or parameters.get("ticker") or parameters.get("symbol"),
         "benchmark": parameters.get("benchmarkSymbol") or fingerprint.get("benchmark_symbol"),
@@ -326,30 +324,23 @@ def export_report(report_id: str, format: str = "html"):
         path = Path(item.get("report_path") or item.get("report_html_path") or "")
         if not path.exists():
             raise HTTPException(status_code=404, detail="HTML report file not found.")
-        return FileResponse(path, media_type="text/html", filename=f"{filename_base}.html")
+        return FileResponse(
+            path,
+            media_type="text/html",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename_base}.html"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     payload = report_payload(item)
-    if export_format == "json":
-        return JSONResponse(
-            payload,
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.json"'},
-        )
     if export_format in {"md", "markdown"}:
         return Response(
             markdown_report(payload),
-            media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.md"'},
-        )
-    if export_format == "csv":
-        return Response(
-            csv_report(payload),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
-        )
-    if export_format == "pdf":
-        return Response(
-            pdf_report(payload),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename_base}.md"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
     raise HTTPException(status_code=400, detail="Unsupported report export format.")

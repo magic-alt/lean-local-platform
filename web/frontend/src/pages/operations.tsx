@@ -75,7 +75,7 @@ import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
-import { asRecord, detailText, shortValue } from "../utils/display";
+import { detailText, shortValue } from "../utils/display";
 import {
   defaultTemplateFor,
   defaultVenueFor,
@@ -384,23 +384,24 @@ export function ReportsPage() {
           size="small"
           columns={[
             { title: "ID", dataIndex: "id", ellipsis: true },
-            { title: "Source", dataIndex: "source", render: (value) => value || "reports" },
+            {
+              title: "Source",
+              dataIndex: "source",
+              render: (value) => value === "backtest_run" ? "Backtest" : value === "generated_report" ? "Generated report" : value || "-"
+            },
             { title: "Run", dataIndex: "run_id", ellipsis: true },
             { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
             { title: "Trust", render: (_, report) => <ValidationStatusTag validation={report.validation ?? report.result?.performance?.validation} /> },
-            { title: "Benchmark", render: (_, report) => shortValue(asRecord(asRecord(report.validation?.data).benchmark).symbol) },
-            { title: "Result", render: (_, report) => report.result_json_path || report.raw_result_object_id ? "available" : "-" },
-            { title: "Objects", render: (_, report) => report.storedObjects?.length || 0 },
+            { title: "Benchmark", dataIndex: "benchmark", render: (value) => shortValue(value) },
             {
               title: "Export",
               render: (_, report) => (
-                <Space>
-                  <a href={api.reportExportUrl(report.id, "html")} target="_blank">HTML</a>
-                  <a href={api.reportExportUrl(report.id, "pdf")} target="_blank">PDF</a>
-                  <a href={api.reportExportUrl(report.id, "markdown")} target="_blank">MD</a>
-                  <a href={api.reportExportUrl(report.id, "csv")} target="_blank">CSV</a>
-                  <a href={api.reportExportUrl(report.id, "json")} target="_blank">JSON</a>
-                </Space>
+                <Tooltip title="点击在新页面预览；右键可将链接另存为文件">
+                  <Space>
+                    <a href={api.reportExportUrl(report.id, "html")} target="_blank" rel="noreferrer">HTML</a>
+                    <a href={api.reportExportUrl(report.id, "markdown")} target="_blank" rel="noreferrer">MD</a>
+                  </Space>
+                </Tooltip>
               )
             }
           ]}

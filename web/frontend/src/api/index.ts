@@ -413,7 +413,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  reportExportUrl: (id: string, format: "html" | "pdf" | "markdown" | "csv" | "json") =>
+  reportExportUrl: (id: string, format: "html" | "markdown") =>
     `/api/reports/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
   objectStoreItems: () => request<ObjectStoreItem[]>("/api/object-store"),
   uploadObjectStoreItem: (key: string, formData: FormData) =>

@@ -568,10 +568,16 @@ export interface ResearchCheckResult {
 
 export interface ReportRecord {
   id: string;
+  type?: "backtest" | "report";
   source?: string;
+  dataSource?: string | null;
   task_id?: string | null;
   run_id: string;
   status: string;
+  benchmark?: string | null;
+  summaryMetrics?: Record<string, unknown>;
+  hasStoredObjects?: boolean;
+  hasFingerprint?: boolean;
   report_path?: string | null;
   result_json_path?: string | null;
   raw_result_object_id?: string | null;
