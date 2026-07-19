@@ -4,10 +4,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 
 
 INSTRUMENT_NAMESPACE = uuid.UUID("ed487062-bcf1-47c6-8f1a-1973b5f9edb0")
+WRITE_BATCH_SIZE = 5_000
+
+
+def _chunks(values: list[Any], size: int = WRITE_BATCH_SIZE) -> list[list[Any]]:
+    return [values[offset : offset + size] for offset in range(0, len(values), size)]
 
 
 def normalize_date(value: Any, field: str = "date") -> str:
@@ -153,6 +158,7 @@ def upsert_market_daily_bars(
     resolution: str = "daily",
     data_type: str = "trade",
     adjust: str = "raw",
+    bulk: bool = False,
 ) -> dict[str, Any]:
     if not rows:
         return {"count": 0}
@@ -168,62 +174,67 @@ def upsert_market_daily_bars(
         status="active",
     )
     now = utc_now()
-    count = 0
-    with db() as connection:
-        for row in rows:
-            trade_date = normalize_date(row.get("trade_date") or row.get("tradeDate") or row.get("date") or row.get("timestamp"), "trade_date")
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-                     open, high, low, close, settle, volume, amount, turnover_rate, open_interest,
-                     prev_close, pct_change, adjust, adj_factor, source, batch_id, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(instrument_id, trade_date, resolution, data_type, adjust, source) do update set
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    settle = excluded.settle,
-                    volume = excluded.volume,
-                    amount = excluded.amount,
-                    turnover_rate = excluded.turnover_rate,
-                    open_interest = excluded.open_interest,
-                    prev_close = excluded.prev_close,
-                    pct_change = excluded.pct_change,
-                    adj_factor = excluded.adj_factor,
-                    batch_id = excluded.batch_id,
-                    created_at = excluded.created_at
-                """,
-                (
-                    item_id,
-                    first_symbol,
-                    asset_class.lower(),
-                    market.lower(),
-                    (venue or market).lower(),
-                    trade_date,
-                    resolution,
-                    data_type,
-                    optional_float(row.get("open")),
-                    optional_float(row.get("high")),
-                    optional_float(row.get("low")),
-                    optional_float(row.get("close")),
-                    optional_float(row.get("settle") or row.get("settle_price")),
-                    optional_float(row.get("volume")),
-                    optional_float(row.get("amount")),
-                    optional_float(row.get("turnover_rate") or row.get("turnoverRate")),
-                    optional_float(row.get("open_interest") or row.get("openInterest")),
-                    optional_float(row.get("prev_close") or row.get("pre_close") or row.get("prevClose")),
-                    optional_float(row.get("pct_change") or row.get("pctChange")),
-                    adjust or "raw",
-                    optional_float(row.get("adj_factor") or row.get("adjFactor")),
-                    source,
-                    batch_id,
-                    now,
-                ),
+    parameters = []
+    for row in rows:
+        trade_date = normalize_date(
+            row.get("trade_date") or row.get("tradeDate") or row.get("date") or row.get("timestamp"),
+            "trade_date",
+        )
+        parameters.append(
+            (
+                item_id,
+                first_symbol,
+                asset_class.lower(),
+                market.lower(),
+                (venue or market).lower(),
+                trade_date,
+                resolution,
+                data_type,
+                optional_float(row.get("open")),
+                optional_float(row.get("high")),
+                optional_float(row.get("low")),
+                optional_float(row.get("close")),
+                optional_float(row.get("settle") or row.get("settle_price")),
+                optional_float(row.get("volume")),
+                optional_float(row.get("amount")),
+                optional_float(row.get("turnover_rate") or row.get("turnoverRate")),
+                optional_float(row.get("open_interest") or row.get("openInterest")),
+                optional_float(row.get("prev_close") or row.get("pre_close") or row.get("prevClose")),
+                optional_float(row.get("pct_change") or row.get("pctChange")),
+                adjust or "raw",
+                optional_float(row.get("adj_factor") or row.get("adjFactor")),
+                source,
+                batch_id,
+                now,
             )
-            count += 1
-    return {"instrumentId": item_id, "count": count}
+        )
+    sql = """
+        insert into market_daily_bars
+            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+             open, high, low, close, settle, volume, amount, turnover_rate, open_interest,
+             prev_close, pct_change, adjust, adj_factor, source, batch_id, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(instrument_id, trade_date, resolution, data_type, adjust, source) do update set
+            open = excluded.open,
+            high = excluded.high,
+            low = excluded.low,
+            close = excluded.close,
+            settle = excluded.settle,
+            volume = excluded.volume,
+            amount = excluded.amount,
+            turnover_rate = excluded.turnover_rate,
+            open_interest = excluded.open_interest,
+            prev_close = excluded.prev_close,
+            pct_change = excluded.pct_change,
+            adj_factor = excluded.adj_factor,
+            batch_id = excluded.batch_id,
+            created_at = excluded.created_at
+    """
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters):
+            connection.executemany(sql, chunk)
+    return {"instrumentId": item_id, "count": len(parameters)}
 
 
 def upsert_market_trade_status(
@@ -235,58 +246,64 @@ def upsert_market_trade_status(
     venue: str | None = None,
     source: str,
     batch_id: str | None = None,
+    bulk: bool = False,
 ) -> dict[str, Any]:
     if not rows:
         return {"count": 0}
     item_id = upsert_instrument(symbol=symbol, asset_class=asset_class, market=market, venue=venue or market, source=source)
     now = utc_now()
-    count = 0
-    with db() as connection:
-        for row in rows:
-            trade_date = normalize_date(row.get("trade_date") or row.get("tradeDate") or row.get("date"), "trade_date")
-            can_buy = bool_int(row.get("can_buy", row.get("canBuy", True)), default=True)
-            can_sell = bool_int(row.get("can_sell", row.get("canSell", True)), default=True)
-            is_suspended = bool_int(row.get("is_suspended", row.get("isSuspended", False)))
-            connection.execute(
-                """
-                insert into market_trade_status
-                    (instrument_id, symbol, asset_class, market, venue, trade_date, is_tradeable, is_suspended,
-                     can_buy, can_sell, limit_up, limit_down, status, reason, source, batch_id, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(instrument_id, trade_date, source) do update set
-                    is_tradeable = excluded.is_tradeable,
-                    is_suspended = excluded.is_suspended,
-                    can_buy = excluded.can_buy,
-                    can_sell = excluded.can_sell,
-                    limit_up = excluded.limit_up,
-                    limit_down = excluded.limit_down,
-                    status = excluded.status,
-                    reason = excluded.reason,
-                    batch_id = excluded.batch_id,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    item_id,
-                    symbol,
-                    asset_class.lower(),
-                    market.lower(),
-                    (venue or market).lower(),
-                    trade_date,
-                    1 if can_buy or can_sell else 0,
-                    is_suspended,
-                    can_buy,
-                    can_sell,
-                    optional_float(row.get("limit_up") or row.get("limitUp")),
-                    optional_float(row.get("limit_down") or row.get("limitDown")),
-                    row.get("status"),
-                    row.get("reason"),
-                    source,
-                    batch_id,
-                    now,
-                ),
+    parameters = []
+    for row in rows:
+        trade_date = normalize_date(
+            row.get("trade_date") or row.get("tradeDate") or row.get("date"),
+            "trade_date",
+        )
+        can_buy = bool_int(row.get("can_buy", row.get("canBuy", True)), default=True)
+        can_sell = bool_int(row.get("can_sell", row.get("canSell", True)), default=True)
+        is_suspended = bool_int(row.get("is_suspended", row.get("isSuspended", False)))
+        parameters.append(
+            (
+                item_id,
+                symbol,
+                asset_class.lower(),
+                market.lower(),
+                (venue or market).lower(),
+                trade_date,
+                1 if can_buy or can_sell else 0,
+                is_suspended,
+                can_buy,
+                can_sell,
+                optional_float(row.get("limit_up") or row.get("limitUp")),
+                optional_float(row.get("limit_down") or row.get("limitDown")),
+                row.get("status"),
+                row.get("reason"),
+                source,
+                batch_id,
+                now,
             )
-            count += 1
-    return {"instrumentId": item_id, "count": count}
+        )
+    sql = """
+        insert into market_trade_status
+            (instrument_id, symbol, asset_class, market, venue, trade_date, is_tradeable, is_suspended,
+             can_buy, can_sell, limit_up, limit_down, status, reason, source, batch_id, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(instrument_id, trade_date, source) do update set
+            is_tradeable = excluded.is_tradeable,
+            is_suspended = excluded.is_suspended,
+            can_buy = excluded.can_buy,
+            can_sell = excluded.can_sell,
+            limit_up = excluded.limit_up,
+            limit_down = excluded.limit_down,
+            status = excluded.status,
+            reason = excluded.reason,
+            batch_id = excluded.batch_id,
+            updated_at = excluded.updated_at
+    """
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters):
+            connection.executemany(sql, chunk)
+    return {"instrumentId": item_id, "count": len(parameters)}
 
 
 def list_instruments(asset_class: str | None = None, market: str | None = None, limit: int = 500) -> list[dict[str, Any]]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import base64
 from datetime import datetime, timezone
+import threading
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -40,6 +41,9 @@ BAR_COLUMNS = [
     "volume",
     "imported_at",
 ]
+_SCHEMA_READY = False
+_SCHEMA_LOCK = threading.Lock()
+INSERT_BATCH_SIZE = 100_000
 
 
 def _normalize_query_market(asset_class: str, market: str | None, venue: str | None) -> str | None:
@@ -117,35 +121,42 @@ def _client(database: str | None = None):
 
 
 def ensure_schema() -> bool:
+    global _SCHEMA_READY
     if not enabled():
         return False
-    base = _client("default")
-    database = _identifier(CLICKHOUSE_DATABASE)
-    base.command(f"CREATE DATABASE IF NOT EXISTS {database}")
-    base.command(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_table()}
-        (
-            asset_class LowCardinality(String),
-            symbol String,
-            venue LowCardinality(String),
-            resolution LowCardinality(String),
-            data_type LowCardinality(String),
-            source LowCardinality(String),
-            timestamp DateTime64(3, 'UTC'),
-            open Float64,
-            high Float64,
-            low Float64,
-            close Float64,
-            volume Float64,
-            imported_at DateTime64(3, 'UTC'),
-            date Date MATERIALIZED toDate(timestamp)
+    if _SCHEMA_READY:
+        return True
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return True
+        base = _client("default")
+        database = _identifier(CLICKHOUSE_DATABASE)
+        base.command(f"CREATE DATABASE IF NOT EXISTS {database}")
+        base.command(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_table()}
+            (
+                asset_class LowCardinality(String),
+                symbol String,
+                venue LowCardinality(String),
+                resolution LowCardinality(String),
+                data_type LowCardinality(String),
+                source LowCardinality(String),
+                timestamp DateTime64(3, 'UTC'),
+                open Float64,
+                high Float64,
+                low Float64,
+                close Float64,
+                volume Float64,
+                imported_at DateTime64(3, 'UTC'),
+                date Date MATERIALIZED toDate(timestamp)
+            )
+            ENGINE = ReplacingMergeTree(imported_at)
+            PARTITION BY toYYYYMM(timestamp)
+            ORDER BY (asset_class, venue, symbol, resolution, data_type, timestamp)
+            """
         )
-        ENGINE = ReplacingMergeTree(imported_at)
-        PARTITION BY toYYYYMM(timestamp)
-        ORDER BY (asset_class, venue, symbol, resolution, data_type, timestamp)
-        """
-    )
+        _SCHEMA_READY = True
     return True
 
 
@@ -198,10 +209,11 @@ def mirror_rows(metadata: dict[str, Any], rows: list[dict[str, str]]) -> dict[st
         return {"enabled": False, "inserted": 0}
     if not rows:
         return {"enabled": True, "inserted": 0}
-    health = ping()
-    if not health["ok"]:
-        return {"enabled": True, "inserted": 0, "error": health["detail"]}
-    ensure_schema()
+    try:
+        ensure_schema()
+    except Exception as exc:
+        set_dependency_status("clickhouse", False)
+        return {"enabled": True, "inserted": 0, "error": str(exc)}
     imported_at = datetime.now(timezone.utc)
     asset_class = str(metadata.get("asset_class") or metadata.get("assetClass") or "equity")
     normalized_symbol = _normalize_query_symbol(
@@ -238,9 +250,26 @@ def mirror_rows(metadata: dict[str, Any], rows: list[dict[str, str]]) -> dict[st
             )
         except Exception:
             skipped += 1
+    batches = 0
     if payload:
-        _client().insert("market_bars", payload, column_names=BAR_COLUMNS)
-    return {"enabled": True, "inserted": len(payload), "skipped": skipped}
+        client = _client()
+        # The table is partitioned monthly and ClickHouse rejects a single
+        # insert spanning more than 100 partitions. Five-year groups cap each
+        # block at 60 monthly partitions while preserving large row batches.
+        by_period: dict[int, list[tuple[Any, ...]]] = {}
+        for item in payload:
+            timestamp = item[6]
+            by_period.setdefault(timestamp.year // 5, []).append(item)
+        for period_rows in by_period.values():
+            for offset in range(0, len(period_rows), INSERT_BATCH_SIZE):
+                client.insert(
+                    "market_bars",
+                    period_rows[offset : offset + INSERT_BATCH_SIZE],
+                    column_names=BAR_COLUMNS,
+                )
+                batches += 1
+        set_dependency_status("clickhouse", True)
+    return {"enabled": True, "inserted": len(payload), "skipped": skipped, "batches": batches}
 
 
 def _literal(value: str) -> str:

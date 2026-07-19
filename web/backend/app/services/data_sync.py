@@ -6,11 +6,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
+from pathlib import Path
 import shutil
 import time
 import uuid
 from typing import Any, Callable, TypeVar
 
+from ..core.config import (
+    DATA_DIR,
+    HOST_DATA_DIR,
+    HOST_PARQUET_DIR,
+    HOST_PLATFORM_DIR,
+    PARQUET_DIR,
+    RUNTIME_DIR,
+)
 from ..db import bulk_db, database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..research.factors import upsert_factor_values
 from .ashare_repository import (
@@ -252,6 +261,65 @@ def catalog_payload() -> dict[str, Any]:
     }
 
 
+def on_demand_storage_targets() -> list[dict[str, Any]]:
+    """Return explicitly selectable, server-writable export roots."""
+    data_root = DATA_DIR.expanduser().resolve()
+    host_data_root = HOST_DATA_DIR.expanduser().resolve()
+    parquet_root = PARQUET_DIR.expanduser().resolve()
+    runtime_root = (RUNTIME_DIR / "exports").resolve()
+    targets: list[dict[str, Any]] = [
+        {
+            "id": "data",
+            "label": "LEAN 数据目录",
+            "path": str(data_root),
+            "displayPath": str(host_data_root),
+            "kind": "mounted_data",
+        },
+        {
+            "id": "parquet",
+            "label": "Parquet 数据湖",
+            "path": str(parquet_root),
+            "displayPath": str(HOST_PARQUET_DIR),
+            "kind": "parquet_lake",
+        },
+        {
+            "id": "workspace",
+            "label": "项目导出目录",
+            "path": str(runtime_root),
+            "displayPath": str(HOST_PLATFORM_DIR / "web" / "runtime" / "exports"),
+            "kind": "workspace",
+        },
+    ]
+    configured = [item.strip() for item in os.environ.get("LEAN_ON_DEMAND_EXPORT_ROOTS", "").split(os.pathsep) if item.strip()]
+    for index, raw_path in enumerate(configured, start=1):
+        path = Path(raw_path).expanduser().resolve()
+        targets.append(
+            {
+                "id": f"external_{index}",
+                "label": f"外部存储 {index}",
+                "path": str(path),
+                "displayPath": str(path),
+                "kind": "external",
+            }
+        )
+    return targets
+
+
+def _on_demand_destination(storage_target: str, relative_path: str | None) -> tuple[Path, Path]:
+    target = next((item for item in on_demand_storage_targets() if item["id"] == storage_target), None)
+    if not target:
+        raise ValueError("A valid storage target must be selected explicitly.")
+    relative = Path(str(relative_path or "tushare-on-demand").strip())
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("Export subdirectory must be a relative path without '..'.")
+    root = Path(str(target["path"])).resolve()
+    output_dir = (root / relative).resolve()
+    if not output_dir.is_relative_to(root):
+        raise ValueError("Export path escapes the selected storage target.")
+    display_root = Path(str(target["displayPath"])).expanduser()
+    return output_dir, display_root / relative
+
+
 def _query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str, Any]]:
     if hasattr(pro, "query"):
         return _records(pro.query(spec.api_name, **params))
@@ -378,6 +446,207 @@ def _record_key(spec: DatasetSpec, row: dict[str, Any]) -> str:
     if not values or not any(values):
         values = [json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)]
     return hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()
+
+
+def _api_snapshot(adapter: TushareAdapter) -> dict[str, int]:
+    counter = getattr(getattr(adapter, "pro", None), "call_counts", None)
+    return counter() if callable(counter) else {}
+
+
+def _api_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
+    return {
+        key: max(0, int(after.get(key, 0)) - int(before.get(key, 0)))
+        for key in set(before) | set(after)
+        if int(after.get(key, 0)) > int(before.get(key, 0))
+    }
+
+
+def _validate_dataset_rows(spec: DatasetSpec, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply the critical/warning gate shared by every registry dataset."""
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        missing_required: list[str] = []
+        if spec.key_fields:
+            first_key = spec.key_fields[0]
+            if row.get(first_key) in (None, ""):
+                missing_required.append(first_key)
+            optional_missing = [field for field in spec.key_fields[1:] if row.get(field) in (None, "")]
+            if optional_missing:
+                warnings.append({"row": index, "code": "optional_key_blank", "fields": optional_missing})
+        if spec.date_field:
+            value = row.get(spec.date_field)
+            if value in (None, ""):
+                missing_required.append(spec.date_field)
+            elif _iso(value) is None:
+                errors.append({"row": index, "code": "invalid_date", "field": spec.date_field, "value": str(value)[:80]})
+        if missing_required:
+            errors.append({"row": index, "code": "missing_required", "fields": sorted(set(missing_required))})
+        key = _record_key(spec, row)
+        if key in seen:
+            errors.append({"row": index, "code": "duplicate_primary_key", "key": key})
+        seen.add(key)
+        if len(errors) >= 50:
+            break
+    result = {
+        "status": "failed" if errors else "warning" if warnings else "passed",
+        "criticalErrors": errors[:50],
+        "warnings": warnings[:50],
+        "checkedRows": len(rows),
+        "rejectedRows": len({item["row"] for item in errors}),
+    }
+    if errors:
+        raise ValueError(f"{spec.key} validation gate failed: {json_dump(result)}")
+    return result
+
+
+def _record_ingestion_manifest(
+    *,
+    run_id: str,
+    spec: DatasetSpec,
+    scope_key: str,
+    request: dict[str, Any],
+    rows: list[dict[str, Any]],
+    validation: dict[str, Any],
+    endpoint_counts: dict[str, int],
+    coverage_start: str | None,
+    coverage_end: str | None,
+    status: str = "success",
+) -> None:
+    canonical_payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    canonical_keys = "|".join(sorted(_record_key(spec, row) for row in rows))
+    with db() as connection:
+        connection.execute(
+            """
+            insert into provider_ingestion_manifests
+                (id,run_id,provider,dataset_key,scope_key,request_json,response_rows,
+                 normalized_rows,rejected_rows,payload_sha256,keys_sha256,coverage_start,
+                 coverage_end,status,validation_json,endpoint_counts_json,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(uuid.uuid4()), run_id, "tushare", spec.key, scope_key, json_dump(request),
+                len(rows), len(rows) - int(validation.get("rejectedRows") or 0),
+                int(validation.get("rejectedRows") or 0),
+                hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest(),
+                hashlib.sha256(canonical_keys.encode("utf-8")).hexdigest(),
+                coverage_start, coverage_end, status, json_dump(validation),
+                json_dump(endpoint_counts), utc_now(),
+            ),
+        )
+
+
+def _coverage_watermarks(spec: DatasetSpec) -> dict[str, str]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select scope_key, coverage_end from provider_dataset_watermarks
+            where provider='tushare' and dataset_key=?
+            """,
+            (spec.key,),
+        ).fetchall()
+    return {str(row["scope_key"]): str(row["coverage_end"]) for row in rows if row["coverage_end"]}
+
+
+def _set_coverage_watermark(
+    spec: DatasetSpec,
+    *,
+    scope_key: str,
+    coverage_start: str,
+    coverage_end: str,
+    rows: list[dict[str, Any]],
+    run_id: str,
+    validation_status: str,
+) -> None:
+    data_dates = sorted(
+        value for value in (_iso(row.get(spec.date_field)) for row in rows) if value
+    ) if spec.date_field else []
+    with db() as connection:
+        connection.execute(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_data_date,
+                 last_run_id,empty_result,validation_status,updated_at)
+            values ('tushare',?,?,?,?,?,?,?,?,?)
+            on conflict(provider,dataset_key,scope_key) do update set
+                coverage_start=case
+                    when provider_dataset_watermarks.coverage_start is null then excluded.coverage_start
+                    when excluded.coverage_start < provider_dataset_watermarks.coverage_start then excluded.coverage_start
+                    else provider_dataset_watermarks.coverage_start end,
+                coverage_end=excluded.coverage_end,
+                last_data_date=coalesce(excluded.last_data_date,provider_dataset_watermarks.last_data_date),
+                last_run_id=excluded.last_run_id,
+                empty_result=excluded.empty_result,
+                validation_status=excluded.validation_status,
+                updated_at=excluded.updated_at
+            """,
+            (
+                spec.key, scope_key, coverage_start, coverage_end,
+                data_dates[-1] if data_dates else None, run_id, 0 if rows else 1,
+                validation_status, utc_now(),
+            ),
+        )
+
+
+def _bootstrap_sparse_watermarks_from_legacy_checkpoint(
+    spec: DatasetSpec,
+    securities: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Convert a trustworthy sequential legacy checkpoint into coverage rows."""
+    if spec.key != "suspend_d" or not securities:
+        return {}
+    with db() as connection:
+        row = connection.execute(
+            """
+            select i.checkpoint_json,r.summary_json,r.id as run_id
+            from data_sync_items i join data_sync_runs r on r.id=i.run_id
+            where i.dataset_key=? and i.checkpoint_json is not null
+              and i.status in ('success','partial','cancelled')
+            order by r.created_at desc limit 1
+            """,
+            (spec.key,),
+        ).fetchone()
+    record = row_to_dict(row) or {}
+    checkpoint = record.get("checkpoint") or {}
+    summary = record.get("summary") or {}
+    completed = min(len(securities), max(0, int(checkpoint.get("index") or 0)))
+    coverage_end = str(summary.get("marketDataEndDate") or "")
+    if completed <= 0 or not coverage_end:
+        return {}
+    now = utc_now()
+    parameters = [
+        (
+            "tushare",
+            spec.key,
+            str(item["symbol"]),
+            str(item.get("listed_date") or "1990-01-01"),
+            coverage_end,
+            None,
+            str(record.get("run_id") or ""),
+            0,
+            "legacy_checkpoint",
+            now,
+        )
+        for item in securities[:completed]
+    ]
+    with bulk_db() as connection:
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_data_date,
+                 last_run_id,empty_result,validation_status,updated_at)
+            values (?,?,?,?,?,?,?,?,?,?)
+            on conflict(provider,dataset_key,scope_key) do update set
+                coverage_end=case when excluded.coverage_end>provider_dataset_watermarks.coverage_end
+                                  then excluded.coverage_end else provider_dataset_watermarks.coverage_end end,
+                last_run_id=excluded.last_run_id,
+                validation_status=excluded.validation_status,
+                updated_at=excluded.updated_at
+            """,
+            parameters,
+        )
+    return {str(item["symbol"]): coverage_end for item in securities[:completed]}
 
 
 def _save_raw(
@@ -622,8 +891,19 @@ def _throughput_metrics(
     downloaded: int,
     committed: int,
     queue_depth: int = 0,
+    processed_units: int = 0,
+    total_units: int = 0,
+    empty_units: int = 0,
+    validated: int = 0,
+    quarantined: int = 0,
+    endpoint_calls: dict[str, int] | None = None,
+    timings: dict[str, float] | None = None,
+    rate_units: int | None = None,
 ) -> dict[str, Any]:
     elapsed = max(0.001, time.monotonic() - started)
+    session_units = processed_units if rate_units is None else max(0, rate_units)
+    units_per_second = session_units / elapsed
+    remaining_units = max(0, total_units - processed_units)
     return {
         "phase": phase,
         "apiCalls": api_calls,
@@ -637,6 +917,16 @@ def _throughput_metrics(
         "downloadRowsPerSecond": round(downloaded / elapsed, 2),
         "writeRowsPerSecond": round(committed / elapsed, 2),
         "queueDepth": queue_depth,
+        "processedUnits": processed_units,
+        "sessionProcessedUnits": session_units,
+        "totalUnits": total_units,
+        "emptyUnits": empty_units,
+        "validatedRows": validated,
+        "quarantinedRows": quarantined,
+        "unitsPerSecond": round(units_per_second, 3),
+        "etaSeconds": round(remaining_units / units_per_second, 1) if units_per_second > 0 else None,
+        "endpointCalls": endpoint_calls or {},
+        "timingsMs": {key: round(value, 2) for key, value in (timings or {}).items()},
         "elapsedSeconds": round(elapsed, 2),
         **_disk_metrics(),
     }
@@ -723,7 +1013,7 @@ def _checkpoint_complete(item: dict[str, Any]) -> bool:
     # Legacy generic datasets intentionally preserve their completed partial
     # checkpoints because retrying them restarts the whole instrument loop.
     work_items_complete = (
-        str(item.get("dataset_key") or "") not in {"daily", "adj_factor"}
+        str(item.get("dataset_key") or "") not in {"daily", "adj_factor", "suspend_d"}
         or int(item.get("failed") or checkpoint.get("failed") or 0) == 0
     )
     return (
@@ -875,11 +1165,13 @@ def _raw_row_for_symbol(spec: DatasetSpec, row: dict[str, Any], symbol: str | No
 
 
 def _sync_stock_basic(adapter: TushareAdapter, batch_id: str) -> tuple[int, int, int]:
+    api_before = _api_snapshot(adapter)
     records = adapter.stock_basic(["L", "D", "P"])
     spec = next(item for item in DATASET_REGISTRY if item.key == "stock_basic")
     raw_rows = []
     for item in records:
         raw_rows.append({**item, "ts_code": item.get("ts_code") or item.get("symbol")})
+    validation = _validate_dataset_rows(spec, raw_rows)
     inserted, updated = _save_raw(spec, raw_rows, batch_id)
     # The endpoint returns the full security master on every request. Avoid
     # thousands of row-by-row master/instrument upserts when its content hash
@@ -887,6 +1179,17 @@ def _sync_stock_basic(adapter: TushareAdapter, batch_id: str) -> tuple[int, int,
     # one provider call and no database rewrite.
     if inserted or updated:
         import_security_master(records, source="tushare:stock_basic", universe_code="ALL_A")
+    _record_ingestion_manifest(
+        run_id=batch_id,
+        spec=spec,
+        scope_key="global",
+        request={"listStatus": ["L", "D", "P"]},
+        rows=raw_rows,
+        validation=validation,
+        endpoint_counts=_api_delta(api_before, _api_snapshot(adapter)),
+        coverage_start=None,
+        coverage_end=None,
+    )
     return len(records), inserted, updated
 
 
@@ -902,12 +1205,34 @@ def _sync_calendar(
     start_date = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else "1990-01-01"
     if start_date > end_date:
         return 0, 0, 0
+    api_before = _api_snapshot(adapter)
     rows = adapter.trade_calendar(start_date, end_date, exchange="SSE")
     raw = [{**item, "cal_date": str(item.get("trade_date") or "").replace("-", ""), "exchange": "SSE"} for item in rows]
+    validation = _validate_dataset_rows(spec, raw)
     inserted, updated = _save_raw(spec, raw, batch_id)
     from .ashare_repository import upsert_trade_calendar
     open_dates = [str(item["trade_date"]) for item in rows if item.get("is_open")]
     upsert_trade_calendar("china", open_dates, source="tushare:trade_cal:SSE", batch_id=batch_id)
+    _record_ingestion_manifest(
+        run_id=batch_id,
+        spec=spec,
+        scope_key="SSE",
+        request={"exchange": "SSE", "startDate": start_date, "endDate": end_date},
+        rows=raw,
+        validation=validation,
+        endpoint_counts=_api_delta(api_before, _api_snapshot(adapter)),
+        coverage_start=start_date,
+        coverage_end=end_date,
+    )
+    _set_coverage_watermark(
+        spec,
+        scope_key="SSE",
+        coverage_start=start_date,
+        coverage_end=end_date,
+        rows=raw,
+        run_id=batch_id,
+        validation_status=str(validation["status"]),
+    )
     return len(rows), inserted, updated
 
 
@@ -923,15 +1248,22 @@ def _sync_daily(
     checkpoint = state.get("checkpoint") or {}
     resume_after = max(0, int(checkpoint.get("index") or 0))
     processed = int(state.get("processed") or 0)
+    session_processed_base = processed
     inserted = int(state.get("inserted") or 0)
     updated = int(state.get("updated") or 0)
     failed = int(state.get("failed") or 0)
     securities = _listed_securities()
     latest_by_symbol = {} if full_refresh else _latest_bars_by_symbol()
     started = time.monotonic()
+    api_before = _api_snapshot(adapter)
+    endpoint_calls: dict[str, int] = {}
     api_calls = 0
     downloaded = 0
     committed = 0
+    empty_units = 0
+    validated = 0
+    timings = {"fetchWait": 0.0, "validate": 0.0, "mysqlAndDerived": 0.0}
+    spec = next(item for item in DATASET_REGISTRY if item.key == "daily")
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
 
     work: list[tuple[int, dict[str, Any], str, str, str]] = []
@@ -979,25 +1311,49 @@ def _sync_daily(
                 break
             future = pending.pop(index)
             try:
+                stage_started = time.perf_counter()
                 rows = future.result()
-                api_calls += int(start <= symbol_end)
+                timings["fetchWait"] += (time.perf_counter() - stage_started) * 1000
+                endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
+                api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
                 if rows:
+                    stage_started = time.perf_counter()
+                    audit_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
+                    validation = _validate_dataset_rows(spec, audit_rows)
+                    validated += len(rows)
+                    timings["validate"] += (time.perf_counter() - stage_started) * 1000
                     estimated_bytes = sum(
                         len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
                         for row in rows
                     ) * 10
                     _assert_disk_capacity(estimated_bytes)
+                    stage_started = time.perf_counter()
                     result = import_ashare_research_data(
                         symbol=symbol, provider="tushare", market="china", rows=rows,
                         source="tushare", overwrite=True, adjust="raw", outputsize="full",
                         asset_class="equity", venue="china", resolution="daily", data_type="trade",
                         start_date=start, end_date=symbol_end,
                         repair_ohlc_errors=True,
+                        suspension_evidence_rows=[],
                         infer_suspensions_from_authoritative_absence=True,
+                        bulk_write=True,
+                        materialize_derived=False,
                     )
+                    timings["mysqlAndDerived"] += (time.perf_counter() - stage_started) * 1000
                     inserted += int(result.get("rows") or len(rows))
                     committed += int(result.get("rows") or len(rows))
+                    _record_ingestion_manifest(
+                        run_id=run_id,
+                        spec=spec,
+                        scope_key=symbol,
+                        request={"symbol": symbol, "startDate": start, "endDate": symbol_end},
+                        rows=audit_rows,
+                        validation=validation,
+                        endpoint_counts=endpoint_calls,
+                        coverage_start=start,
+                        coverage_end=symbol_end,
+                    )
                     with db() as connection:
                         connection.execute(
                             """
@@ -1008,6 +1364,31 @@ def _sync_daily(
                             """,
                             (utc_now(), str(result.get("batch_id") or batch_id), symbol),
                         )
+                else:
+                    empty_units += 1
+                    audit_rows = []
+                    validation = _validate_dataset_rows(spec, [])
+                    _record_ingestion_manifest(
+                        run_id=run_id,
+                        spec=spec,
+                        scope_key=symbol,
+                        request={"symbol": symbol, "startDate": start, "endDate": symbol_end},
+                        rows=[],
+                        validation=validation,
+                        endpoint_counts=endpoint_calls,
+                        coverage_start=start,
+                        coverage_end=symbol_end,
+                    )
+                if start <= symbol_end:
+                    _set_coverage_watermark(
+                        spec,
+                        scope_key=symbol,
+                        coverage_start=start,
+                        coverage_end=symbol_end,
+                        rows=audit_rows,
+                        run_id=run_id,
+                        validation_status=str(validation["status"]),
+                    )
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 with db() as connection:
@@ -1040,6 +1421,13 @@ def _sync_daily(
                     downloaded=downloaded,
                     committed=committed,
                     queue_depth=len(pending),
+                    processed_units=processed,
+                    total_units=len(securities),
+                    empty_units=empty_units,
+                    validated=validated,
+                    endpoint_calls=endpoint_calls,
+                    timings=timings,
+                    rate_units=processed - session_processed_base,
                 ),
             )
     return processed, inserted, updated, failed
@@ -1141,7 +1529,7 @@ def _normalize_optional(
             if row.get("suspend_date") and row.get("is_full_day", True)
         ]
         if statuses:
-            upsert_trade_status(statuses, source="tushare:suspend_d", batch_id=batch_id)
+            upsert_trade_status(statuses, source="tushare:suspend_d", batch_id=batch_id, bulk=bulk)
     elif spec.normalizer == "stk_limit":
         statuses = [
             {
@@ -1156,7 +1544,7 @@ def _normalize_optional(
             if row.get("trade_date")
         ]
         if statuses:
-            upsert_trade_status(statuses, source="tushare:stk_limit", batch_id=batch_id)
+            upsert_trade_status(statuses, source="tushare:stk_limit", batch_id=batch_id, bulk=bulk)
 
 
 def _record_sync_failure(
@@ -1215,6 +1603,21 @@ def _resolve_sync_failure(spec: DatasetSpec, symbol: str | None, batch_id: str) 
         )
 
 
+def _open_sync_failure_instruments(spec: DatasetSpec) -> set[str]:
+    if spec.scope != "instrument":
+        return set()
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select distinct instrument_code from data_record_issues
+            where dataset_key=? and source='tushare' and issue_code='sync_failed'
+              and status='open' and instrument_code is not null
+            """,
+            (spec.key,),
+        ).fetchall()
+    return {str(row["instrument_code"]) for row in rows if row["instrument_code"]}
+
+
 def _flush_adj_factor_batch(
     spec: DatasetSpec,
     batch_id: str,
@@ -1259,6 +1662,8 @@ def _sync_adj_factor_fast(
     updated = int(state.get("updated") or 0)
     failed = int(state.get("failed") or 0)
     started = time.monotonic()
+    api_before = _api_snapshot(adapter)
+    endpoint_calls: dict[str, int] = {}
     api_calls = 0
     downloaded = 0
     committed = 0
@@ -1320,6 +1725,7 @@ def _sync_adj_factor_fast(
         total = len(securities)
         fetcher = fetch_symbol
 
+    session_processed_base = processed
     if not pending:
         return processed, inserted, updated, failed
 
@@ -1331,6 +1737,12 @@ def _sync_adj_factor_fast(
         nonlocal entries, buffered_rows, inserted, updated, processed, committed
         if not entries:
             return
+        audited_entries: list[tuple[str, list[dict[str, Any]], dict[str, Any], str]] = []
+        for work_key, values in entries:
+            audit_rows = [_raw_row_for_symbol(spec, row, str(row.get("symbol") or work_key)) for row in values]
+            validation = _validate_dataset_rows(spec, audit_rows)
+            request_start = listed_dates[work_key] if full_refresh else work_key
+            audited_entries.append((work_key, audit_rows, validation, request_start))
         estimated_bytes = sum(
             len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
             for _, values in entries
@@ -1338,6 +1750,28 @@ def _sync_adj_factor_fast(
         ) * 3
         _assert_disk_capacity(estimated_bytes)
         add, change, written, counts = _flush_adj_factor_batch(spec, batch_id, entries)
+        for work_key, audit_rows, validation, request_start in audited_entries:
+            _record_ingestion_manifest(
+                run_id=run_id,
+                spec=spec,
+                scope_key=work_key,
+                request={"workKey": work_key, "startDate": request_start, "endDate": end_date},
+                rows=audit_rows,
+                validation=validation,
+                endpoint_counts=endpoint_calls,
+                coverage_start=request_start,
+                coverage_end=end_date if full_refresh else work_key,
+            )
+            if full_refresh:
+                _set_coverage_watermark(
+                    spec,
+                    scope_key=work_key,
+                    coverage_start=request_start,
+                    coverage_end=end_date,
+                    rows=audit_rows,
+                    run_id=run_id,
+                    validation_status=str(validation["status"]),
+                )
         keys = [key for key, _ in entries]
         _mark_work_items(run_id, spec.key, keys, status="committed", row_counts=counts)
         for key in keys:
@@ -1364,6 +1798,11 @@ def _sync_adj_factor_fast(
                 downloaded=downloaded,
                 committed=committed,
                 queue_depth=0,
+                processed_units=processed,
+                total_units=total,
+                validated=downloaded,
+                endpoint_calls=endpoint_calls,
+                rate_units=processed - session_processed_base,
             ),
         )
         entries = []
@@ -1373,13 +1812,14 @@ def _sync_adj_factor_fast(
         futures = {executor.submit(fetcher, key): key for key, _ in pending}
         for future in as_completed(futures):
             key = futures[future]
-            api_calls += 1
             if _cancelled(run_id, task_id):
                 for pending_future in futures:
                     pending_future.cancel()
                 break
             try:
                 rows = future.result()
+                endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
+                api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
                 entries.append((key, rows))
                 buffered_rows += len(rows)
@@ -1407,6 +1847,10 @@ def _sync_adj_factor_fast(
                         api_calls=api_calls,
                         downloaded=downloaded,
                         committed=committed,
+                        processed_units=processed,
+                        total_units=total,
+                        endpoint_calls=endpoint_calls,
+                        rate_units=processed - session_processed_base,
                     ),
                 )
         flush()
@@ -1420,8 +1864,174 @@ def _sync_adj_factor_fast(
             api_calls=api_calls,
             downloaded=downloaded,
             committed=committed,
+            processed_units=processed,
+            total_units=total,
+            validated=downloaded,
+            endpoint_calls=endpoint_calls,
+            rate_units=processed - session_processed_base,
         ),
     )
+    return processed, inserted, updated, failed
+
+
+def _sync_suspend_by_trade_date(
+    adapter: TushareAdapter,
+    spec: DatasetSpec,
+    run_id: str,
+    batch_id: str,
+    end_date: str,
+    task_id: str | None,
+    coverage_by_scope: dict[str, str],
+) -> tuple[int, int, int, int]:
+    """Increment suspend_d with one market-wide call per missing trade date."""
+    start_after = min(coverage_by_scope.values())
+    with db() as connection:
+        dates = connection.execute(
+            """
+            select trade_date from trade_calendar
+            where market='china' and is_open=1 and trade_date>? and trade_date<=?
+            order by trade_date
+            """,
+            (start_after, end_date),
+        ).fetchall()
+    work_dates = [str(row["trade_date"]) for row in dates]
+    state = _item_state(run_id, spec.key)
+    processed = int(state.get("processed") or 0)
+    session_processed_base = processed
+    inserted = int(state.get("inserted") or 0)
+    updated = int(state.get("updated") or 0)
+    failed = int(state.get("failed") or 0)
+    started = time.monotonic()
+    api_before = _api_snapshot(adapter)
+    endpoint_calls: dict[str, int] = {}
+    downloaded = 0
+    committed = 0
+    empty_units = 0
+    validated = 0
+    if not work_dates:
+        _item(
+            run_id,
+            spec.key,
+            metrics=_throughput_metrics(
+                started,
+                phase="validate",
+                api_calls=0,
+                downloaded=0,
+                committed=0,
+                processed_units=processed,
+                total_units=processed,
+                endpoint_calls={},
+                rate_units=0,
+            ),
+        )
+        return processed, inserted, updated, failed
+
+    for index, trade_date in enumerate(work_dates, start=1):
+        if _cancelled(run_id, task_id):
+            break
+        try:
+            rows = _call_with_retry(lambda: adapter.suspend_rows_for_date(trade_date))
+            endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
+            downloaded += len(rows)
+            raw_rows = [
+                _raw_row_for_symbol(spec, row, str(row.get("symbol") or ""))
+                for row in rows
+            ]
+            validation = _validate_dataset_rows(spec, raw_rows)
+            validated += len(raw_rows)
+            add, change = _save_raw(spec, raw_rows, batch_id, assume_new=True)
+            _normalize_optional(spec, rows, batch_id, bulk=True)
+            inserted += add
+            updated += change
+            committed += len(rows)
+            empty_units += int(not rows)
+            _record_ingestion_manifest(
+                run_id=run_id,
+                spec=spec,
+                scope_key=f"trade_date:{trade_date}",
+                request={"tradeDate": trade_date},
+                rows=raw_rows,
+                validation=validation,
+                endpoint_counts=endpoint_calls,
+                coverage_start=trade_date,
+                coverage_end=trade_date,
+            )
+            with db() as connection:
+                connection.execute(
+                    """
+                    update provider_dataset_watermarks
+                    set coverage_end=?,last_run_id=?,validation_status=?,updated_at=?
+                    where provider='tushare' and dataset_key=?
+                    """,
+                    (trade_date, run_id, validation["status"], utc_now(), spec.key),
+                )
+                if rows:
+                    connection.executemany(
+                        """
+                        update provider_dataset_watermarks set last_data_date=?,empty_result=0
+                        where provider='tushare' and dataset_key=? and scope_key=?
+                        """,
+                        [(trade_date, spec.key, str(row["symbol"])) for row in rows],
+                    )
+        except Exception as exc:  # noqa: BLE001 - preserve a contiguous coverage watermark
+            failed += 1
+            _record_sync_failure(spec, None, trade_date, trade_date, exc)
+            processed += 1
+            _item(
+                run_id,
+                spec.key,
+                processed=processed,
+                inserted=inserted,
+                updated=updated,
+                failed=failed,
+                error=json_dump({"failed": failed, "date": trade_date, "error": str(exc)}),
+                checkpoint={
+                    "index": processed,
+                    "total": session_processed_base + len(work_dates),
+                    "symbol": trade_date,
+                },
+                metrics=_throughput_metrics(
+                    started,
+                    phase="fetch",
+                    api_calls=sum(endpoint_calls.values()),
+                    downloaded=downloaded,
+                    committed=committed,
+                    processed_units=processed,
+                    total_units=session_processed_base + len(work_dates),
+                    empty_units=empty_units,
+                    validated=validated,
+                    endpoint_calls=endpoint_calls,
+                    rate_units=processed - session_processed_base,
+                ),
+            )
+            break
+        processed += 1
+        _item(
+            run_id,
+            spec.key,
+            processed=processed,
+            inserted=inserted,
+            updated=updated,
+            failed=failed,
+            checkpoint={
+                "index": processed,
+                "total": session_processed_base + len(work_dates),
+                "symbol": trade_date,
+            },
+            metrics=_throughput_metrics(
+                started,
+                phase="load",
+                api_calls=sum(endpoint_calls.values()),
+                downloaded=downloaded,
+                committed=committed,
+                processed_units=processed,
+                total_units=session_processed_base + len(work_dates),
+                empty_units=empty_units,
+                validated=validated,
+                endpoint_calls=endpoint_calls,
+                rate_units=processed - session_processed_base,
+            ),
+        )
     return processed, inserted, updated, failed
 
 
@@ -1444,6 +2054,32 @@ def _sync_generic(
             task_id,
             full_refresh=full_refresh,
         )
+    if spec.normalizer == "suspend_d" and not full_refresh and hasattr(adapter, "suspend_rows_for_date"):
+        listed_securities = _listed_securities()
+        coverage_by_scope = _coverage_watermarks(spec)
+        bootstrapped = False
+        if not coverage_by_scope:
+            coverage_by_scope = _bootstrap_sparse_watermarks_from_legacy_checkpoint(spec, listed_securities)
+            bootstrapped = bool(coverage_by_scope)
+        listed_scope_keys = {str(item["symbol"]) for item in listed_securities}
+        if listed_scope_keys and listed_scope_keys.issubset(coverage_by_scope):
+            return _sync_suspend_by_trade_date(
+                adapter,
+                spec,
+                run_id,
+                batch_id,
+                end_date,
+                task_id,
+                coverage_by_scope,
+            )
+        if bootstrapped:
+            completed = len(listed_scope_keys & set(coverage_by_scope))
+            _item(
+                run_id,
+                spec.key,
+                processed=completed,
+                checkpoint={"index": completed, "total": len(listed_securities), "symbol": listed_securities[completed - 1]["symbol"]},
+            )
     state = _item_state(run_id, spec.key)
     checkpoint = state.get("checkpoint") or {}
     resume_after = max(0, int(checkpoint.get("index") or 0))
@@ -1452,20 +2088,41 @@ def _sync_generic(
     updated = int(state.get("updated") or 0)
     failed = int(state.get("failed") or 0)
     failure_samples: list[dict[str, Any]] = []
+    session_processed_base = processed
     symbols = _listed_securities() if spec.scope == "instrument" else [None]
+    if checkpoint.get("retryFailedOnly") and spec.scope == "instrument":
+        retry_symbols = _open_sync_failure_instruments(spec)
+        symbols = [item for item in symbols if str(item["symbol"]) in retry_symbols]
     latest_by_instrument = _latest_raw_dates_by_instrument(spec) if spec.scope == "instrument" else {}
     global_latest = _latest_raw_date(spec) if spec.scope != "instrument" else None
+    coverage_by_scope = {} if full_refresh else _coverage_watermarks(spec)
+    started = time.monotonic()
+    api_before = _api_snapshot(adapter)
+    api_calls = 0
+    endpoint_calls: dict[str, int] = {}
+    downloaded = 0
+    committed = 0
+    empty_units = 0
+    validated = 0
+    quarantined = 0
+    timings = {"fetch": 0.0, "validate": 0.0, "mysqlWrite": 0.0}
     for index, item in enumerate(symbols, start=1):
         if index <= resume_after:
             continue
         if _cancelled(run_id, task_id):
             break
         symbol = str(item["symbol"]) if item else None
-        persisted_latest = latest_by_instrument.get(symbol) if symbol else global_latest
+        scope_key = symbol or "global"
+        persisted_latest = coverage_by_scope.get(scope_key) or (
+            latest_by_instrument.get(symbol) if symbol else global_latest
+        )
         latest = None if full_refresh else persisted_latest
         initial_start = str(item.get("listed_date") or "1990-01-01") if item else "1990-01-01"
         start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else initial_start
+        rows: list[dict[str, Any]] = []
         try:
+            request = _generic_params(spec, start, end_date, symbol)
+            stage_started = time.perf_counter()
             if spec.date_field and start > end_date:
                 rows = []
             elif spec.normalizer == "index_weight":
@@ -1473,17 +2130,39 @@ def _sync_generic(
                 rows = normalized
             else:
                 if symbol:
-                    normalized = _call_with_retry(lambda: _normalized_rows(adapter, spec, symbol, start, end_date))
+                    if spec.normalizer == "suspend_d":
+                        try:
+                            normalized = _call_with_retry(
+                                lambda: adapter.suspend_rows(
+                                    symbol,
+                                    start,
+                                    end_date,
+                                    include_legacy=persisted_latest is None,
+                                )
+                            )
+                        except TypeError:
+                            normalized = _call_with_retry(lambda: adapter.suspend_rows(symbol, start, end_date))
+                    else:
+                        normalized = _call_with_retry(lambda: _normalized_rows(adapter, spec, symbol, start, end_date))
                 else:
                     normalized = None
                 rows = normalized if normalized is not None else _call_with_retry(
                     lambda: _query(
                         adapter.pro,
                         spec,
-                        _generic_params(spec, start, end_date, symbol),
+                        request,
                     )
                 )
+            timings["fetch"] += (time.perf_counter() - stage_started) * 1000
+            endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
+            api_calls = sum(endpoint_calls.values())
+            downloaded += len(rows)
             raw_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
+            stage_started = time.perf_counter()
+            validation = _validate_dataset_rows(spec, raw_rows)
+            validated += len(raw_rows)
+            timings["validate"] += (time.perf_counter() - stage_started) * 1000
+            stage_started = time.perf_counter()
             add, change = _save_raw(
                 spec,
                 raw_rows,
@@ -1491,11 +2170,37 @@ def _sync_generic(
                 assume_new=persisted_latest is None,
             )
             _normalize_optional(spec, rows, batch_id)
+            committed += len(rows)
+            timings["mysqlWrite"] += (time.perf_counter() - stage_started) * 1000
             _resolve_sync_failure(spec, symbol, batch_id)
             inserted += add
             updated += change
+            if not rows:
+                empty_units += 1
+            _record_ingestion_manifest(
+                run_id=run_id,
+                spec=spec,
+                scope_key=scope_key,
+                request=request,
+                rows=raw_rows,
+                validation=validation,
+                endpoint_counts=endpoint_calls,
+                coverage_start=start,
+                coverage_end=end_date,
+            )
+            if not spec.date_field or start <= end_date:
+                _set_coverage_watermark(
+                    spec,
+                    scope_key=scope_key,
+                    coverage_start=start,
+                    coverage_end=end_date,
+                    rows=raw_rows,
+                    run_id=run_id,
+                    validation_status=str(validation["status"]),
+                )
         except Exception as exc:  # noqa: BLE001 - continue other instruments, but persist the cause
             failed += 1
+            quarantined += len(rows)
             sample = _record_sync_failure(spec, symbol, start, end_date, exc)
             if len(failure_samples) < 10:
                 failure_samples.append(sample)
@@ -1512,9 +2217,22 @@ def _sync_generic(
             failed=failed,
             error=item_error,
             checkpoint={"index": index, "total": len(symbols), "symbol": symbol},
+            metrics=_throughput_metrics(
+                started,
+                phase="load",
+                api_calls=api_calls,
+                downloaded=downloaded,
+                committed=committed,
+                processed_units=processed,
+                total_units=len(symbols),
+                empty_units=empty_units,
+                validated=validated,
+                quarantined=quarantined,
+                endpoint_calls=endpoint_calls,
+                timings=timings,
+                rate_units=processed - session_processed_base,
+            ),
         )
-        if spec.scope == "instrument":
-            time.sleep(0.03)
     return processed, inserted, updated, failed
 
 
@@ -1659,6 +2377,8 @@ def run_sync(
                 )
                 continue
             _item(run_id, spec.key, status="running", started_at=utc_now(), error="")
+            dataset_started = time.monotonic()
+            dataset_api_before = _api_snapshot(adapter)
             try:
                 if spec.key == "stock_basic":
                     values = _sync_stock_basic(adapter, batch_id)
@@ -1691,6 +2411,24 @@ def run_sync(
                         full_refresh=full_refresh,
                     )
                 processed, inserted, updated, failed = result
+                if spec.key in {"stock_basic", "trade_cal"}:
+                    endpoint_calls = _api_delta(dataset_api_before, _api_snapshot(adapter))
+                    _item(
+                        run_id,
+                        spec.key,
+                        metrics=_throughput_metrics(
+                            dataset_started,
+                            phase="validate",
+                            api_calls=sum(endpoint_calls.values()),
+                            downloaded=processed,
+                            committed=inserted + updated,
+                            processed_units=1,
+                            total_units=1,
+                            empty_units=1 if processed == 0 else 0,
+                            validated=processed,
+                            endpoint_calls=endpoint_calls,
+                        ),
+                    )
                 if _cancelled(run_id, task_id):
                     if _current_task(run_id, task_id):
                         _item(
@@ -1712,15 +2450,51 @@ def run_sync(
                     }
                     break
                 status = "success" if failed == 0 else "partial"
-                _item(run_id, spec.key, status=status, processed=processed, inserted=inserted, updated=updated, failed=failed, finished_at=utc_now())
+                _item(
+                    run_id,
+                    spec.key,
+                    status=status,
+                    processed=processed,
+                    inserted=inserted,
+                    updated=updated,
+                    failed=failed,
+                    canonical_status="ready" if failed == 0 else "partial",
+                    derived_status_json=json_dump(
+                        {"status": "pending"}
+                        if spec.key == "daily"
+                        else {"status": "not_required"}
+                    ),
+                    finished_at=utc_now(),
+                )
                 _set_catalog_coverage(spec)
                 summaries[spec.key] = {"processed": processed, "inserted": inserted, "updated": updated, "failed": failed}
             except Exception as exc:  # noqa: BLE001
-                _item(run_id, spec.key, status="failed", failed=1, error=str(exc), finished_at=utc_now())
+                _item(
+                    run_id,
+                    spec.key,
+                    status="failed",
+                    failed=1,
+                    canonical_status="failed",
+                    error=str(exc),
+                    finished_at=utc_now(),
+                )
                 summaries[spec.key] = {"error": str(exc)}
         cancelled = _cancelled(run_id, task_id)
         degraded = any(item.get("error") or int(item.get("failed") or 0) > 0 for item in summaries.values())
         final_status = "cancelled" if cancelled else "partial" if degraded else "success"
+        canonical_status = "cancelled" if cancelled else "partial" if degraded else "ready"
+        daily_summary = summaries.get("daily") or {}
+        should_materialize = bool(
+            not cancelled
+            and "daily" in selected_keys
+            and not daily_summary.get("error")
+            and int(daily_summary.get("failed") or 0) == 0
+        )
+        derived_status = (
+            {"status": "queued", "total": None, "completed": 0, "failed": 0}
+            if should_materialize
+            else {"status": "not_required" if "daily" not in selected_keys else "blocked"}
+        )
         summary = {
             "status": final_status, "permissions": permissions, "audit": audit,
             "datasets": summaries, "endDate": end_date, "marketDataEndDate": market_end_date, "cancelled": cancelled,
@@ -1729,25 +2503,58 @@ def run_sync(
         with db() as connection:
             if task_id:
                 connection.execute(
-                    "update data_sync_runs set status=?, summary_json=?, finished_at=? where id=? and task_id=?",
-                    (final_status, json_dump(summary), utc_now(), run_id, task_id),
+                    """update data_sync_runs
+                       set status=?, summary_json=?, canonical_status=?, canonical_ready_at=?,
+                           derived_status_json=?, finished_at=?
+                       where id=? and task_id=?""",
+                    (
+                        final_status,
+                        json_dump(summary),
+                        canonical_status,
+                        utc_now() if canonical_status == "ready" else None,
+                        json_dump(derived_status),
+                        utc_now(),
+                        run_id,
+                        task_id,
+                    ),
                 )
             else:
                 connection.execute(
-                    "update data_sync_runs set status=?, summary_json=?, finished_at=? where id=?",
-                    (final_status, json_dump(summary), utc_now(), run_id),
+                    """update data_sync_runs
+                       set status=?, summary_json=?, canonical_status=?, canonical_ready_at=?,
+                           derived_status_json=?, finished_at=? where id=?""",
+                    (
+                        final_status,
+                        json_dump(summary),
+                        canonical_status,
+                        utc_now() if canonical_status == "ready" else None,
+                        json_dump(derived_status),
+                        utc_now(),
+                        run_id,
+                    ),
                 )
+        if should_materialize:
+            try:
+                from ..tasks.worker import materialize_sync_data_task
+
+                materialize_sync_data_task.apply_async(args=[run_id], queue="data-demand")
+            except Exception as exc:  # Derived enqueue failure must not revoke canonical readiness.
+                with db() as connection:
+                    connection.execute(
+                        "update data_sync_runs set derived_status_json=? where id=?",
+                        (json_dump({"status": "enqueue_failed", "error": str(exc)[:500]}), run_id),
+                    )
         return summary
     except Exception as exc:
         with db() as connection:
             if task_id:
                 connection.execute(
-                    "update data_sync_runs set status='failed', error=?, finished_at=? where id=? and task_id=?",
+                    "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=? and task_id=?",
                     (str(exc), utc_now(), run_id, task_id),
                 )
             else:
                 connection.execute(
-                    "update data_sync_runs set status='failed', error=?, finished_at=? where id=?",
+                    "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=?",
                     (str(exc), utc_now(), run_id),
                 )
         raise
@@ -1794,10 +2601,17 @@ def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -
         connection.execute(
             """
             insert into data_sync_runs
-                (id,provider,mode,scope,status,requested_datasets_json,created_at)
-            values (?,'tushare',?,'all_entitled_low_frequency','queued',?,?)
+                (id,provider,mode,scope,status,requested_datasets_json,
+                 canonical_status,derived_status_json,created_at)
+            values (?,'tushare',?,'all_entitled_low_frequency','queued',?,'pending',?,?)
             """,
-            (run_id, resolved_mode, json_dump([item.key for item in selected]), now),
+            (
+                run_id,
+                resolved_mode,
+                json_dump([item.key for item in selected]),
+                json_dump({"leanCache": "pending", "clickHouse": "pending"}),
+                now,
+            ),
         )
         for spec in selected:
             connection.execute(
@@ -1815,6 +2629,284 @@ def sync_run(run_id: str) -> dict[str, Any] | None:
     if result:
         result["items"] = rows_to_dicts(items)
     return result
+
+
+def sync_validation(run_id: str, *, limit: int = 500) -> dict[str, Any]:
+    run = sync_run(run_id)
+    if not run:
+        raise KeyError("Data sync run not found.")
+    safe_limit = max(1, min(int(limit), 5_000))
+    with db() as connection:
+        manifests = connection.execute(
+            """
+            select * from provider_ingestion_manifests
+            where run_id=? order by created_at desc limit ?
+            """,
+            (run_id, safe_limit),
+        ).fetchall()
+        summary_rows = connection.execute(
+            """
+            select dataset_key,status,count(*) as scopes,sum(response_rows) as response_rows,
+                   sum(normalized_rows) as normalized_rows,sum(rejected_rows) as rejected_rows
+            from provider_ingestion_manifests where run_id=?
+            group by dataset_key,status order by dataset_key,status
+            """,
+            (run_id,),
+        ).fetchall()
+        watermarks = connection.execute(
+            """
+            select * from provider_dataset_watermarks
+            where last_run_id=? order by dataset_key,scope_key limit ?
+            """,
+            (run_id, safe_limit),
+        ).fetchall()
+        issues = connection.execute(
+            """
+            select * from data_record_issues
+            where resolution_batch_id=? or (
+                detected_at>=coalesce(?,'0000-01-01') and detected_at<=coalesce(?,?)
+                and dataset_key in (
+                    select dataset_key from data_sync_items where run_id=?
+                )
+            )
+            order by detected_at desc limit ?
+            """,
+            (
+                run_id,
+                run.get("started_at"),
+                run.get("finished_at"),
+                utc_now(),
+                run_id,
+                safe_limit,
+            ),
+        ).fetchall()
+    return {
+        "runId": run_id,
+        "canonicalStatus": run.get("canonical_status"),
+        "summary": rows_to_dicts(summary_rows),
+        "manifests": rows_to_dicts(manifests),
+        "watermarks": rows_to_dicts(watermarks),
+        "issues": rows_to_dicts(issues),
+        "limit": safe_limit,
+    }
+
+
+def download_on_demand_dataset(
+    *,
+    task_id: str,
+    dataset_key: str,
+    storage_target: str,
+    relative_path: str | None,
+    file_format: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    symbol: str | None = None,
+    parameters: dict[str, Any] | None = None,
+    adapter: TushareAdapter | None = None,
+) -> dict[str, Any]:
+    spec = next((item for item in DATASET_REGISTRY if item.key == dataset_key), None)
+    if not spec:
+        raise ValueError(f"Unknown TuShare dataset: {dataset_key}")
+    if spec.sync_policy != "on_demand":
+        raise ValueError(f"{dataset_key} participates in managed synchronization; use the dataset sync controls instead.")
+    if spec.scope == "instrument" and not str(symbol or "").strip():
+        raise ValueError(f"{dataset_key} requires a symbol.")
+    resolved_end = date.fromisoformat(end_date).isoformat() if end_date else date.today().isoformat()
+    resolved_start = (
+        date.fromisoformat(start_date).isoformat()
+        if start_date
+        else (date.fromisoformat(resolved_end) - timedelta(days=30)).isoformat()
+    )
+    if resolved_start > resolved_end:
+        raise ValueError("startDate must not be after endDate.")
+    export_format = str(file_format or "parquet").strip().lower()
+    if export_format not in {"parquet", "jsonl"}:
+        raise ValueError("format must be parquet or jsonl.")
+    output_dir, display_dir = _on_demand_destination(storage_target, relative_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    adapter = adapter or TushareAdapter()
+    api_before = _api_snapshot(adapter)
+    normalized: list[dict[str, Any]] | None = None
+    selected_symbol = str(symbol or "").strip()
+    if selected_symbol and spec.normalizer:
+        normalized = _call_with_retry(
+            lambda: _normalized_rows(adapter, spec, selected_symbol, resolved_start, resolved_end)
+        )
+    request_params = _generic_params(spec, resolved_start, resolved_end, selected_symbol or None)
+    for key, value in (parameters or {}).items():
+        clean_key = str(key).strip()
+        if not clean_key.isidentifier():
+            raise ValueError(f"Invalid TuShare parameter name: {clean_key!r}")
+        if value not in (None, ""):
+            request_params[clean_key] = value
+    rows = normalized if normalized is not None else _call_with_retry(
+        lambda: _query(adapter.pro, spec, request_params)
+    )
+    raw_rows = [
+        _raw_row_for_symbol(spec, row, selected_symbol or str(row.get("symbol") or ""))
+        for row in rows
+    ]
+    validation = _validate_dataset_rows(spec, raw_rows)
+    endpoint_counts = _api_delta(api_before, _api_snapshot(adapter))
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = "parquet" if export_format == "parquet" else "jsonl"
+    file_name = f"tushare-{spec.key}-{stamp}-{task_id[:8]}.{suffix}"
+    output_path = output_dir / file_name
+    if export_format == "jsonl":
+        with output_path.open("w", encoding="utf-8") as handle:
+            for row in raw_rows:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+    else:
+        try:
+            import polars as pl
+        except Exception as exc:  # pragma: no cover - deployment dependency guard.
+            raise RuntimeError("polars is required for Parquet on-demand exports.") from exc
+        parquet_rows = [
+            {
+                key: json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+                if isinstance(value, (dict, list, tuple, set))
+                else value.item() if hasattr(value, "item")
+                else value
+                for key, value in row.items()
+            }
+            for row in raw_rows
+        ]
+        if parquet_rows:
+            frame = pl.DataFrame(parquet_rows, infer_schema_length=None)
+        else:
+            fields = list(dict.fromkeys([*spec.key_fields, *([spec.date_field] if spec.date_field else [])]))
+            frame = pl.DataFrame(schema={field: pl.String for field in fields})
+        frame.write_parquet(output_path, compression=os.environ.get("LEAN_PARQUET_COMPRESSION", "zstd"))
+
+    digest = hashlib.sha256()
+    with output_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    _record_ingestion_manifest(
+        run_id=task_id,
+        spec=spec,
+        scope_key=selected_symbol or "custom",
+        request={
+            "startDate": resolved_start,
+            "endDate": resolved_end,
+            "symbol": selected_symbol or None,
+            "parameters": request_params,
+            "storageTarget": storage_target,
+            "relativePath": str(relative_path or "tushare-on-demand"),
+            "format": export_format,
+        },
+        rows=raw_rows,
+        validation=validation,
+        endpoint_counts=endpoint_counts,
+        coverage_start=resolved_start if spec.date_field else None,
+        coverage_end=resolved_end if spec.date_field else None,
+    )
+    return {
+        "taskId": task_id,
+        "dataset": spec.key,
+        "rows": len(raw_rows),
+        "format": export_format,
+        "path": str(output_path),
+        "displayPath": str(display_dir / file_name),
+        "bytes": output_path.stat().st_size,
+        "sha256": digest.hexdigest(),
+        "apiCalls": sum(endpoint_counts.values()),
+        "endpointCalls": endpoint_counts,
+        "validation": validation,
+    }
+
+
+def materialize_daily_run(run_id: str) -> dict[str, Any]:
+    """Build LEAN/object/ClickHouse derivatives after canonical MySQL commit."""
+    from .data import record_data_asset
+    from .lean_cache import rebuild_ashare_lean_cache_from_db
+    from .market_data import mirror_rows, query_database_bars
+
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select distinct scope_key from provider_ingestion_manifests
+            where run_id=? and dataset_key='daily' and status='success' and response_rows>0
+            order by scope_key
+            """,
+            (run_id,),
+        ).fetchall()
+    symbols = [str(row["scope_key"]) for row in rows]
+    completed = 0
+    failures: list[dict[str, str]] = []
+
+    def persist_progress(status: str) -> None:
+        payload = {
+            "status": status,
+            "total": len(symbols),
+            "completed": completed,
+            "failed": len(failures),
+            "failureSamples": failures[:10],
+        }
+        with db() as connection:
+            connection.execute(
+                "update data_sync_runs set derived_status_json=? where id=?",
+                (json_dump(payload), run_id),
+            )
+            connection.execute(
+                "update data_sync_items set derived_status_json=? where run_id=? and dataset_key='daily'",
+                (json_dump(payload), run_id),
+            )
+
+    persist_progress("running")
+    for symbol in symbols:
+        try:
+            metadata = rebuild_ashare_lean_cache_from_db(
+                symbol,
+                source="tushare",
+                adjust="raw",
+                market="china",
+                batch_id=run_id,
+            )
+            metadata.update(
+                {
+                    "asset_class": "equity",
+                    "venue": "china",
+                    "resolution": "daily",
+                    "data_type": "trade",
+                    "provider": "tushare",
+                    "market": "china",
+                    "adjust": "raw",
+                    "batch_id": run_id,
+                }
+            )
+            bars = query_database_bars(
+                asset_class="equity",
+                symbol=symbol,
+                market="china",
+                venue="china",
+                resolution="daily",
+                data_type="trade",
+                provider_source="tushare",
+                limit=0,
+            )["items"]
+            clickhouse = mirror_rows(metadata, bars)
+            metadata["clickhouse"] = clickhouse
+            record_data_asset(metadata)
+            if clickhouse.get("error"):
+                failures.append({"symbol": symbol, "stage": "clickhouse", "error": str(clickhouse["error"])[:500]})
+        except Exception as exc:  # noqa: BLE001 - derivatives are independently retryable
+            failures.append({"symbol": symbol, "stage": "materialize", "error": str(exc)[:500]})
+        completed += 1
+        if completed % 25 == 0:
+            persist_progress("running")
+    final_status = "ready" if not failures else "partial"
+    persist_progress(final_status)
+    return {
+        "runId": run_id,
+        "status": final_status,
+        "total": len(symbols),
+        "completed": completed,
+        "failed": len(failures),
+        "failureSamples": failures[:10],
+    }
 
 
 def list_sync_runs(limit: int = 20) -> list[dict[str, Any]]:
@@ -1930,6 +3022,35 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
                     """,
                     (run_id, entry["dataset_key"]),
                 )
+            elif entry.get("dataset_key") == "suspend_d":
+                spec = next(item for item in DATASET_REGISTRY if item.key == "suspend_d")
+                retry_count = len(_open_sync_failure_instruments(spec))
+                if retry_count:
+                    connection.execute(
+                        """
+                        update data_sync_items
+                        set status='queued', processed=0, inserted=0, updated=0, failed=0,
+                            checkpoint_json=?, metrics_json=null, error=null,
+                            started_at=null, finished_at=null
+                        where run_id=? and dataset_key=?
+                        """,
+                        (
+                            json_dump({"index": 0, "total": retry_count, "retryFailedOnly": True}),
+                            run_id,
+                            entry["dataset_key"],
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        update data_sync_items
+                        set status='queued', processed=0, inserted=0, updated=0, failed=0,
+                            checkpoint_json=null, metrics_json=null, error=null,
+                            started_at=null, finished_at=null
+                        where run_id=? and dataset_key=?
+                        """,
+                        (run_id, entry["dataset_key"]),
+                    )
             else:
                 connection.execute(
                     """

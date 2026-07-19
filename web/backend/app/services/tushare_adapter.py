@@ -449,7 +449,14 @@ class TushareAdapter:
                 )
         return rows
 
-    def suspend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    def suspend_rows(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        *,
+        include_legacy: bool = True,
+    ) -> list[dict[str, Any]]:
         """Return full-day suspension intervals with auditable TuShare provenance.
 
         ``suspend_d`` is an event/daily-status endpoint.  Its current schema is
@@ -485,7 +492,7 @@ class TushareAdapter:
                 }
             )
 
-        legacy = getattr(self.pro, "suspend", None)
+        legacy = getattr(self.pro, "suspend", None) if include_legacy else None
         if callable(legacy):
             legacy_frame = legacy(
                 ts_code=to_tushare_stock_code(symbol),
@@ -513,11 +520,41 @@ class TushareAdapter:
                     }
                 )
 
-        unique: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+        unique: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
-            key = (str(row["suspend_date"]), row.get("resume_date"), str(row.get("source") or ""))
-            unique[key] = row
+            # ``suspend_d`` and the legacy ``suspend`` endpoint can describe
+            # the same first suspension day. The canonical dataset key does
+            # not include provider endpoint, so retain the first (official
+            # suspend_d) record instead of manufacturing a duplicate key.
+            key = (str(row["suspend_date"]), str(row.get("suspend_timing") or ""))
+            unique.setdefault(key, row)
         return sorted(unique.values(), key=lambda row: (row["suspend_date"], row["symbol"], row["source"]))
+
+    def suspend_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        """Fetch the authoritative market-wide suspension set for one date."""
+        frame = self.pro.suspend_d(
+            trade_date=_compact_date(trade_date, "trade_date"),
+            fields="ts_code,trade_date,suspend_timing,suspend_type",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            event_date = _iso_date(item.get("trade_date"))
+            if not event_date or str(item.get("suspend_type") or "S").upper() != "S":
+                continue
+            timing = str(item.get("suspend_timing") or "").strip() or None
+            rows.append(
+                {
+                    "symbol": from_tushare_code(item.get("ts_code")),
+                    "suspend_date": event_date,
+                    "resume_date": (date.fromisoformat(event_date) + timedelta(days=1)).isoformat(),
+                    "suspend_timing": timing,
+                    "is_full_day": timing is None,
+                    "reason": "daily_suspend_event",
+                    "reason_type": "S",
+                    "source": "tushare:suspend_d",
+                }
+            )
+        return sorted(rows, key=lambda row: (row["suspend_date"], row["symbol"]))
 
     def limit_prices(
         self,

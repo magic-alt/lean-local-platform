@@ -74,6 +74,16 @@ export interface DataSyncItem {
     downloadRowsPerSecond?: number;
     writeRowsPerSecond?: number;
     queueDepth?: number;
+    processedUnits?: number;
+    totalUnits?: number;
+    emptyUnits?: number;
+    validatedRows?: number;
+    quarantinedRows?: number;
+    unitsPerSecond?: number;
+    sessionProcessedUnits?: number;
+    etaSeconds?: number | null;
+    endpointCalls?: Record<string, number>;
+    timingsMs?: Record<string, number>;
     elapsedSeconds?: number;
     diskFreeBytes?: number;
     diskTotalBytes?: number;
@@ -98,6 +108,9 @@ export interface DataSyncRun {
   started_at?: string | null;
   finished_at?: string | null;
   cancel_requested?: boolean | number;
+  canonical_status?: string | null;
+  canonical_ready_at?: string | null;
+  derivedStatus?: Record<string, unknown> | null;
   items?: DataSyncItem[];
 }
 
@@ -118,6 +131,14 @@ export interface DataSyncCatalog {
   };
   activeRun?: DataSyncRun | null;
   latestRun?: DataSyncRun | null;
+}
+
+export interface OnDemandStorageTarget {
+  id: string;
+  label: string;
+  path: string;
+  displayPath: string;
+  kind: "mounted_data" | "parquet_lake" | "workspace" | "external" | string;
 }
 
 export interface MarketInfo {

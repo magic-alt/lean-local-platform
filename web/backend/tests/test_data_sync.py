@@ -1,6 +1,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
@@ -102,6 +104,63 @@ def test_failed_work_is_not_treated_as_a_complete_checkpoint():
     assert _checkpoint_complete({"dataset_key": "adj_factor", "failed": 0, "checkpoint": {"index": 10, "total": 10}})
     assert not _checkpoint_complete({"dataset_key": "adj_factor", "failed": 1, "checkpoint": {"index": 10, "total": 10}})
     assert not _checkpoint_complete({"dataset_key": "daily", "failed": 1, "checkpoint": {"index": 10, "total": 10}})
+
+
+def test_throughput_uses_session_units_for_resume_rate_and_eta(monkeypatch):
+    from app.services import data_sync
+
+    monkeypatch.setattr(data_sync.time, "monotonic", lambda: 110.0)
+    metrics = data_sync._throughput_metrics(
+        100.0,
+        phase="load",
+        api_calls=10,
+        downloaded=20,
+        committed=20,
+        processed_units=5_500,
+        total_units=6_000,
+        rate_units=50,
+    )
+
+    assert metrics["sessionProcessedUnits"] == 50
+    assert metrics["unitsPerSecond"] == 5.0
+    assert metrics["etaSeconds"] == 100.0
+
+
+def test_suspend_resume_targets_only_open_failed_instruments(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["suspend_d"])
+    with db() as connection:
+        connection.execute("update data_sync_runs set status='partial' where id=?", (run["id"],))
+        connection.execute(
+            """
+            update data_sync_items
+            set status='partial', processed=5865, failed=2,
+                checkpoint_json='{"index":5865,"total":5865}'
+            where run_id=? and dataset_key='suspend_d'
+            """,
+            (run["id"],),
+        )
+        connection.executemany(
+            """
+            insert into data_record_issues
+                (id,dataset_key,source,instrument_code,start_date,end_date,issue_code,
+                 severity,status,details_json,detected_at)
+            values (?,'suspend_d','tushare',?,'2020-01-01','2026-07-17','sync_failed',
+                    'error','open','{}','2026-07-19T00:00:00+00:00')
+            """,
+            [("retry-1", "688646"), ("retry-2", "688655")],
+        )
+
+    resumed = data_sync.prepare_resume(run["id"])
+    item = next(entry for entry in resumed["items"] if entry["dataset_key"] == "suspend_d")
+
+    assert item["status"] == "queued"
+    assert item["processed"] == 0
+    assert item["failed"] == 0
+    assert item["checkpoint"] == {"index": 0, "total": 2, "retryFailedOnly": True}
 
 
 def test_daily_sync_scope_excludes_b_shares(tmp_path, monkeypatch):
@@ -402,6 +461,208 @@ def test_daily_sync_does_not_query_past_a_delisting_date(tmp_path, monkeypatch):
     assert data_sync._sync_daily(Adapter(), run["id"], run["id"], "2026-07-17") == (1, 0, 0, 0)
 
 
+def test_daily_bulk_sync_uses_authoritative_absence_without_nested_suspend_calls(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-17"}],
+    )
+    monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
+    imported = []
+
+    def fake_import(**kwargs):
+        imported.append(kwargs)
+        return {"rows": 1, "batch_id": "batch"}
+
+    monkeypatch.setattr(data_sync, "import_ashare_research_data", fake_import)
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            return [{"symbol": symbol, "trade_date": "2026-07-17", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
+
+    assert data_sync._sync_daily(Adapter(), run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
+    assert imported[0]["suspension_evidence_rows"] == []
+    assert imported[0]["infer_suspensions_from_authoritative_absence"] is True
+    assert imported[0]["bulk_write"] is True
+    assert imported[0]["materialize_derived"] is False
+
+
+def test_empty_instrument_result_advances_coverage_watermark(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    enable_bulk_dataset_for_test(data_sync, monkeypatch, "daily_basic")
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily_basic")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-01"}],
+    )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = 0
+
+        def daily_basic_rows(self, symbol, start, end):
+            self.calls += 1
+            return []
+
+    first = data_sync.create_sync_run(requested=["daily_basic"])
+    adapter = Adapter()
+    assert data_sync._sync_generic(adapter, spec, first["id"], first["id"], "2026-07-17") == (1, 0, 0, 0)
+    with db() as connection:
+        watermark = connection.execute(
+            "select coverage_end,empty_result from provider_dataset_watermarks where dataset_key='daily_basic' and scope_key='000001'"
+        ).fetchone()
+        connection.execute("update data_sync_runs set status='success' where id=?", (first["id"],))
+    assert watermark["coverage_end"] == "2026-07-17"
+    assert watermark["empty_result"] == 1
+
+    second = data_sync.create_sync_run(requested=["daily_basic"])
+    assert data_sync._sync_generic(adapter, spec, second["id"], second["id"], "2026-07-17") == (1, 0, 0, 0)
+    assert adapter.calls == 1
+
+
+def test_suspend_incremental_fetches_once_per_trade_date_not_once_per_symbol(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["suspend_d"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "suspend_d")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03"},
+            {"symbol": "600000", "listed_date": "1999-11-10"},
+        ],
+    )
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) values ('china','2026-07-17',1,'test','test')"
+        )
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','suspend_d',?,'1990-01-01','2026-07-16','old',0,'passed',?)
+            """,
+            [("000001", utc_now()), ("600000", utc_now())],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def suspend_rows_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [
+                {
+                    "symbol": "000001",
+                    "suspend_date": trade_date,
+                    "resume_date": "2026-07-18",
+                    "suspend_timing": None,
+                    "is_full_day": True,
+                    "source": "tushare:suspend_d",
+                }
+            ]
+
+    adapter = Adapter()
+    assert data_sync._sync_generic(adapter, spec, run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
+    assert adapter.calls == ["2026-07-17"]
+    with db() as connection:
+        watermarks = connection.execute(
+            "select scope_key,coverage_end from provider_dataset_watermarks where dataset_key='suspend_d' order by scope_key"
+        ).fetchall()
+    assert [(row["scope_key"], row["coverage_end"]) for row in watermarks] == [
+        ("000001", "2026-07-17"),
+        ("600000", "2026-07-17"),
+    ]
+
+
+def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data, data_sync, lean_cache, market_data
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
+    row = {"ts_code": "000001.SZ", "trade_date": "20260717", "close": 10}
+    data_sync._record_ingestion_manifest(
+        run_id=run["id"],
+        spec=spec,
+        scope_key="000001",
+        request={"startDate": "2026-07-17", "endDate": "2026-07-17"},
+        rows=[row],
+        validation=data_sync._validate_dataset_rows(spec, [row]),
+        endpoint_counts={"daily": 1},
+        coverage_start="2026-07-17",
+        coverage_end="2026-07-17",
+    )
+    monkeypatch.setattr(lean_cache, "rebuild_ashare_lean_cache_from_db", lambda *args, **kwargs: {"symbol": "000001", "rows": 1})
+    monkeypatch.setattr(
+        market_data,
+        "query_database_bars",
+        lambda **kwargs: {"items": [{"timestamp": "2026-07-17", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1}]},
+    )
+    monkeypatch.setattr(market_data, "mirror_rows", lambda metadata, rows: {"enabled": True, "inserted": 1})
+    assets = []
+    monkeypatch.setattr(data, "record_data_asset", lambda metadata: assets.append(metadata) or metadata)
+
+    result = data_sync.materialize_daily_run(run["id"])
+
+    assert result["status"] == "ready"
+    assert result["completed"] == 1
+    assert assets[0]["clickhouse"]["inserted"] == 1
+    assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "ready"
+
+
+def test_on_demand_download_requires_selected_safe_storage_and_writes_jsonl(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    export_root = tmp_path / "external-data"
+    monkeypatch.setattr(data_sync, "DATA_DIR", export_root)
+    monkeypatch.setattr(data_sync, "HOST_DATA_DIR", export_root)
+    monkeypatch.setattr(data_sync, "PARQUET_DIR", export_root / "parquet")
+    monkeypatch.setattr(data_sync, "RUNTIME_DIR", tmp_path / "runtime")
+
+    class Adapter:
+        def daily_basic_rows(self, symbol, start, end):
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2026-07-17",
+                    "factors": {"pe_ttm": 12.3},
+                }
+            ]
+
+    result = data_sync.download_on_demand_dataset(
+        task_id="task-12345678",
+        dataset_key="daily_basic",
+        storage_target="data",
+        relative_path="research/factors",
+        file_format="jsonl",
+        start_date="2026-07-17",
+        end_date="2026-07-17",
+        symbol="000001",
+        adapter=Adapter(),
+    )
+
+    output = export_root / "research" / "factors"
+    assert result["rows"] == 1
+    assert result["displayPath"].startswith(str(output))
+    assert list(output.glob("*.jsonl"))
+    with pytest.raises(ValueError, match="relative path"):
+        data_sync._on_demand_destination("data", "../escape")
+
+
 def test_generic_instrument_sync_uses_persisted_date_watermark(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, json_dump, utc_now
@@ -647,6 +908,8 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
 
     routes = celery_app.conf.task_routes
     assert routes["lean_web.sync_all_data"]["queue"] == "data-bulk"
+    assert routes["lean_web.materialize_sync_data"]["queue"] == "data-demand"
+    assert routes["lean_web.download_on_demand_dataset"]["queue"] == "data-demand"
     assert routes["lean_web.recover_data_sync"]["queue"] == "default"
     assert routes["lean_web.fetch_data_batch"]["queue"] == "data-demand"
     assert routes["lean_web.run_backtest"]["queue"] == "backtest"

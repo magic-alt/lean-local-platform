@@ -26,7 +26,9 @@ celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "lean_web.fetch_data_batch": {"queue": "data-demand"},
+        "lean_web.download_on_demand_dataset": {"queue": "data-demand"},
         "lean_web.sync_all_data": {"queue": "data-bulk"},
+        "lean_web.materialize_sync_data": {"queue": "data-demand"},
         "lean_web.recover_data_sync": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
         "lean_web.optimize": {"queue": "backtest"},

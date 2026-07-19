@@ -5,6 +5,7 @@ import type {
   DataProvider,
   DataSyncCatalog,
   DataSyncRun,
+  OnDemandStorageTarget,
   MarketInfo,
   AssetClassInfo,
   LocalDataFile,
@@ -195,6 +196,21 @@ export const api = {
   },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
+  onDemandStorageTargets: () => request<{ items: OnDemandStorageTarget[] }>("/api/data/on-demand/storage-targets"),
+  createOnDemandDownload: (payload: {
+    dataset: string;
+    storageTarget: string;
+    relativePath?: string;
+    format: "parquet" | "jsonl";
+    startDate?: string;
+    endDate?: string;
+    symbol?: string;
+    apiParameters?: Record<string, unknown>;
+  }) => request<Task>("/api/data/on-demand/downloads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }),
   dataSyncRuns: () => request<{ items: DataSyncRun[]; limit: number }>("/api/data/sync-runs"),
   dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
   createDataSyncRun: (datasets?: string[], mode: "auto" | "incremental" | "full_rebuild" = "auto") =>
@@ -340,6 +356,7 @@ export const api = {
   chartData: (id: string) =>
     request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data`),
   tasks: () => request<Task[]>("/api/tasks"),
+  task: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),

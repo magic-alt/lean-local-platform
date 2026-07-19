@@ -51,6 +51,7 @@ RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
 REPORTS_DIR = RUNTIME_DIR / "reports"
 PARQUET_DIR = Path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "parquet")).expanduser()
+HOST_PARQUET_DIR = Path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).expanduser().resolve()
 PARQUET_COMPRESSION = os.environ.get("LEAN_PARQUET_COMPRESSION", "zstd")
 MYSQL_HOST = os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.environ.get("LEAN_MYSQL_PORT", "3306"))

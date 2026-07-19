@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
 import os
 import threading
@@ -151,6 +151,17 @@ class RateLimitedProProxy:
     def __init__(self, target: Any, limiter: TushareRateLimiter | None = None) -> None:
         self._target = target
         self._limiter = limiter or global_tushare_limiter()
+        self._call_counts: Counter[str] = Counter()
+        self._count_lock = threading.Lock()
+
+    def call_counts(self) -> dict[str, int]:
+        """Return a stable snapshot of actual SDK method invocations."""
+        with self._count_lock:
+            return dict(self._call_counts)
+
+    def call_count(self) -> int:
+        with self._count_lock:
+            return sum(self._call_counts.values())
 
     def __getattr__(self, name: str) -> Any:
         value = getattr(self._target, name)
@@ -166,6 +177,8 @@ class RateLimitedProProxy:
                     wait=False,
                 )
             self._limiter.acquire()
+            with self._count_lock:
+                self._call_counts[name] += 1
             return value(*args, **kwargs)
 
         return limited

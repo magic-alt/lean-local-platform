@@ -268,6 +268,19 @@ def test_hong_kong_endpoint_rate_limit_fails_fast():
         proxy.hk_basic()
 
 
+def test_rate_limited_proxy_counts_actual_endpoint_invocations():
+    from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
+
+    limiter = TushareRateLimiter(calls_per_minute=500)
+    limiter._redis = None
+    proxy = RateLimitedProProxy(HongKongPro(), limiter=limiter)
+
+    proxy.hk_basic()
+
+    assert proxy.call_count() == 1
+    assert proxy.call_counts() == {"hk_basic": 1}
+
+
 def test_tushare_rejects_qfq_hfq_to_avoid_adjustment_mixing():
     from app.core.errors import LeanWebError
     from app.services.tushare_adapter import TushareAdapter
@@ -301,6 +314,19 @@ class ResearchPro(DailyOnlyPro):
                     "trade_date": "20240103",
                     "suspend_timing": None,
                     "suspend_type": "S",
+                }
+            ]
+        )
+
+    def suspend(self, **kwargs):
+        return FakeFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "suspend_date": "20240103",
+                    "resume_date": "20240104",
+                    "suspend_reason": "legacy duplicate",
+                    "reason_type": "S",
                 }
             ]
         )
@@ -371,6 +397,7 @@ def test_tushare_research_rows_normalize_units_dates_and_fields():
     assert factors[0]["factors"]["free_share_shares"] == 1000000.0
 
     suspensions = adapter.suspend_rows("600519", "2024-01-02", "2024-01-05")
+    assert len(suspensions) == 1
     assert suspensions[0]["suspend_date"] == "2024-01-03"
     assert suspensions[0]["resume_date"] == "2024-01-04"
     assert suspensions[0]["source"] == "tushare:suspend_d"

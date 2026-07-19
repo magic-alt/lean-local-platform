@@ -509,6 +509,8 @@ def import_ashare_research_data(
     repair_ohlc_errors: bool = False,
     suspension_evidence_rows: list[dict[str, Any]] | None = None,
     infer_suspensions_from_authoritative_absence: bool = False,
+    bulk_write: bool = False,
+    materialize_derived: bool = True,
 ) -> dict[str, Any]:
     batch = create_import_batch(
         provider,
@@ -635,24 +637,43 @@ def import_ashare_research_data(
         )
         trade_status = build_ashare_trade_status(normalized_rows)
         status_source = f"{source}:official_status" if has_official_trade_status else f"{source}:ohlcv_inferred"
-        upsert_daily_bars(normalized_rows, source=source, batch_id=batch_id, adjust=adjust or "raw")
-        upsert_trade_status(trade_status, source=status_source, batch_id=batch_id)
+        upsert_daily_bars(
+            normalized_rows,
+            source=source,
+            batch_id=batch_id,
+            adjust=adjust or "raw",
+            bulk=bulk_write,
+        )
+        upsert_trade_status(trade_status, source=status_source, batch_id=batch_id, bulk=bulk_write)
         official_suspension_dates = suspension_dates - inferred_suspension_dates
         if official_suspension_dates:
             upsert_trade_status(
                 _suspension_status_rows(symbol, official_suspension_dates),
                 source="tushare:suspension_evidence",
                 batch_id=batch_id,
+                bulk=bulk_write,
             )
         if inferred_suspension_dates:
             upsert_trade_status(
                 _suspension_status_rows(symbol, inferred_suspension_dates),
                 source="tushare:daily_absence_inferred",
                 batch_id=batch_id,
+                bulk=bulk_write,
             )
         verified_factor_rows = [row for row in normalized_rows if row.get("adj_factor_verified", True)]
         upsert_adjustment_factors(verified_factor_rows, source=source, batch_id=batch_id)
         upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
+
+        if not materialize_derived:
+            finish_import_batch(batch_id, "success", qa_report=qa_report)
+            return {
+                "symbol": symbol,
+                "rows": len(normalized_rows),
+                "batch_id": batch_id,
+                "qa_report": qa_report,
+                "canonicalStatus": "ready",
+                "derivedStatus": "pending",
+            }
 
         lean_rows = _ashare_rows_for_lean(normalized_rows)
         metadata = rebuild_ashare_lean_cache_from_db(

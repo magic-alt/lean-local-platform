@@ -248,3 +248,30 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
     assert payload["count"] == 1
     assert payload["sourceAttempts"][0]["source"] == "tushare"
     assert payload["sourceAttempts"][1]["source"] == "akshare"
+
+
+def test_clickhouse_mirror_splits_rows_into_partition_safe_five_year_blocks(monkeypatch):
+    from app.services import market_data
+
+    inserts = []
+
+    class Client:
+        def insert(self, table, rows, column_names):
+            inserts.append((table, list(rows), column_names))
+
+    monkeypatch.setattr(market_data, "enabled", lambda: True)
+    monkeypatch.setattr(market_data, "ensure_schema", lambda: True)
+    monkeypatch.setattr(market_data, "_client", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(market_data, "set_dependency_status", lambda *args, **kwargs: None)
+
+    result = market_data.mirror_rows(
+        {"symbol": "600519", "asset_class": "equity", "market": "china", "source": "tushare"},
+        [
+            {"date": "2000-01-03", "open": "1", "high": "1", "low": "1", "close": "1", "volume": "1"},
+            {"date": "2004-12-31", "open": "2", "high": "2", "low": "2", "close": "2", "volume": "2"},
+            {"date": "2005-01-04", "open": "3", "high": "3", "low": "3", "close": "3", "volume": "3"},
+        ],
+    )
+
+    assert result == {"enabled": True, "inserted": 3, "skipped": 0, "batches": 2}
+    assert [len(item[1]) for item in inserts] == [2, 1]

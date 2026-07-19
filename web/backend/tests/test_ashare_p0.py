@@ -2,7 +2,7 @@ import json
 import sys
 import types
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -887,6 +887,46 @@ def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejec
     can_buy, reason = is_tradeable("600001", "2024-01-04", "buy")
     assert can_buy is False
     assert reason == "trade_status_missing"
+
+
+def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.ashare_repository import LOOKUP_BATCH_SIZE, upsert_trade_status
+
+    start = datetime(2024, 1, 1)
+    official_rows = [
+        {
+            "symbol": "600001",
+            "trade_date": (start + timedelta(days=index)).date().isoformat(),
+            "is_suspended": False,
+            "can_buy": False,
+            "can_sell": True,
+        }
+        for index in range(LOOKUP_BATCH_SIZE + 1)
+    ]
+    inferred_rows = [{**row, "can_buy": True} for row in official_rows]
+
+    upsert_trade_status(official_rows, source="official-unit", batch_id="official-batch")
+    upsert_trade_status(inferred_rows, source="unit:ohlcv_inferred", batch_id="inferred-batch")
+
+    with db() as connection:
+        ashare = connection.execute(
+            """
+            select count(*) as count, min(can_buy) as min_can_buy, max(can_buy) as max_can_buy,
+                   min(source) as min_source, max(source) as max_source
+            from ashare_trade_status where symbol='600001'
+            """
+        ).fetchone()
+        market = connection.execute(
+            "select count(*) as count from market_trade_status where symbol='600001'"
+        ).fetchone()
+
+    assert ashare["count"] == LOOKUP_BATCH_SIZE + 1
+    assert ashare["min_can_buy"] == ashare["max_can_buy"] == 0
+    assert ashare["min_source"] == ashare["max_source"] == "official-unit"
+    assert market["count"] == LOOKUP_BATCH_SIZE + 1
 
 
 def test_adjustment_factors_write_factor_file_and_corporate_actions(tmp_path, monkeypatch):

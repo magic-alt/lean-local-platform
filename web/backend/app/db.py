@@ -91,6 +91,8 @@ JSON_COLUMNS = {
     "checkpoint_json": "checkpoint",
     "requested_datasets_json": "requestedDatasets",
     "metrics_json": "metrics",
+    "derived_status_json": "derivedStatus",
+    "endpoint_counts_json": "endpointCounts",
 }
 
 
@@ -148,6 +150,8 @@ LONG_TEXT_COLUMNS = {
     "rule_tags_json",
     "checkpoint_json",
     "requested_datasets_json",
+    "derived_status_json",
+    "endpoint_counts_json",
     "error",
     "error_message",
 }

@@ -43,7 +43,7 @@ from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, re
 from ..services.security_search import search_securities as search_security_catalog
 from ..services.tasks import create_task
 from ..services import data_sync
-from ..tasks.worker import fetch_data_batch_task, sync_all_data_task
+from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, sync_all_data_task
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -174,6 +174,17 @@ class DataSyncRequest(BaseModel):
     mode: str = "auto"
 
 
+class OnDemandDatasetDownloadRequest(BaseModel):
+    dataset: str
+    storageTarget: str
+    relativePath: str | None = None
+    format: str = "parquet"
+    startDate: str | None = None
+    endDate: str | None = None
+    symbol: str | None = None
+    apiParameters: dict[str, Any] = Field(default_factory=dict)
+
+
 @router.get("/symbols")
 def symbols(
     market: str = "usa",
@@ -238,6 +249,38 @@ def data_catalog():
     return data_sync.catalog_payload()
 
 
+@router.get("/data/on-demand/storage-targets")
+def on_demand_storage_targets():
+    return {"items": data_sync.on_demand_storage_targets()}
+
+
+@router.post("/data/on-demand/downloads")
+def create_on_demand_download(request: OnDemandDatasetDownloadRequest):
+    try:
+        spec = next((item for item in data_sync.DATASET_REGISTRY if item.key == request.dataset), None)
+        if not spec or spec.sync_policy != "on_demand":
+            raise ValueError("Only datasets marked as on-demand can be downloaded here.")
+        if request.storageTarget not in {item["id"] for item in data_sync.on_demand_storage_targets()}:
+            raise ValueError("Select an available storage target explicitly.")
+        with db() as connection:
+            active = connection.execute(
+                "select id from data_sync_runs where status in ('queued','running','cancelling') limit 1"
+            ).fetchone()
+        if active:
+            raise ValueError("A full data update is active; wait for it to finish before starting an on-demand download.")
+        parameters = request.model_dump()
+        task = create_task(
+            "on_demand_download",
+            f"Download TuShare {request.dataset}",
+            parameters,
+            related_id=request.dataset,
+        )
+        dispatch_task(download_on_demand_dataset_task.s(task["id"]), task["id"])
+        return task
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/data/sync-runs")
 def data_sync_runs(limit: int = 20):
     return {"items": data_sync.list_sync_runs(limit), "limit": limit}
@@ -267,6 +310,14 @@ def data_sync_run(run_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="Data sync run not found.")
     return item
+
+
+@router.get("/data/sync-runs/{run_id}/validation")
+def data_sync_validation(run_id: str, limit: int = 500):
+    try:
+        return data_sync.sync_validation(run_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/data/sync-runs/{run_id}/cancel")

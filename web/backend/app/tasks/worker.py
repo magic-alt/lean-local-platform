@@ -246,6 +246,50 @@ def fetch_data_batch_task(task_id: str):
 
 
 @celery_app.task(
+    name="lean_web.download_on_demand_dataset",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def download_on_demand_dataset_task(task_id: str):
+    task = get_task(task_id)
+    parameters = task["parameters"]
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
+    append_log(
+        task_id,
+        f"Downloading TuShare dataset {parameters.get('dataset')} to explicit storage target {parameters.get('storageTarget')}.",
+    )
+    try:
+        result = data_sync.download_on_demand_dataset(
+            task_id=task_id,
+            dataset_key=str(parameters.get("dataset") or ""),
+            storage_target=str(parameters.get("storageTarget") or ""),
+            relative_path=str(parameters.get("relativePath") or "") or None,
+            file_format=str(parameters.get("format") or "parquet"),
+            start_date=str(parameters.get("startDate") or "") or None,
+            end_date=str(parameters.get("endDate") or "") or None,
+            symbol=str(parameters.get("symbol") or "") or None,
+            parameters=dict(parameters.get("apiParameters") or {}),
+        )
+        append_log(
+            task_id,
+            f"Exported {result['rows']} rows to {result['displayPath']} sha256={result['sha256']}.",
+        )
+        update_task(
+            task_id,
+            status="success",
+            artifacts_json=[result["displayPath"]],
+            finished_at=utc_now(),
+        )
+        _record_task_metric("on_demand_download", "success")
+        return result
+    except Exception as exc:
+        append_log(task_id, f"error: {exc}")
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("on_demand_download", "failed")
+        raise
+
+
+@celery_app.task(
     name="lean_web.sync_all_data",
     acks_late=True,
     reject_on_worker_lost=True,
@@ -271,6 +315,15 @@ def sync_all_data_task(task_id: str, run_id: str):
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
         _record_task_metric("data_sync", "failed")
         raise
+
+
+@celery_app.task(
+    name="lean_web.materialize_sync_data",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def materialize_sync_data_task(run_id: str):
+    return data_sync.materialize_daily_run(run_id)
 
 
 def _broker_contains_sync_run(client: Any, run_id: str) -> bool:

@@ -54,6 +54,7 @@ import type {
   DataProvider,
   DataSyncCatalog,
   DataSyncRun,
+  OnDemandStorageTarget,
   DatabaseHealth,
   DependencyHealth,
   FactorEvaluationResult,
@@ -1265,6 +1266,17 @@ export function DataPage() {
   }, false);
   const [syncRun, setSyncRun] = useState<DataSyncRun>();
   const [syncActionLoading, setSyncActionLoading] = useState(false);
+  const storageTargets = useAsyncData<OnDemandStorageTarget[]>(
+    () => api.onDemandStorageTargets().then((result) => result.items),
+    [],
+    false
+  );
+  const [downloadForm] = Form.useForm();
+  const [downloadDataset, setDownloadDataset] = useState<DataSyncCatalog["items"][number] | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [downloadTasks, setDownloadTasks] = useState<Record<string, Task>>({});
+  const selectedStorageTarget = Form.useWatch("storageTarget", downloadForm);
+  const selectedStorage = storageTargets.data.find((item) => item.id === selectedStorageTarget);
   const [csvForm] = Form.useForm();
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
@@ -1340,6 +1352,61 @@ export function DataPage() {
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [currentSync?.id, currentSync?.status]);
+
+  useEffect(() => {
+    const active = Object.entries(downloadTasks).filter(([, task]) => ["queued", "running"].includes(task.status));
+    if (!active.length) return;
+    let cancelled = false;
+    const refresh = () => Promise.all(
+      active.map(([dataset, task]) => api.task(task.id).then((next) => [dataset, next] as const))
+    ).then((items) => {
+      if (!cancelled) setDownloadTasks((current) => ({ ...current, ...Object.fromEntries(items) }));
+    }).catch(() => undefined);
+    const timer = window.setInterval(refresh, 2000);
+    refresh();
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [Object.values(downloadTasks).map((task) => `${task.id}:${task.status}`).join("|")]);
+
+  function openOnDemandDownload(item: DataSyncCatalog["items"][number]) {
+    setDownloadDataset(item);
+    downloadForm.resetFields();
+    downloadForm.setFieldsValue({
+      dataset: item.dataset_key,
+      relativePath: `tushare-on-demand/${item.dataset_key}`,
+      format: "parquet",
+      startDate: dayjs().subtract(30, "day").format("YYYY-MM-DD"),
+      endDate: dayjs().format("YYYY-MM-DD"),
+      apiParameters: "{}",
+    });
+  }
+
+  async function submitOnDemandDownload(values: Record<string, string>) {
+    if (!downloadDataset) return;
+    setDownloadLoading(true);
+    try {
+      const parsed = JSON.parse(values.apiParameters || "{}") as unknown;
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+        throw new Error("额外 API 参数必须是 JSON 对象");
+      }
+      const task = await api.createOnDemandDownload({
+        dataset: downloadDataset.dataset_key,
+        storageTarget: values.storageTarget,
+        relativePath: values.relativePath,
+        format: values.format as "parquet" | "jsonl",
+        startDate: values.startDate || undefined,
+        endDate: values.endDate || undefined,
+        symbol: values.symbol || undefined,
+        apiParameters: parsed as Record<string, unknown>,
+      });
+      setDownloadTasks((current) => ({ ...current, [downloadDataset.dataset_key]: task }));
+      setDownloadDataset(null);
+      message.success(`${task.title} 已进入按需下载队列`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setDownloadLoading(false);
+    }
+  }
 
   async function startFullSync(mode: "auto" | "incremental" | "full_rebuild" = "auto") {
     setSyncActionLoading(true);
@@ -1470,6 +1537,19 @@ export function DataPage() {
             <Space direction="vertical" style={{ width: "100%" }} size={4}>
               <Space wrap>
                 <StatusTag status={currentSync.status} />
+                {currentSync.canonical_status && (
+                  <Tag color={currentSync.canonical_status === "ready" ? "success" : "processing"}>
+                    MySQL {currentSync.canonical_status}
+                  </Tag>
+                )}
+                {Boolean(currentSync.derivedStatus?.status) && (
+                  <Tag color={currentSync.derivedStatus?.status === "ready" ? "success" : currentSync.derivedStatus?.status === "partial" ? "warning" : "processing"}>
+                    派生层 {String(currentSync.derivedStatus?.status)}
+                    {currentSync.derivedStatus?.completed !== undefined && currentSync.derivedStatus?.total
+                      ? ` ${String(currentSync.derivedStatus?.completed)}/${String(currentSync.derivedStatus?.total)}`
+                      : ""}
+                  </Tag>
+                )}
                 <strong>
                   {syncProgress.active
                     ? `${syncProgress.active.status === "checking" ? "正在检查" : "正在更新"}：${syncProgress.active.dataset_key}`
@@ -1485,10 +1565,18 @@ export function DataPage() {
                 {syncProgress.active?.metrics?.phase && <Tag color="processing">{syncProgress.active.metrics.phase}</Tag>}
                 {syncProgress.active?.metrics?.apiCalls !== undefined && (
                   <span>
-                    API {syncProgress.active.metrics.apiCalls.toLocaleString()} calls
+                    API {syncProgress.active.metrics.apiCalls.toLocaleString()} 次真实调用
                     {syncProgress.active.metrics.apiQuotaPerMinute !== undefined
                       ? ` · 限额 ${syncProgress.active.metrics.apiQuotaPerMinute}/min`
                       : ""}
+                  </span>
+                )}
+                {syncProgress.active?.metrics?.endpointCalls && Object.keys(syncProgress.active.metrics.endpointCalls).length > 0 && (
+                  <span>
+                    {Object.entries(syncProgress.active.metrics.endpointCalls)
+                      .sort(([left], [right]) => left.localeCompare(right))
+                      .map(([endpoint, count]) => `${endpoint} ${count}`)
+                      .join(" · ")}
                   </span>
                 )}
                 {syncProgress.active?.metrics?.downloadedRows !== undefined && (
@@ -1499,6 +1587,25 @@ export function DataPage() {
                 )}
                 {syncProgress.active?.metrics?.writeRowsPerSecond !== undefined && (
                   <span>写入 {Math.round(syncProgress.active.metrics.writeRowsPerSecond).toLocaleString()} rows/s</span>
+                )}
+                {syncProgress.active?.metrics?.unitsPerSecond !== undefined && (
+                  <span>处理 {syncProgress.active.metrics.unitsPerSecond.toFixed(1)} 个工作单元/s</span>
+                )}
+                {syncProgress.active?.metrics?.emptyUnits !== undefined && (
+                  <span>空结果 {syncProgress.active.metrics.emptyUnits.toLocaleString()} 个</span>
+                )}
+                {syncProgress.active?.metrics?.validatedRows !== undefined && (
+                  <span>校验 {syncProgress.active.metrics.validatedRows.toLocaleString()} rows</span>
+                )}
+                {Boolean(syncProgress.active?.metrics?.quarantinedRows) && (
+                  <span>隔离 {syncProgress.active?.metrics?.quarantinedRows?.toLocaleString()} rows</span>
+                )}
+                {syncProgress.active?.metrics?.etaSeconds !== undefined && syncProgress.active.metrics.etaSeconds !== null && (
+                  <span>
+                    ETA {syncProgress.active.metrics.etaSeconds >= 60
+                      ? `${Math.ceil(syncProgress.active.metrics.etaSeconds / 60)} 分钟`
+                      : `${Math.ceil(syncProgress.active.metrics.etaSeconds)} 秒`}
+                  </span>
                 )}
                 {syncProgress.active?.metrics?.diskFreeBytes !== undefined && (
                   <span>磁盘可用 {(syncProgress.active.metrics.diskFreeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB</span>
@@ -1529,6 +1636,35 @@ export function DataPage() {
                 dataIndex: "sync_policy",
                 render: (value) => value === "on_demand" ? <Tag color="blue">按需</Tag> : <Tag>批量</Tag>
               },
+              {
+                title: "操作",
+                width: 180,
+                render: (_, item) => {
+                  if (item.sync_policy !== "on_demand") return "-";
+                  const task = downloadTasks[item.dataset_key];
+                  const busy = Boolean(task && ["queued", "running"].includes(task.status));
+                  return (
+                    <Space size={4}>
+                      <Tooltip title={activeSync ? "一键更新进行中，为避免共享 TuShare 配额竞争，完成后可单独下载" : undefined}>
+                        <Button
+                          size="small"
+                          icon={<CloudDownloadOutlined />}
+                          loading={busy}
+                          disabled={item.permission_status === "denied" || activeSync}
+                          onClick={() => openOnDemandDownload(item)}
+                        >
+                          {task?.status === "success" ? "再次下载" : "单独下载"}
+                        </Button>
+                      </Tooltip>
+                      {task && !busy && (
+                        <Tooltip title={task.error || task.artifacts?.[0] || task.status}>
+                          <StatusTag status={task.status} />
+                        </Tooltip>
+                      )}
+                    </Space>
+                  );
+                }
+              },
               { title: "Permission", dataIndex: "permission_status", render: (value) => <StatusTag status={value} /> },
               { title: "Sync", render: (_, item) => item.syncItem ? <StatusTag status={item.syncItem.status} /> : "-" },
               { title: "Processed", render: (_, item) => item.syncItem?.processed ?? "-" },
@@ -1552,6 +1688,71 @@ export function DataPage() {
           />
         )}
       </Card>
+      <Modal
+        title={`单独下载数据集${downloadDataset ? ` · ${downloadDataset.dataset_key}` : ""}`}
+        open={Boolean(downloadDataset)}
+        onCancel={() => setDownloadDataset(null)}
+        onOk={() => downloadForm.submit()}
+        okText="开始下载"
+        confirmLoading={downloadLoading}
+        width={680}
+        destroyOnHidden
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="文件只写入你明确选择的存储位置"
+          description="存储目标必须手动选择。外置硬盘或 NAS 需要先挂载到服务，并通过 LEAN_ON_DEMAND_EXPORT_ROOTS 配置后才会出现在列表中。"
+        />
+        <Form form={downloadForm} layout="vertical" onFinish={submitOnDemandDownload}>
+          <Form.Item name="dataset" label="数据集"><Input disabled /></Form.Item>
+          <div className="field-grid two">
+            <Form.Item name="storageTarget" label="下载地址" rules={[{ required: true, message: "请选择下载地址" }]}>
+              <Select
+                placeholder="请选择，不使用默认硬盘目录"
+                loading={storageTargets.loading}
+                options={storageTargets.data.map((item) => ({
+                  value: item.id,
+                  label: `${item.label} · ${item.displayPath}`,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="relativePath" label="目标子目录" rules={[{ required: true }]}>
+              <Input placeholder="例如 tushare-on-demand/fund_nav" />
+            </Form.Item>
+          </div>
+          {selectedStorage && (
+            <Alert type="success" showIcon style={{ marginBottom: 12 }} message={`实际保存到：${selectedStorage.displayPath}`} />
+          )}
+          <div className="field-grid three">
+            <Form.Item name="format" label="文件格式" rules={[{ required: true }]}>
+              <Select options={[{ value: "parquet", label: "Parquet" }, { value: "jsonl", label: "JSON Lines" }]} />
+            </Form.Item>
+            <Form.Item
+              name="symbol"
+              label="标的代码"
+              rules={[{ required: downloadDataset?.scope_type === "instrument", message: "该数据集需要标的代码" }]}
+            >
+              <Input placeholder={downloadDataset?.scope_type === "instrument" ? "必填，例如 600519" : "可选"} />
+            </Form.Item>
+            <Form.Item label="接口限制">
+              <Input disabled value={downloadDataset?.rate_limit_per_hour ? `${downloadDataset.rate_limit_per_hour} 次/小时` : "全局 500 次/分钟"} />
+            </Form.Item>
+          </div>
+          <div className="field-grid two">
+            <Form.Item name="startDate" label="开始日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
+            <Form.Item name="endDate" label="结束日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
+          </div>
+          <Form.Item
+            name="apiParameters"
+            label="额外 TuShare 参数（JSON，可选）"
+            tooltip="用于 index_code、exchange、trade_date 等数据集专有参数；这里的值会覆盖自动生成的参数。"
+          >
+            <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder='例如 {"exchange":"CFFEX"}' />
+          </Form.Item>
+        </Form>
+      </Modal>
       <MarketDataDownloader unboundedPreview showLimitInput={false} />
       <Card title="Import CSV" style={{ marginTop: 16 }}>
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>

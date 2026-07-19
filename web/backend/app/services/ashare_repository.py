@@ -5,9 +5,17 @@ from datetime import date, datetime
 from typing import Any
 
 from ..core.errors import LeanWebError
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.errors import LeanPlatformError
 from .market_repository import upsert_instrument, upsert_market_daily_bars, upsert_market_trade_status
+
+
+WRITE_BATCH_SIZE = 5_000
+LOOKUP_BATCH_SIZE = 400
+
+
+def _chunks(values: list[Any], size: int) -> list[list[Any]]:
+    return [values[offset : offset + size] for offset in range(0, len(values), size)]
 
 
 def _bool(value: Any) -> int:
@@ -344,49 +352,59 @@ def end_coverage_status(market: str, requested_end: str, actual_last_date: str |
     }
 
 
-def upsert_daily_bars(rows: list[dict[str, Any]], source: str, batch_id: str, adjust: str) -> None:
+def upsert_daily_bars(
+    rows: list[dict[str, Any]],
+    source: str,
+    batch_id: str,
+    adjust: str,
+    *,
+    bulk: bool = False,
+) -> None:
     now = utc_now()
-    with db() as connection:
-        for row in rows:
-            connection.execute(
-                """
-                insert into ashare_daily_bars
-                    (symbol, trade_date, open, high, low, close, volume, amount, turnover_rate,
-                     prev_close, pct_change, adj_factor, adjust, source, batch_id, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(symbol, trade_date, adjust, source) do update set
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    volume = excluded.volume,
-                    amount = excluded.amount,
-                    turnover_rate = excluded.turnover_rate,
-                    prev_close = excluded.prev_close,
-                    pct_change = excluded.pct_change,
-                    adj_factor = excluded.adj_factor,
-                    batch_id = excluded.batch_id,
-                    created_at = excluded.created_at
-                """,
-                (
-                    row["symbol"],
-                    row["trade_date"],
-                    row["open"],
-                    row["high"],
-                    row["low"],
-                    row["close"],
-                    row["volume"],
-                    row.get("amount"),
-                    row.get("turnover_rate"),
-                    row.get("prev_close"),
-                    row.get("pct_change"),
-                    row.get("adj_factor"),
-                    adjust,
-                    source,
-                    batch_id,
-                    now,
-                ),
-            )
+    sql = """
+        insert into ashare_daily_bars
+            (symbol, trade_date, open, high, low, close, volume, amount, turnover_rate,
+             prev_close, pct_change, adj_factor, adjust, source, batch_id, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(symbol, trade_date, adjust, source) do update set
+            open = excluded.open,
+            high = excluded.high,
+            low = excluded.low,
+            close = excluded.close,
+            volume = excluded.volume,
+            amount = excluded.amount,
+            turnover_rate = excluded.turnover_rate,
+            prev_close = excluded.prev_close,
+            pct_change = excluded.pct_change,
+            adj_factor = excluded.adj_factor,
+            batch_id = excluded.batch_id,
+            created_at = excluded.created_at
+    """
+    parameters = [
+        (
+            row["symbol"],
+            row["trade_date"],
+            row["open"],
+            row["high"],
+            row["low"],
+            row["close"],
+            row["volume"],
+            row.get("amount"),
+            row.get("turnover_rate"),
+            row.get("prev_close"),
+            row.get("pct_change"),
+            row.get("adj_factor"),
+            adjust,
+            source,
+            batch_id,
+            now,
+        )
+        for row in rows
+    ]
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
+            connection.executemany(sql, chunk)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(row["symbol"], []).append(row)
@@ -402,6 +420,7 @@ def upsert_daily_bars(rows: list[dict[str, Any]], source: str, batch_id: str, ad
             resolution="daily",
             data_type="trade",
             adjust=adjust,
+            bulk=bulk,
         )
 
 
@@ -418,55 +437,88 @@ def _trade_status_source_priority(source: str) -> int:
     return 50
 
 
-def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) -> None:
+def upsert_trade_status(
+    rows: list[dict[str, Any]],
+    source: str,
+    batch_id: str,
+    *,
+    bulk: bool = False,
+) -> None:
     persisted_rows: list[dict[str, Any]] = []
     source_priority = _trade_status_source_priority(source)
-    with db() as connection:
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        existing_sources: dict[tuple[str, str], str] = {}
+        dates_by_symbol: dict[str, set[str]] = {}
         for row in rows:
-            existing = connection.execute(
-                "select source from ashare_trade_status where symbol = ? and trade_date = ?",
-                (row["symbol"], row["trade_date"]),
-            ).fetchone()
-            if existing and _trade_status_source_priority(existing["source"]) > source_priority:
+            dates_by_symbol.setdefault(str(row["symbol"]), set()).add(str(row["trade_date"]))
+        for symbol, dates in dates_by_symbol.items():
+            for date_chunk in _chunks(sorted(dates), LOOKUP_BATCH_SIZE):
+                placeholders = ",".join("?" for _ in date_chunk)
+                existing = connection.execute(
+                    f"""
+                    select symbol, trade_date, source
+                    from ashare_trade_status
+                    where symbol = ? and trade_date in ({placeholders})
+                    """,
+                    [symbol, *date_chunk],
+                ).fetchall()
+                existing_sources.update(
+                    {
+                        (str(item["symbol"]), str(item["trade_date"])): str(item["source"] or "")
+                        for item in existing
+                    }
+                )
+
+        for row in rows:
+            existing_key = (str(row["symbol"]), str(row["trade_date"]))
+            if (
+                existing_key in existing_sources
+                and _trade_status_source_priority(existing_sources[existing_key]) > source_priority
+            ):
                 continue
-            connection.execute(
-                """
-                insert into ashare_trade_status
-                    (symbol, trade_date, is_suspended, limit_up, limit_down, is_limit_up, is_limit_down,
-                     is_one_word_limit_up, is_one_word_limit_down, can_buy, can_sell, is_st, source, batch_id)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(symbol, trade_date) do update set
-                    is_suspended = excluded.is_suspended,
-                    limit_up = excluded.limit_up,
-                    limit_down = excluded.limit_down,
-                    is_limit_up = excluded.is_limit_up,
-                    is_limit_down = excluded.is_limit_down,
-                    is_one_word_limit_up = excluded.is_one_word_limit_up,
-                    is_one_word_limit_down = excluded.is_one_word_limit_down,
-                    can_buy = excluded.can_buy,
-                    can_sell = excluded.can_sell,
-                    is_st = excluded.is_st,
-                    source = excluded.source,
-                    batch_id = excluded.batch_id
-                """,
-                (
-                    row["symbol"],
-                    row["trade_date"],
-                    _bool(row.get("is_suspended")),
-                    row.get("limit_up"),
-                    row.get("limit_down"),
-                    _bool(row.get("is_limit_up")),
-                    _bool(row.get("is_limit_down")),
-                    _bool(row.get("is_one_word_limit_up")),
-                    _bool(row.get("is_one_word_limit_down")),
-                    _bool(row.get("can_buy", True)),
-                    _bool(row.get("can_sell", True)),
-                    _bool(row.get("is_st")),
-                    source,
-                    batch_id,
-                ),
-            )
             persisted_rows.append(row)
+
+        sql = """
+            insert into ashare_trade_status
+                (symbol, trade_date, is_suspended, limit_up, limit_down, is_limit_up, is_limit_down,
+                 is_one_word_limit_up, is_one_word_limit_down, can_buy, can_sell, is_st, source, batch_id)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(symbol, trade_date) do update set
+                is_suspended = excluded.is_suspended,
+                limit_up = excluded.limit_up,
+                limit_down = excluded.limit_down,
+                is_limit_up = excluded.is_limit_up,
+                is_limit_down = excluded.is_limit_down,
+                is_one_word_limit_up = excluded.is_one_word_limit_up,
+                is_one_word_limit_down = excluded.is_one_word_limit_down,
+                can_buy = excluded.can_buy,
+                can_sell = excluded.can_sell,
+                is_st = excluded.is_st,
+                source = excluded.source,
+                batch_id = excluded.batch_id
+        """
+        parameters = [
+            (
+                row["symbol"],
+                row["trade_date"],
+                _bool(row.get("is_suspended")),
+                row.get("limit_up"),
+                row.get("limit_down"),
+                _bool(row.get("is_limit_up")),
+                _bool(row.get("is_limit_down")),
+                _bool(row.get("is_one_word_limit_up")),
+                _bool(row.get("is_one_word_limit_down")),
+                _bool(row.get("can_buy", True)),
+                _bool(row.get("can_sell", True)),
+                _bool(row.get("is_st")),
+                source,
+                batch_id,
+            )
+            for row in persisted_rows
+        ]
+        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
+            connection.executemany(sql, chunk)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in persisted_rows:
         grouped.setdefault(row["symbol"], []).append(row)
@@ -479,6 +531,7 @@ def upsert_trade_status(rows: list[dict[str, Any]], source: str, batch_id: str) 
             venue="china",
             source=source,
             batch_id=batch_id,
+            bulk=bulk,
         )
 
 
