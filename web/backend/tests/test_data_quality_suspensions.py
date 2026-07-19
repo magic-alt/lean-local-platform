@@ -72,3 +72,30 @@ def test_partial_day_suspension_is_not_a_full_day_gap_exception():
 
     assert dates == set()
     assert evidence == {}
+
+
+def test_daily_normalization_converts_optional_nan_to_null():
+    from app.services.data_quality import normalize_ashare_daily_rows
+
+    rows = normalize_ashare_daily_rows(
+        "600601",
+        [
+            {
+                "date": "1990-12-19",
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.1,
+                "volume": 100,
+                "amount": float("nan"),
+                "prev_close": float("nan"),
+                "pct_change": float("nan"),
+            }
+        ],
+        source="tushare",
+        batch_id="batch",
+    )
+
+    assert rows[0]["amount"] is None
+    assert rows[0]["prev_close"] is None
+    assert rows[0]["pct_change"] is None

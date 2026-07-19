@@ -84,14 +84,22 @@ def upsert_instrument(
             on conflict(instrument_id) do update set
                 symbol = excluded.symbol,
                 normalized_symbol = excluded.normalized_symbol,
-                name = coalesce(excluded.name, instruments.name),
+                name = case
+                    when excluded.name = excluded.symbol and instruments.name <> instruments.symbol
+                    then instruments.name
+                    else coalesce(excluded.name, instruments.name)
+                end,
                 exchange = coalesce(excluded.exchange, instruments.exchange),
                 venue = excluded.venue,
                 currency = coalesce(excluded.currency, instruments.currency),
                 base_currency = coalesce(excluded.base_currency, instruments.base_currency),
                 quote_currency = coalesce(excluded.quote_currency, instruments.quote_currency),
                 underlying_symbol = coalesce(excluded.underlying_symbol, instruments.underlying_symbol),
-                listed_date = coalesce(excluded.listed_date, instruments.listed_date),
+                listed_date = case
+                    when instruments.listed_date is null then excluded.listed_date
+                    when excluded.listed_date is null then instruments.listed_date
+                    else min(instruments.listed_date, excluded.listed_date)
+                end,
                 delisted_date = excluded.delisted_date,
                 expiry_date = coalesce(excluded.expiry_date, instruments.expiry_date),
                 status = excluded.status,

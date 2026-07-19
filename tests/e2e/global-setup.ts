@@ -128,13 +128,13 @@ async function globalSetup() {
   if (shouldStartStack && backendMode === "compose") {
     const composeArgs = ["compose", "--profile", "app", "up", "-d"];
     if (process.env.E2E_COMPOSE_BUILD !== "0") composeArgs.push("--build");
-    composeArgs.push("mysql", "redis", "clickhouse", "api", "worker");
+    composeArgs.push("mysql", "redis", "clickhouse", "api", "worker", "data-worker", "backtest-worker");
     run("docker", composeArgs, { cwd: repoRoot, env: composeEnv });
   } else if (shouldStartStack) {
     run("docker", ["compose", "up", "-d", "--wait", "mysql", "redis", "clickhouse"], { cwd: repoRoot, env: composeEnv });
     const python = process.env.E2E_PYTHON || path.join(backendDir, ".venv/bin/python");
     startedProcesses.push(startProcess("api", python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", apiPort], serviceEnv));
-    startedProcesses.push(startProcess("worker", python, ["-m", "celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--pool=solo"], serviceEnv));
+    startedProcesses.push(startProcess("worker", python, ["-m", "celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "--queues=default,data,backtest"], serviceEnv));
     fs.writeFileSync(reportPath("processes.json"), JSON.stringify(startedProcesses, null, 2), "utf-8");
   }
   await waitForHealth();

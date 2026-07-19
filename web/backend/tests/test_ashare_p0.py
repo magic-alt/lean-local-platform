@@ -97,6 +97,49 @@ def test_ashare_import_writes_research_tables_and_restores_asof_universe(tmp_pat
     assert reason == "suspended"
 
 
+def test_bulk_tushare_import_records_authoritative_daily_absence_as_suspension(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import app.services.data as data_service
+    from app.services.ashare_repository import is_tradeable, upsert_trade_calendar
+
+    upsert_trade_calendar(
+        "china",
+        ["2024-01-02", "2024-01-03", "2024-01-04"],
+        source="test",
+        batch_id="calendar",
+    )
+
+    class EmptySuspensionAdapter:
+        def suspend_rows(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setattr(data_service, "TushareAdapter", EmptySuspensionAdapter)
+    asset = data_service.import_ashare_research_data(
+        symbol="600138",
+        provider="tushare",
+        market="china",
+        rows=[
+            {"date": "2024-01-02", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
+            {"date": "2024-01-04", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
+        ],
+        source="tushare",
+        overwrite=True,
+        adjust="raw",
+        outputsize="full",
+        asset_class="equity",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        start_date="2024-01-02",
+        end_date="2024-01-04",
+        infer_suspensions_from_authoritative_absence=True,
+    )
+
+    assert asset["qa_report"]["passed"] is True
+    assert "suspensions_inferred_from_authoritative_daily_absence=1" in asset["qa_report"]["warnings"]
+    assert is_tradeable("600138", "2024-01-03", "buy") == (False, "suspended")
+
+
 def test_incremental_ashare_import_rebuilds_lean_zip_from_full_database_history(tmp_path, monkeypatch):
     import_sample_ashare(tmp_path, monkeypatch)
 

@@ -26,12 +26,14 @@ const MATCH_TYPE_LABELS: Record<string, string> = { exact: "精确", prefix: "�
 
 function optionLabel(item: SecurityItem) {
   const matchLabel = item.matchField === "none" ? "" : `${MATCH_FIELD_LABELS[item.matchField] ?? item.matchField}/${MATCH_TYPE_LABELS[item.matchType] ?? item.matchType}`;
+  const companyName = String(item.name || "").trim();
+  const hasDistinctCompanyName = Boolean(companyName && companyName.toUpperCase() !== item.symbol.toUpperCase());
   return (
     <div className="security-option">
       <Space size={8} className="security-option-main">
         <Tag color={MARKET_COLORS[item.market] ?? "default"}>{item.marketLabel}</Tag>
-        <span className="security-option-company">{item.name || item.symbol}</span>
-        <Typography.Text type="secondary">{item.symbol}</Typography.Text>
+        <span className="security-option-company">{hasDistinctCompanyName ? companyName : item.symbol}</span>
+        {hasDistinctCompanyName && <Typography.Text type="secondary">{item.symbol}</Typography.Text>}
       </Space>
       <Space size={6}>
         {item.exchange && <Typography.Text type="secondary" className="security-option-meta">{item.exchange}</Typography.Text>}

@@ -179,7 +179,11 @@ def upsert_security(
                  industry, concepts_json, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(symbol) do update set
-                name = excluded.name,
+                name = case
+                    when excluded.name = excluded.symbol and securities.name <> securities.symbol
+                    then securities.name
+                    else excluded.name
+                end,
                 exchange = excluded.exchange,
                 listed_date = min(securities.listed_date, excluded.listed_date),
                 delisted_date = excluded.delisted_date,
@@ -509,11 +513,20 @@ def import_trade_status(records: list[dict[str, Any]], source: str = "manual") -
     return {"batchId": batch_id, "count": len(rows)}
 
 
-def upsert_adjustment_factors(rows: list[dict[str, Any]], source: str, batch_id: str) -> None:
+def upsert_adjustment_factors(
+    rows: list[dict[str, Any]],
+    source: str,
+    batch_id: str,
+    *,
+    bulk: bool = False,
+) -> None:
     values = [row for row in rows if row.get("adj_factor") is not None]
-    with db() as connection:
-        for row in values:
-            connection.execute(
+    if values:
+        from ..db import bulk_db
+
+        context = bulk_db if bulk else db
+        with context() as connection:
+            connection.executemany(
                 """
                 insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id)
                 values (?, ?, ?, ?, ?)
@@ -521,7 +534,7 @@ def upsert_adjustment_factors(rows: list[dict[str, Any]], source: str, batch_id:
                     adj_factor = excluded.adj_factor,
                     batch_id = excluded.batch_id
                 """,
-                (row["symbol"], row["trade_date"], row["adj_factor"], source, batch_id),
+                [(row["symbol"], row["trade_date"], row["adj_factor"], source, batch_id) for row in values],
             )
 
 

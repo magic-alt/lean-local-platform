@@ -23,7 +23,20 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="Asia/Shanghai",
     enable_utc=True,
+    task_default_queue="default",
+    task_routes={
+        "lean_web.fetch_data_batch": {"queue": "data-demand"},
+        "lean_web.sync_all_data": {"queue": "data-bulk"},
+        "lean_web.recover_data_sync": {"queue": "default"},
+        "lean_web.run_backtest": {"queue": "backtest"},
+        "lean_web.optimize": {"queue": "backtest"},
+    },
+    worker_prefetch_multiplier=1,
     beat_schedule={
+        "recover-orphaned-data-sync": {
+            "task": "lean_web.recover_data_sync",
+            "schedule": 60.0,
+        },
         "ashare-tech-report-after-close": {
             "task": "lean_web.schedule_ashare_tech_report",
             "schedule": crontab(

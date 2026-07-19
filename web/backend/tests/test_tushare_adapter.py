@@ -243,6 +243,31 @@ def test_tushare_full_history_is_downloaded_in_bounded_date_windows():
     assert all(row["adj_factor_verified"] for row in rows)
 
 
+def test_adjustment_factor_first_fill_uses_one_provider_request():
+    from app.services.tushare_adapter import TushareAdapter
+
+    pro = WindowedDailyPro()
+    factors = TushareAdapter(pro=pro).adjustment_factors_full("000001", "1990-01-01", "2026-07-16")
+
+    assert factors == {"1990-01-01": 1.0}
+    assert len(pro.adjustment_calls) == 1
+    assert pro.adjustment_calls[0]["start_date"] == "19900101"
+    assert pro.adjustment_calls[0]["end_date"] == "20260716"
+
+
+def test_hong_kong_endpoint_rate_limit_fails_fast():
+    from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
+
+    limiter = TushareRateLimiter(calls_per_minute=500)
+    limiter._redis = None
+    pro = HongKongPro()
+    proxy = RateLimitedProProxy(pro, limiter=limiter)
+
+    assert proxy.hk_basic().to_dict("records")[0]["ts_code"] == "00700.HK"
+    with pytest.raises(RuntimeError, match="tushare_endpoint_rate_limited:hk_basic"):
+        proxy.hk_basic()
+
+
 def test_tushare_rejects_qfq_hfq_to_avoid_adjustment_mixing():
     from app.core.errors import LeanWebError
     from app.services.tushare_adapter import TushareAdapter
@@ -371,6 +396,35 @@ def test_tushare_research_rows_normalize_units_dates_and_fields():
     assert financials[0]["report_date"] == "2023-12-31"
     assert financials[0]["effective_date"] == "2024-04-03"
     assert financials[0]["fields"] == {"revenue": 100.0, "n_income": 20.0}
+
+
+def test_long_daily_basic_and_index_weight_ranges_are_windowed():
+    from app.services.tushare_adapter import TushareAdapter
+
+    class WindowPro:
+        def __init__(self):
+            self.daily_basic_calls = []
+            self.index_weight_calls = []
+
+        def daily_basic(self, **kwargs):
+            self.daily_basic_calls.append(kwargs)
+            return FakeFrame([])
+
+        def index_weight(self, **kwargs):
+            self.index_weight_calls.append(kwargs)
+            return FakeFrame([])
+
+    pro = WindowPro()
+    adapter = TushareAdapter(pro=pro)
+    assert adapter.daily_basic_rows("600519", "1990-01-01", "2026-07-17") == []
+    assert len(pro.daily_basic_calls) == 4
+    assert pro.daily_basic_calls[0]["start_date"] == "19900101"
+    assert pro.daily_basic_calls[-1]["end_date"] == "20260717"
+
+    assert adapter.index_weight_rows("000300", "2024-01-01", "2026-07-17") == []
+    assert len(pro.index_weight_calls) == 3
+    assert pro.index_weight_calls[0]["start_date"] == "20240101"
+    assert pro.index_weight_calls[-1]["end_date"] == "20260717"
 
 
 class HongKongPro:

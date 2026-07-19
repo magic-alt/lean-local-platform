@@ -8,6 +8,7 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..lean_engine.symbols import normalize_symbol
 from .ashare_repository import import_security_master, infer_exchange, upsert_trade_calendar
+from .tushare_rate_limit import RateLimitedProProxy
 
 
 def _records(frame: Any) -> list[dict[str, Any]]:
@@ -178,7 +179,7 @@ class TushareAdapter:
             import tushare as ts  # type: ignore
         except ImportError as exc:
             raise LeanWebError("tushare is not installed. Install web/backend requirements first.") from exc
-        self.pro = ts.pro_api(self.token)
+        self.pro = RateLimitedProProxy(ts.pro_api(self.token))
 
     def trade_calendar(self, start_date: str, end_date: str, exchange: str = "SSE") -> list[dict[str, Any]]:
         frame = self.pro.trade_cal(
@@ -351,17 +352,23 @@ class TushareAdapter:
         }
 
     def daily_basic_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
-        frame = self.pro.daily_basic(
-            ts_code=to_tushare_stock_code(symbol),
-            start_date=_compact_date(start_date, "start_date"),
-            end_date=_compact_date(end_date, "end_date"),
-            fields=(
-                "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,"
-                "ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
-            ),
-        )
+        records_by_date: dict[str, dict[str, Any]] = {}
+        for window_start, window_end in _date_windows(start_date, end_date):
+            frame = self.pro.daily_basic(
+                ts_code=to_tushare_stock_code(symbol),
+                start_date=window_start,
+                end_date=window_end,
+                fields=(
+                    "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,"
+                    "ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
+                ),
+            )
+            for item in _records(frame):
+                trade_date = _iso_date(item.get("trade_date"))
+                if trade_date:
+                    records_by_date[trade_date] = item
         rows: list[dict[str, Any]] = []
-        for item in _records(frame):
+        for item in records_by_date.values():
             trade_date = _iso_date(item.get("trade_date"))
             if not trade_date:
                 continue
@@ -396,6 +403,51 @@ class TushareAdapter:
                 if trade_date and factor and factor > 0:
                     result[trade_date] = factor
         return result
+
+    def adjustment_factors_full(self, symbol: str, start_date: str, end_date: str) -> dict[str, float]:
+        """Fetch one instrument in one request.
+
+        TuShare documents ``adj_factor`` as supporting the complete history of
+        one stock.  The legacy ten-year windows multiplied first-fill calls and
+        prevented the 5,000-point account from approaching its 500/minute cap.
+        """
+        frame = self.pro.adj_factor(
+            ts_code=to_tushare_stock_code(symbol),
+            start_date=_compact_date(start_date, "start_date"),
+            end_date=_compact_date(end_date, "end_date"),
+            fields="ts_code,trade_date,adj_factor",
+        )
+        result: dict[str, float] = {}
+        for item in _records(frame):
+            trade_date = _iso_date(item.get("trade_date"))
+            factor = _float(item.get("adj_factor"))
+            if trade_date and factor and factor > 0:
+                result[trade_date] = factor
+        return result
+
+    def adjustment_factors_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        """Fetch the full A-share market for a single incremental trade day."""
+        day = _compact_date(trade_date, "trade_date")
+        frame = self.pro.adj_factor(
+            ts_code="",
+            trade_date=day,
+            fields="ts_code,trade_date,adj_factor",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            factor = _float(item.get("adj_factor"))
+            normalized_date = _iso_date(item.get("trade_date"))
+            symbol = from_tushare_code(item.get("ts_code") or "")
+            if symbol and normalized_date and factor and factor > 0:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "trade_date": normalized_date,
+                        "adj_factor": factor,
+                        "source": "tushare",
+                    }
+                )
+        return rows
 
     def suspend_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         """Return full-day suspension intervals with auditable TuShare provenance.
@@ -467,7 +519,14 @@ class TushareAdapter:
             unique[key] = row
         return sorted(unique.values(), key=lambda row: (row["suspend_date"], row["symbol"], row["source"]))
 
-    def limit_prices(self, symbol: str, start_date: str, end_date: str) -> dict[str, dict[str, float | None]]:
+    def limit_prices(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        *,
+        strict: bool = False,
+    ) -> dict[str, dict[str, float | None]]:
         result: dict[str, dict[str, float | None]] = {}
         try:
             for window_start, window_end in _date_windows(start_date, end_date):
@@ -485,6 +544,8 @@ class TushareAdapter:
                             "limitDown": _float(item.get("down_limit")),
                         }
         except Exception:
+            if strict:
+                raise
             return {}
         return result
 
@@ -560,14 +621,21 @@ class TushareAdapter:
         return sorted(rows, key=lambda row: (row["ex_date"], row["symbol"]))
 
     def index_weight_rows(self, index_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
-        frame = self.pro.index_weight(
-            index_code=to_tushare_index_code(index_code),
-            start_date=_compact_date(start_date, "start_date"),
-            end_date=_compact_date(end_date, "end_date"),
-            fields="index_code,con_code,trade_date,weight",
-        )
+        records_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for window_start, window_end in _date_windows(start_date, end_date, max_days=365):
+            frame = self.pro.index_weight(
+                index_code=to_tushare_index_code(index_code),
+                start_date=window_start,
+                end_date=window_end,
+                fields="index_code,con_code,trade_date,weight",
+            )
+            for item in _records(frame):
+                trade_date = _iso_date(item.get("trade_date"))
+                symbol = str(item.get("con_code") or "")
+                if trade_date and symbol:
+                    records_by_key[(trade_date, symbol)] = item
         rows: list[dict[str, Any]] = []
-        for item in _records(frame):
+        for item in records_by_key.values():
             trade_date = _iso_date(item.get("trade_date"))
             symbol = item.get("con_code")
             weight = _finite_float(item.get("weight"))
@@ -640,12 +708,14 @@ class TushareAdapter:
         *,
         adjust: str = "raw",
         include_limits: bool = True,
+        include_adjustments: bool = True,
+        include_index_fallback: bool = True,
     ) -> list[dict[str, Any]]:
         if adjust and adjust.lower() not in {"", "raw"}:
             raise LeanWebError("TuShare adapter imports raw daily bars plus adj_factor; do not request qfq/hfq here.")
         is_index = False
         records = self._daily_market_records(symbol, start_date, end_date)
-        if not records:
+        if not records and include_index_fallback:
             try:
                 records = self._daily_market_records(symbol, start_date, end_date, index=True)
                 is_index = True
@@ -656,21 +726,28 @@ class TushareAdapter:
 
         ticker = from_tushare_code(records[0].get("ts_code") or symbol)
         adj_factor_verified = is_index
-        try:
-            adj_factors = {} if is_index else self.adjustment_factors(ticker, start_date, end_date)
-            adj_factor_verified = is_index or len(adj_factors) >= len(records)
-        except Exception:
+        if include_adjustments:
+            try:
+                adj_factors = {} if is_index else self.adjustment_factors(ticker, start_date, end_date)
+                adj_factor_verified = is_index or len(adj_factors) >= len(records)
+            except Exception:
+                adj_factors = {}
+                adj_factor_verified = False
+        else:
             adj_factors = {}
-            adj_factor_verified = False
+            adj_factor_verified = is_index
         limits = {} if is_index or not include_limits else self.limit_prices(ticker, start_date, end_date)
         rows: list[dict[str, Any]] = []
         for item in records:
             trade_date = _iso_date(item.get("trade_date"))
             if not trade_date:
                 continue
-            close = _float(item.get("close"))
-            high = _float(item.get("high"))
-            low = _float(item.get("low"))
+            close = _finite_float(item.get("close"))
+            high = _finite_float(item.get("high"))
+            low = _finite_float(item.get("low"))
+            open_price = _finite_float(item.get("open"))
+            if None in {open_price, high, low, close}:
+                continue
             limit = limits.get(trade_date, {})
             limit_up = limit.get("limitUp")
             limit_down = limit.get("limitDown")
@@ -679,14 +756,14 @@ class TushareAdapter:
             rows.append(
                 {
                     "date": trade_date,
-                    "open": item.get("open"),
-                    "high": item.get("high"),
-                    "low": item.get("low"),
-                    "close": item.get("close"),
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
                     "volume": int((_float(item.get("vol")) or 0) * 100),
                     "amount": (_float(item.get("amount")) or 0) * 1000,
-                    "prev_close": item.get("pre_close"),
-                    "pct_change": item.get("pct_chg"),
+                    "prev_close": _finite_float(item.get("pre_close")),
+                    "pct_change": _finite_float(item.get("pct_chg")),
                     "adj_factor": adj_factors.get(trade_date, 1.0),
                     "adj_factor_verified": adj_factor_verified,
                     "limitUp": limit_up,

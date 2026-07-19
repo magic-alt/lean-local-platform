@@ -149,6 +149,7 @@ export const api = {
         marketLabel: string;
         name: string;
         exchange?: string;
+        listedDate?: string | null;
         status?: string;
         hasLocalData: boolean;
         matchType: "exact" | "prefix" | "contains" | "browse";

@@ -15,7 +15,7 @@ Worker:
 
 ```bash
 cd web/backend
-.venv/bin/celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
+.venv/bin/celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=default,data,backtest
 ```
 
 Frontend:
@@ -44,7 +44,7 @@ docker compose up -d mysql redis
 Full app profile:
 
 ```bash
-docker compose --profile app up -d --build mysql redis api worker
+docker compose --profile app up -d --build mysql redis api worker data-worker backtest-worker
 ```
 
 Optional observability/data services:
@@ -95,6 +95,34 @@ LEAN_DB_OBJECT_STORE_ENABLED
 LEAN_DB_OBJECT_CHUNK_BYTES
 TUSHARE_TOKEN
 ```
+
+`scripts/start_web_single_instance.sh` generates a runtime-only MySQL loader
+password and grants that account only the privileges required for rebuildable
+market-data batches. Bulk sessions disable their own binlog; API, projects,
+backtests and paper-trading metadata continue using the normal database user.
+
+High-throughput TuShare synchronization can be tuned with
+`LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
+`LEAN_TUSHARE_FETCH_CONCURRENCY`, and `LEAN_DATA_SYNC_CHUNK_ROWS`.
+
+The workstation profile treats MySQL as a bounded cache.
+`LEAN_MYSQL_MAX_DATABASE_GB` defaults to 50; bulk writes stop before the
+estimated tables, indexes, binlog and engine headroom exceed that limit.
+One-click refreshes retain only A-share execution data, benchmark indexes,
+CFFEX futures references, and SSE option references. Contract bars plus
+fundamentals, funds, overseas markets, macro data, and feature lists are fetched
+on demand by the workflow that uses them.
+
+MySQL uses the `mysql-data` named volume while `LEAN_MYSQL_DATA_DIR` is blank.
+To move it to a mechanical drive, stop the stack completely, copy the named
+volume contents to an empty directory on the drive, set for example
+`LEAN_MYSQL_DATA_DIR=/Volumes/MarketData/lean-platform/mysql`, and restart.
+Never copy a live MySQL data directory. Use a journaled local filesystem and do
+not place the directory under cloud synchronization.
+
+Business binlogs use `MINIMAL` row images and expire after seven days. Bulk
+provider-cache sessions do not write binlogs, preventing rebuildable history
+from consuming storage twice.
 
 `BACKTEST_MAX_CONCURRENT_JOBS` is enforced by database-backed `scheduler_leases` before a LEAN container starts. When no slot is available, the Celery task remains queued and retries instead of launching another container.
 

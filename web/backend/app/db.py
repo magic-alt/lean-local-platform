@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -26,6 +27,9 @@ try:  # pragma: no cover - optional unless LEAN_DATABASE_URL points at MySQL.
 except Exception:  # pragma: no cover
     pymysql = None
     DictCursor = None
+
+
+logger = logging.getLogger(__name__)
 
 
 JSON_COLUMNS = {
@@ -86,6 +90,7 @@ JSON_COLUMNS = {
     "rule_tags_json": "ruleTags",
     "checkpoint_json": "checkpoint",
     "requested_datasets_json": "requestedDatasets",
+    "metrics_json": "metrics",
 }
 
 
@@ -281,10 +286,10 @@ def init_storage() -> None:
 
 
 class MySQLConnection:
-    def __init__(self) -> None:
+    def __init__(self, database_url: str | None = None) -> None:
         if pymysql is None or DictCursor is None:
             raise RuntimeError("pymysql is required when LEAN_DATABASE_URL uses mysql+pymysql.")
-        parsed = urlparse(DATABASE_URL)
+        parsed = urlparse(database_url or DATABASE_URL)
         database = (parsed.path or "/lean_platform").lstrip("/")
         if not database:
             raise RuntimeError("MySQL database name is required in LEAN_DATABASE_URL.")
@@ -486,6 +491,46 @@ def connect() -> sqlite3.Connection | MySQLConnection:
 @contextmanager
 def db() -> Iterable[sqlite3.Connection | MySQLConnection]:
     connection = connect()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+@contextmanager
+def bulk_db() -> Iterable[sqlite3.Connection | MySQLConnection]:
+    """Connection used only for rebuildable provider data bulk ingestion.
+
+    A dedicated loader URL may hold the restricted session-variable privilege
+    required for ``sql_log_bin=0``.  Business/API connections continue using
+    the normal URL and retain binary logging.
+    """
+    if database_backend() != "mysql":
+        with db() as connection:
+            yield connection
+        return
+    loader_url = os.environ.get("LEAN_LOADER_DATABASE_URL") or DATABASE_URL
+    disable_binlog = os.environ.get("LEAN_MYSQL_BULK_DISABLE_BINLOG", "0").lower() in {"1", "true", "yes", "on"}
+    require_loader = os.environ.get("LEAN_REQUIRE_LOADER_DATABASE", "0").lower() in {"1", "true", "yes", "on"}
+    connection: MySQLConnection | None = None
+    try:
+        connection = MySQLConnection(loader_url)
+        if disable_binlog:
+            connection.execute("set session sql_log_bin=0")
+    except Exception as exc:
+        if connection is not None:
+            connection.close()
+        if require_loader or loader_url == DATABASE_URL:
+            raise
+        # Direct ``docker compose up`` does not provision the restricted loader
+        # user created by start_web_single_instance.sh.  Keep that path usable
+        # and retain normal business-session binlogging instead of failing a run.
+        logger.warning("Bulk loader session unavailable; falling back to the normal database connection: %s", exc)
+        connection = MySQLConnection(DATABASE_URL)
     try:
         yield connection
         connection.commit()

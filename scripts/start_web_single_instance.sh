@@ -5,10 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/web/backend"
 FRONTEND_DIR="${ROOT_DIR}/web/frontend"
 COMPOSE_PROJECT_DIR="${ROOT_DIR}"
-COMPOSE_SERVICES="${LEAN_COMPOSE_SERVICES:-mysql redis clickhouse prometheus grafana api worker beat}"
+COMPOSE_SERVICES="${LEAN_COMPOSE_SERVICES:-mysql redis clickhouse prometheus grafana api worker data-worker data-demand-worker backtest-worker beat}"
 COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 START_COMPOSE_SERVICES="${LEAN_START_COMPOSE_SERVICES:-1}"
 COMPOSE_BUILD="${LEAN_COMPOSE_BUILD:-0}"
+DOCKER_BUILD_CACHE_MAX="${LEAN_DOCKER_BUILD_CACHE_MAX:-2GB}"
 
 LEAN_WEB_HOST="${LEAN_WEB_HOST:-127.0.0.1}"
 VITE_HOST="${VITE_HOST:-127.0.0.1}"
@@ -24,11 +25,22 @@ LEAN_CLICKHOUSE_HTTP_PORT="${LEAN_CLICKHOUSE_HTTP_PORT:-8123}"
 LEAN_CLICKHOUSE_NATIVE_PORT="${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}"
 LEAN_PROMETHEUS_PORT="${LEAN_PROMETHEUS_PORT:-9090}"
 LEAN_GRAFANA_PORT="${LEAN_GRAFANA_PORT:-3000}"
+LEAN_MYSQL_ROOT_PASSWORD="${LEAN_MYSQL_ROOT_PASSWORD:-lean-root}"
+if [[ -z "${LEAN_MYSQL_LOADER_PASSWORD:-}" ]]; then
+  if command -v openssl >/dev/null 2>&1; then
+    LEAN_MYSQL_LOADER_PASSWORD="$(openssl rand -hex 24)"
+  else
+    LEAN_MYSQL_LOADER_PASSWORD="loader-$(date +%s)-${RANDOM}${RANDOM}"
+  fi
+fi
+export LEAN_MYSQL_LOADER_PASSWORD
 
 BACKEND_VENV_PY="${BACKEND_DIR}/.venv/bin/python"
 BACKEND_LOG=""
 FRONTEND_LOG=""
-COMPOSE_DOWN_ON_EXIT="${LEAN_COMPOSE_DOWN_ON_EXIT:-1}"
+# Database/API/worker containers are persistent local platform services. Keep
+# them running when the foreground launcher exits unless cleanup is explicit.
+COMPOSE_DOWN_ON_EXIT="${LEAN_COMPOSE_DOWN_ON_EXIT:-0}"
 BACKEND_PID=""
 FRONTEND_PID=""
 COMPOSE_STARTED=0
@@ -93,22 +105,51 @@ find_next_available_port() {
   return 1
 }
 
+compose_project_host_port() {
+  local service="$1"
+  local container_port="$2"
+  local published=""
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 1
+  fi
+  published="$(docker compose -p "${COMPOSE_PROJECT_NAME}" --project-directory "${COMPOSE_PROJECT_DIR}" \
+    port "${service}" "${container_port}" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${published}" && "${published##*:}" =~ ^[0-9]+$ ]]; then
+    echo "${published##*:}"
+    return 0
+  fi
+  return 1
+}
+
+resolve_compose_port() {
+  local service="$1"
+  local container_port="$2"
+  local requested_host_port="$3"
+  local existing_host_port=""
+  if existing_host_port="$(compose_project_host_port "${service}" "${container_port}")"; then
+    echo "${existing_host_port}"
+  else
+    find_next_available_port "${requested_host_port}" 200
+  fi
+}
+
 resolve_ports() {
   if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-    LEAN_REDIS_PORT="$(find_next_available_port "${LEAN_REDIS_PORT}" 200)"
-    LEAN_MYSQL_PORT="$(find_next_available_port "${LEAN_MYSQL_PORT}" 200)"
+    LEAN_REDIS_PORT="$(resolve_compose_port redis 6379 "${LEAN_REDIS_PORT}")"
+    LEAN_MYSQL_PORT="$(resolve_compose_port mysql 3306 "${LEAN_MYSQL_PORT}")"
     if [[ "${COMPOSE_SERVICES}" == *"clickhouse"* ]]; then
-      LEAN_CLICKHOUSE_HTTP_PORT="$(find_next_available_port "${LEAN_CLICKHOUSE_HTTP_PORT}" 200)"
-      LEAN_CLICKHOUSE_NATIVE_PORT="$(find_next_available_port "${LEAN_CLICKHOUSE_NATIVE_PORT}" 200)"
+      LEAN_CLICKHOUSE_HTTP_PORT="$(resolve_compose_port clickhouse 8123 "${LEAN_CLICKHOUSE_HTTP_PORT}")"
+      LEAN_CLICKHOUSE_NATIVE_PORT="$(resolve_compose_port clickhouse 9000 "${LEAN_CLICKHOUSE_NATIVE_PORT}")"
     fi
     if [[ "${COMPOSE_SERVICES}" == *"prometheus"* ]]; then
-      LEAN_PROMETHEUS_PORT="$(find_next_available_port "${LEAN_PROMETHEUS_PORT}" 200)"
+      LEAN_PROMETHEUS_PORT="$(resolve_compose_port prometheus 9090 "${LEAN_PROMETHEUS_PORT}")"
     fi
     if [[ "${COMPOSE_SERVICES}" == *"grafana"* ]]; then
-      LEAN_GRAFANA_PORT="$(find_next_available_port "${LEAN_GRAFANA_PORT}" 200)"
+      LEAN_GRAFANA_PORT="$(resolve_compose_port grafana 3000 "${LEAN_GRAFANA_PORT}")"
     fi
     if [[ "${COMPOSE_SERVICES}" == *"api"* ]]; then
-      LEAN_API_PORT="$(find_next_available_port "${LEAN_API_PORT}" 200)"
+      LEAN_API_PORT="$(resolve_compose_port api 8000 "${LEAN_API_PORT}")"
       LEAN_WEB_PORT="${LEAN_API_PORT}"
     fi
     export LEAN_REDIS_PORT LEAN_MYSQL_PORT LEAN_CLICKHOUSE_HTTP_PORT LEAN_CLICKHOUSE_NATIVE_PORT LEAN_PROMETHEUS_PORT LEAN_GRAFANA_PORT LEAN_API_PORT
@@ -201,10 +242,10 @@ open_frontend_in_browser() {
 }
 
 cleanup_previous_instances() {
-  log "清理旧实例（${LEAN_WEB_HOST}:${LEAN_WEB_PORT} / ${VITE_HOST}:${VITE_PORT}）"
-  if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-    docker compose -p "${COMPOSE_PROJECT_NAME}" --project-directory "${COMPOSE_PROJECT_DIR}" down --remove-orphans >/dev/null 2>&1 || true
-  fi
+  log "清理旧本地前后端进程（${LEAN_WEB_HOST}:${LEAN_WEB_PORT} / ${VITE_HOST}:${VITE_PORT}）"
+  # `docker compose up -d` below is idempotent and reconciles changed service
+  # definitions. Do not tear down MySQL/API/workers here: doing so interrupts
+  # checkpoints and makes an already-open frontend return HTTP 500.
   pkill -f "vite --host ${VITE_HOST} --port ${VITE_PORT}" || true
   pkill -f "npm run dev -- --host ${VITE_HOST} --port ${VITE_PORT}" || true
   pkill -f "python -m uvicorn app.main:app --host ${LEAN_WEB_HOST} --port ${LEAN_WEB_PORT}" || true
@@ -232,6 +273,16 @@ check_dependencies() {
     log "请先执行：cd ${FRONTEND_DIR} && npm install"
     exit 1
   fi
+}
+
+bound_docker_build_cache() {
+  if [[ "${START_COMPOSE_SERVICES}" != "1" ]]; then
+    return 0
+  fi
+  docker builder prune -af \
+    --max-used-space "${DOCKER_BUILD_CACHE_MAX}" \
+    --reserved-space 512MB >/dev/null 2>&1 || true
+  log "Docker 构建缓存上限: ${DOCKER_BUILD_CACHE_MAX}"
 }
 
 start_backend() {
@@ -263,6 +314,26 @@ start_compose_services() {
   COMPOSE_STARTED=1
 }
 
+configure_mysql_loader() {
+  local i=0
+  while ((i < COMPOSE_START_TIMEOUT)); do
+    if docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot "-p${LEAN_MYSQL_ROOT_PASSWORD}" --silent >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+    ((i += 1))
+  done
+  if ((i >= COMPOSE_START_TIMEOUT)); then
+    log "MySQL loader 账户配置超时；批量同步将拒绝关闭 binlog"
+    return 1
+  fi
+  docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+    exec -T mysql mysql -uroot "-p${LEAN_MYSQL_ROOT_PASSWORD}" -e \
+    "CREATE USER IF NOT EXISTS 'lean_loader'@'%' IDENTIFIED BY '${LEAN_MYSQL_LOADER_PASSWORD}'; ALTER USER 'lean_loader'@'%' IDENTIFIED BY '${LEAN_MYSQL_LOADER_PASSWORD}'; GRANT SELECT, INSERT, UPDATE, DELETE, CREATE TEMPORARY TABLES ON lean_market.* TO 'lean_loader'@'%'; GRANT FILE, SESSION_VARIABLES_ADMIN ON *.* TO 'lean_loader'@'%'; FLUSH PRIVILEGES;" >/dev/null
+  log "已配置仅用于可重建市场数据的 MySQL loader 会话"
+}
+
 wait_for_compose_service() {
   local service="$1"
   local health_url="$2"
@@ -289,7 +360,8 @@ start_frontend() {
   log "启动前端: ${VITE_HOST}:${VITE_PORT}"
   (
     cd "${FRONTEND_DIR}"
-    npm run dev -- --host "${VITE_HOST}" --port "${VITE_PORT}"
+    VITE_API_PROXY_TARGET="http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}" \
+      npm run dev -- --host "${VITE_HOST}" --port "${VITE_PORT}"
   ) >"${FRONTEND_LOG}" 2>&1 &
   FRONTEND_PID=$!
 }
@@ -307,6 +379,8 @@ shutdown() {
       cd "${COMPOSE_PROJECT_DIR}"
       docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" down
     )
+  elif [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_STARTED}" == "1" ]]; then
+    log "保留 MySQL、API 与 worker 容器运行；如需退出时清理，请设置 LEAN_COMPOSE_DOWN_ON_EXIT=1"
   fi
   wait || true
 }
@@ -317,8 +391,10 @@ resolve_ports
 
 cleanup_previous_instances
 check_dependencies
+bound_docker_build_cache
 if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
   start_compose_services
+  configure_mysql_loader
   if ! wait_for_compose_service api "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health"; then
     log "后端容器未就绪，以下是 api 近况："
     docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=120 api || true

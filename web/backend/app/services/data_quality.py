@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from typing import Any
 
 
@@ -31,14 +32,18 @@ def _date(value: Any) -> str:
 def _float(value: Any, field: str) -> float:
     if value is None or value == "":
         raise ValueError(f"{field} is required")
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be finite")
+    return number
 
 
 def _optional_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -106,6 +111,7 @@ def normalize_ashare_daily_rows(
                 "prev_close": prev_close,
                 "pct_change": pct_change,
                 "adj_factor": adj_factor,
+                "adj_factor_verified": bool(row.get("adj_factor_verified", row.get("adjFactorVerified", True))),
                 "adjust": adjust or "raw",
                 "source": source,
                 "batch_id": batch_id,

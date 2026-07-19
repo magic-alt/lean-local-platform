@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Progress,
   Select,
   Space,
   Statistic,
@@ -347,9 +348,9 @@ function MarketDataDownloader({
   const markets = useAsyncData<MarketInfo[]>(api.markets, []);
   const providers = useAsyncData<DataProvider[]>(api.dataProviders, []);
   const [symbolsText, setSymbolsText] = useState(defaultSymbolText(defaultBarPreviewValues.assetClass, defaultBarPreviewValues.market));
-  const [symbolLookup, setSymbolLookup] = useState("");
+  const [listedDate, setListedDate] = useState<string>();
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
-  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; marketLabel?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
+  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; marketLabel?: string; listedDate?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const previewRequestId = useRef(0);
@@ -373,6 +374,33 @@ function MarketDataDownloader({
     form.setFieldValue("source", form.getFieldValue("source") ?? defaultBarPreviewValues.source);
     form.setFieldValue("provider", form.getFieldValue("provider") ?? defaultProviderForMarket(selectedMarket, markets.data));
   }, [assetClasses.data, forcedAssetClass, forcedDataType, forcedMarket, forcedResolution, forcedVenue, form, markets.data, selectedAssetClass, selectedMarket]);
+
+  useEffect(() => {
+    if (selectedAssetClass !== "equity" || !querySymbol) {
+      setListedDate(undefined);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void api.searchSecurities(selectedMarket, querySymbol, 20)
+        .then((result) => {
+          if (!active) return;
+          const security = result.items.find((item) => item.symbol.toUpperCase() === querySymbol.toUpperCase());
+          const nextListedDate = security?.listedDate ?? undefined;
+          setListedDate(nextListedDate);
+          if (nextListedDate) {
+            form.setFieldValue("startDate", nextListedDate);
+          }
+        })
+        .catch(() => {
+          if (active) setListedDate(undefined);
+        });
+    }, 180);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [form, querySymbol, selectedAssetClass, selectedMarket]);
 
   useEffect(() => {
     const market = markets.data.find((item) => item.key === selectedMarket);
@@ -400,7 +428,7 @@ function MarketDataDownloader({
     return symbols;
   }
 
-  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; marketLabel?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
+  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; marketLabel?: string; listedDate?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
     try {
       const [search, identifiers] = await Promise.all([
         api.searchSecurities(selectedMarket, symbol),
@@ -412,6 +440,7 @@ function MarketDataDownloader({
         name: matched?.name ?? symbol,
         market: matched?.market ?? selectedMarket,
         marketLabel: matched?.marketLabel,
+        listedDate: matched?.listedDate ?? undefined,
         hasLocalData: matched?.hasLocalData,
         identifierCount: identifiers.count,
         source: identifiers.items[0]?.source ? String(identifiers.items[0].source) : undefined
@@ -450,10 +479,17 @@ function MarketDataDownloader({
       const security = await loadSecurityInfo(symbol);
       if (requestId !== previewRequestId.current) return;
       setSecurityInfo(security);
-      let result = await queryLocalBars(values, symbol);
+      const effectiveStartDate = security.listedDate && (!values.startDate || dayjs(values.startDate).isBefore(dayjs(security.listedDate)))
+        ? security.listedDate
+        : values.startDate;
+      if (effectiveStartDate !== values.startDate) {
+        form.setFieldValue("startDate", effectiveStartDate);
+      }
+      const effectiveValues = { ...values, startDate: effectiveStartDate };
+      let result = await queryLocalBars(effectiveValues, symbol);
       if (requestId !== previewRequestId.current) return;
-      if (result.enabled && result.items.length === 0 && selectedMarket === "china") {
-        message.info(`No local ${values.provider ?? "provider"} bars for ${symbol}; fetching its full history from TuShare Pro and saving locally.`);
+      if (result.enabled && result.items.length === 0 && ["china", "hongkong"].includes(selectedMarket)) {
+        message.info(`本地没有 ${symbol} 数据，正在按需从 TuShare Pro 获取并缓存。`);
         await api.fetchData({
           symbol,
           assetClass: selectedAssetClass,
@@ -464,14 +500,14 @@ function MarketDataDownloader({
           provider: "tushare",
           apiKey: values.apiKey,
           outputsize: "full",
-          startDate: defaultBarPreviewValues.startDate,
+          startDate: effectiveStartDate,
           endDate: dayjs().format(ISO_DATE_FORMAT),
           adjust: values.adjust,
           overwrite: Boolean(values.overwrite)
         });
         if (requestId !== previewRequestId.current) return;
         setSecurityInfo((current) => current ? { ...current, hasLocalData: true, source: "tushare" } : current);
-        result = await queryLocalBars(values, symbol, "tushare");
+        result = await queryLocalBars(effectiveValues, symbol, "tushare");
         if (requestId !== previewRequestId.current) return;
       }
       setQueryResult(result);
@@ -496,6 +532,13 @@ function MarketDataDownloader({
     if (symbols.length === 0) return;
     setFetchLoading(true);
     try {
+      const primarySecurity = await loadSecurityInfo(symbols[0]);
+      const effectiveStartDate = primarySecurity.listedDate && (!values.startDate || dayjs(values.startDate).isBefore(dayjs(primarySecurity.listedDate)))
+        ? primarySecurity.listedDate
+        : values.startDate;
+      if (effectiveStartDate !== values.startDate) {
+        form.setFieldValue("startDate", effectiveStartDate);
+      }
       const task = await api.fetchBatchData({
         symbols,
         assetClass: selectedAssetClass,
@@ -506,7 +549,7 @@ function MarketDataDownloader({
         provider: values.provider,
         apiKey: values.apiKey,
         outputsize: values.outputsize ?? "compact",
-        startDate: values.startDate,
+        startDate: effectiveStartDate,
         endDate: values.endDate,
         adjust: values.adjust,
         overwrite: Boolean(values.overwrite)
@@ -624,9 +667,25 @@ function MarketDataDownloader({
           <Form.Item
             name="startDate"
             label="Start"
-            rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}
+            extra={listedDate ? `最早可选：上市日 ${listedDate}` : undefined}
+            rules={[
+              { required: true, message: "Start date is required" },
+              dateRule("Start date"),
+              {
+                validator(_, value) {
+                  if (!value || !listedDate || !isValidDate(value)) return Promise.resolve();
+                  if (dayjs(value).isBefore(dayjs(listedDate), "day")) {
+                    return Promise.reject(new Error(`Start date cannot be earlier than listing date ${listedDate}`));
+                  }
+                  return Promise.resolve();
+                }
+              }
+            ]}
           >
-            <DateStringPicker testId="market-data-start-input" />
+            <DateStringPicker
+              testId="market-data-start-input"
+              disabledDate={(current) => Boolean(listedDate && current.isBefore(dayjs(listedDate), "day"))}
+            />
           </Form.Item>
           <Form.Item
             name="endDate"
@@ -664,22 +723,23 @@ function MarketDataDownloader({
           <SecuritySearch
             assetClass={selectedAssetClass}
             market={selectedMarket}
-            value={symbolLookup}
-            onChange={setSymbolLookup}
-            onSelectSecurity={(security) => {
-              const existing = selectedSymbols();
-              setSymbolsText(Array.from(new Set([...existing, security.symbol])).join(", "));
-              setSymbolLookup("");
-            }}
-            placeholder="搜索代码 / 公司 / 拼音"
-            style={{ width: 320 }}
-          />
-          <Input
             value={symbolsText}
-            onChange={(event) => setSymbolsText(event.target.value)}
-            placeholder={selectedAssetClass === "crypto" ? "BTCUSDT, ETHUSDT" : selectedAssetClass === "future" ? "GC, ES" : selectedMarket === "china" ? "600519, 000001" : selectedMarket === "hongkong" ? "00700, 00941" : "AAPL, MSFT"}
+            onChange={(value) => setSymbolsText(value.toUpperCase())}
+            onSelectSecurity={(security) => {
+              setSymbolsText(security.symbol);
+              const nextListedDate = security.listedDate ?? undefined;
+              setListedDate(nextListedDate);
+              if (nextListedDate) form.setFieldValue("startDate", nextListedDate);
+            }}
+            placeholder={selectedAssetClass === "equity" ? "搜索代码 / 公司 / 拼音，或直接输入代码" : "输入 Symbol"}
+            style={{ flex: 1 }}
           />
-          <Button data-testid="market-data-preview-button" icon={<ReloadOutlined />} loading={queryLoading} onClick={() => previewMarketData(form.getFieldsValue())}>Preview</Button>
+          <Button
+            data-testid="market-data-preview-button"
+            icon={<ReloadOutlined />}
+            loading={queryLoading}
+            onClick={() => void form.validateFields().then(previewMarketData).catch(() => undefined)}
+          >Preview</Button>
           <Button data-testid="market-data-fetch-button" type="primary" icon={<CloudDownloadOutlined />} htmlType="submit" loading={fetchLoading}>Download</Button>
         </Space.Compact>
       </Form>
@@ -688,6 +748,7 @@ function MarketDataDownloader({
           <Space wrap>
             <Tag color="blue">{securityInfo.symbol}</Tag>
             <Tag>{securityInfo.name}</Tag>
+            {securityInfo.listedDate && <Tag>listed {securityInfo.listedDate}</Tag>}
             <Tag color={securityInfo.market === "china" ? "red" : securityInfo.market === "hongkong" ? "green" : "blue"}>{securityInfo.marketLabel ?? securityInfo.market}</Tag>
             <Tag color={securityInfo.hasLocalData ? "success" : "warning"}>{securityInfo.hasLocalData ? "local data" : "local data pending"}</Tag>
             {securityInfo.identifierCount !== undefined && <Tag>{securityInfo.identifierCount} identifiers</Tag>}
@@ -1200,7 +1261,7 @@ export function ProjectsPage() {
 export function DataPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const catalog = useAsyncData<DataSyncCatalog>(api.dataCatalog, {
-    provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0, activeRun: null
+    provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0, activeRun: null, latestRun: null
   }, false);
   const [syncRun, setSyncRun] = useState<DataSyncRun>();
   const [syncActionLoading, setSyncActionLoading] = useState(false);
@@ -1209,7 +1270,9 @@ export function DataPage() {
   const csvMarket = Form.useWatch("market", csvForm) || "china";
 
   const catalogSync = catalog.data.activeRun || undefined;
-  const currentSync = catalogSync && catalogSync.id !== syncRun?.id ? catalogSync : (syncRun || catalogSync);
+  const currentSync = catalogSync && catalogSync.id !== syncRun?.id
+    ? catalogSync
+    : (syncRun || catalogSync || catalog.data.latestRun || undefined);
   const activeSync = Boolean(currentSync && ["queued", "running", "cancelling"].includes(currentSync.status));
   const syncModeLabel = ({
     initial_full: "首次全量建库",
@@ -1217,6 +1280,50 @@ export function DataPage() {
     resume_checkpoint: "从检查点继续",
     full_rebuild: "显式全量重建"
   } as Record<string, string>)[currentSync?.mode || ""] || currentSync?.mode || "自动判断";
+  const syncItemsByDataset = useMemo(
+    () => new Map((currentSync?.items ?? []).map((item) => [item.dataset_key, item])),
+    [currentSync?.items]
+  );
+  const catalogRows = useMemo(
+    () => catalog.data.items.map((item) => ({ ...item, syncItem: syncItemsByDataset.get(item.dataset_key) })),
+    [catalog.data.items, syncItemsByDataset]
+  );
+  const syncProgress = useMemo(() => {
+    const items = currentSync?.items ?? [];
+    const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled"]);
+    const completed = items.filter((item) => terminal.has(item.status)).length;
+    const active = items.find((item) => ["checking", "running"].includes(item.status));
+    return {
+      active,
+      completed,
+      total: items.length,
+      percent: items.length ? Math.round((completed / items.length) * 100) : 0,
+      denied: catalogRows.filter((item) => item.permission_status === "denied").length,
+      retryable: catalogRows.filter((item) => item.permission_status === "retryable").length,
+      onDemand: catalogRows.filter((item) => item.sync_policy === "on_demand").length,
+    };
+  }, [catalogRows, currentSync?.items]);
+
+  function permissionReason(item: typeof catalogRows[number]) {
+    if (item.sync_policy === "on_demand") return "按需获取，不参与一键更新";
+    if (item.permission_status === "denied") return "无权限，本次已跳过";
+    if (item.permission_status === "retryable") return "接口限频或暂时不可用，本次暂缓";
+    if (item.permission_status === "empty") return "接口可访问，探测区间暂无数据";
+    if (item.permission_status === "available") return "已验证可访问";
+    return "尚未验证";
+  }
+
+  function syncError(item: typeof catalogRows[number]) {
+    if (!item.syncItem?.error) return permissionReason(item);
+    if (item.syncItem.status === "skipped") return permissionReason(item);
+    try {
+      const parsed = JSON.parse(item.syncItem.error) as { failed?: number };
+      if (parsed.failed) return `${parsed.failed} 个标的失败，悬停查看详情`;
+    } catch {
+      // Provider errors are shown verbatim in the tooltip below.
+    }
+    return item.syncItem.error;
+  }
 
   useEffect(() => {
     const activeId = currentSync?.id;
@@ -1234,10 +1341,10 @@ export function DataPage() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [currentSync?.id, currentSync?.status]);
 
-  async function startFullSync() {
+  async function startFullSync(mode: "auto" | "incremental" | "full_rebuild" = "auto") {
     setSyncActionLoading(true);
     try {
-      const run = await api.createDataSyncRun();
+      const run = await api.createDataSyncRun(undefined, mode);
       setSyncRun(run);
       message.success("TuShare Pro 全库更新已进入后台队列");
       catalog.reload();
@@ -1251,9 +1358,19 @@ export function DataPage() {
   function confirmFullSync() {
     Modal.confirm({
       title: "更新本地全部市场与研究数据？",
-      content: "将按当前 5000 积分权限扫描低频接口，增量更新并修复缺口。首次全 A 回填可能持续较长时间，可安全取消和续跑。",
+      content: "将按当前 5000 积分权限高速增量更新可批量接口并修复缺口。港美股和每小时级限频数据不会扫描，仅在实际使用时按需获取。任务可安全取消和续跑。",
       okText: "开始更新",
-      onOk: startFullSync
+      onOk: () => startFullSync("auto")
+    });
+  }
+
+  function confirmRebuild() {
+    Modal.confirm({
+      title: "确认全量重建本地数据？",
+      content: "全量重建会忽略增量水位并重新读取批量数据。仅在复权口径或已有数据确实错误时使用。",
+      okText: "全量重建",
+      okButtonProps: { danger: true },
+      onOk: () => startFullSync("full_rebuild")
     });
   }
 
@@ -1317,14 +1434,26 @@ export function DataPage() {
           {activeSync
             ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
             : currentSync && ["failed", "cancelled", "partial"].includes(currentSync.status)
-              ? <Button type="primary" loading={syncActionLoading} onClick={resumeFullSync}>继续</Button>
+              ? <>
+                  <Button type="primary" loading={syncActionLoading} onClick={resumeFullSync}>继续检查点</Button>
+                  <Button loading={syncActionLoading} onClick={() => startFullSync("incremental")}>重新增量</Button>
+                  <Button danger loading={syncActionLoading} onClick={confirmRebuild}>全量重建</Button>
+                </>
               : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>一键更新全部数据</Button>}
         </Space>}
       >
         {catalog.error && <Alert type="warning" showIcon message="同步目录尚未初始化" description={catalog.error.message} style={{ marginBottom: 12 }} />}
         <div className="grid">
           <Card size="small"><Statistic title="TuShare 权限" value={`${catalog.data.entitlementPoints} 积分`} /></Card>
-          <Card size="small"><Statistic title="低频数据集" value={catalog.data.count} /></Card>
+          <Card size="small"><Statistic title="批量数据集" value={catalog.data.count - syncProgress.onDemand} /></Card>
+          <Card size="small"><Statistic title="按需数据集" value={syncProgress.onDemand} /></Card>
+          <Card size="small">
+            <Statistic
+              title="MySQL 缓存"
+              value={((catalog.data.storage?.databaseBytes || 0) / 1024 / 1024 / 1024).toFixed(1)}
+              suffix={`/ ${((catalog.data.storage?.databaseLimitBytes || 50 * 1024 ** 3) / 1024 / 1024 / 1024).toFixed(0)} GiB`}
+            />
+          </Card>
           <Card size="small"><Statistic title="已验证可用" value={catalog.data.available} /></Card>
           <Card size="small"><Statistic title="更新模式" value={syncModeLabel} /></Card>
           <Card size="small"><Statistic title="同步状态" value={currentSync?.status || "idle"} /></Card>
@@ -1334,40 +1463,91 @@ export function DataPage() {
           showIcon
           style={{ margin: "12px 0" }}
           message="实际接口探测优先于积分推断"
-          description="同步基础、日/周/月行情、财务、基金、衍生品、港美股、外汇、宏观和事件数据；不采集实时、Tick、分钟及资讯流。"
+          description={`一键更新只保留 A 股执行数据、基准指数及 CFFEX/SSE 期货期权合约目录。具体合约行情、财务、基金、港美股、宏观及特色数据仅在 Preview、项目、研究或回测实际使用时查询。当前有 ${syncProgress.denied} 个无权限数据集、${syncProgress.onDemand} 个按需数据集、${syncProgress.retryable} 个暂时限频数据集。`}
         />
-        {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
-        {currentSync?.items && currentSync.items.length > 0 && (
-          <Table
-            size="small"
-            rowKey="dataset_key"
-            dataSource={currentSync.items}
-            pagination={{ pageSize: 10 }}
-            columns={[
-              { title: "Dataset", dataIndex: "dataset_key" },
-              { title: "Status", dataIndex: "status", render: (value) => <StatusTag status={value} /> },
-              { title: "Processed", dataIndex: "processed" },
-              { title: "Inserted", dataIndex: "inserted" },
-              { title: "Updated", dataIndex: "updated" },
-              { title: "Failed", dataIndex: "failed", render: (value) => value ? <Tag color="error">{value}</Tag> : 0 },
-              { title: "Checkpoint", render: (_, item) => item.checkpoint?.symbol ? `${item.checkpoint.symbol} · ${item.checkpoint.index}/${item.checkpoint.total}` : "-" },
-              { title: "Error", dataIndex: "error", ellipsis: true, render: (value) => value || "-" }
-            ]}
-          />
+        {currentSync && (
+          <Card size="small" style={{ marginBottom: 12 }}>
+            <Space direction="vertical" style={{ width: "100%" }} size={4}>
+              <Space wrap>
+                <StatusTag status={currentSync.status} />
+                <strong>
+                  {syncProgress.active
+                    ? `${syncProgress.active.status === "checking" ? "正在检查" : "正在更新"}：${syncProgress.active.dataset_key}`
+                    : currentSync.status === "queued"
+                      ? "等待数据 worker 接收任务"
+                      : `已处理 ${syncProgress.completed}/${syncProgress.total} 个数据集`}
+                </strong>
+                {Boolean(syncProgress.active?.checkpoint?.symbol) && syncProgress.active && (
+                  <span>
+                    {String(syncProgress.active.checkpoint?.symbol)} · {String(syncProgress.active.checkpoint?.index ?? "-")}/{String(syncProgress.active.checkpoint?.total ?? "-")}
+                  </span>
+                )}
+                {syncProgress.active?.metrics?.phase && <Tag color="processing">{syncProgress.active.metrics.phase}</Tag>}
+                {syncProgress.active?.metrics?.apiCalls !== undefined && (
+                  <span>
+                    API {syncProgress.active.metrics.apiCalls.toLocaleString()} calls
+                    {syncProgress.active.metrics.apiQuotaPerMinute !== undefined
+                      ? ` · 限额 ${syncProgress.active.metrics.apiQuotaPerMinute}/min`
+                      : ""}
+                  </span>
+                )}
+                {syncProgress.active?.metrics?.downloadedRows !== undefined && (
+                  <span>下载 {syncProgress.active.metrics.downloadedRows.toLocaleString()} rows</span>
+                )}
+                {syncProgress.active?.metrics?.committedRows !== undefined && (
+                  <span>入库 {syncProgress.active.metrics.committedRows.toLocaleString()} rows</span>
+                )}
+                {syncProgress.active?.metrics?.writeRowsPerSecond !== undefined && (
+                  <span>写入 {Math.round(syncProgress.active.metrics.writeRowsPerSecond).toLocaleString()} rows/s</span>
+                )}
+                {syncProgress.active?.metrics?.diskFreeBytes !== undefined && (
+                  <span>磁盘可用 {(syncProgress.active.metrics.diskFreeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB</span>
+                )}
+                {syncProgress.active?.metrics?.databaseBytes !== undefined && (
+                  <span>
+                    MySQL {(syncProgress.active.metrics.databaseBytes / 1024 / 1024 / 1024).toFixed(1)} / {((syncProgress.active.metrics.databaseLimitBytes || 50 * 1024 ** 3) / 1024 / 1024 / 1024).toFixed(0)} GiB
+                  </span>
+                )}
+              </Space>
+              <Progress percent={syncProgress.percent} size="small" status={currentSync.status === "failed" ? "exception" : "active"} />
+            </Space>
+          </Card>
         )}
-        {!syncRun && catalog.data.items.length > 0 && (
+        {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
+        {catalogRows.length > 0 && (
           <Table
             size="small"
             rowKey="dataset_key"
-            dataSource={catalog.data.items}
-            pagination={{ pageSize: 8 }}
+            dataSource={catalogRows}
+            pagination={{ pageSize: 20, showSizeChanger: true }}
+            scroll={{ x: 1200 }}
             columns={[
-              { title: "Category", dataIndex: "category" },
+              { title: "Category", dataIndex: "category", width: 120 },
               { title: "Dataset", dataIndex: "dataset_key" },
+              {
+                title: "Policy",
+                dataIndex: "sync_policy",
+                render: (value) => value === "on_demand" ? <Tag color="blue">按需</Tag> : <Tag>批量</Tag>
+              },
               { title: "Permission", dataIndex: "permission_status", render: (value) => <StatusTag status={value} /> },
+              { title: "Sync", render: (_, item) => item.syncItem ? <StatusTag status={item.syncItem.status} /> : "-" },
+              { title: "Processed", render: (_, item) => item.syncItem?.processed ?? "-" },
+              { title: "Inserted", render: (_, item) => item.syncItem?.inserted ?? "-" },
+              { title: "Write/s", render: (_, item) => item.syncItem?.metrics?.writeRowsPerSecond ? Math.round(item.syncItem.metrics.writeRowsPerSecond).toLocaleString() : "-" },
+              { title: "Failed", render: (_, item) => item.syncItem?.failed ? <Tag color="error">{item.syncItem.failed}</Tag> : item.syncItem ? 0 : "-" },
+              { title: "Checkpoint", width: 190, render: (_, item) => item.syncItem?.checkpoint?.symbol ? `${item.syncItem.checkpoint.symbol} · ${item.syncItem.checkpoint.index}/${item.syncItem.checkpoint.total}` : "-" },
               { title: "Rows", dataIndex: "row_count" },
               { title: "Coverage", render: (_, item) => item.first_data_date ? `${item.first_data_date} → ${item.last_data_date || "-"}` : "-" },
-              { title: "Reason", dataIndex: "permission_reason", ellipsis: true, render: (value) => value || "-" }
+              {
+                title: "状态说明",
+                width: 240,
+                ellipsis: true,
+                render: (_, item) => {
+                  const display = syncError(item);
+                  const detail = item.syncItem?.error || item.permission_reason || display;
+                  return <Tooltip title={detail}><span>{display}</span></Tooltip>;
+                }
+              }
             ]}
           />
         )}

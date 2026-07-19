@@ -323,7 +323,7 @@ docker compose --profile app up -d --build
 本机端口被占用时可以覆盖宿主端口；容器内部仍使用服务名互联：
 
 ```bash
-LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker
+LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker data-worker backtest-worker
 ```
 
 Level 3 shadow 验收入口：
@@ -402,6 +402,8 @@ cd /Users/kaermax/lean-platform
 scripts/start_web_single_instance.sh
 ```
 
+启动脚本采用幂等的 `docker compose up -d`，退出脚本时默认保留 MySQL、API 和 worker，避免中断数据同步。若希望退出时同时清理容器，可设置 `LEAN_COMPOSE_DOWN_ON_EXIT=1`。
+
 脚本会执行：
 
 - 清理旧实例（按 8000/5173 端口）
@@ -417,7 +419,7 @@ scripts/start_web_single_instance.sh
 ```bash
 cd /Users/kaermax/lean-platform/web/backend
 source .venv/bin/activate
-celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
+celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=default,data,backtest
 ```
 
 打开：

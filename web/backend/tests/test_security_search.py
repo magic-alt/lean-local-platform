@@ -10,6 +10,17 @@ def test_security_search_matches_company_alias_pinyin_and_market_labels(monkeypa
     init_db()
     upsert_security(symbol="600519", name="贵州茅台", exchange="SSE", listed_date="2001-08-27")
     upsert_instrument(
+        symbol="600519",
+        name="600519",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        exchange="SSE",
+        currency="CNY",
+        listed_date="2026-07-14",
+        source="test:coverage-derived",
+    )
+    upsert_instrument(
         symbol="00700",
         name="腾讯控股",
         asset_class="equity",
@@ -42,6 +53,7 @@ def test_security_search_matches_company_alias_pinyin_and_market_labels(monkeypa
     assert company["symbol"] == "600519"
     assert company["name"] == "贵州茅台"
     assert company["marketLabel"] == "A股"
+    assert company["listedDate"] == "2001-08-27"
     assert company["matchField"] == "name"
 
     from app.services import security_search

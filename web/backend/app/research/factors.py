@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 from ..core.errors import LeanWebError
-from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..db import bulk_db, db, json_dump, rows_to_dicts, utc_now
 from ..lean_engine.symbols import normalize_symbol, parse_date
 from ..services.ashare_repository import trade_dates_between, universe_as_of
 
@@ -44,21 +44,29 @@ def import_factor_values(records: list[dict[str, Any]], source: str = "manual") 
     return {"batchId": batch_id, "count": count}
 
 
-def upsert_factor_values(records: list[dict[str, Any]], source: str = "manual", batch_id: str | None = None) -> int:
+def upsert_factor_values(
+    records: list[dict[str, Any]],
+    source: str = "manual",
+    batch_id: str | None = None,
+    *,
+    bulk: bool = False,
+) -> int:
     now = utc_now()
-    count = 0
-    with db() as connection:
-        for record in records:
-            symbol = _symbol(record["symbol"])
-            trade_date = _date(record.get("trade_date") or record.get("tradeDate"))
-            factor_name = str(record.get("factor_name") or record.get("factorName")).strip()
-            if not factor_name:
-                raise LeanWebError("factor_name is required.")
-            value = float(record["value"])
-            if not math.isfinite(value):
-                raise LeanWebError("factor value must be finite.")
-            item_source = record.get("source") or source
-            connection.execute(
+    values = []
+    for record in records:
+        symbol = _symbol(record["symbol"])
+        trade_date = _date(record.get("trade_date") or record.get("tradeDate"))
+        factor_name = str(record.get("factor_name") or record.get("factorName")).strip()
+        if not factor_name:
+            raise LeanWebError("factor_name is required.")
+        value = float(record["value"])
+        if not math.isfinite(value):
+            raise LeanWebError("factor value must be finite.")
+        values.append((symbol, trade_date, factor_name, value, record.get("source") or source, batch_id, now))
+    if values:
+        connection_factory = bulk_db if bulk else db
+        with connection_factory() as connection:
+            connection.executemany(
                 """
                 insert into factor_values
                     (symbol, trade_date, factor_name, value, source, batch_id, created_at)
@@ -68,10 +76,9 @@ def upsert_factor_values(records: list[dict[str, Any]], source: str = "manual", 
                     batch_id = excluded.batch_id,
                     created_at = excluded.created_at
                 """,
-                (symbol, trade_date, factor_name, value, item_source, batch_id, now),
+                values,
             )
-            count += 1
-    return count
+    return len(values)
 
 
 def _factor_values(symbols: list[str], trade_date: str, factor_names: list[str]) -> dict[str, dict[str, float]]:

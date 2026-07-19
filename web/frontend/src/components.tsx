@@ -7,9 +7,17 @@ export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
     created: "default",
     queued: "default",
+    checking: "processing",
     running: "processing",
     success: "success",
     succeeded: "success",
+    available: "success",
+    empty: "cyan",
+    partial: "warning",
+    retryable: "warning",
+    skipped: "default",
+    denied: "error",
+    unknown: "default",
     failed: "error",
     interrupted: "warning",
     cancelled: "warning"

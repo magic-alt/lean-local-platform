@@ -1,4 +1,6 @@
+import json
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -506,6 +508,7 @@ def import_ashare_research_data(
     allow_missing_trade_dates: bool = False,
     repair_ohlc_errors: bool = False,
     suspension_evidence_rows: list[dict[str, Any]] | None = None,
+    infer_suspensions_from_authoritative_absence: bool = False,
 ) -> dict[str, Any]:
     batch = create_import_batch(
         provider,
@@ -550,6 +553,7 @@ def import_ashare_research_data(
             batch_id=batch_id,
         )
         suspension_dates: set[str] = set()
+        inferred_suspension_dates: set[str] = set()
         gap_classifications: dict[str, dict[str, Any]] = {}
         suspension_lookup_error: str | None = None
         if provider == "tushare" and preliminary_report.get("missing_trade_dates"):
@@ -560,6 +564,25 @@ def import_ashare_research_data(
                 suspension_dates, gap_classifications = _classify_suspension_dates(suspension_rows, calendar_dates)
             except Exception as exc:  # noqa: BLE001 - unresolved gaps must remain blocking.
                 suspension_lookup_error = str(exc)
+        if infer_suspensions_from_authoritative_absence and provider == "tushare":
+            # A per-symbol TuShare daily request is split into bounded date
+            # windows, so it cannot silently hit the endpoint row cap. An
+            # absent row on an otherwise open exchange session is therefore
+            # a no-trade/full-day suspension for this instrument. Persist the
+            # inference explicitly instead of rejecting decades of valid bars.
+            inferred_suspension_dates = set(preliminary_report.get("missing_trade_dates") or []) - suspension_dates
+            suspension_dates.update(inferred_suspension_dates)
+            for trade_date in inferred_suspension_dates:
+                gap_classifications[trade_date] = {
+                    "classification": "full_day_suspension",
+                    "status": "resolved",
+                    "evidence_source": "tushare:daily_absence_inferred",
+                    "evidence": {
+                        "provider": provider,
+                        "batch_id": batch_id,
+                        "reason": "authoritative_bounded_daily_window_has_no_bar",
+                    },
+                }
         qa_report = validate_ashare_daily_rows(
             normalized_rows,
             calendar_dates=calendar_dates,
@@ -572,6 +595,10 @@ def import_ashare_research_data(
         warnings = qa_report.setdefault("warnings", [])
         if suspension_lookup_error:
             warnings.append(f"suspension_lookup_failed={suspension_lookup_error[:300]}")
+        if inferred_suspension_dates:
+            warnings.append(
+                f"suspensions_inferred_from_authoritative_daily_absence={len(inferred_suspension_dates)}"
+            )
         has_official_trade_status = _has_official_trade_status(normalized_rows)
         if has_official_trade_status:
             warnings.append("trade_status_official_fields_used")
@@ -610,13 +637,21 @@ def import_ashare_research_data(
         status_source = f"{source}:official_status" if has_official_trade_status else f"{source}:ohlcv_inferred"
         upsert_daily_bars(normalized_rows, source=source, batch_id=batch_id, adjust=adjust or "raw")
         upsert_trade_status(trade_status, source=status_source, batch_id=batch_id)
-        if suspension_dates:
+        official_suspension_dates = suspension_dates - inferred_suspension_dates
+        if official_suspension_dates:
             upsert_trade_status(
-                _suspension_status_rows(symbol, suspension_dates),
+                _suspension_status_rows(symbol, official_suspension_dates),
                 source="tushare:suspension_evidence",
                 batch_id=batch_id,
             )
-        upsert_adjustment_factors(normalized_rows, source=source, batch_id=batch_id)
+        if inferred_suspension_dates:
+            upsert_trade_status(
+                _suspension_status_rows(symbol, inferred_suspension_dates),
+                source="tushare:daily_absence_inferred",
+                batch_id=batch_id,
+            )
+        verified_factor_rows = [row for row in normalized_rows if row.get("adj_factor_verified", True)]
+        upsert_adjustment_factors(verified_factor_rows, source=source, batch_id=batch_id)
         upsert_universe_membership("ALL_A", symbol, first_date, None, source=source, batch_id=batch_id)
 
         lean_rows = _ashare_rows_for_lean(normalized_rows)
@@ -737,6 +772,19 @@ def fetch_and_import_symbol(
                 source_attempts.append(_build_source_attempt(source, "empty", rows=0, duration_ms=(time.perf_counter() - t0) * 1000))
             except Exception as exc:  # noqa: BLE001
                 provider_error = exc
+                if source == "tushare" and market == "hongkong":
+                    match = re.search(r"nextAllowedAt=([^;\s]+)", str(exc))
+                    if match:
+                        with db() as connection:
+                            connection.execute(
+                                """
+                                update provider_dataset_catalog
+                                set sync_policy='on_demand', permission_status='retryable',
+                                    skip_reason=?, next_allowed_at=?, rate_limit_per_hour=1
+                                where provider='tushare' and dataset_key in ('hk_basic','hk_daily')
+                                """,
+                                (str(exc)[:1000], match.group(1)),
+                            )
                 source_attempts.append(_build_source_attempt(source, "failed", rows=0, error=str(exc), duration_ms=(time.perf_counter() - t0) * 1000))
         if selected_rows is None:
             raise ProviderExhaustedError(source_attempts) from provider_error
@@ -776,6 +824,15 @@ def fetch_and_import_symbol(
     else:
         source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
+    # On-demand workflows share the same 50GB cache ceiling as the bulk
+    # loader. The multiplier covers normalized tables and secondary indexes.
+    from .data_sync import _assert_disk_capacity
+
+    estimated_write_bytes = sum(
+        len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
+        for row in rows
+    ) * 10
+    _assert_disk_capacity(estimated_write_bytes)
     if asset_class == "equity" and market == "china":
         result = import_ashare_research_data(
             symbol=symbol,

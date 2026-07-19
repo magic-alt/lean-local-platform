@@ -47,6 +47,10 @@ export interface DataSyncCatalogItem {
   last_checked_at?: string | null;
   last_synced_at?: string | null;
   metadata?: Record<string, unknown>;
+  sync_policy?: "bulk" | "incremental" | "on_demand" | "unavailable";
+  skip_reason?: string | null;
+  rate_limit_per_hour?: number | null;
+  next_allowed_at?: string | null;
 }
 
 export interface DataSyncItem {
@@ -60,6 +64,24 @@ export interface DataSyncItem {
   failed: number;
   checkpoint?: Record<string, unknown> | null;
   error?: string | null;
+  metrics?: {
+    phase?: string;
+    apiCalls?: number;
+    apiCallsPerMinute?: number;
+    apiQuotaPerMinute?: number;
+    downloadedRows?: number;
+    committedRows?: number;
+    downloadRowsPerSecond?: number;
+    writeRowsPerSecond?: number;
+    queueDepth?: number;
+    elapsedSeconds?: number;
+    diskFreeBytes?: number;
+    diskTotalBytes?: number;
+    diskFreePercent?: number;
+    databaseBytes?: number;
+    databaseLimitBytes?: number;
+    databaseUsagePercent?: number;
+  } | null;
 }
 
 export interface DataSyncRun {
@@ -86,7 +108,16 @@ export interface DataSyncCatalog {
   items: DataSyncCatalogItem[];
   count: number;
   available: number;
+  storage?: {
+    diskFreeBytes?: number;
+    diskTotalBytes?: number;
+    diskFreePercent?: number;
+    databaseBytes?: number;
+    databaseLimitBytes?: number;
+    databaseUsagePercent?: number;
+  };
   activeRun?: DataSyncRun | null;
+  latestRun?: DataSyncRun | null;
 }
 
 export interface MarketInfo {

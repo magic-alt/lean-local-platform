@@ -1,10 +1,11 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from .celery_app import celery_app
 from zoneinfo import ZoneInfo
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
@@ -196,7 +197,7 @@ def fetch_data_batch_task(task_id: str):
     end_date = parameters.get("endDate") or None
     adjust = parameters.get("adjust") or ""
     api_key = parameters.get("apiKey") or None
-    update_task(task_id, status="running", started_at=utc_now(), error=None)
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
     results = []
     failures = []
     try:
@@ -244,13 +245,17 @@ def fetch_data_batch_task(task_id: str):
         raise
 
 
-@celery_app.task(name="lean_web.sync_all_data")
+@celery_app.task(
+    name="lean_web.sync_all_data",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def sync_all_data_task(task_id: str, run_id: str):
     task = get_task(task_id)
     if task.get("status") == CANCELLED:
         append_log(task_id, "Data synchronization was cancelled before the worker started it.")
         return {"status": "cancelled", "cancelled": True, "datasets": {}}
-    update_task(task_id, status="running", started_at=utc_now(), error=None)
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
     append_log(task_id, "Discovering TuShare Pro 5,000-point low-frequency entitlements.")
     try:
         result = data_sync.run_sync(run_id, task_id=task_id)
@@ -266,6 +271,73 @@ def sync_all_data_task(task_id: str, run_id: str):
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
         _record_task_metric("data_sync", "failed")
         raise
+
+
+def _broker_contains_sync_run(client: Any, run_id: str) -> bool:
+    """Check ready and unacknowledged Redis messages without worker RPC.
+
+    The bulk worker uses the solo pool, so it cannot answer Celery inspect
+    requests while a long synchronization is active.  Redis messages retain
+    ``argsrepr`` in their JSON envelope, which lets the recovery task avoid
+    dispatching a duplicate while the original is queued or unacknowledged.
+    """
+    needle = run_id.encode("utf-8")
+    messages: list[bytes] = []
+    for queue in ("data-bulk", "data"):
+        messages.extend(client.lrange(queue, 0, -1) or [])
+    messages.extend(client.hvals("unacked") or [])
+    return any(needle in message for message in messages)
+
+
+@celery_app.task(name="lean_web.recover_data_sync")
+def recover_data_sync_task():
+    """Requeue database runs whose Celery message disappeared after restart."""
+    stale_seconds = max(60, int(os.environ.get("LEAN_DATA_SYNC_STALE_SECONDS", "120")))
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select id,task_id,status from data_sync_runs
+            where status in ('queued','running') and cancel_requested=0
+              and coalesce(started_at,created_at) < ?
+            order by created_at
+            """,
+            (cutoff,),
+        ).fetchall()
+    if not rows:
+        return {"recovered": [], "preserved": []}
+
+    try:
+        import redis
+
+        client = redis.Redis.from_url(celery_app.conf.broker_url, socket_connect_timeout=1, socket_timeout=2)
+        client.ping()
+    except Exception as exc:  # pragma: no cover - requires broker outage.
+        return {"recovered": [], "preserved": [], "error": f"broker_unavailable:{exc}"}
+
+    recovered: list[str] = []
+    preserved: list[str] = []
+    for row in rows:
+        run_id = str(row["id"])
+        task_id = str(row["task_id"] or "")
+        if not task_id or _broker_contains_sync_run(client, run_id):
+            preserved.append(run_id)
+            continue
+        # Mark queued before publishing. A concurrent recovery pass will then
+        # see the published Redis envelope and preserve it.
+        with db() as connection:
+            current = connection.execute(
+                "select status,cancel_requested from data_sync_runs where id=?",
+                (run_id,),
+            ).fetchone()
+            if not current or current["status"] not in {"queued", "running"} or current["cancel_requested"]:
+                continue
+            connection.execute("update data_sync_runs set status='queued', error=null where id=?", (run_id,))
+        result = sync_all_data_task.apply_async(args=[task_id, run_id], queue="data-bulk")
+        update_task(task_id, celery_task_id=result.id, status="queued", error=None, finished_at=None)
+        append_log(task_id, "Recovered orphaned data synchronization after worker restart.")
+        recovered.append(run_id)
+    return {"recovered": recovered, "preserved": preserved}
 
 
 @celery_app.task(name="lean_web.run_backtest", bind=True, max_retries=None)

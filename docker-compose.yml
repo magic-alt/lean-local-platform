@@ -1,5 +1,12 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   redis:
+    logging: *bounded-logging
     image: redis:7-alpine
     ports:
       - "${LEAN_REDIS_PORT:-6379}:6379"
@@ -12,6 +19,7 @@ services:
       retries: 12
 
   mysql:
+    logging: *bounded-logging
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: lean-root
@@ -21,12 +29,15 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=1G
+      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-2G}
+      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-512M}
+      - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
+      - --binlog-row-image=MINIMAL
       - --max-allowed-packet=256M
     ports:
       - "${LEAN_MYSQL_PORT:-3306}:3306"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ulean", "-plean"]
       interval: 10s
@@ -34,6 +45,7 @@ services:
       retries: 12
 
   clickhouse:
+    logging: *bounded-logging
     image: clickhouse/clickhouse-server:24.12-alpine
     environment:
       CLICKHOUSE_DB: lean_market
@@ -47,6 +59,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
 
   prometheus:
+    logging: *bounded-logging
     image: prom/prometheus:v2.55.1
     ports:
       - "${LEAN_PROMETHEUS_PORT:-9090}:9090"
@@ -57,6 +70,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
+    logging: *bounded-logging
     image: grafana/grafana:11.4.0
     ports:
       - "${LEAN_GRAFANA_PORT:-3000}:3000"
@@ -73,6 +87,7 @@ services:
       - clickhouse
 
   api:
+    logging: *bounded-logging
     profiles: ["app"]
     build:
       context: .
@@ -125,16 +140,31 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_started
+      worker:
+        condition: service_started
+      data-worker:
+        condition: service_started
+      data-demand-worker:
+        condition: service_started
+      backtest-worker:
+        condition: service_started
 
   worker:
+    logging: *bounded-logging
     profiles: ["app"]
     build:
       context: .
       dockerfile: web/backend/Dockerfile
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=default --hostname=default@%h
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
+      LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
+      LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
+      LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
+      LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-100000}
+      LEAN_MYSQL_MAX_DATABASE_GB: ${LEAN_MYSQL_MAX_DATABASE_GB:-50}
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -176,7 +206,23 @@ services:
       clickhouse:
         condition: service_started
 
+  data-worker:
+    extends:
+      service: worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=data-bulk,data --hostname=data-bulk@%h
+
+  data-demand-worker:
+    extends:
+      service: worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_DATA_DEMAND_WORKER_CONCURRENCY:-4} --queues=data-demand --hostname=data-demand@%h
+
+  backtest-worker:
+    extends:
+      service: worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
+
   beat:
+    logging: *bounded-logging
     profiles: ["app"]
     build:
       context: .

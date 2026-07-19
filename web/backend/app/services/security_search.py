@@ -101,7 +101,7 @@ def _database_candidates(markets: list[str]) -> list[dict[str, Any]]:
     with db() as connection:
         instruments = rows_to_dicts(connection.execute(
             f"""
-            select symbol, name, market, exchange, metadata_json, status
+            select symbol, name, market, exchange, listed_date, metadata_json, status
             from instruments
             where asset_class = 'equity' and market in ({placeholders})
             """,
@@ -109,7 +109,7 @@ def _database_candidates(markets: list[str]) -> list[dict[str, Any]]:
         ).fetchall())
         securities = rows_to_dicts(connection.execute(
             f"""
-            select symbol, name, market, exchange, null as metadata_json, status
+            select symbol, name, market, exchange, listed_date, null as metadata_json, status
             from securities
             where market in ({placeholders})
             """,
@@ -124,11 +124,19 @@ def _database_candidates(markets: list[str]) -> list[dict[str, Any]]:
             continue
         key = (item_market, symbol)
         previous = merged.get(key, {})
+        listed_dates = [
+            str(value)
+            for value in (previous.get("listed_date"), item.get("listed_date"))
+            if value
+        ]
         merged[key] = {
             "symbol": symbol,
             "name": item.get("name") or previous.get("name") or symbol,
             "market": item_market,
             "exchange": item.get("exchange") or previous.get("exchange"),
+            # Coverage-derived instrument rows can start later than the real IPO.
+            # The earliest verified master-data date is the valid listing floor.
+            "listed_date": min(listed_dates) if listed_dates else None,
             "status": item.get("status") or previous.get("status"),
             "aliases": list(dict.fromkeys([*previous.get("aliases", []), *_metadata_aliases(item.get("metadata") or item.get("metadata_json"))])),
         }
@@ -160,6 +168,7 @@ def search_securities(keyword: str = "", market: str = "all", limit: int = 50) -
             "market": candidate["market"],
             "marketLabel": MARKET_LABELS[candidate["market"]],
             "exchange": candidate.get("exchange"),
+            "listedDate": candidate.get("listed_date"),
             "status": candidate.get("status"),
             "hasLocalData": has_local_data,
             "matchType": match_type,
