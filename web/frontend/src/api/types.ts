@@ -88,9 +88,14 @@ export interface DataSyncItem {
     diskFreeBytes?: number;
     diskTotalBytes?: number;
     diskFreePercent?: number;
+    diskReserveBytes?: number;
+    diskWritableBytes?: number;
     databaseBytes?: number;
     databaseLimitBytes?: number;
     databaseUsagePercent?: number;
+    databaseLimitEnforced?: boolean;
+    onDemandDatabaseLimitBytes?: number;
+    databaseSizeSource?: string;
   } | null;
 }
 
@@ -125,9 +130,14 @@ export interface DataSyncCatalog {
     diskFreeBytes?: number;
     diskTotalBytes?: number;
     diskFreePercent?: number;
+    diskReserveBytes?: number;
+    diskWritableBytes?: number;
     databaseBytes?: number;
     databaseLimitBytes?: number;
     databaseUsagePercent?: number;
+    databaseLimitEnforced?: boolean;
+    onDemandDatabaseLimitBytes?: number;
+    databaseSizeSource?: string;
   };
   activeRun?: DataSyncRun | null;
   latestRun?: DataSyncRun | null;

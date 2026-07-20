@@ -10,6 +10,11 @@ COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 START_COMPOSE_SERVICES="${LEAN_START_COMPOSE_SERVICES:-1}"
 COMPOSE_BUILD="${LEAN_COMPOSE_BUILD:-0}"
 DOCKER_BUILD_CACHE_MAX="${LEAN_DOCKER_BUILD_CACHE_MAX:-2GB}"
+PRUNE_BUILD_CACHE="${LEAN_PRUNE_BUILD_CACHE:-0}"
+ALLOW_ACTIVE_SYNC_RECREATE="${LEAN_ALLOW_ACTIVE_SYNC_RECREATE:-0}"
+ALLOW_ACTIVE_SYNC_SHUTDOWN="${LEAN_ALLOW_ACTIVE_SYNC_SHUTDOWN:-0}"
+RUNTIME_SECRETS_DIR="${LEAN_RUNTIME_SECRETS_DIR:-${ROOT_DIR}/web/runtime/secrets}"
+MYSQL_LOADER_PASSWORD_FILE="${LEAN_MYSQL_LOADER_PASSWORD_FILE:-${RUNTIME_SECRETS_DIR}/mysql_loader_password}"
 
 LEAN_WEB_HOST="${LEAN_WEB_HOST:-127.0.0.1}"
 VITE_HOST="${VITE_HOST:-127.0.0.1}"
@@ -26,14 +31,6 @@ LEAN_CLICKHOUSE_NATIVE_PORT="${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}"
 LEAN_PROMETHEUS_PORT="${LEAN_PROMETHEUS_PORT:-9090}"
 LEAN_GRAFANA_PORT="${LEAN_GRAFANA_PORT:-3000}"
 LEAN_MYSQL_ROOT_PASSWORD="${LEAN_MYSQL_ROOT_PASSWORD:-lean-root}"
-if [[ -z "${LEAN_MYSQL_LOADER_PASSWORD:-}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    LEAN_MYSQL_LOADER_PASSWORD="$(openssl rand -hex 24)"
-  else
-    LEAN_MYSQL_LOADER_PASSWORD="loader-$(date +%s)-${RANDOM}${RANDOM}"
-  fi
-fi
-export LEAN_MYSQL_LOADER_PASSWORD
 
 BACKEND_VENV_PY="${BACKEND_DIR}/.venv/bin/python"
 BACKEND_LOG=""
@@ -43,7 +40,12 @@ FRONTEND_LOG=""
 COMPOSE_DOWN_ON_EXIT="${LEAN_COMPOSE_DOWN_ON_EXIT:-0}"
 BACKEND_PID=""
 FRONTEND_PID=""
+LOG_STREAM_PID=""
 COMPOSE_STARTED=0
+ACTIVE_DATA_SYNC=0
+SHUTTING_DOWN=0
+LOCK_DIR="${LEAN_SINGLE_INSTANCE_LOCK_DIR:-/tmp/${COMPOSE_PROJECT_NAME}-web-single-instance.lock}"
+LOCK_ACQUIRED=0
 
 timestamp() {
   date "+%Y-%m-%d %H:%M:%S"
@@ -55,6 +57,105 @@ log() {
 
 log_stderr() {
   echo "[$(timestamp)] $*" >&2
+}
+
+acquire_single_instance_lock() {
+  local owner_pid=""
+  if mkdir "${LOCK_DIR}" 2>/dev/null; then
+    printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+    LOCK_ACQUIRED=1
+    return 0
+  fi
+
+  if [[ -f "${LOCK_DIR}/pid" ]]; then
+    IFS= read -r owner_pid <"${LOCK_DIR}/pid" || true
+  fi
+  if [[ "${owner_pid}" =~ ^[0-9]+$ ]] && kill -0 "${owner_pid}" 2>/dev/null; then
+    log_stderr "已有启动脚本实例正在运行（PID ${owner_pid}）。请使用现有页面，或先停止该实例。"
+    return 1
+  fi
+
+  rm -f "${LOCK_DIR}/pid"
+  rmdir "${LOCK_DIR}" 2>/dev/null || true
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    log_stderr "无法取得单实例锁：${LOCK_DIR}"
+    return 1
+  fi
+  printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+  LOCK_ACQUIRED=1
+}
+
+existing_loader_password() {
+  local container_id=""
+  local line=""
+  container_id="$(docker compose -p "${COMPOSE_PROJECT_NAME}" --project-directory "${COMPOSE_PROJECT_DIR}" \
+    ps -q data-worker 2>/dev/null || true)"
+  if [[ -z "${container_id}" ]]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    case "${line}" in
+      LEAN_LOADER_DATABASE_URL=mysql+pymysql://lean_loader:*@mysql:3306/lean_market)
+        line="${line#LEAN_LOADER_DATABASE_URL=mysql+pymysql://lean_loader:}"
+        line="${line%@mysql:3306/lean_market}"
+        if [[ -n "${line}" && "${line}" != "loader-not-configured" ]]; then
+          printf '%s\n' "${line}"
+          return 0
+        fi
+        ;;
+    esac
+  done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container_id}" 2>/dev/null || true)
+  return 1
+}
+
+initialize_mysql_loader_password() {
+  local generated=""
+  if [[ -n "${LEAN_MYSQL_LOADER_PASSWORD:-}" ]]; then
+    export LEAN_MYSQL_LOADER_PASSWORD
+    return 0
+  fi
+
+  if [[ -f "${MYSQL_LOADER_PASSWORD_FILE}" ]]; then
+    IFS= read -r LEAN_MYSQL_LOADER_PASSWORD <"${MYSQL_LOADER_PASSWORD_FILE}" || true
+  elif command -v docker >/dev/null 2>&1; then
+    LEAN_MYSQL_LOADER_PASSWORD="$(existing_loader_password || true)"
+  fi
+  if [[ "${LEAN_MYSQL_LOADER_PASSWORD:-}" == "loader-not-configured" ]]; then
+    LEAN_MYSQL_LOADER_PASSWORD=""
+  fi
+
+  if [[ -z "${LEAN_MYSQL_LOADER_PASSWORD:-}" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      generated="$(openssl rand -hex 24)"
+    else
+      generated="loader-$(date +%s)-${RANDOM}${RANDOM}"
+    fi
+    LEAN_MYSQL_LOADER_PASSWORD="${generated}"
+  fi
+
+  if [[ ! -s "${MYSQL_LOADER_PASSWORD_FILE}" ]]; then
+    (umask 077 && mkdir -p "${RUNTIME_SECRETS_DIR}" && printf '%s\n' "${LEAN_MYSQL_LOADER_PASSWORD}" >"${MYSQL_LOADER_PASSWORD_FILE}")
+  fi
+  chmod 600 "${MYSQL_LOADER_PASSWORD_FILE}" 2>/dev/null || true
+  export LEAN_MYSQL_LOADER_PASSWORD
+}
+
+data_sync_is_active() {
+  local payload=""
+  local active_count=""
+  if command -v curl >/dev/null 2>&1; then
+    payload="$(curl -fsS --max-time 3 "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/data/catalog" 2>/dev/null || true)"
+    if grep -Eq '"activeRun"[[:space:]]*:[[:space:]]*\{' <<<"${payload}"; then
+      return 0
+    fi
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    active_count="$(docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T mysql mysql -uroot "-p${LEAN_MYSQL_ROOT_PASSWORD}" -Nse \
+      "select count(*) from lean_market.data_sync_runs where status in ('queued','running','cancelling')" \
+      2>/dev/null || true)"
+  fi
+  [[ "${active_count}" =~ ^[1-9][0-9]*$ ]]
 }
 
 is_port_in_use() {
@@ -276,7 +377,7 @@ check_dependencies() {
 }
 
 bound_docker_build_cache() {
-  if [[ "${START_COMPOSE_SERVICES}" != "1" ]]; then
+  if [[ "${START_COMPOSE_SERVICES}" != "1" || "${COMPOSE_BUILD}" != "1" || "${PRUNE_BUILD_CACHE}" != "1" ]]; then
     return 0
   fi
   docker builder prune -af \
@@ -297,6 +398,8 @@ start_backend() {
 }
 
 start_compose_services() {
+  local -a services=()
+  read -r -a services <<<"${COMPOSE_SERVICES}"
   log "启动 compose 服务: ${COMPOSE_SERVICES}"
   if [[ "${COMPOSE_BUILD}" == "1" ]]; then
     log "开启 compose 镜像重建: docker compose --build"
@@ -306,9 +409,9 @@ start_compose_services() {
   (
     cd "${COMPOSE_PROJECT_DIR}"
     if [[ "${COMPOSE_BUILD}" == "1" ]]; then
-      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d --build ${COMPOSE_SERVICES}
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d --build "${services[@]}"
     else
-      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d ${COMPOSE_SERVICES}
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" --profile app up -d "${services[@]}"
     fi
   )
   COMPOSE_STARTED=1
@@ -366,74 +469,134 @@ start_frontend() {
   FRONTEND_PID=$!
 }
 
+stop_child_process() {
+  local pid="$1"
+  local label="$2"
+  local attempt=0
+  if [[ -z "${pid}" ]] || ! kill -0 "${pid}" 2>/dev/null; then
+    return 0
+  fi
+  kill "${pid}" >/dev/null 2>&1 || true
+  while kill -0 "${pid}" 2>/dev/null && ((attempt < 30)); do
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    log "${label} 未在 3 秒内退出，发送 SIGKILL"
+    kill -KILL "${pid}" >/dev/null 2>&1 || true
+  fi
+  wait "${pid}" 2>/dev/null || true
+}
+
 shutdown() {
-  log "收到退出信号，清理服务..."
-  if [[ -n "${BACKEND_PID}" ]]; then
-    kill "${BACKEND_PID}" >/dev/null 2>&1 || true
+  local exit_code="${1:-0}"
+  if [[ "${SHUTTING_DOWN}" == "1" ]]; then
+    return 0
   fi
-  if [[ -n "${FRONTEND_PID}" ]]; then
-    kill "${FRONTEND_PID}" >/dev/null 2>&1 || true
+  SHUTTING_DOWN=1
+  trap '' INT TERM
+  trap - EXIT
+  log "收到退出信号，清理启动脚本子进程..."
+  stop_child_process "${LOG_STREAM_PID}" "Compose 日志跟随进程"
+  stop_child_process "${FRONTEND_PID}" "前端进程"
+  stop_child_process "${BACKEND_PID}" "后端进程"
+  if [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_DOWN_ON_EXIT}" == "1" ]] && data_sync_is_active; then
+    ACTIVE_DATA_SYNC=1
   fi
-  if [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_STARTED}" == "1" && "${COMPOSE_DOWN_ON_EXIT}" == "1" ]]; then
+  if [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_STARTED}" == "1" && "${COMPOSE_DOWN_ON_EXIT}" == "1" && "${ACTIVE_DATA_SYNC}" == "1" && "${ALLOW_ACTIVE_SYNC_SHUTDOWN}" != "1" ]]; then
+    log "检测到数据同步仍在运行，忽略 LEAN_COMPOSE_DOWN_ON_EXIT=1；如确需关闭请设置 LEAN_ALLOW_ACTIVE_SYNC_SHUTDOWN=1"
+  elif [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_STARTED}" == "1" && "${COMPOSE_DOWN_ON_EXIT}" == "1" ]]; then
     (
       cd "${COMPOSE_PROJECT_DIR}"
-      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" down
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" down --timeout 10
     )
   elif [[ "${START_COMPOSE_SERVICES}" == "1" && "${COMPOSE_STARTED}" == "1" ]]; then
     log "保留 MySQL、API 与 worker 容器运行；如需退出时清理，请设置 LEAN_COMPOSE_DOWN_ON_EXIT=1"
   fi
-  wait || true
+  if [[ "${LOCK_ACQUIRED}" == "1" ]]; then
+    rm -f "${LOCK_DIR}/pid"
+    rmdir "${LOCK_DIR}" 2>/dev/null || true
+  fi
+  exit "${exit_code}"
 }
 
-trap shutdown INT TERM EXIT
-parse_args "$@"
-resolve_ports
+main() {
+  trap 'shutdown 130' INT
+  trap 'shutdown 143' TERM
+  trap 'shutdown $?' EXIT
+  parse_args "$@"
+  acquire_single_instance_lock
+  initialize_mysql_loader_password
 
-cleanup_previous_instances
-check_dependencies
-bound_docker_build_cache
-if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-  start_compose_services
-  configure_mysql_loader
-  if ! wait_for_compose_service api "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health"; then
-    log "后端容器未就绪，以下是 api 近况："
-    docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=120 api || true
+  cleanup_previous_instances
+  resolve_ports
+  check_dependencies
+  if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
+    if data_sync_is_active; then
+      ACTIVE_DATA_SYNC=1
+      if [[ "${ALLOW_ACTIVE_SYNC_RECREATE}" == "1" ]]; then
+        log "警告：检测到活动数据同步，但 LEAN_ALLOW_ACTIVE_SYNC_RECREATE=1，继续协调 Compose 服务"
+        bound_docker_build_cache
+        start_compose_services
+        configure_mysql_loader
+      else
+        log "检测到活动数据同步，跳过 Compose 协调和 loader 密码变更，保护 worker 检查点"
+        if [[ "${COMPOSE_BUILD}" == "1" ]]; then
+          log "本次 --build 已延后；同步结束后重新运行脚本即可应用镜像更新"
+        fi
+      fi
+    else
+      bound_docker_build_cache
+      start_compose_services
+      configure_mysql_loader
+    fi
+    if ! wait_for_compose_service api "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health"; then
+      log "后端容器未就绪，以下是 api 近况："
+      docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=120 api || true
+      exit 1
+    fi
+  else
+    start_backend
+    if ! wait_for_port "后端" "${LEAN_WEB_HOST}" "${LEAN_WEB_PORT}" 45; then
+      log "后端启动失败，以下是日志片段："
+      tail -n 80 "${BACKEND_LOG}" || true
+      exit 1
+    fi
+  fi
+
+  start_frontend
+  if ! wait_for_port "前端" "${VITE_HOST}" "${VITE_PORT}" 45; then
+    log "前端启动失败，以下是日志片段："
+    tail -n 80 "${FRONTEND_LOG}" || true
     exit 1
   fi
-else
-  start_backend
-  if ! wait_for_port "后端" "${LEAN_WEB_HOST}" "${LEAN_WEB_PORT}" 45; then
-    log "后端启动失败，以下是日志片段："
-    tail -n 80 "${BACKEND_LOG}" || true
-    exit 1
+
+  log "健康检查："
+  curl -sS "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health" || true
+  echo
+  curl -sS "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health/dependencies" || true
+  echo
+  if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
+    log "后端日志: compose service api (${COMPOSE_PROJECT_NAME})"
+  else
+    log "后端日志: ${BACKEND_LOG}"
   fi
-fi
+  log "前端日志: ${FRONTEND_LOG}"
+  log "访问地址: http://${VITE_HOST}:${VITE_PORT}"
+  open_frontend_in_browser
 
-start_frontend
-if ! wait_for_port "前端" "${VITE_HOST}" "${VITE_PORT}" 45; then
-  log "前端启动失败，以下是日志片段："
-  tail -n 80 "${FRONTEND_LOG}" || true
-  exit 1
-fi
+  if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
+    docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs -f --tail=120 api worker data-worker data-demand-worker beat &
+    LOG_STREAM_PID=$!
+    wait "${LOG_STREAM_PID}"
+    LOG_STREAM_PID=""
+  else
+    log "后端PID: ${BACKEND_PID}"
+    log "前端PID: ${FRONTEND_PID}"
+    wait "${BACKEND_PID}" "${FRONTEND_PID}"
+  fi
+}
 
-log "健康检查："
-curl -sS "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health" || true
-echo
-curl -sS "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/health/dependencies" || true
-echo
-if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-  log "后端日志: compose service api (${COMPOSE_PROJECT_NAME})"
-else
-  log "后端日志: ${BACKEND_LOG}"
-fi
-log "前端日志: ${FRONTEND_LOG}"
-log "访问地址: http://${VITE_HOST}:${VITE_PORT}"
-open_frontend_in_browser
-
-if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
-  docker compose --project-directory "${COMPOSE_PROJECT_DIR}" -p "${COMPOSE_PROJECT_NAME}" logs -f --tail=120 api worker beat
-else
-  log "后端PID: ${BACKEND_PID}"
-  log "前端PID: ${FRONTEND_PID}"
-  wait "${BACKEND_PID}" "${FRONTEND_PID}"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi

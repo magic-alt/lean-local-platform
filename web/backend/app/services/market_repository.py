@@ -250,10 +250,51 @@ def upsert_market_trade_status(
 ) -> dict[str, Any]:
     if not rows:
         return {"count": 0}
-    item_id = upsert_instrument(symbol=symbol, asset_class=asset_class, market=market, venue=venue or market, source=source)
+    normalized_rows = [{**row, "symbol": symbol} for row in rows]
+    result = upsert_market_trade_status_batch(
+        normalized_rows,
+        asset_class=asset_class,
+        market=market,
+        venue=venue,
+        source=source,
+        batch_id=batch_id,
+        bulk=bulk,
+    )
+    return {"instrumentId": instrument_id(asset_class, market, symbol, venue or market), **result}
+
+
+def upsert_market_trade_status_batch(
+    rows: list[dict[str, Any]],
+    *,
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    source: str,
+    batch_id: str | None = None,
+    bulk: bool = False,
+) -> dict[str, Any]:
+    """Write trade status for many instruments with one connection/transaction."""
+    if not rows:
+        return {"count": 0, "instruments": 0}
+    asset_class = asset_class.lower()
+    market = market.lower()
+    venue = (venue or market).lower()
     now = utc_now()
+    symbols = sorted(
+        {
+            str(row.get("symbol") or row.get("code") or row.get("ts_code") or "").split(".", 1)[0].upper()
+            for row in rows
+        }
+        - {""}
+    )
+    if not symbols:
+        raise ValueError("symbol is required for market_trade_status.")
+    ids = {symbol: instrument_id(asset_class, market, symbol, venue) for symbol in symbols}
     parameters = []
     for row in rows:
+        row_symbol = str(row.get("symbol") or row.get("code") or row.get("ts_code") or "").split(".", 1)[0].upper()
+        if not row_symbol:
+            raise ValueError("symbol is required for market_trade_status.")
         trade_date = normalize_date(
             row.get("trade_date") or row.get("tradeDate") or row.get("date"),
             "trade_date",
@@ -263,11 +304,11 @@ def upsert_market_trade_status(
         is_suspended = bool_int(row.get("is_suspended", row.get("isSuspended", False)))
         parameters.append(
             (
-                item_id,
-                symbol,
-                asset_class.lower(),
-                market.lower(),
-                (venue or market).lower(),
+                ids[row_symbol],
+                row_symbol,
+                asset_class,
+                market,
+                venue,
                 trade_date,
                 1 if can_buy or can_sell else 0,
                 is_suspended,
@@ -301,9 +342,25 @@ def upsert_market_trade_status(
     """
     connection_factory = bulk_db if bulk else db
     with connection_factory() as connection:
+        connection.executemany(
+            """
+            insert into instruments
+                (instrument_id,symbol,normalized_symbol,name,asset_class,market,venue,status,
+                 metadata_json,source,created_at,updated_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(instrument_id) do update set updated_at=excluded.updated_at
+            """,
+            [
+                (
+                    ids[item], item, item, item, asset_class, market, venue, "active",
+                    json_dump({}), source, now, now,
+                )
+                for item in symbols
+            ],
+        )
         for chunk in _chunks(parameters):
             connection.executemany(sql, chunk)
-    return {"instrumentId": item_id, "count": len(parameters)}
+    return {"count": len(parameters), "instruments": len(symbols)}
 
 
 def list_instruments(asset_class: str | None = None, market: str | None = None, limit: int = 500) -> list[dict[str, Any]]:

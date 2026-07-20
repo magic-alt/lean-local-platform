@@ -127,6 +127,72 @@ body {
   overflow-x: auto;
 }
 
+.data-catalog-table .ant-table {
+  overflow-x: hidden;
+}
+
+.data-catalog-table .ant-table-cell {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.data-catalog-primary {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.data-catalog-unit,
+.data-catalog-meta,
+.data-catalog-note {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.data-catalog-note {
+  display: -webkit-box;
+  margin-top: 3px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.data-catalog-tags,
+.data-catalog-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.data-catalog-tags .ant-tag,
+.data-catalog-actions .ant-tag {
+  margin-inline-end: 0;
+}
+
+.data-catalog-progress-title,
+.data-catalog-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.data-catalog-progress-title {
+  justify-content: space-between;
+}
+
+.data-catalog-progress .ant-progress {
+  display: block;
+  margin: 1px 0 2px;
+  line-height: 1;
+}
+
 .metric-value {
   font-size: 22px;
   font-weight: 700;

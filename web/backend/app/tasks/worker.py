@@ -342,17 +342,34 @@ def _broker_contains_sync_run(client: Any, run_id: str) -> bool:
     return any(needle in message for message in messages)
 
 
+def _broker_ready_contains_sync_run(client: Any, run_id: str) -> bool:
+    needle = run_id.encode("utf-8")
+    messages: list[bytes] = []
+    for queue in ("data-bulk", "data"):
+        messages.extend(client.lrange(queue, 0, -1) or [])
+    return any(needle in message for message in messages)
+
+
+def _broker_unacked_sync_tags(client: Any, run_id: str) -> list[str]:
+    needle = run_id.encode("utf-8")
+    return [
+        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
+        for tag, message in (client.hgetall("unacked") or {}).items()
+        if needle in message
+    ]
+
+
 @celery_app.task(name="lean_web.recover_data_sync")
 def recover_data_sync_task():
     """Requeue database runs whose Celery message disappeared after restart."""
-    stale_seconds = max(60, int(os.environ.get("LEAN_DATA_SYNC_STALE_SECONDS", "120")))
+    stale_seconds = max(60, int(os.environ.get("LEAN_DATA_SYNC_STALE_SECONDS", "300")))
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
     with db() as connection:
         rows = connection.execute(
             """
-            select id,task_id,status from data_sync_runs
+            select id,task_id,status,heartbeat_at from data_sync_runs
             where status in ('queued','running') and cancel_requested=0
-              and coalesce(started_at,created_at) < ?
+              and coalesce(heartbeat_at,started_at,created_at) < ?
             order by created_at
             """,
             (cutoff,),
@@ -373,9 +390,17 @@ def recover_data_sync_task():
     for row in rows:
         run_id = str(row["id"])
         task_id = str(row["task_id"] or "")
-        if not task_id or _broker_contains_sync_run(client, run_id):
+        if not task_id or _broker_ready_contains_sync_run(client, run_id):
             preserved.append(run_id)
             continue
+        orphaned_tags = _broker_unacked_sync_tags(client, run_id)
+        if orphaned_tags:
+            # A fresh heartbeat keeps live long-running tasks out of this
+            # recovery set. Matching unacked messages that reach here belong
+            # to a worker that disappeared without acknowledging them.
+            client.hdel("unacked", *orphaned_tags)
+            client.zrem("unacked_index", *orphaned_tags)
+            append_log(task_id, f"Removed {len(orphaned_tags)} orphaned broker message(s) after stale heartbeat.")
         # Mark queued before publishing. A concurrent recovery pass will then
         # see the published Redis envelope and preserve it.
         with db() as connection:

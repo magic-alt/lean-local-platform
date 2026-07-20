@@ -103,11 +103,21 @@ backtests and paper-trading metadata continue using the normal database user.
 
 High-throughput TuShare synchronization can be tuned with
 `LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
-`LEAN_TUSHARE_FETCH_CONCURRENCY`, and `LEAN_DATA_SYNC_CHUNK_ROWS`.
+`LEAN_TUSHARE_FETCH_CONCURRENCY`, `LEAN_STK_LIMIT_FETCH_CONCURRENCY`,
+`LEAN_DATA_SYNC_BATCH_UNITS` (8-32 instruments per commit), and
+`LEAN_DATA_SYNC_CHUNK_ROWS`. Initial `stk_limit` history uses concurrent
+instrument prefetch plus a sequential batch writer; later increments use one
+market-wide request per missing trade date.
 
-The workstation profile treats MySQL as a bounded cache.
-`LEAN_MYSQL_MAX_DATABASE_GB` defaults to 50; bulk writes stop before the
-estimated tables, indexes, binlog and engine headroom exceed that limit.
+The workstation profile treats on-demand MySQL writes as a bounded cache.
+`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 and applies only to on-demand
+fetches. One-click bulk synchronization has no database-size ceiling and stops
+only when the physical disk reserve would be breached. The reserve is the
+larger of 500 GiB and 50% of total disk capacity. The API and workers
+read the same MySQL data directory through a read-only observer mount, so the
+catalog and live progress both report its physical allocated size.
+The legacy `LEAN_MYSQL_MAX_DATABASE_GB` name remains a fallback for existing
+installations, but no longer limits one-click synchronization.
 One-click refreshes retain only A-share execution data, benchmark indexes,
 CFFEX futures references, and SSE option references. Contract bars plus
 fundamentals, funds, overseas markets, macro data, and feature lists are fetched

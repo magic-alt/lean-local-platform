@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -208,6 +209,68 @@ def test_throughput_api_rate_is_capped_at_configured_quota(monkeypatch):
     assert metrics["apiCallsPerMinute"] == metrics["apiQuotaPerMinute"]
 
 
+def test_mysql_storage_metrics_prefer_physical_observer_directory(tmp_path, monkeypatch):
+    from app.services import data_sync
+
+    observer = tmp_path / "mysql"
+    observer.mkdir()
+    (observer / "ibdata1").write_bytes(b"x" * 8192)
+    monkeypatch.setattr(data_sync, "database_backend", lambda: "mysql")
+    monkeypatch.setenv("LEAN_MYSQL_DATA_OBSERVER_DIR", str(observer))
+    monkeypatch.setenv("LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB", "50")
+    monkeypatch.setattr(data_sync, "_DATABASE_SIZE_CACHE", (0.0, {}))
+
+    metrics = data_sync._database_storage_metrics()
+
+    assert metrics["databaseBytes"] >= 8192
+    assert metrics["databaseSizeSource"] == "physical_data_directory"
+    assert metrics["databaseLimitBytes"] == 0
+    assert metrics["databaseLimitEnforced"] is False
+    assert metrics["onDemandDatabaseLimitBytes"] == 50 * 1024**3
+
+
+def test_database_ceiling_applies_only_to_on_demand_writes(monkeypatch):
+    from app.services import data_sync
+
+    monkeypatch.setattr(
+        data_sync,
+        "_disk_metrics",
+        lambda: {
+            "diskFreeBytes": 800 * 1024**3,
+            "diskTotalBytes": 1000 * 1024**3,
+            "databaseBytes": 60 * 1024**3,
+            "onDemandDatabaseLimitBytes": 50 * 1024**3,
+        },
+    )
+
+    data_sync._assert_disk_capacity(1024)
+    with pytest.raises(RuntimeError, match="on_demand_database_guard"):
+        data_sync._assert_disk_capacity(1024, enforce_database_limit=True)
+
+
+def test_disk_reserve_is_at_least_500_gib_or_half_the_disk(monkeypatch):
+    from app.services import data_sync
+
+    gib = 1024**3
+    assert data_sync._disk_hard_reserve_bytes(800 * gib) == 500 * gib
+    assert data_sync._disk_hard_reserve_bytes(1200 * gib) == 600 * gib
+
+    monkeypatch.setattr(
+        data_sync,
+        "_disk_metrics",
+        lambda: {
+            "diskFreeBytes": 510 * gib,
+            "diskTotalBytes": 800 * gib,
+            "diskReserveBytes": 500 * gib,
+            "databaseBytes": 0,
+            "onDemandDatabaseLimitBytes": 0,
+        },
+    )
+    data_sync._assert_disk_capacity(10 * gib)
+    with pytest.raises(RuntimeError, match="data_sync_disk_guard"):
+        data_sync._assert_disk_capacity(10 * gib + 1)
+
+
 def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db
@@ -219,9 +282,110 @@ def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, m
     assert _save_raw(spec, [row], "batch-2") == (0, 0)
     assert _save_raw(spec, [{**row, "close": 1501.0}], "batch-3") == (0, 1)
     with db() as connection:
-        stored = connection.execute("select count(*) as count,max(batch_id) as batch_id from provider_raw_records").fetchone()
+        stored = connection.execute(
+            "select count(*) as count,max(batch_id) as batch_id,max(payload_json) as payload_json "
+            "from provider_raw_records"
+        ).fetchone()
     assert stored["count"] == 1
     assert stored["batch_id"] == "batch-3"
+    assert stored["payload_json"] == ""
+
+
+def test_legacy_provider_json_cleanup_archives_noncanonical_rows(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+    from app.services.provider_raw_cleanup import cleanup_legacy_provider_json
+
+    monkeypatch.setattr(data_sync, "_assert_disk_capacity", lambda *args, **kwargs: None)
+    now = utc_now()
+    with db() as connection:
+        connection.executemany(
+            """
+            insert into provider_raw_records
+                (provider,dataset_key,record_key,business_date,instrument_code,payload_json,
+                 content_sha256,batch_id,ingested_at)
+            values ('tushare',?,?,?,?,?,?,?,?)
+            """,
+            [
+                ("stk_limit", "limit-1", "2026-07-17", "000001", json.dumps({"symbol": "000001", "trade_date": "20260717", "limit_up": 12.0}), "hash-1", "old", now),
+                ("suspend_d", "suspend-1", "2026-07-17", "000001", json.dumps({"symbol": "000001", "suspend_date": "20260717", "reason": "test"}), "hash-2", "old", now),
+            ],
+        )
+
+    result = cleanup_legacy_provider_json(archive_batch_size=1, clear_batch_size=1)
+
+    assert result["before"]["rows"] == 2
+    assert result["after"] == {"rows": 0, "jsonBytes": 0, "datasets": []}
+    assert result["datasets"]["stk_limit"] == {"archived": 0, "cleared": 1}
+    assert result["datasets"]["suspend_d"] == {"archived": 1, "cleared": 1}
+    with db() as connection:
+        assert connection.execute(
+            "select count(*) count from provider_raw_records where payload_json<>''"
+        ).fetchone()["count"] == 0
+        assert connection.execute(
+            "select count(*) count from provider_raw_archives where dataset_key='suspend_d'"
+        ).fetchone()["count"] == 1
+        assert len(connection.execute(
+            "select run_id from provider_raw_archives where dataset_key='suspend_d'"
+        ).fetchone()["run_id"]) <= 64
+
+
+def test_raw_row_hashing_does_not_serialize_json(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
+    monkeypatch.setattr(
+        data_sync.json,
+        "dumps",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("row JSON serialization is forbidden")),
+    )
+
+    assert data_sync._save_raw(
+        spec,
+        [{"ts_code": "600519.SH", "trade_date": "20260716", "close": 1500.0}],
+        "batch-no-json",
+    ) == (1, 0)
+
+
+def test_retained_raw_data_uses_one_compressed_batch_archive(tmp_path, monkeypatch):
+    import gzip
+    import json
+
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services.data_sync import DATASET_REGISTRY, _save_raw
+    from app.services.db_object_store import read_bytes
+
+    spec = next(item for item in DATASET_REGISTRY if item.key == "suspend_d")
+    rows = [
+        {"ts_code": "000001.SZ", "suspend_date": "20260716", "suspend_timing": "全天"},
+        {"ts_code": "000002.SZ", "suspend_date": "20260716", "suspend_timing": "上午"},
+    ]
+
+    assert _save_raw(spec, rows, "archive-run") == (2, 0)
+    assert _save_raw(spec, rows, "archive-run-retry") == (0, 0)
+    with db() as connection:
+        archive = connection.execute(
+            "select * from provider_raw_archives where run_id='archive-run' and dataset_key='suspend_d'"
+        ).fetchone()
+        archive_counts = connection.execute(
+            "select count(*) as references_count,count(distinct object_id) as objects_count "
+            "from provider_raw_archives where dataset_key='suspend_d'"
+        ).fetchone()
+        raw = connection.execute(
+            "select count(*) as count,min(payload_json) as min_payload,max(payload_json) as max_payload "
+            "from provider_raw_records where dataset_key='suspend_d'"
+        ).fetchone()
+
+    assert archive["row_count"] == 2
+    assert archive["compressed_size"] < archive["uncompressed_size"]
+    assert archive_counts["references_count"] == 2
+    assert archive_counts["objects_count"] == 1
+    assert raw["count"] == 2
+    assert raw["min_payload"] == raw["max_payload"] == ""
+    assert json.loads(gzip.decompress(read_bytes(archive["object_id"]))) == rows
 
 
 def test_raw_initial_load_can_skip_lookup_and_remains_idempotent(tmp_path, monkeypatch):
@@ -587,6 +751,125 @@ def test_suspend_incremental_fetches_once_per_trade_date_not_once_per_symbol(tmp
     ]
 
 
+def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["stk_limit"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "stk_limit")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "2026-07-16", "delisted_date": None},
+            {"symbol": "600000", "listed_date": "2026-07-16", "delisted_date": None},
+        ],
+    )
+    bulk_calls = []
+    real_normalize = data_sync._normalize_optional
+
+    def capture_normalize(selected, rows, batch_id, *, bulk=False):
+        bulk_calls.append((len(rows), bulk))
+        return real_normalize(selected, rows, batch_id, bulk=bulk)
+
+    monkeypatch.setattr(data_sync, "_normalize_optional", capture_normalize)
+
+    class Adapter:
+        def limit_prices(self, symbol, start, end, *, strict=False):
+            assert strict is True
+            return {"2026-07-17": {"limitUp": 11.0, "limitDown": 9.0}}
+
+    result = data_sync._sync_generic(Adapter(), spec, run["id"], run["id"], "2026-07-17")
+
+    assert result == (2, 2, 0, 0)
+    assert bulk_calls == [(2, True)]
+    assert spec.retain_raw is False
+    with db() as connection:
+        work = connection.execute(
+            "select count(*) as count,min(status) as min_status,max(status) as max_status "
+            "from data_sync_work_items where run_id=? and dataset_key='stk_limit'",
+            (run["id"],),
+        ).fetchone()
+        ashare = connection.execute("select count(*) as count from ashare_trade_status").fetchone()
+        market = connection.execute("select count(*) as count from market_trade_status").fetchone()
+        manifests = connection.execute(
+            "select count(*) as count from provider_ingestion_manifests where run_id=? and dataset_key='stk_limit'",
+            (run["id"],),
+        ).fetchone()
+        raw = connection.execute(
+            "select count(*) as count from provider_raw_records where dataset_key='stk_limit'"
+        ).fetchone()
+    assert work["count"] == 2
+    assert work["min_status"] == work["max_status"] == "committed"
+    assert ashare["count"] == market["count"] == 2
+    assert manifests["count"] == 2
+    assert raw["count"] == 0
+
+
+def test_stk_limit_increment_fetches_once_per_trade_date(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["stk_limit"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "stk_limit")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03"},
+            {"symbol": "600000", "listed_date": "1999-11-10"},
+        ],
+    )
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-17',1,'test','test')"
+        )
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','stk_limit',?,'1990-01-01','2026-07-16','old',0,'passed',?)
+            """,
+            [("000001", utc_now()), ("600000", utc_now())],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def limit_prices_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    "limit_up": 11.0,
+                    "limit_down": 9.0,
+                    "source": "tushare:stk_limit",
+                }
+                for symbol in ("000001", "600000")
+            ]
+
+    adapter = Adapter()
+    result = data_sync._sync_generic(adapter, spec, run["id"], run["id"], "2026-07-17")
+
+    assert result == (1, 2, 0, 0)
+    assert adapter.calls == ["2026-07-17"]
+    with db() as connection:
+        watermarks = connection.execute(
+            "select scope_key,coverage_end,last_data_date from provider_dataset_watermarks "
+            "where dataset_key='stk_limit' order by scope_key"
+        ).fetchall()
+    assert [(row["scope_key"], row["coverage_end"], row["last_data_date"]) for row in watermarks] == [
+        ("000001", "2026-07-17", "2026-07-17"),
+        ("600000", "2026-07-17", "2026-07-17"),
+    ]
+
+
 def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services import data, data_sync, lean_cache, market_data
@@ -748,6 +1031,33 @@ def test_generic_instrument_sync_preloads_watermarks_once(tmp_path, monkeypatch)
     ]
 
 
+def test_generic_normalizer_uses_bulk_loader(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    enable_bulk_dataset_for_test(data_sync, monkeypatch, "daily_basic")
+    run = data_sync.create_sync_run(requested=["daily_basic"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily_basic")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-17"}],
+    )
+    calls = []
+    monkeypatch.setattr(
+        data_sync,
+        "_normalize_optional",
+        lambda selected, rows, batch_id, *, bulk=False: calls.append((selected.key, len(rows), bulk)),
+    )
+
+    class Adapter:
+        def daily_basic_rows(self, symbol, start, end):
+            return [{"symbol": symbol, "trade_date": "2026-07-17", "factors": {"pe": 10.0}}]
+
+    assert data_sync._sync_generic(Adapter(), spec, run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
+    assert calls == [("daily_basic", 1, True)]
+
+
 def test_all_generic_date_parameters_use_requested_range():
     from app.services.data_sync import DATASET_REGISTRY, _generic_params
 
@@ -794,6 +1104,40 @@ def test_daily_catalog_coverage_uses_normalized_table(tmp_path, monkeypatch):
     assert item["row_count"] == 1
     assert item["first_data_date"] == "2026-07-17"
     assert item["last_data_date"] == "2026-07-17"
+
+
+def test_stock_basic_catalog_coverage_uses_canonical_instruments(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+    from app.services.ashare_repository import import_security_master
+
+    data_sync.ensure_catalog()
+    import_security_master(
+        [
+            {
+                "symbol": "000001",
+                "name": "平安银行",
+                "exchange": "SZSE",
+                "listed_date": "1991-04-03",
+                "status": "listed",
+            }
+        ],
+        source="tushare:stock_basic",
+        universe_code="ALL_A",
+        bulk=True,
+    )
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "stock_basic")
+    data_sync._set_catalog_coverage(spec)
+
+    with db() as connection:
+        item = connection.execute(
+            "select row_count,first_data_date,last_data_date from provider_dataset_catalog "
+            "where dataset_key='stock_basic'"
+        ).fetchone()
+    assert item["row_count"] == 1
+    assert item["first_data_date"] == "1991-04-03"
+    assert item["last_data_date"] == "1991-04-03"
 
 
 def test_adj_factor_sync_persists_only_normalized_rows(tmp_path, monkeypatch):
@@ -904,7 +1248,12 @@ def test_adj_factor_resume_retries_failed_work_item_without_restarting(tmp_path,
 
 def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     from app.tasks.celery_app import celery_app
-    from app.tasks.worker import _broker_contains_sync_run, sync_all_data_task
+    from app.tasks.worker import (
+        _broker_contains_sync_run,
+        _broker_ready_contains_sync_run,
+        _broker_unacked_sync_tags,
+        sync_all_data_task,
+    )
 
     routes = celery_app.conf.task_routes
     assert routes["lean_web.sync_all_data"]["queue"] == "data-bulk"
@@ -922,10 +1271,19 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
             return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-123"}}'] if queue == "data-bulk" else []
 
         def hvals(self, key):
-            return []
+            return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}']
+
+        def hgetall(self, key):
+            return {
+                b"delivery-run-unacked": b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}'
+            }
 
     assert _broker_contains_sync_run(FakeRedis(), "run-123") is True
+    assert _broker_contains_sync_run(FakeRedis(), "run-unacked") is True
     assert _broker_contains_sync_run(FakeRedis(), "run-456") is False
+    assert _broker_ready_contains_sync_run(FakeRedis(), "run-123") is True
+    assert _broker_ready_contains_sync_run(FakeRedis(), "run-unacked") is False
+    assert _broker_unacked_sync_tags(FakeRedis(), "run-unacked") == ["delivery-run-unacked"]
 
 
 def test_transient_provider_failures_are_retried(monkeypatch):
@@ -990,6 +1348,26 @@ def test_checkpoint_progress_cannot_move_backwards(tmp_path, monkeypatch):
     assert item["processed"] == 705
     assert item["inserted"] == 399505
     assert item["failed"] == 6
+
+
+def test_sync_item_progress_updates_run_heartbeat(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    data_sync._item(
+        run["id"],
+        "daily",
+        processed=1,
+        checkpoint={"index": 1, "symbol": "000001", "total": 2},
+    )
+    with db() as connection:
+        heartbeat = connection.execute(
+            "select heartbeat_at from data_sync_runs where id=?",
+            (run["id"],),
+        ).fetchone()
+    assert heartbeat["heartbeat_at"]
 
 
 def test_sync_mode_records_initial_incremental_and_checkpoint_resume(tmp_path, monkeypatch):

@@ -889,6 +889,30 @@ def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejec
     assert reason == "trade_status_missing"
 
 
+def test_security_master_bulk_path_populates_all_canonical_tables(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services.ashare_repository import import_security_master
+
+    result = import_security_master(
+        [
+            {"symbol": "000001", "name": "平安银行", "listed_date": "1991-04-03", "status": "listed"},
+            {"symbol": "600000", "name": "浦发银行", "listed_date": "1999-11-10", "status": "listed"},
+        ],
+        source="unit",
+        bulk=True,
+    )
+
+    assert result["count"] == 2
+    with db() as connection:
+        securities = connection.execute("select count(*) as count from securities").fetchone()
+        instruments = connection.execute("select count(*) as count from instruments").fetchone()
+        memberships = connection.execute(
+            "select count(*) as count from universe_membership where universe_code='ALL_A'"
+        ).fetchone()
+    assert securities["count"] == instruments["count"] == memberships["count"] == 2
+
+
 def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 

@@ -1266,8 +1266,12 @@ export function DataPage() {
   }, false);
   const [syncRun, setSyncRun] = useState<DataSyncRun>();
   const [syncActionLoading, setSyncActionLoading] = useState(false);
-  const storageTargets = useAsyncData<OnDemandStorageTarget[]>(
+  const loadOnDemandStorageTargets = useCallback(
     () => api.onDemandStorageTargets().then((result) => result.items),
+    []
+  );
+  const storageTargets = useAsyncData<OnDemandStorageTarget[]>(
+    loadOnDemandStorageTargets,
     [],
     false
   );
@@ -1516,9 +1520,9 @@ export function DataPage() {
           <Card size="small"><Statistic title="按需数据集" value={syncProgress.onDemand} /></Card>
           <Card size="small">
             <Statistic
-              title="MySQL 缓存"
+              title="MySQL 物理占用（一键更新不限额）"
               value={((catalog.data.storage?.databaseBytes || 0) / 1024 / 1024 / 1024).toFixed(1)}
-              suffix={`/ ${((catalog.data.storage?.databaseLimitBytes || 50 * 1024 ** 3) / 1024 / 1024 / 1024).toFixed(0)} GiB`}
+              suffix="GiB"
             />
           </Card>
           <Card size="small"><Statistic title="已验证可用" value={catalog.data.available} /></Card>
@@ -1608,11 +1612,16 @@ export function DataPage() {
                   </span>
                 )}
                 {syncProgress.active?.metrics?.diskFreeBytes !== undefined && (
-                  <span>磁盘可用 {(syncProgress.active.metrics.diskFreeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB</span>
+                  <span>
+                    磁盘可用 {(syncProgress.active.metrics.diskFreeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB
+                    {syncProgress.active.metrics.diskReserveBytes !== undefined
+                      ? ` · 安全预留 ${(syncProgress.active.metrics.diskReserveBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
+                      : ""}
+                  </span>
                 )}
                 {syncProgress.active?.metrics?.databaseBytes !== undefined && (
                   <span>
-                    MySQL {(syncProgress.active.metrics.databaseBytes / 1024 / 1024 / 1024).toFixed(1)} / {((syncProgress.active.metrics.databaseLimitBytes || 50 * 1024 ** 3) / 1024 / 1024 / 1024).toFixed(0)} GiB
+                    MySQL 物理占用 {(syncProgress.active.metrics.databaseBytes / 1024 / 1024 / 1024).toFixed(1)} GiB · 一键更新不限额
                   </span>
                 )}
               </Space>
@@ -1623,28 +1632,101 @@ export function DataPage() {
         {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
         {catalogRows.length > 0 && (
           <Table
+            className="data-catalog-table"
             size="small"
             rowKey="dataset_key"
             dataSource={catalogRows}
             pagination={{ pageSize: 20, showSizeChanger: true }}
-            scroll={{ x: 1200 }}
+            tableLayout="fixed"
             columns={[
-              { title: "Category", dataIndex: "category", width: 120 },
-              { title: "Dataset", dataIndex: "dataset_key" },
               {
-                title: "Policy",
-                dataIndex: "sync_policy",
-                render: (value) => value === "on_demand" ? <Tag color="blue">按需</Tag> : <Tag>批量</Tag>
+                title: "数据集",
+                width: "21%",
+                render: (_, item) => {
+                  const display = syncError(item);
+                  const detail = item.syncItem?.error || item.permission_reason || display;
+                  return (
+                    <div>
+                      <div className="data-catalog-primary">{item.dataset_key}</div>
+                      <div className="data-catalog-meta">{item.category}</div>
+                      <Tooltip title={detail}>
+                        <div className="data-catalog-note">{display}</div>
+                      </Tooltip>
+                    </div>
+                  );
+                }
+              },
+              {
+                title: "状态",
+                width: "18%",
+                render: (_, item) => (
+                  <div className="data-catalog-tags">
+                    <Tooltip title={item.sync_policy === "on_demand" ? "按需获取，不参与一键更新" : "参与一键更新"}>
+                      <Tag color={item.sync_policy === "on_demand" ? "blue" : undefined}>
+                        {item.sync_policy === "on_demand" ? "按需" : "批量"}
+                      </Tag>
+                    </Tooltip>
+                    <Tooltip title="TuShare 接口权限"><span><StatusTag status={item.permission_status} /></span></Tooltip>
+                    {item.syncItem && (
+                      <Tooltip title="本轮同步状态"><span><StatusTag status={item.syncItem.status} /></span></Tooltip>
+                    )}
+                    {Boolean(item.syncItem?.failed) && <Tag color="error">失败 {item.syncItem?.failed}</Tag>}
+                  </div>
+                )
+              },
+              {
+                title: "同步进度",
+                width: "28%",
+                render: (_, item) => {
+                  const checkpoint = item.syncItem?.checkpoint as { symbol?: string; index?: number; total?: number } | null | undefined;
+                  const checkpointIndex = Number(checkpoint?.index || 0);
+                  const checkpointTotal = Number(checkpoint?.total || 0);
+                  const percent = checkpointTotal ? Math.min(100, Math.round(checkpointIndex * 100 / checkpointTotal)) : 0;
+                  const writeRate = item.syncItem?.metrics?.writeRowsPerSecond;
+                  if (!item.syncItem) return <span className="data-catalog-meta">尚未同步</span>;
+                  return (
+                    <div className="data-catalog-progress">
+                      {checkpointTotal > 0 && (
+                        <>
+                          <div className="data-catalog-progress-title">
+                            <span>{checkpoint?.symbol || "进度"}</span>
+                            <span>{checkpointIndex.toLocaleString()} / {checkpointTotal.toLocaleString()}</span>
+                          </div>
+                          <Progress percent={percent} size="small" showInfo={false} />
+                        </>
+                      )}
+                      <div className="data-catalog-stats">
+                        <span>处理 {item.syncItem.processed.toLocaleString()}</span>
+                        <span>入库 {item.syncItem.inserted.toLocaleString()}</span>
+                        <span>写入 {writeRate !== undefined ? `${Math.round(writeRate).toLocaleString()}/s` : "-"}</span>
+                      </div>
+                    </div>
+                  );
+                }
+              },
+              {
+                title: "数据范围",
+                width: "20%",
+                render: (_, item) => (
+                  <div>
+                    <div className="data-catalog-primary">
+                      {Number(item.row_count || 0).toLocaleString()} <span className="data-catalog-unit">rows</span>
+                    </div>
+                    <div className="data-catalog-meta">
+                      {item.first_data_date ? `${item.first_data_date} → ${item.last_data_date || "-"}` : "暂无覆盖日期"}
+                    </div>
+                  </div>
+                )
               },
               {
                 title: "操作",
-                width: 180,
+                width: "13%",
                 render: (_, item) => {
-                  if (item.sync_policy !== "on_demand") return "-";
+                  if (item.sync_policy !== "on_demand") return <span className="data-catalog-meta">随一键更新</span>;
                   const task = downloadTasks[item.dataset_key];
                   const busy = Boolean(task && ["queued", "running"].includes(task.status));
                   return (
-                    <Space size={4}>
+                    <div className="data-catalog-actions">
                       <Tooltip title={activeSync ? "一键更新进行中，为避免共享 TuShare 配额竞争，完成后可单独下载" : undefined}>
                         <Button
                           size="small"
@@ -1658,30 +1740,11 @@ export function DataPage() {
                       </Tooltip>
                       {task && !busy && (
                         <Tooltip title={task.error || task.artifacts?.[0] || task.status}>
-                          <StatusTag status={task.status} />
+                          <span><StatusTag status={task.status} /></span>
                         </Tooltip>
                       )}
-                    </Space>
+                    </div>
                   );
-                }
-              },
-              { title: "Permission", dataIndex: "permission_status", render: (value) => <StatusTag status={value} /> },
-              { title: "Sync", render: (_, item) => item.syncItem ? <StatusTag status={item.syncItem.status} /> : "-" },
-              { title: "Processed", render: (_, item) => item.syncItem?.processed ?? "-" },
-              { title: "Inserted", render: (_, item) => item.syncItem?.inserted ?? "-" },
-              { title: "Write/s", render: (_, item) => item.syncItem?.metrics?.writeRowsPerSecond ? Math.round(item.syncItem.metrics.writeRowsPerSecond).toLocaleString() : "-" },
-              { title: "Failed", render: (_, item) => item.syncItem?.failed ? <Tag color="error">{item.syncItem.failed}</Tag> : item.syncItem ? 0 : "-" },
-              { title: "Checkpoint", width: 190, render: (_, item) => item.syncItem?.checkpoint?.symbol ? `${item.syncItem.checkpoint.symbol} · ${item.syncItem.checkpoint.index}/${item.syncItem.checkpoint.total}` : "-" },
-              { title: "Rows", dataIndex: "row_count" },
-              { title: "Coverage", render: (_, item) => item.first_data_date ? `${item.first_data_date} → ${item.last_data_date || "-"}` : "-" },
-              {
-                title: "状态说明",
-                width: 240,
-                ellipsis: true,
-                render: (_, item) => {
-                  const display = syncError(item);
-                  const detail = item.syncItem?.error || item.permission_reason || display;
-                  return <Tooltip title={detail}><span>{display}</span></Tooltip>;
                 }
               }
             ]}

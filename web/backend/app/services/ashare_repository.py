@@ -7,7 +7,12 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.errors import LeanPlatformError
-from .market_repository import upsert_instrument, upsert_market_daily_bars, upsert_market_trade_status
+from .market_repository import (
+    instrument_id,
+    upsert_instrument,
+    upsert_market_daily_bars,
+    upsert_market_trade_status_batch,
+)
 
 
 WRITE_BATCH_SIZE = 5_000
@@ -93,8 +98,109 @@ def import_security_master(
     *,
     source: str = "manual",
     universe_code: str = "ALL_A",
+    bulk: bool = False,
 ) -> dict[str, Any]:
     batch_id = str(uuid.uuid4())
+    if bulk and records:
+        now = utc_now()
+        security_parameters = []
+        instrument_parameters = []
+        membership_parameters = []
+        for record in records:
+            symbol = _symbol(record)
+            listed_date = _date(record.get("listed_date") or record.get("list_date") or record.get("listDate"), "listed_date")
+            delisted_date = _optional_date(record.get("delisted_date") or record.get("delist_date") or record.get("delistDate"))
+            status = _status(record.get("status") or record.get("list_status"))
+            if delisted_date and status == "listed":
+                status = "delisted"
+            name = record.get("name") or record.get("symbol_name") or record.get("stock_name") or symbol
+            exchange = record.get("exchange") or record.get("exchange_code") or infer_exchange(symbol)
+            is_st = bool(record.get("is_st", False))
+            industry = record.get("industry")
+            concepts = record.get("concepts") if isinstance(record.get("concepts"), list) else []
+            record_source = record.get("source") or source
+            security_parameters.append(
+                (
+                    symbol, name, exchange, "china", listed_date, delisted_date, status,
+                    _bool(is_st), industry, json_dump(concepts), now, now,
+                )
+            )
+            instrument_parameters.append(
+                (
+                    instrument_id("equity", "china", symbol, "china"), symbol, symbol, name,
+                    "equity", "china", exchange, "china", "CNY", listed_date, delisted_date,
+                    "delisted" if status == "delisted" else "active", 100, 0.01,
+                    json_dump({"source_status": status, "is_st": is_st, "industry": industry, "concepts": concepts}),
+                    "securities", now, now,
+                )
+            )
+            membership_parameters.append(
+                (
+                    universe_code.upper(), symbol, listed_date, delisted_date,
+                    _optional_date(record.get("announce_date") or record.get("announceDate")) or listed_date,
+                    _optional_date(record.get("effective_date") or record.get("effectiveDate")) or listed_date,
+                    None, record_source, batch_id,
+                )
+            )
+        with bulk_db() as connection:
+            connection.executemany(
+                """
+                insert into securities
+                    (symbol,name,exchange,market,listed_date,delisted_date,status,is_st,
+                     industry,concepts_json,created_at,updated_at)
+                values (?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(symbol) do update set
+                    name=case when excluded.name=excluded.symbol and securities.name<>securities.symbol
+                              then securities.name else excluded.name end,
+                    exchange=excluded.exchange,
+                    listed_date=min(securities.listed_date,excluded.listed_date),
+                    delisted_date=excluded.delisted_date,
+                    status=excluded.status,
+                    is_st=excluded.is_st,
+                    industry=coalesce(excluded.industry,securities.industry),
+                    concepts_json=coalesce(excluded.concepts_json,securities.concepts_json),
+                    updated_at=excluded.updated_at
+                """,
+                security_parameters,
+            )
+            connection.executemany(
+                """
+                insert into instruments
+                    (instrument_id,symbol,normalized_symbol,name,asset_class,market,exchange,venue,
+                     currency,listed_date,delisted_date,status,lot_size,tick_size,metadata_json,
+                     source,created_at,updated_at)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(instrument_id) do update set
+                    name=case when excluded.name=excluded.symbol and instruments.name<>instruments.symbol
+                              then instruments.name else excluded.name end,
+                    exchange=excluded.exchange,
+                    listed_date=case when instruments.listed_date is null then excluded.listed_date
+                                     else min(instruments.listed_date,excluded.listed_date) end,
+                    delisted_date=excluded.delisted_date,
+                    status=excluded.status,
+                    metadata_json=excluded.metadata_json,
+                    source=excluded.source,
+                    updated_at=excluded.updated_at
+                """,
+                instrument_parameters,
+            )
+            connection.executemany(
+                """
+                insert into universe_membership
+                    (universe_code,symbol,start_date,end_date,announce_date,effective_date,
+                     weight,source,batch_id)
+                values (?,?,?,?,?,?,?,?,?)
+                on conflict(universe_code,symbol,start_date) do update set
+                    end_date=excluded.end_date,
+                    announce_date=excluded.announce_date,
+                    effective_date=excluded.effective_date,
+                    weight=excluded.weight,
+                    source=excluded.source,
+                    batch_id=excluded.batch_id
+                """,
+                membership_parameters,
+            )
+        return {"batchId": batch_id, "universe": universe_code.upper(), "count": len(records)}
     imported = 0
     for record in records:
         symbol = _symbol(record)
@@ -449,19 +555,21 @@ def upsert_trade_status(
     connection_factory = bulk_db if bulk else db
     with connection_factory() as connection:
         existing_sources: dict[tuple[str, str], str] = {}
-        dates_by_symbol: dict[str, set[str]] = {}
-        for row in rows:
-            dates_by_symbol.setdefault(str(row["symbol"]), set()).add(str(row["trade_date"]))
-        for symbol, dates in dates_by_symbol.items():
-            for date_chunk in _chunks(sorted(dates), LOOKUP_BATCH_SIZE):
-                placeholders = ",".join("?" for _ in date_chunk)
+        # Priority 100 is the maximum possible value. Official TuShare status
+        # therefore cannot overwrite a higher-priority source and needs no
+        # read-before-write query. Lower-priority sources retain the guard.
+        if source_priority < 100:
+            keys = sorted({(str(row["symbol"]), str(row["trade_date"])) for row in rows})
+            for key_chunk in _chunks(keys, LOOKUP_BATCH_SIZE):
+                placeholders = ",".join("(?,?)" for _ in key_chunk)
+                values = [value for key in key_chunk for value in key]
                 existing = connection.execute(
                     f"""
                     select symbol, trade_date, source
                     from ashare_trade_status
-                    where symbol = ? and trade_date in ({placeholders})
+                    where (symbol,trade_date) in ({placeholders})
                     """,
-                    [symbol, *date_chunk],
+                    values,
                 ).fetchall()
                 existing_sources.update(
                     {
@@ -519,13 +627,9 @@ def upsert_trade_status(
         ]
         for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
             connection.executemany(sql, chunk)
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in persisted_rows:
-        grouped.setdefault(row["symbol"], []).append(row)
-    for symbol, symbol_rows in grouped.items():
-        upsert_market_trade_status(
-            symbol_rows,
-            symbol=symbol,
+    if persisted_rows:
+        upsert_market_trade_status_batch(
+            persisted_rows,
             asset_class="equity",
             market="china",
             venue="china",
@@ -619,17 +723,40 @@ def import_adjustment_factors(records: list[dict[str, Any]], source: str = "manu
     return {"batchId": batch_id, "count": len(rows), "factorFiles": factor_files}
 
 
-def upsert_corporate_actions(records: list[dict[str, Any]], source: str = "manual", batch_id: str | None = None) -> dict[str, Any]:
+def upsert_corporate_actions(
+    records: list[dict[str, Any]],
+    source: str = "manual",
+    batch_id: str | None = None,
+    *,
+    bulk: bool = False,
+) -> dict[str, Any]:
     batch_id = batch_id or str(uuid.uuid4())
     now = utc_now()
-    count = 0
-    with db() as connection:
-        for record in records:
-            symbol = _symbol(record)
-            action_type = str(record.get("action_type") or record.get("actionType") or "dividend").strip().lower()
-            if not action_type:
-                raise LeanWebError("action_type is required.")
-            connection.execute(
+    parameters = []
+    for record in records:
+        symbol = _symbol(record)
+        action_type = str(record.get("action_type") or record.get("actionType") or "dividend").strip().lower()
+        if not action_type:
+            raise LeanWebError("action_type is required.")
+        parameters.append(
+            (
+                symbol,
+                _date(record.get("ex_date") or record.get("exDate"), "ex_date"),
+                action_type,
+                _float(record.get("cash_dividend") or record.get("cashDividend")),
+                _float(record.get("stock_dividend") or record.get("stockDividend")),
+                _float(record.get("split_ratio") or record.get("splitRatio")),
+                _float(record.get("allotment_ratio") or record.get("allotmentRatio")),
+                _float(record.get("allotment_price") or record.get("allotmentPrice")),
+                record.get("source") or source,
+                batch_id,
+                now,
+            )
+        )
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
+            connection.executemany(
                 """
                 insert into corporate_actions
                     (symbol, ex_date, action_type, cash_dividend, stock_dividend, split_ratio,
@@ -644,22 +771,9 @@ def upsert_corporate_actions(records: list[dict[str, Any]], source: str = "manua
                     batch_id = excluded.batch_id,
                     created_at = excluded.created_at
                 """,
-                (
-                    symbol,
-                    _date(record.get("ex_date") or record.get("exDate"), "ex_date"),
-                    action_type,
-                    _float(record.get("cash_dividend") or record.get("cashDividend")),
-                    _float(record.get("stock_dividend") or record.get("stockDividend")),
-                    _float(record.get("split_ratio") or record.get("splitRatio")),
-                    _float(record.get("allotment_ratio") or record.get("allotmentRatio")),
-                    _float(record.get("allotment_price") or record.get("allotmentPrice")),
-                    record.get("source") or source,
-                    batch_id,
-                    now,
-                ),
+                chunk,
             )
-            count += 1
-    return {"batchId": batch_id, "count": count}
+    return {"batchId": batch_id, "count": len(parameters)}
 
 
 def adjustment_factors(symbol: str, start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
@@ -712,18 +826,27 @@ def corporate_actions(symbol: str, start: str | None = None, end: str | None = N
     return rows_to_dicts(rows)
 
 
-def upsert_index_weights(records: list[dict[str, Any]], source: str, batch_id: str | None = None) -> dict[str, Any]:
+def upsert_index_weights(
+    records: list[dict[str, Any]],
+    source: str,
+    batch_id: str | None = None,
+    *,
+    bulk: bool = False,
+) -> dict[str, Any]:
     now = utc_now()
-    count = 0
-    with db() as connection:
-        for record in records:
-            symbol = _symbol(record)
-            universe_code = str(record.get("universe_code") or record.get("universeCode") or "CSI300").upper()
-            trade_date = _date(record.get("trade_date") or record.get("tradeDate"), "trade_date")
-            weight = _float(record.get("weight"))
-            if weight is None:
-                raise LeanWebError("index weight is required.")
-            connection.execute(
+    parameters = []
+    for record in records:
+        symbol = _symbol(record)
+        universe_code = str(record.get("universe_code") or record.get("universeCode") or "CSI300").upper()
+        trade_date = _date(record.get("trade_date") or record.get("tradeDate"), "trade_date")
+        weight = _float(record.get("weight"))
+        if weight is None:
+            raise LeanWebError("index weight is required.")
+        parameters.append((universe_code, symbol, trade_date, weight, record.get("source") or source, batch_id, now))
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
+            connection.executemany(
                 """
                 insert into index_weights
                     (universe_code, symbol, trade_date, weight, source, batch_id, created_at)
@@ -733,10 +856,9 @@ def upsert_index_weights(records: list[dict[str, Any]], source: str, batch_id: s
                     batch_id = excluded.batch_id,
                     created_at = excluded.created_at
                 """,
-                (universe_code, symbol, trade_date, weight, record.get("source") or source, batch_id, now),
+                chunk,
             )
-            count += 1
-    return {"batchId": batch_id, "count": count}
+    return {"batchId": batch_id, "count": len(parameters)}
 
 
 def index_weights(

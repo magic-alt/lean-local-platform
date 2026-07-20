@@ -83,6 +83,8 @@ Parquet is intended for fast research scans and factor analysis. It should not r
 
 - LEAN raw outputs.
 - LEAN cache files.
+- Content-addressed, gzip-compressed TuShare response batches when a canonical
+  table cannot losslessly represent the provider response.
 - Reports and generated artifacts.
 - Other binary/text objects through `/api/object-store`.
 
@@ -107,8 +109,21 @@ The Data page exposes a one-click TuShare Pro update backed by
 `data_sync_items`, and `data_record_issues`. The checked-in low-frequency
 registry covers the locally configured 5,000-point entitlement across equities,
 indices, funds, convertible bonds, futures, options, HK/US equities, FX, macro,
-and reference events. Raw payloads are retained generically, while supported
-datasets are also normalized into canonical research and LEAN tables.
+and reference events. `provider_raw_records` is a lightweight key/date/hash
+index and never stores per-row payload JSON. Datasets with lossless canonical
+tables keep only canonical rows plus ingestion manifests. Other datasets keep
+the lightweight index and a content-addressed gzip batch in the database object
+store, cataloged by `provider_raw_archives`, so raw responses remain auditable
+without duplicating large JSON text in every indexed row.
+
+Legacy installations can inspect old per-row payload usage with
+`web/backend/.venv/bin/python scripts/cleanup_provider_raw_json.py`. Run the
+same command with `--execute` only after data synchronization is idle. The
+cleanup archives noncanonical payloads, verifies each compressed object by
+reading it back, clears row JSON in resumable key ranges, and preserves record
+keys, dates, hashes, watermarks, and manifests. Rebuild
+`provider_raw_records` afterward if MySQL must return freed pages to the
+filesystem.
 
 Important services:
 

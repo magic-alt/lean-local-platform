@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from ..core.errors import LeanWebError
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.symbols import normalize_symbol, parse_date
 from .ashare_repository import tradable_universe_as_of, universe_as_of, upsert_security, upsert_universe_membership
 
@@ -163,24 +163,84 @@ def import_financial_statement(
     return financial_statement(ticker, statement, report, announce, source) or {}
 
 
-def import_financial_statements(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
+def import_financial_statements(
+    records: list[dict[str, Any]],
+    source: str = "manual",
+    *,
+    bulk: bool = False,
+) -> dict[str, Any]:
     batch_id = str(uuid.uuid4())
+    now = utc_now()
+    statements = []
+    facts = []
     imported = []
     for record in records:
-        imported.append(
-            import_financial_statement(
-                symbol=record["symbol"],
-                statement_type=record.get("statement_type") or record.get("statementType") or "metrics",
-                report_date=record["report_date"] if "report_date" in record else record["reportDate"],
-                announce_date=record["announce_date"] if "announce_date" in record else record["announceDate"],
-                effective_date=record.get("effective_date") or record.get("effectiveDate"),
-                fiscal_period=record.get("fiscal_period") or record.get("fiscalPeriod"),
-                currency=record.get("currency") or "CNY",
-                fields=record.get("fields") or {},
-                source=record.get("source") or source,
-                batch_id=batch_id,
+        ticker = _clean_symbol(record["symbol"])
+        statement = str(record.get("statement_type") or record.get("statementType") or "metrics").strip().lower()
+        report = _date(record["report_date"] if "report_date" in record else record["reportDate"], "report_date")
+        announce = _date(record["announce_date"] if "announce_date" in record else record["announceDate"], "announce_date")
+        effective = _optional_date(record.get("effective_date") or record.get("effectiveDate")) or announce
+        if effective < announce:
+            raise LeanWebError("effective_date cannot be earlier than announce_date.")
+        record_source = record.get("source") or source
+        currency = record.get("currency") or "CNY"
+        fields = dict(record.get("fields") or {})
+        statements.append(
+            (
+                ticker, statement, report, announce, effective,
+                record.get("fiscal_period") or record.get("fiscalPeriod"),
+                currency, json_dump(fields), record_source, batch_id, now,
             )
         )
+        for name, value in fields.items():
+            number = _field_number(value)
+            if number is not None:
+                facts.append(
+                    (ticker, str(name), report, announce, effective, number, currency, record_source, batch_id, now)
+                )
+        imported.append(
+            {
+                "symbol": ticker, "statement_type": statement, "report_date": report,
+                "announce_date": announce, "effective_date": effective,
+                "fiscal_period": record.get("fiscal_period") or record.get("fiscalPeriod"),
+                "currency": currency, "fields": fields, "source": record_source, "batch_id": batch_id,
+            }
+        )
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        if statements:
+            connection.executemany(
+                """
+                insert into financial_statements
+                    (symbol,statement_type,report_date,announce_date,effective_date,
+                     fiscal_period,currency,fields_json,source,batch_id,created_at)
+                values (?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(symbol,statement_type,report_date,announce_date,source) do update set
+                    effective_date=excluded.effective_date,
+                    fiscal_period=excluded.fiscal_period,
+                    currency=excluded.currency,
+                    fields_json=excluded.fields_json,
+                    batch_id=excluded.batch_id,
+                    created_at=excluded.created_at
+                """,
+                statements,
+            )
+        if facts:
+            connection.executemany(
+                """
+                insert into financial_facts
+                    (symbol,field_name,report_date,announce_date,effective_date,
+                     value,unit,source,batch_id,created_at)
+                values (?,?,?,?,?,?,?,?,?,?)
+                on conflict(symbol,field_name,report_date,announce_date,source) do update set
+                    effective_date=excluded.effective_date,
+                    value=excluded.value,
+                    unit=excluded.unit,
+                    batch_id=excluded.batch_id,
+                    created_at=excluded.created_at
+                """,
+                facts,
+            )
     return {"batchId": batch_id, "count": len(imported), "items": imported}
 
 

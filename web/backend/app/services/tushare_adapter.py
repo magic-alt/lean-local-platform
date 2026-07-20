@@ -566,7 +566,10 @@ class TushareAdapter:
     ) -> dict[str, dict[str, float | None]]:
         result: dict[str, dict[str, float | None]] = {}
         try:
-            for window_start, window_end in _date_windows(start_date, end_date):
+            # 7,000 calendar days contain fewer than the provider's 5,000-row
+            # cap of A-share sessions. This halves full-history calls for old
+            # listings compared with the generic ten-year window.
+            for window_start, window_end in _date_windows(start_date, end_date, max_days=7000):
                 frame = self.pro.stk_limit(
                     ts_code=to_tushare_stock_code(symbol),
                     start_date=window_start,
@@ -585,6 +588,30 @@ class TushareAdapter:
                 raise
             return {}
         return result
+
+    def limit_prices_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        """Fetch the full A-share price-limit set for one incremental day."""
+        day = _compact_date(trade_date, "trade_date")
+        frame = self.pro.stk_limit(
+            ts_code="",
+            trade_date=day,
+            fields="ts_code,trade_date,up_limit,down_limit",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            normalized_date = _iso_date(item.get("trade_date"))
+            symbol = from_tushare_code(item.get("ts_code") or "")
+            if symbol and normalized_date:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "trade_date": normalized_date,
+                        "limit_up": _float(item.get("up_limit")),
+                        "limit_down": _float(item.get("down_limit")),
+                        "source": "tushare:stk_limit",
+                    }
+                )
+        return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
 
     def _daily_market_records(
         self,

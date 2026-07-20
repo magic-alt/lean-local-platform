@@ -845,15 +845,15 @@ def fetch_and_import_symbol(
     else:
         source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
     source = f"{provider}:{outputsize}" if provider == "alpha_vantage" else provider
-    # On-demand workflows share the same 50GB cache ceiling as the bulk
-    # loader. The multiplier covers normalized tables and secondary indexes.
+    # Only on-demand writes use the configurable cache ceiling. One-click
+    # synchronization may exceed it and is guarded by physical disk reserve.
     from .data_sync import _assert_disk_capacity
 
     estimated_write_bytes = sum(
         len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
         for row in rows
     ) * 10
-    _assert_disk_capacity(estimated_write_bytes)
+    _assert_disk_capacity(estimated_write_bytes, enforce_database_limit=True)
     if asset_class == "equity" and market == "china":
         result = import_ashare_research_data(
             symbol=symbol,

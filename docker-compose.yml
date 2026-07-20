@@ -98,6 +98,8 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
+      LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -133,6 +135,7 @@ services:
       - .:/workspace
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
@@ -156,7 +159,7 @@ services:
     build:
       context: .
       dockerfile: web/backend/Dockerfile
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=default --hostname=default@%h
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=default --hostname=default@%h
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
@@ -164,8 +167,11 @@ services:
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
       LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
       LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
+      LEAN_STK_LIMIT_FETCH_CONCURRENCY: ${LEAN_STK_LIMIT_FETCH_CONCURRENCY:-8}
+      LEAN_DATA_SYNC_BATCH_UNITS: ${LEAN_DATA_SYNC_BATCH_UNITS:-16}
       LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-100000}
-      LEAN_MYSQL_MAX_DATABASE_GB: ${LEAN_MYSQL_MAX_DATABASE_GB:-50}
+      LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
+      LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_USERNAME: lean
@@ -199,6 +205,7 @@ services:
       - .:/workspace
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
@@ -211,7 +218,7 @@ services:
   data-worker:
     extends:
       service: worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=data-bulk,data --hostname=data-bulk@%h
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-bulk,data --hostname=data-bulk@%h
 
   data-demand-worker:
     extends:

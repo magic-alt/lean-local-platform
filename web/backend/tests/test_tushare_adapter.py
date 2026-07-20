@@ -233,7 +233,9 @@ def test_tushare_full_history_is_downloaded_in_bounded_date_windows():
 
     assert len(pro.daily_calls) == 4
     assert len(pro.adjustment_calls) == 4
-    assert len(pro.limit_calls) == 4
+    assert len(pro.limit_calls) == 2
+    assert pro.limit_calls[0]["start_date"] == "19900101"
+    assert pro.limit_calls[-1]["end_date"] == "20260716"
     assert pro.daily_calls[0]["start_date"] == "19900101"
     assert pro.daily_calls[-1]["end_date"] == "20260716"
     assert [row["date"] for row in rows] == [
@@ -241,6 +243,46 @@ def test_tushare_full_history_is_downloaded_in_bounded_date_windows():
         for call in pro.daily_calls
     ]
     assert all(row["adj_factor_verified"] for row in rows)
+
+
+def test_stk_limit_increment_fetches_full_market_for_one_trade_date():
+    from app.services.tushare_adapter import TushareAdapter
+
+    class Pro:
+        def __init__(self):
+            self.calls = []
+
+        def stk_limit(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260717",
+                        "up_limit": 11.0,
+                        "down_limit": 9.0,
+                    },
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260717",
+                        "up_limit": 12.0,
+                        "down_limit": 8.0,
+                    },
+                ]
+            )
+
+    pro = Pro()
+    rows = TushareAdapter(pro=pro).limit_prices_for_date("2026-07-17")
+
+    assert pro.calls == [
+        {
+            "ts_code": "",
+            "trade_date": "20260717",
+            "fields": "ts_code,trade_date,up_limit,down_limit",
+        }
+    ]
+    assert [row["symbol"] for row in rows] == ["000001", "600000"]
+    assert rows[0]["limit_up"] == 11.0
 
 
 def test_adjustment_factor_first_fill_uses_one_provider_request():

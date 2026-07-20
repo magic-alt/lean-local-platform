@@ -402,7 +402,7 @@ cd /Users/kaermax/lean-platform
 scripts/start_web_single_instance.sh
 ```
 
-启动脚本采用幂等的 `docker compose up -d`，退出脚本时默认保留 MySQL、API 和 worker，避免中断数据同步。若希望退出时同时清理容器，可设置 `LEAN_COMPOSE_DOWN_ON_EXIT=1`。
+启动脚本采用幂等的 `docker compose up -d`，持久化 MySQL loader 密码，并使用进程锁保证只有一个启动器实例。检测到活动数据同步时，脚本会跳过 Compose 协调和 loader 密码变更，避免替换 `data-worker`；同步结束后重新运行即可应用 `--build` 更新。退出脚本时默认保留 MySQL、API 和 worker。即使设置 `LEAN_COMPOSE_DOWN_ON_EXIT=1`，活动同步期间也会拒绝关闭容器，除非同时显式设置 `LEAN_ALLOW_ACTIVE_SYNC_SHUTDOWN=1`。
 
 脚本会执行：
 

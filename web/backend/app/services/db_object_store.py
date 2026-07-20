@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import DB_OBJECT_CHUNK_BYTES, DB_OBJECT_STORE_ENABLED
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 
 
 OBJECT_ID_NAMESPACE = uuid.UUID("bf2f81f8-7a4f-4d88-a5f9-cabdc356b0f3")
@@ -25,6 +25,7 @@ def put_bytes(
     content_type: str | None = None,
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
+    bulk: bool = False,
 ) -> dict[str, Any]:
     if not DB_OBJECT_STORE_ENABLED:
         return {}
@@ -37,7 +38,15 @@ def put_bytes(
     now = utc_now()
     chunk_size = max(1, int(DB_OBJECT_CHUNK_BYTES))
     metadata = metadata or {}
-    with db() as connection:
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        if bulk:
+            existing = connection.execute(
+                "select id from stored_objects where id = ?",
+                (item_id,),
+            ).fetchone()
+            if existing:
+                return get_object(item_id) or {}
         connection.execute(
             """
             insert into stored_objects
@@ -69,14 +78,17 @@ def put_bytes(
             ),
         )
         connection.execute("delete from stored_object_chunks where object_id = ?", (item_id,))
+        chunks = []
         for index, start in enumerate(range(0, len(data), chunk_size)):
             chunk = data[start : start + chunk_size]
-            connection.execute(
+            chunks.append((item_id, index, chunk, len(chunk), hashlib.sha256(chunk).hexdigest()))
+        if chunks:
+            connection.executemany(
                 """
                 insert into stored_object_chunks (object_id, chunk_index, data, size, sha256)
                 values (?, ?, ?, ?, ?)
                 """,
-                (item_id, index, chunk, len(chunk), hashlib.sha256(chunk).hexdigest()),
+                chunks,
             )
     return get_object(item_id) or {}
 
