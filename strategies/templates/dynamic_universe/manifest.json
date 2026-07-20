@@ -1,0 +1,12 @@
+{
+  "key": "dynamic_universe",
+  "name": "PIT Dynamic Universe Portfolio",
+  "description": "Rebalance an equal-weight or momentum Top-N portfolio from a point-in-time membership schedule.",
+  "executionScope": "dynamic_universe",
+  "parameters": [
+    {"key": "weighting", "label": "Weighting", "type": "text", "default": "equal"},
+    {"key": "topN", "label": "Top N", "type": "number", "default": 20, "min": 1},
+    {"key": "lookback", "label": "Momentum Lookback", "type": "number", "default": 60, "min": 2},
+    {"key": "rebalanceDays", "label": "Rebalance Days", "type": "number", "default": 20, "min": 1}
+  ]
+}

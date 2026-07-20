@@ -7,6 +7,7 @@ export {
   RunDetailPage
 } from "./core";
 export { ResearchPage } from "./research";
+export { DocsPage } from "./docs";
 export { InsightsPage } from "./insights";
 export {
   MonitoringPage,

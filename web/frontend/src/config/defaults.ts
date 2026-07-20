@@ -17,6 +17,7 @@ export const defaultSettings: AppSettings = {
   researchImage: "quantconnect/research:latest",
   chartPointLimit: 1000000,
   maxConcurrentJobs: 1,
+  maxBatchRuns: 5000,
   jobTimeoutSeconds: 7200,
   logLevel: "INFO"
 };

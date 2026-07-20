@@ -22,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "researchImage": DEFAULT_RESEARCH_IMAGE,
     "chartPointLimit": 1000000,
     "maxConcurrentJobs": MAX_CONCURRENT_JOBS,
+    "maxBatchRuns": 5000,
     "jobTimeoutSeconds": JOB_TIMEOUT_SECONDS,
     "logLevel": LOG_LEVEL,
 }

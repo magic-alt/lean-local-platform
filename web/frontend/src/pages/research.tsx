@@ -70,6 +70,8 @@ import type {
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
+import { ExampleGallery } from "../components/examples/ExampleGallery";
+import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
@@ -294,6 +296,8 @@ export function ResearchPage() {
         <h1 className="page-title">Research</h1>
         <Button icon={<ReloadOutlined />} onClick={() => { sessions.reload(); engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
       </div>
+      <ExampleGallery kind="research" onCreated={() => projects.reload()} />
+      <BatchWorkbench kind="research" projects={projects.data} />
       <Modal title="Research Logs" open={logsOpen} onCancel={() => setLogsOpen(false)} footer={<Button onClick={() => setLogsOpen(false)}>Close</Button>} width={900}>
         <pre style={{ maxHeight: 520, overflow: "auto", whiteSpace: "pre-wrap" }}>{researchLogs}</pre>
       </Modal>

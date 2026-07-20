@@ -6,6 +6,7 @@ import {
   ExperimentOutlined,
   FileTextOutlined,
   BulbOutlined,
+  ReadOutlined,
   FolderOpenOutlined,
   PlayCircleOutlined,
   SettingOutlined,
@@ -19,6 +20,7 @@ import {
   BacktestsPage,
   Dashboard,
   DataPage,
+  DocsPage,
   MonitoringPage,
   InsightsPage,
   OptimizationPage,
@@ -42,6 +44,7 @@ function AppShell() {
     { key: "/optimization", icon: <SlidersOutlined />, label: <Link to="/optimization">Optimization</Link> },
     { key: "/paper", icon: <ExperimentOutlined />, label: <Link to="/paper">Paper</Link> },
     { key: "/research", icon: <ExperimentOutlined />, label: <Link to="/research">Research</Link> },
+    { key: "/docs", icon: <ReadOutlined />, label: <Link to="/docs">文档</Link> },
     { key: "/reports", icon: <FileTextOutlined />, label: <Link to="/reports">Reports</Link> },
     { key: "/insights", icon: <BulbOutlined />, label: <Link to="/insights">Insights</Link> },
     { key: "/tasks", icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
@@ -64,6 +67,7 @@ function AppShell() {
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/paper" element={<PaperPage />} />
             <Route path="/research" element={<ResearchPage />} />
+            <Route path="/docs" element={<DocsPage />} />
             <Route path="/ashare-research" element={<Navigate to="/research" replace />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/insights" element={<InsightsPage />} />

@@ -55,16 +55,22 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     if project_id:
-        snapshot_dir = run_dir / "strategy"
+        shared_snapshot = request_data.get("sharedStrategySnapshotDir")
+        snapshot_dir = Path(shared_snapshot).resolve() if shared_snapshot else run_dir / "strategy"
         snapshot_source = request_data.get("strategySnapshotSourceDir")
         source_path = Path(snapshot_source).resolve() if snapshot_source else Path(project["project_path"]).resolve()
-        if snapshot_source:
+        if shared_snapshot:
             allowed_root = RUNS_DIR.resolve()
-            if source_path != allowed_root and allowed_root not in source_path.parents:
-                raise LeanPlatformError("Paper strategy snapshot must be stored under the managed runs directory.")
-            if not source_path.is_dir():
-                raise LeanPlatformError("Paper strategy snapshot directory is missing.")
-        shutil.copytree(source_path, snapshot_dir)
+            if allowed_root not in snapshot_dir.parents or not snapshot_dir.is_dir():
+                raise LeanPlatformError("Shared strategy snapshot must be a managed directory under runs.")
+        else:
+            if snapshot_source:
+                allowed_root = RUNS_DIR.resolve()
+                if source_path != allowed_root and allowed_root not in source_path.parents:
+                    raise LeanPlatformError("Paper strategy snapshot must be stored under the managed runs directory.")
+                if not source_path.is_dir():
+                    raise LeanPlatformError("Paper strategy snapshot directory is missing.")
+            shutil.copytree(source_path, snapshot_dir)
         parameters["strategySnapshotDir"] = str(snapshot_dir)
         parameters["strategySnapshotMainFile"] = (
             request_data.get("strategySnapshotMainFile") if snapshot_source else None
@@ -260,6 +266,12 @@ def cancel_backtest(job_id: str) -> dict[str, Any]:
         error_message="Cancellation requested by user.",
         finished_at=now,
     )
+    try:
+        from .experiment_batches import reconcile_backtest
+
+        reconcile_backtest(job_id)
+    except Exception:
+        pass
     return get_backtest(job_id) or run
 
 

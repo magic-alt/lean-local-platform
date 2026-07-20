@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,9 @@ from ..services import ashare_tech_insights
 from ..services import paper as paper_service
 from ..services import data_sync
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
+
+
+logger = logging.getLogger(__name__)
 
 
 def _record_task_metric(kind: str, status: str) -> None:
@@ -178,6 +182,72 @@ def _task_project(task, run: dict[str, Any] | None = None):
         }
     project_id = task.get("project_id")
     return get_project(project_id) if project_id else None
+
+
+@celery_app.task(name="lean_web.dispatch_experiment_batch")
+def dispatch_experiment_batch_task(batch_id: str):
+    from ..services.experiment_batches import dispatch_window
+
+    return dispatch_window(batch_id)
+
+
+@celery_app.task(name="lean_web.reconcile_experiment_batches")
+def reconcile_experiment_batches_task():
+    from ..services.experiment_batches import dispatch_window, list_batches
+
+    reconciled = []
+    for batch in list_batches():
+        if batch.get("status") in {"queued", "running"} and not batch.get("cancel_requested"):
+            dispatch_window(str(batch["id"]))
+            reconciled.append(str(batch["id"]))
+    return {"reconciled": reconciled}
+
+
+@celery_app.task(name="lean_web.run_research_batch_item")
+def run_research_batch_item_task(batch_id: str, item_id: str):
+    from ..research import factors
+    from ..services.experiment_batches import finish_research_item
+
+    with db() as connection:
+        row = connection.execute("select * from experiment_batch_items where id=? and batch_id=?", (item_id, batch_id)).fetchone()
+    item = row_to_dict(row)
+    if not item:
+        return {"status": "missing", "itemId": item_id}
+    with db() as connection:
+        connection.execute("update experiment_batch_items set status='running',started_at=? where id=?", (utc_now(), item_id))
+    parameters = item.get("parameters") or {}
+    try:
+        mode = str(parameters.get("mode") or "analysis")
+        if mode == "factor_batch" or parameters.get("factorName"):
+            result = factors.evaluate_factor(
+                factor_name=str(parameters.get("factorName") or "momentum"),
+                universe_code=str(parameters.get("universeCode") or "ALL_A"),
+                start_date=str(parameters.get("start") or parameters.get("startDate") or "2020-01-01"),
+                end_date=str(parameters.get("end") or parameters.get("endDate") or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()),
+                forward_days=int(parameters.get("forwardDays") or 1),
+                quantiles=int(parameters.get("quantiles") or 5),
+                engine=parameters.get("engine"),
+                persist=True,
+            )
+        else:
+            symbol = str(parameters.get("symbol") or "").upper()
+            with db() as connection:
+                coverage = connection.execute(
+                    """
+                    select count(*) as rows,min(trade_date) as first_date,max(trade_date) as last_date,
+                           count(distinct source) as sources
+                    from market_daily_bars where (?='' or symbol=?)
+                    """,
+                    (symbol, symbol),
+                ).fetchone()
+            result = {"exampleKey": parameters.get("exampleKey"), "symbol": symbol or None, "coverage": dict(coverage or {})}
+        finish_research_item(batch_id, item_id, result=result)
+        dispatch_experiment_batch_task.apply_async(args=[batch_id], queue="default")
+        return {"status": "success", "itemId": item_id, "result": result}
+    except Exception as exc:
+        finish_research_item(batch_id, item_id, error=str(exc))
+        dispatch_experiment_batch_task.apply_async(args=[batch_id], queue="default")
+        raise
 
 
 @celery_app.task(name="lean_web.fetch_data_batch")
@@ -451,6 +521,12 @@ def run_backtest_task(self, task_id: str, run_id: str):
     update_task(task_id, status="running", started_at=utc_now(), error=None)
     started_at = utc_now()
     update_backtest(run_id, status="running", started_at=started_at, error=None, error_message=None)
+    try:
+        from ..services.experiment_batches import reconcile_backtest
+
+        reconcile_backtest(run_id)
+    except Exception:
+        logger.exception("Unable to mark experiment batch item running for %s", run_id)
 
     run_dir = RUNS_DIR / run_id
     lean_cache: dict[str, Any] = {}
@@ -495,18 +571,20 @@ def run_backtest_task(self, task_id: str, run_id: str):
         container_name = runner.container_name_for(run_id)
         update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
-            gate_symbols = [str(parameters["ticker"]).upper()]
+            universe_symbols = [str(value).upper() for value in parameters.get("universeSymbols") or []]
+            gate_symbols = list(dict.fromkeys([str(parameters["ticker"]).upper(), *universe_symbols]))
             benchmark_for_gate = str(parameters.get("benchmarkSymbol") or "").upper()
             source = str(parameters.get("source") or parameters.get("provider") or DEFAULT_PRODUCTION_SOURCE)
             adjust = str(parameters.get("adjust") or "raw")
-            assert_ashare_ready(
-                str(parameters["ticker"]).upper(),
-                parameters["start"],
-                parameters["end"],
-                adjust=adjust,
-                source=source,
-                allow_truncated=bool(parameters.get("allowTruncatedData")),
-            )
+            for data_symbol in gate_symbols:
+                assert_ashare_ready(
+                    data_symbol,
+                    parameters["start"],
+                    parameters["end"],
+                    adjust=adjust,
+                    source=source,
+                    allow_truncated=bool(parameters.get("allowTruncatedData")),
+                )
             assert_benchmark_ready(
                 benchmark_for_gate,
                 parameters["start"],
@@ -528,7 +606,13 @@ def run_backtest_task(self, task_id: str, run_id: str):
                     report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
                     detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
                     raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
-            lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
+            if universe_symbols:
+                lean_cache["universe"] = {
+                    symbol: ensure_ashare_lean_cache(symbol, source=source, adjust=adjust)
+                    for symbol in universe_symbols
+                }
+            else:
+                lean_cache["symbol"] = ensure_ashare_lean_cache(parameters["ticker"], source=source, adjust=adjust)
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or "").upper()
             if benchmark_symbol:
                 lean_cache["benchmark"] = ensure_ashare_lean_cache(benchmark_symbol, source=source, adjust=adjust)
@@ -677,6 +761,12 @@ def run_backtest_task(self, task_id: str, run_id: str):
         raise
     finally:
         release_scheduler_lease(lease.get("id"))
+        try:
+            from ..services.experiment_batches import reconcile_backtest
+
+            reconcile_backtest(run_id)
+        except Exception:
+            logger.exception("Unable to reconcile experiment batch for backtest %s", run_id)
 
 
 @celery_app.task(name="lean_web.optimize")
@@ -884,6 +974,7 @@ def start_research_task(task_id: str, session_id: str):
             Path(workspace_path),
             port,
             lambda line: append_log(task_id, line),
+            image=str(get_settings().get("researchImage") or "quantconnect/research:latest"),
         )
         _update_table(
             "research_sessions",

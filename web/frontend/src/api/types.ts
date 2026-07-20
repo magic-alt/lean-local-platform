@@ -289,8 +289,83 @@ export interface AppSettings {
   researchImage: string;
   chartPointLimit: number;
   maxConcurrentJobs: number;
+  maxBatchRuns: number;
   jobTimeoutSeconds: number;
   logLevel: string;
+}
+
+export interface WorkflowExample {
+  key: string;
+  kind: "backtest" | "optimization" | "research";
+  name: string;
+  description: string;
+  templateKey: string;
+  mode: string;
+  version: number;
+  tags: string[];
+  defaults: Record<string, unknown>;
+}
+
+export interface ExperimentBatchItem {
+  id: string;
+  batch_id: string;
+  item_index: number;
+  item_key: string;
+  project_id?: string | null;
+  symbol?: string | null;
+  status: string;
+  parameters: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+  related_id?: string | null;
+  error?: string | null;
+  attempt: number;
+}
+
+export interface ExperimentBatch {
+  id: string;
+  kind: "backtest" | "optimization" | "research";
+  mode: string;
+  name: string;
+  example_key?: string | null;
+  status: string;
+  config: Record<string, unknown>;
+  summary?: { rankingMetric?: string; ranking?: Array<Record<string, unknown>> } | null;
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
+  cancel_requested: boolean | number;
+  items?: ExperimentBatchItem[];
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ExperimentBatchPreview {
+  kind: string;
+  mode: string;
+  expandedCount: number;
+  limit: number;
+  withinLimit: boolean;
+  effectiveConcurrency: number;
+  selection: Record<string, unknown>;
+  warnings: string[];
+  sample: Array<Record<string, unknown>>;
+}
+
+export interface HelpArticleSummary {
+  slug: string;
+  title: string;
+  category: string;
+  order: number;
+  snippet: string;
+}
+
+export interface HelpArticle extends Omit<HelpArticleSummary, "snippet"> {
+  content: string;
 }
 
 export interface DependencyStatus {

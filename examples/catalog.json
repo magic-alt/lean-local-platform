@@ -1,0 +1,23 @@
+[
+  {"key":"single-buy-hold","kind":"backtest","name":"单股买入持有基准","description":"用买入持有建立收益和回撤基线。","templateKey":"buy_hold","mode":"independent","tags":["单股","基准"],"defaults":{"market":"china","symbol":"000001"}},
+  {"key":"single-trend","kind":"backtest","name":"单股均线趋势","description":"EMA快慢线趋势跟踪案例。","templateKey":"ema_cross","mode":"independent","tags":["单股","趋势"],"defaults":{"market":"china","symbol":"000001","parameters":{"fast":10,"slow":30}}},
+  {"key":"single-reversion","kind":"backtest","name":"单股RSI均值回归","description":"RSI超卖买入和恢复退出案例。","templateKey":"rsi_reversion","mode":"independent","tags":["单股","均值回归"],"defaults":{"market":"china","symbol":"000001"}},
+  {"key":"single-breakout","kind":"backtest","name":"单股Donchian突破","description":"滚动高低点突破趋势案例。","templateKey":"donchian_breakout","mode":"independent","tags":["单股","突破"],"defaults":{"market":"china","symbol":"000001"}},
+  {"key":"strategy-universe","kind":"backtest","name":"单策略 × 股票池","description":"对开始日PIT股票池逐只运行同一策略并排名。","templateKey":"ema_cross","mode":"independent","tags":["批量","PIT"],"defaults":{"market":"china","universeCode":"CSI300"}},
+  {"key":"symbol-strategies","kind":"backtest","name":"单股票 × 多策略","description":"对同一股票运行多个项目并横向比较。","templateKey":"ema_cross","mode":"independent","tags":["批量","多策略"],"defaults":{"market":"china","symbol":"000001"}},
+  {"key":"strategy-symbol-matrix","kind":"backtest","name":"多策略 × 多股票矩阵","description":"完整展开项目与股票矩阵，适合稳健性筛选。","templateKey":"ema_cross","mode":"independent","tags":["批量","矩阵"],"defaults":{"market":"china","universeCode":"CSI300"}},
+  {"key":"rolling-stability","kind":"backtest","name":"滚动窗口稳定性","description":"在多个时间窗口重复运行策略，检查参数稳定性。","templateKey":"ema_cross","mode":"rolling","tags":["滚动","稳定性"],"defaults":{"market":"china","symbol":"000001"}},
+  {"key":"csi300-equal-weight","kind":"backtest","name":"沪深300动态等权组合","description":"按历史有效成分构建动态等权组合。","templateKey":"dynamic_universe","mode":"dynamic_universe","tags":["组合","动态成分"],"defaults":{"market":"china","universeCode":"CSI300","parameters":{"weighting":"equal"}}},
+  {"key":"csi300-momentum-topn","kind":"backtest","name":"沪深300动量Top-N","description":"在历史有效成分内选择动量最强股票。","templateKey":"dynamic_universe","mode":"dynamic_universe","tags":["组合","动量"],"defaults":{"market":"china","universeCode":"CSI300","parameters":{"weighting":"momentum","topN":20}}},
+  {"key":"single-grid","kind":"optimization","name":"单股参数网格","description":"对单股票执行标准参数组合寻优。","templateKey":"ema_cross","mode":"single_symbol_grid","tags":["参数","网格"],"defaults":{"symbol":"000001","parameterGrid":{"fast":[5,10,20],"slow":[30,60,120]}}},
+  {"key":"universe-robust","kind":"optimization","name":"股票池稳健参数","description":"在PIT股票池上按中位Sharpe和覆盖率选择参数。","templateKey":"ema_cross","mode":"universe_robust","tags":["股票池","稳健性"],"defaults":{"universeCode":"CSI300","parameterGrid":{"fast":[5,10,20],"slow":[30,60]}}},
+  {"key":"walk-forward","kind":"optimization","name":"Walk-forward样本外","description":"三年训练、一年样本外、每年滚动。","templateKey":"ema_cross","mode":"walk_forward","tags":["样本外","滚动"],"defaults":{"trainYears":3,"testYears":1,"stepYears":1}},
+  {"key":"multi-strategy-opt","kind":"optimization","name":"多策略分别寻优","description":"按各策略自己的参数Schema分别寻优并汇总。","templateKey":"ema_cross","mode":"multi_strategy","tags":["多策略","参数"]},
+  {"key":"stock-eda","kind":"research","name":"单股探索分析","description":"行情、收益率、波动率和回撤的Notebook与快捷分析。","templateKey":"buy_hold","mode":"analysis","tags":["Notebook","单股"],"defaults":{"symbol":"000001"}},
+  {"key":"data-quality","kind":"research","name":"数据覆盖与质量审计","description":"检查行情覆盖、缺口、来源和质量门禁。","templateKey":"blank","mode":"analysis","tags":["Notebook","数据质量"]},
+  {"key":"pit-turnover","kind":"research","name":"指数PIT成分变动","description":"分析指数历史成分、换入换出和幸存者偏差。","templateKey":"blank","mode":"analysis","tags":["Notebook","PIT"],"defaults":{"universeCode":"CSI300"}},
+  {"key":"factor-batch","kind":"research","name":"多因子IC与分层收益","description":"批量比较因子IC、Rank IC和分位收益。","templateKey":"blank","mode":"factor_batch","tags":["Notebook","因子"],"defaults":{"universeCode":"CSI300","factorNames":["momentum","volatility"]}},
+  {"key":"event-study","kind":"research","name":"A股事件研究","description":"研究停牌、涨跌停和分红事件前后收益。","templateKey":"blank","mode":"analysis","tags":["Notebook","事件"]},
+  {"key":"result-sensitivity","kind":"research","name":"结果与参数敏感度","description":"比较回测并绘制参数敏感度热力图。","templateKey":"blank","mode":"analysis","tags":["Notebook","回测结果"]},
+  {"key":"portfolio-risk","kind":"research","name":"组合相关性与风险贡献","description":"分析相关性、波动率和组合风险贡献。","templateKey":"risk_parity","mode":"analysis","tags":["Notebook","组合风险"]}
+]

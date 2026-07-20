@@ -63,7 +63,12 @@ import type {
   AshareTechWatchlist,
   AshareTechWatchlistItem,
   SecurityProfile,
-  DatasetPreviewResult
+  DatasetPreviewResult,
+  WorkflowExample,
+  ExperimentBatch,
+  ExperimentBatchPreview,
+  HelpArticleSummary,
+  HelpArticle
 } from "./types";
 
 export * from "./types";
@@ -86,6 +91,21 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   strategyTemplates: () => request<StrategyTemplate[]>("/api/strategies/templates"),
+  examples: (kind?: "backtest" | "optimization" | "research", q?: string) =>
+    request<{ items: WorkflowExample[]; count: number }>(`/api/examples?${new URLSearchParams({ ...(kind ? { kind } : {}), ...(q ? { q } : {}) }).toString()}`),
+  instantiateExample: (kind: WorkflowExample["kind"], key: string, payload: { name?: string; overrides?: Record<string, unknown> } = {}) =>
+    request<{ example: WorkflowExample; project: Project; launch: { route: string; defaults: Record<string, unknown> } }>(`/api/examples/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/instantiate`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  experimentBatches: () => request<ExperimentBatch[]>("/api/experiment-batches"),
+  experimentBatchPreview: (payload: Record<string, unknown>) => request<ExperimentBatchPreview>("/api/experiment-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  createExperimentBatch: (payload: Record<string, unknown>) => request<ExperimentBatch>("/api/experiment-batches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  experimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}`),
+  cancelExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
+  experimentBatchExportUrl: (id: string) => `/api/experiment-batches/${encodeURIComponent(id)}/export.csv`,
+  helpArticles: (q?: string) => request<{ items: HelpArticleSummary[]; count: number }>(`/api/help/articles${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  helpArticle: (slug: string) => request<HelpArticle>(`/api/help/articles/${encodeURIComponent(slug)}`),
   assetClasses: () => request<AssetClassInfo[]>("/api/asset-classes"),
   markets: () => request<MarketInfo[]>("/api/markets"),
   djiaUniverse: () => request<Universe>("/api/universes/djia"),

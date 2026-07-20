@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 import uuid
 
-from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, factors, futures, health, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
+from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import init_db
@@ -131,6 +131,8 @@ app.include_router(universes.router)
 app.include_router(level3plus.router)
 app.include_router(settings.router)
 app.include_router(strategies.router)
+app.include_router(examples.router)
+app.include_router(help_docs.router)
 app.include_router(projects.router)
 app.include_router(data.router)
 app.include_router(ashare.router)
@@ -140,6 +142,7 @@ app.include_router(cbond.router)
 app.include_router(futures.router)
 app.include_router(tasks.router)
 app.include_router(backtests.router)
+app.include_router(experiment_batches.router)
 app.include_router(optimization.router)
 app.include_router(portfolios.router)
 app.include_router(compare.router)

@@ -258,11 +258,15 @@ def write_ashare_execution_artifacts(run_dir: Path, parameters: dict[str, Any]) 
     if not parameters.get("ashareRules"):
         return None
     symbol = str(parameters["ticker"]).upper()
+    symbols = list(dict.fromkeys([symbol, *[str(value).upper() for value in parameters.get("universeSymbols") or []]]))
     start = str(parameters["start"])
     end = str(parameters["end"])
     run_dir.mkdir(parents=True, exist_ok=True)
     helper_path = run_dir / "ashare_execution.py"
     status_path = run_dir / "ashare_trade_status.json"
     helper_path.write_text(ASHARE_EXECUTION_HELPER_SOURCE, encoding="utf-8")
-    status_path.write_text(json.dumps(status_payload(symbol, start, end), indent=2), encoding="utf-8")
+    payload: dict[str, Any] = {}
+    for ticker in symbols:
+        payload.update(status_payload(ticker, start, end))
+    status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {"helper": str(helper_path), "status": str(status_path)}

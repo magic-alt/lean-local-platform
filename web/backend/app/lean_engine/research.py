@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..core.config import DATA_DIR, DEFAULT_RESEARCH_IMAGE, OBJECT_STORE_DIR, REPO_ROOT
+from ..core.config import DEFAULT_RESEARCH_IMAGE, HOST_DATA_DIR, HOST_PARQUET_DIR, HOST_PLATFORM_DIR, OBJECT_STORE_DIR, PLATFORM_DIR, REPO_ROOT
 from .errors import LeanPlatformError
 
 def run_detached_research(
@@ -23,6 +23,14 @@ def run_detached_research(
     if not docker:
         raise LeanPlatformError("docker command not found.")
     token = secrets.token_urlsafe(24)
+    def host_platform_path(path: Path) -> Path:
+        try:
+            return HOST_PLATFORM_DIR / path.resolve().relative_to(PLATFORM_DIR.resolve())
+        except ValueError:
+            return path.resolve()
+
+    host_project_dir = host_platform_path(project_dir)
+    host_object_store = host_platform_path(OBJECT_STORE_DIR)
     command = [
         docker,
         "run",
@@ -34,14 +42,19 @@ def run_detached_research(
         "-e",
         f"JUPYTER_TOKEN={token}",
         "-v",
-        f"{DATA_DIR}:/Lean/Data:ro",
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "-v",
-        f"{project_dir}:/Lean/Project",
+        f"{HOST_DATA_DIR}:/Lean/Data:ro",
         "-v",
-        f"{OBJECT_STORE_DIR}:/Lean/Launcher/bin/Debug/storage",
+        f"{HOST_PARQUET_DIR}:/Lean/Parquet:ro",
+        "-v",
+        f"{host_project_dir}:/Lean/Project",
+        "-v",
+        f"{host_object_store}:/Lean/Launcher/bin/Debug/storage",
         image,
     ]
-    output_callback("running: " + " ".join(command))
+    output_callback("running: " + " ".join("JUPYTER_TOKEN=<redacted>" if value.startswith("JUPYTER_TOKEN=") else value for value in command))
     completed = subprocess.run(
         command,
         cwd=REPO_ROOT,

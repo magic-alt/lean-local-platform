@@ -20,6 +20,9 @@ TARGET_DIRECTORIES = (
 )
 
 HISTORY_TABLES = (
+    "experiment_batch_attempts",
+    "experiment_batch_items",
+    "experiment_batches",
     "backtest_runs",
     "backtest_results",
     "optimization_runs",

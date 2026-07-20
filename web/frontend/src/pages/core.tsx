@@ -80,6 +80,8 @@ import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
 import { DatasetPreviewPanel } from "../components/data/DatasetPreviewPanel";
 import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
+import { ExampleGallery } from "../components/examples/ExampleGallery";
+import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
@@ -2221,6 +2223,7 @@ export function BacktestsPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Backtests</h1><Button icon={<ReloadOutlined />} onClick={runs.reload}>Refresh</Button></div>
+      <ExampleGallery kind="backtest" onCreated={() => projects.reload()} />
       <Card title="New Backtest">
         <Form
           form={form}
@@ -2317,6 +2320,7 @@ export function BacktestsPage() {
           <Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run</Button>
         </Form>
       </Card>
+      <BatchWorkbench kind="backtest" projects={projects.data} />
       <Card title="History" style={{ marginTop: 16 }}>
         <Form form={historyForm} layout="inline" style={{ marginBottom: 12 }} onFinish={(values) => setFilters(values)}>
           <Form.Item name="name" label="Name"><Input placeholder="Name" style={{ width: 180 }} /></Form.Item>
@@ -2756,6 +2760,8 @@ export function OptimizationPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Optimization</h1><Button icon={<ReloadOutlined />} onClick={optimizations.reload}>Refresh</Button></div>
+      <ExampleGallery kind="optimization" onCreated={() => projects.reload()} />
+      <BatchWorkbench kind="optimization" projects={projects.data} />
       <Tabs
         items={[
           {

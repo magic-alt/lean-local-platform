@@ -32,11 +32,18 @@ celery_app.conf.update(
         "lean_web.recover_data_sync": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
         "lean_web.optimize": {"queue": "backtest"},
+        "lean_web.dispatch_experiment_batch": {"queue": "default"},
+        "lean_web.run_research_batch_item": {"queue": "default"},
+        "lean_web.reconcile_experiment_batches": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
     beat_schedule={
         "recover-orphaned-data-sync": {
             "task": "lean_web.recover_data_sync",
+            "schedule": 60.0,
+        },
+        "reconcile-experiment-batches": {
+            "task": "lean_web.reconcile_experiment_batches",
             "schedule": 60.0,
         },
         "ashare-tech-report-after-close": {
