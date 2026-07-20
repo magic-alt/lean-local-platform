@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .common import dispatch_task
@@ -41,6 +41,8 @@ from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
 from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, require_source_allowed, source_certification
 from ..services.security_search import search_securities as search_security_catalog
+from ..services.security_profile import security_profile
+from ..services.dataset_preview import dataset_preview
 from ..services.tasks import create_task
 from ..services import data_sync
 from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, sync_all_data_task
@@ -202,6 +204,11 @@ def search_securities(market: str = "all", keyword: str = "", limit: int = 50):
     return search_security_catalog(keyword=keyword, market=market, limit=limit)
 
 
+@router.get("/securities/{symbol}/profile")
+def get_security_profile(symbol: str, market: str = "china"):
+    return security_profile(symbol, market=market)
+
+
 @router.get("/data-assets")
 def data_assets(
     status: str | None = None,
@@ -247,6 +254,28 @@ def data_provider_availability(provider: str | None = None):
 @router.get("/data/catalog")
 def data_catalog():
     return data_sync.catalog_payload()
+
+
+@router.get("/data/dataset-preview/{dataset}")
+def preview_dataset(
+    dataset: str,
+    keyword: str = "",
+    startDate: str | None = None,
+    endDate: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    try:
+        return dataset_preview(
+            dataset,
+            keyword=keyword,
+            start_date=startDate,
+            end_date=endDate,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/data/on-demand/storage-targets")
@@ -713,6 +742,21 @@ def fetch_batch(request: BatchDataFetchRequest):
     )
     dispatch_task(fetch_data_batch_task.s(task["id"]), task["id"])
     return task
+
+
+@router.get("/data/import-csv/template")
+def import_csv_template():
+    content = (
+        "\ufefftimestamp,open,high,low,close,volume\n"
+        "2026-07-15,10.00,10.35,9.92,10.20,1250000\n"
+        "2026-07-16,10.20,10.48,10.05,10.36,1380000\n"
+        "2026-07-17,10.36,10.60,10.22,10.52,1420000\n"
+    )
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="lean_daily_ohlcv_template.csv"'},
+    )
 
 
 @router.post("/data/import-csv")

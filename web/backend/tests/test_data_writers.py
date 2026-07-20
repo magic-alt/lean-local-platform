@@ -1,6 +1,6 @@
 import pytest
 
-from app.lean_engine.data_writers import normalize_rows
+from app.lean_engine.data_writers import normalize_rows, rows_from_csv
 from app.lean_engine.errors import LeanPlatformError
 
 
@@ -35,3 +35,11 @@ def test_normalize_rows_still_rejects_material_ohlc_violation():
                 }
             ]
         )
+
+
+def test_rows_from_csv_reports_all_missing_template_columns(tmp_path):
+    csv_path = tmp_path / "invalid.csv"
+    csv_path.write_text("date,price\n2026-07-17,10.5\n", encoding="utf-8")
+
+    with pytest.raises(LeanPlatformError, match="Required columns: timestamp, open, high, low, close, volume"):
+        rows_from_csv(csv_path)

@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 
 from app.db import init_db
+from app.db import db, utc_now
 from app.main import app
 from app.services.ashare_repository import upsert_security
+from app.services.instrument_identity import upsert_instrument_identifiers
 from app.services.market_repository import get_instrument, upsert_instrument
 
 
@@ -87,3 +89,65 @@ def test_security_search_matches_company_alias_pinyin_and_market_labels(monkeypa
     assert hk_response.json()["items"][0]["symbol"] == "00700"
     assert hk_response.json()["items"][0]["marketLabel"] == "H股"
     assert hk_response.json()["items"][0]["matchType"] == "exact"
+
+
+def test_security_profile_separates_master_source_from_identifiers_and_reports_coverage():
+    init_db()
+    upsert_security(
+        symbol="000001",
+        name="平安银行",
+        exchange="SZSE",
+        listed_date="1991-04-03",
+        industry="银行",
+    )
+    upsert_instrument(
+        symbol="000001",
+        name="平安银行",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        exchange="SZSE",
+        currency="CNY",
+        listed_date="1991-04-03",
+        source="tushare:stock_basic",
+    )
+    upsert_instrument_identifiers(symbols=["000001"], source="akshare")
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into ashare_daily_bars
+                (symbol, trade_date, open, high, low, close, prev_close, pct_change,
+                 volume, adjust, source, batch_id, created_at)
+            values ('000001','2026-07-18',10,11,9,10.5,10,5,1000,'raw','tushare','test',?)
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            insert into ashare_trade_status
+                (symbol,trade_date,is_suspended,limit_up,limit_down,can_buy,can_sell,source,batch_id)
+            values ('000001','2026-07-18',0,11.55,9.45,1,1,'tushare:stk_limit','test')
+            """
+        )
+        connection.execute(
+            """
+            insert into adjustment_factors (symbol,trade_date,adj_factor,source,batch_id)
+            values ('000001','2026-07-18',123.45,'tushare','test')
+            """
+        )
+
+    response = TestClient(app).get("/api/securities/000001/profile", params={"market": "china"})
+    assert response.status_code == 200
+    profile = response.json()
+    assert profile["name"] == "平安银行"
+    assert profile["listedDate"] == "1991-04-03"
+    assert profile["industry"] == "银行"
+    assert profile["masterSource"] == "tushare:stock_basic"
+    assert profile["masterSource"] != profile["identifiers"][0]["source"]
+    assert {item["key"] for item in profile["coverage"]} == {"daily", "trade_status", "adjustment_factors"}
+    assert profile["latestTradeStatus"]["trade_date"] == "2026-07-18"
+    assert profile["quote"]["close"] == 10.5
+    assert profile["quote"]["change"] == 0.5
+    assert profile["adjustmentHistory"][0]["adj_factor"] == 123.45
+    assert profile["limitHistory"][0]["limit_up"] == 11.55

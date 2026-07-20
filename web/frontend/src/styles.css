@@ -136,6 +136,18 @@ body {
   overflow-wrap: anywhere;
 }
 
+.data-catalog-visibility {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+}
+
 .data-catalog-primary {
   color: #172033;
   font-size: 13px;
@@ -191,6 +203,121 @@ body {
   display: block;
   margin: 1px 0 2px;
   line-height: 1;
+}
+
+.stock-preview-card {
+  overflow: hidden;
+  border-color: #dbe3ed;
+}
+
+.stock-preview-card > .ant-card-body {
+  padding: 0;
+}
+
+.stock-preview-card .ant-tabs-nav,
+.stock-preview-card .ant-tabs-content-holder {
+  margin-right: 16px;
+  margin-left: 16px;
+}
+
+.stock-quote-hero {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(170px, auto) minmax(480px, 1.8fr);
+  gap: 24px;
+  align-items: center;
+  padding: 20px 22px;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 55%, #f6f8fb 100%);
+  border-bottom: 1px solid #e7edf4;
+}
+
+.stock-quote-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.stock-quote-subtitle,
+.stock-quote-date {
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.stock-quote-price {
+  min-width: 170px;
+}
+
+.stock-quote-last {
+  font-size: 36px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+}
+
+.stock-quote-change {
+  display: flex;
+  gap: 12px;
+  margin-top: 7px;
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-quote-price.up,
+.quote-up-text {
+  color: #cf1322;
+}
+
+.stock-quote-price.down,
+.quote-down-text {
+  color: #15803d;
+}
+
+.stock-quote-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 12px 18px;
+}
+
+.stock-quote-metrics > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 5px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.stock-quote-metrics span {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.stock-quote-metrics strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dataset-preview-card > .ant-card-body {
+  padding: 12px;
+}
+
+.dataset-preview-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .metric-value {
@@ -268,6 +395,14 @@ body {
   .field-grid.six {
     grid-template-columns: repeat(2, minmax(150px, 1fr));
   }
+
+  .stock-quote-hero {
+    grid-template-columns: 1fr auto;
+  }
+
+  .stock-quote-metrics {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 640px) {
@@ -287,5 +422,25 @@ body {
   .toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .data-catalog-visibility {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stock-quote-hero {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .stock-quote-metrics {
+    grid-column: auto;
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
+  }
+
+  .dataset-preview-toolbar > * {
+    width: 100% !important;
   }
 }

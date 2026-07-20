@@ -209,6 +209,18 @@ def rows_from_csv(
     rows: list[dict[str, str]] = []
     with file_path.open(newline="", encoding=encoding) as file:
         reader = csv.DictReader(file)
+        fieldnames = [str(value or "").strip() for value in (reader.fieldnames or [])]
+        reader.fieldnames = fieldnames
+        required = [date_col, open_col, high_col, low_col, close_col, volume_col]
+        missing = [column for column in required if column not in fieldnames]
+        if missing:
+            raise LeanPlatformError(
+                "CSV header is invalid. Required columns: "
+                + ", ".join(required)
+                + "; missing: "
+                + ", ".join(missing)
+                + ". Download and use the provided OHLCV template."
+            )
         for row in reader:
             if not row:
                 continue

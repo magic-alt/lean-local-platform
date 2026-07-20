@@ -1372,7 +1372,7 @@ def test_sync_item_progress_updates_run_heartbeat(tmp_path, monkeypatch):
 
 def test_sync_mode_records_initial_incremental_and_checkpoint_resume(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
-    from app.db import db, json_dump, utc_now
+    from app.db import db, utc_now
     from app.services import data_sync
 
     first = data_sync.create_sync_run(requested=["daily"])
@@ -1383,16 +1383,19 @@ def test_sync_mode_records_initial_incremental_and_checkpoint_resume(tmp_path, m
     assert resumed["summary"]["resumeBaseMode"] == "initial_full"
     assert data_sync.request_cancel(first["id"])["status"] == "cancelled"
 
+    # The UI and auto mode remember a completed canonical build, rather than
+    # treating an incidental preview/raw row as proof that the library exists.
     with db() as connection:
         connection.execute(
             """
-            insert into provider_raw_records
-                (provider,dataset_key,record_key,business_date,instrument_code,payload_json,
-                 content_sha256,batch_id,ingested_at)
-            values ('tushare','daily','mode-test','2026-07-16','000001.SZ',?,
-                    'hash','mode-test',?)
+            update data_sync_runs
+            set status='success', canonical_status='ready', finished_at=?
+            where id=?
             """,
-            (json_dump({"trade_date": "20260716"}), utc_now()),
+            (utc_now(), first["id"]),
         )
+    catalog = data_sync.catalog_payload()
+    assert catalog["hasCompletedInitialSync"] is True
+    assert catalog["recommendedMode"] == "incremental"
     incremental = data_sync.create_sync_run(requested=["daily"])
     assert incremental["mode"] == "incremental"

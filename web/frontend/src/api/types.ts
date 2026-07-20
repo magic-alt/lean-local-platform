@@ -141,6 +141,81 @@ export interface DataSyncCatalog {
   };
   activeRun?: DataSyncRun | null;
   latestRun?: DataSyncRun | null;
+  hasCompletedInitialSync: boolean;
+  recommendedMode: "initial_full" | "incremental";
+}
+
+export interface SecurityProfileIdentifier {
+  provider?: string | null;
+  identifier_type?: string | null;
+  identifier_value?: string | null;
+  exchange?: string | null;
+  market?: string | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  is_primary?: boolean | number;
+  source?: string | null;
+}
+
+export interface SecurityProfileCoverage {
+  key: string;
+  label: string;
+  rows: number;
+  firstDate?: string | null;
+  lastDate?: string | null;
+  sources: string[];
+}
+
+export interface SecurityProfile {
+  symbol: string;
+  name: string;
+  market: string;
+  marketLabel: string;
+  exchange?: string | null;
+  listedDate?: string | null;
+  delistedDate?: string | null;
+  status?: string | null;
+  isSt: boolean;
+  industry?: string | null;
+  concepts: string[];
+  currency?: string | null;
+  lotSize?: number | null;
+  tickSize?: number | null;
+  masterSource?: string | null;
+  masterUpdatedAt?: string | null;
+  hasLocalData: boolean;
+  identifiers: SecurityProfileIdentifier[];
+  coverage: SecurityProfileCoverage[];
+  latestTradeStatus?: Record<string, unknown> | null;
+  memberships: Array<Record<string, unknown>>;
+  quote?: {
+    tradeDate?: string | null;
+    open?: number | null;
+    high?: number | null;
+    low?: number | null;
+    close?: number | null;
+    previousClose?: number | null;
+    change?: number | null;
+    pctChange?: number | null;
+    volume?: number | null;
+    amount?: number | null;
+    turnoverRate?: number | null;
+    adjustmentFactor?: number | null;
+    source?: string | null;
+  } | null;
+  adjustmentHistory: Array<Record<string, unknown>>;
+  suspensionHistory: Array<Record<string, unknown>>;
+  limitHistory: Array<Record<string, unknown>>;
+}
+
+export interface DatasetPreviewResult {
+  dataset: string;
+  items: Array<Record<string, unknown>>;
+  count: number;
+  limit: number;
+  offset: number;
+  storage: "canonical_table" | "compressed_archive" | string;
+  updatedAt?: string | null;
 }
 
 export interface OnDemandStorageTarget {

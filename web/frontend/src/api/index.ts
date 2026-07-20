@@ -61,7 +61,9 @@ import type {
   AshareTechReportList,
   AshareTechRuleTag,
   AshareTechWatchlist,
-  AshareTechWatchlistItem
+  AshareTechWatchlistItem,
+  SecurityProfile,
+  DatasetPreviewResult
 } from "./types";
 
 export * from "./types";
@@ -163,6 +165,10 @@ export const api = {
     }>(
       `/api/securities/search?market=${encodeURIComponent(market)}&keyword=${encodeURIComponent(keyword)}&limit=${encodeURIComponent(limit)}`
     ),
+  securityProfile: (market: string, symbol: string) =>
+    request<SecurityProfile>(
+      `/api/securities/${encodeURIComponent(symbol)}/profile?market=${encodeURIComponent(market)}`
+    ),
   dataIdentifiers: (symbol: string) =>
     request<{ symbol: string; items: Array<Record<string, unknown>>; count: number }>(
       `/api/data/identifiers/${encodeURIComponent(symbol)}`
@@ -196,6 +202,23 @@ export const api = {
   },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
+  datasetPreview: (dataset: string, params?: {
+    keyword?: string;
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.keyword) query.set("keyword", params.keyword);
+    if (params?.startDate) query.set("startDate", params.startDate);
+    if (params?.endDate) query.set("endDate", params.endDate);
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    if (params?.offset !== undefined) query.set("offset", String(params.offset));
+    return request<DatasetPreviewResult>(
+      `/api/data/dataset-preview/${encodeURIComponent(dataset)}?${query.toString()}`
+    );
+  },
   onDemandStorageTargets: () => request<{ items: OnDemandStorageTarget[] }>("/api/data/on-demand/storage-targets"),
   createOnDemandDownload: (payload: {
     dataset: string;

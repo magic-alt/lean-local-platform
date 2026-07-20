@@ -259,6 +259,13 @@ def catalog_payload() -> dict[str, Any]:
         latest = connection.execute(
             "select * from data_sync_runs order by created_at desc limit 1"
         ).fetchone()
+        completed_initial_sync = connection.execute(
+            """
+            select id from data_sync_runs
+            where status = 'success' and coalesce(canonical_status, 'ready') = 'ready'
+            order by finished_at desc limit 1
+            """
+        ).fetchone()
     items = rows_to_dicts(rows)
     active_run = sync_run(str(active["id"])) if active else None
     latest_run = sync_run(str(latest["id"])) if latest else None
@@ -274,6 +281,11 @@ def catalog_payload() -> dict[str, Any]:
         # currently being checked or synchronized.
         "activeRun": active_run,
         "latestRun": latest_run,
+        # A successful canonical run is durable database state. Do not infer this
+        # from the most recent run because a later cancelled run must not make the
+        # UI forget that the initial library was already built.
+        "hasCompletedInitialSync": bool(completed_initial_sync),
+        "recommendedMode": "incremental" if completed_initial_sync else "initial_full",
     }
 
 
@@ -3440,16 +3452,16 @@ def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -
         ).fetchone()
         if active:
             raise ValueError("A full database update is already queued or running.")
-        existing = connection.execute(
+        completed_initial_sync = connection.execute(
             """
-            select
-                (select count(*) from ashare_daily_bars) +
-                (select count(*) from provider_raw_records) as row_count
+            select id from data_sync_runs
+            where status = 'success' and coalesce(canonical_status, 'ready') = 'ready'
+            order by finished_at desc limit 1
             """
         ).fetchone()
     resolved_mode = mode
     if mode == "auto":
-        resolved_mode = "incremental" if existing and int(existing["row_count"] or 0) > 0 else "initial_full"
+        resolved_mode = "incremental" if completed_initial_sync else "initial_full"
     known = {spec.key for spec in DATASET_REGISTRY}
     unknown = sorted(set(requested or []) - known)
     if unknown:

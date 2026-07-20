@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Descriptions,
   Form,
   Input,
   InputNumber,
@@ -69,6 +70,7 @@ import type {
   PortfolioOptimizationResult,
   Project,
   ReportRecord,
+  SecurityProfile,
   StrategyTemplate,
   Task,
 } from "../api";
@@ -76,6 +78,7 @@ import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { DatasetPreviewPanel } from "../components/data/DatasetPreviewPanel";
 import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -108,6 +111,25 @@ const A_SHARE_BACKTEST_SOURCE_OPTIONS = [
   { value: "yfinance", label: "YFinance" }
 ];
 const ISO_DATE_FORMAT = "YYYY-MM-DD";
+
+function dataSourceLabel(value: string) {
+  if (["securities", "canonical"].includes(value)) return "本地证券主表";
+  return value.replace(/^tushare(?=:|$)/, "TuShare Pro");
+}
+
+function quoteNumber(value: number | null | undefined, digits = 2) {
+  return value === null || value === undefined || !Number.isFinite(Number(value))
+    ? "-"
+    : Number(value).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function compactMarketNumber(value: number | null | undefined) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  if (Math.abs(number) >= 100_000_000) return `${(number / 100_000_000).toFixed(2)} 亿`;
+  if (Math.abs(number) >= 10_000) return `${(number / 10_000).toFixed(2)} 万`;
+  return number.toLocaleString();
+}
 
 function normalizeDateInput(value: string) {
   const text = String(value).trim();
@@ -351,7 +373,7 @@ function MarketDataDownloader({
   const [symbolsText, setSymbolsText] = useState(defaultSymbolText(defaultBarPreviewValues.assetClass, defaultBarPreviewValues.market));
   const [listedDate, setListedDate] = useState<string>();
   const [queryResult, setQueryResult] = useState<DataQueryResult>();
-  const [securityInfo, setSecurityInfo] = useState<{ symbol: string; name: string; market: string; marketLabel?: string; listedDate?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }>();
+  const [securityInfo, setSecurityInfo] = useState<SecurityProfile>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const previewRequestId = useRef(0);
@@ -429,25 +451,30 @@ function MarketDataDownloader({
     return symbols;
   }
 
-  async function loadSecurityInfo(symbol: string): Promise<{ symbol: string; name: string; market: string; marketLabel?: string; listedDate?: string; hasLocalData?: boolean; identifierCount?: number; source?: string }> {
+  async function loadSecurityInfo(symbol: string): Promise<SecurityProfile> {
     try {
-      const [search, identifiers] = await Promise.all([
-        api.searchSecurities(selectedMarket, symbol),
-        api.dataIdentifiers(symbol).catch(() => ({ symbol, items: [], count: 0 }))
-      ]);
+      return await api.securityProfile(selectedMarket, symbol);
+    } catch {
+      const search = await api.searchSecurities(selectedMarket, symbol);
       const matched = search.items.find((item) => item.symbol === symbol) ?? search.items[0];
       return {
         symbol,
         name: matched?.name ?? symbol,
         market: matched?.market ?? selectedMarket,
-        marketLabel: matched?.marketLabel,
-        listedDate: matched?.listedDate ?? undefined,
-        hasLocalData: matched?.hasLocalData,
-        identifierCount: identifiers.count,
-        source: identifiers.items[0]?.source ? String(identifiers.items[0].source) : undefined
+        marketLabel: matched?.marketLabel ?? selectedMarket,
+        exchange: matched?.exchange,
+        listedDate: matched?.listedDate,
+        status: matched?.status,
+        isSt: false,
+        concepts: [],
+        hasLocalData: Boolean(matched?.hasLocalData),
+        identifiers: [],
+        coverage: [],
+        memberships: [],
+        adjustmentHistory: [],
+        suspensionHistory: [],
+        limitHistory: []
       };
-    } catch {
-      return { symbol, name: symbol, market: selectedMarket };
     }
   }
 
@@ -507,7 +534,7 @@ function MarketDataDownloader({
           overwrite: Boolean(values.overwrite)
         });
         if (requestId !== previewRequestId.current) return;
-        setSecurityInfo((current) => current ? { ...current, hasLocalData: true, source: "tushare" } : current);
+        setSecurityInfo(await loadSecurityInfo(symbol));
         result = await queryLocalBars(effectiveValues, symbol, "tushare");
         if (requestId !== previewRequestId.current) return;
       }
@@ -745,31 +772,193 @@ function MarketDataDownloader({
         </Space.Compact>
       </Form>
       {securityInfo && (
-        <Card size="small" title="Company Info" style={{ marginBottom: 12 }}>
-          <Space wrap>
-            <Tag color="blue">{securityInfo.symbol}</Tag>
-            <Tag>{securityInfo.name}</Tag>
-            {securityInfo.listedDate && <Tag>listed {securityInfo.listedDate}</Tag>}
-            <Tag color={securityInfo.market === "china" ? "red" : securityInfo.market === "hongkong" ? "green" : "blue"}>{securityInfo.marketLabel ?? securityInfo.market}</Tag>
-            <Tag color={securityInfo.hasLocalData ? "success" : "warning"}>{securityInfo.hasLocalData ? "local data" : "local data pending"}</Tag>
-            {securityInfo.identifierCount !== undefined && <Tag>{securityInfo.identifierCount} identifiers</Tag>}
-            {securityInfo.source && <Tag>{securityInfo.source}</Tag>}
-          </Space>
+        <Card size="small" className="stock-preview-card" style={{ marginBottom: 12 }}>
+          <div className="stock-quote-hero">
+            <div className="stock-quote-identity">
+              <div className="stock-quote-title">
+                <span>{securityInfo.name}</span>
+                {securityInfo.isSt && <Tag color="warning">ST</Tag>}
+                <Tag color={securityInfo.status === "listed" || securityInfo.status === "active" ? "success" : "default"}>{securityInfo.status || "未知状态"}</Tag>
+              </div>
+              <div className="stock-quote-subtitle">{securityInfo.symbol} · {securityInfo.marketLabel}{securityInfo.exchange ? ` / ${securityInfo.exchange}` : ""} · {securityInfo.industry || "行业未分类"}</div>
+            </div>
+            <div className={`stock-quote-price ${(securityInfo.quote?.pctChange ?? 0) >= 0 ? "up" : "down"}`}>
+              <div className="stock-quote-last">{quoteNumber(securityInfo.quote?.close)}</div>
+              <div className="stock-quote-change">
+                {securityInfo.quote?.change !== null && securityInfo.quote?.change !== undefined && Number(securityInfo.quote.change) > 0 ? "+" : ""}{quoteNumber(securityInfo.quote?.change)}
+                <span>{securityInfo.quote?.pctChange !== null && securityInfo.quote?.pctChange !== undefined && Number(securityInfo.quote.pctChange) > 0 ? "+" : ""}{quoteNumber(securityInfo.quote?.pctChange)}%</span>
+              </div>
+              <div className="stock-quote-date">截至 {securityInfo.quote?.tradeDate || "-"}</div>
+            </div>
+            <div className="stock-quote-metrics">
+              <div><span>今开</span><strong>{quoteNumber(securityInfo.quote?.open)}</strong></div>
+              <div><span>最高</span><strong>{quoteNumber(securityInfo.quote?.high)}</strong></div>
+              <div><span>最低</span><strong>{quoteNumber(securityInfo.quote?.low)}</strong></div>
+              <div><span>昨收</span><strong>{quoteNumber(securityInfo.quote?.previousClose)}</strong></div>
+              <div><span>成交量</span><strong>{compactMarketNumber(securityInfo.quote?.volume)}</strong></div>
+              <div><span>成交额</span><strong>{compactMarketNumber(securityInfo.quote?.amount)}</strong></div>
+              <div><span>换手率</span><strong>{quoteNumber(securityInfo.quote?.turnoverRate)}%</strong></div>
+              <div><span>复权因子</span><strong>{quoteNumber(securityInfo.quote?.adjustmentFactor, 4)}</strong></div>
+            </div>
+          </div>
+          <Tabs
+            size="small"
+            items={[
+              {
+                key: "chart",
+                label: "行情走势",
+                children: (
+                  <>
+                    {queryResult && !queryResult.enabled && <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={queryResult.error ?? "所选数据源不可用"} />}
+                    {queryResult?.enabled && queryResult.message && <Alert style={{ marginBottom: 12 }} type="info" showIcon message={queryResult.message} />}
+                    {queryResult?.enabled && queryResult.items.length === 0 && <Alert style={{ marginBottom: 12 }} type="info" showIcon message="所选日期范围没有本地日线数据。" />}
+                    {queryResult?.enabled && queryResult.items.length > 0 && (
+                      <>
+                        <Space wrap style={{ marginBottom: 12 }}>
+                          <Tag color="blue">{dataSourceLabel(queryResult.source ?? "data")}</Tag>
+                          <Tag>{queryResult.count.toLocaleString()} 根日线</Tag>
+                          <Tag>{`${queryResult.items[0].timestamp.slice(0, 10)} → ${queryResult.items[queryResult.items.length - 1].timestamp.slice(0, 10)}`}</Tag>
+                        </Space>
+                        <ReactECharts style={{ height: compact ? 360 : 540, marginBottom: 8 }} option={chartOption} />
+                      </>
+                    )}
+                  </>
+                )
+              },
+              {
+                key: "profile",
+                label: "公司资料",
+                children: (
+                  <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+                    <Descriptions.Item label="证券代码">{securityInfo.symbol}</Descriptions.Item>
+                    <Descriptions.Item label="证券名称">{securityInfo.name}</Descriptions.Item>
+                    <Descriptions.Item label="市场 / 交易所">{securityInfo.marketLabel}{securityInfo.exchange ? ` / ${securityInfo.exchange}` : ""}</Descriptions.Item>
+                    <Descriptions.Item label="上市日期">{securityInfo.listedDate || "-"}</Descriptions.Item>
+                    <Descriptions.Item label="上市状态">
+                      <Space size={4}><Tag color={securityInfo.status === "listed" || securityInfo.status === "active" ? "success" : "default"}>{securityInfo.status || "未知"}</Tag>{securityInfo.isSt && <Tag color="warning">ST</Tag>}</Space>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="行业">{securityInfo.industry || "-"}</Descriptions.Item>
+                    <Descriptions.Item label="币种 / 交易单位">{securityInfo.currency || "-"}{securityInfo.lotSize ? ` / ${securityInfo.lotSize}` : ""}</Descriptions.Item>
+                    <Descriptions.Item label="主数据来源">{securityInfo.masterSource ? dataSourceLabel(securityInfo.masterSource) : "本地证券主表"}</Descriptions.Item>
+                    <Descriptions.Item label="本地数据">{securityInfo.hasLocalData ? <Tag color="success">已入库</Tag> : <Tag color="warning">暂无覆盖</Tag>}</Descriptions.Item>
+                    {securityInfo.concepts.length > 0 && <Descriptions.Item label="概念" span={3}><Space wrap>{securityInfo.concepts.map((item) => <Tag key={item}>{item}</Tag>)}</Space></Descriptions.Item>}
+                  </Descriptions>
+                )
+              },
+              {
+                key: "adjustments",
+                label: `复权因子 (${securityInfo.adjustmentHistory.length})`,
+                children: (
+                  <Table
+                    size="small"
+                    pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                    rowKey={(row) => `${row.trade_date}:${row.source}`}
+                    dataSource={securityInfo.adjustmentHistory}
+                    locale={{ emptyText: "暂无复权因子" }}
+                    columns={[
+                      { title: "交易日", dataIndex: "trade_date" },
+                      { title: "复权因子", dataIndex: "adj_factor", render: (value: number) => quoteNumber(value, 6) },
+                      { title: "来源", dataIndex: "source", render: (value: string) => dataSourceLabel(value) }
+                    ]}
+                  />
+                )
+              },
+              {
+                key: "suspensions",
+                label: `停牌历史 (${securityInfo.suspensionHistory.length})`,
+                children: (
+                  <Table
+                    size="small"
+                    pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                    rowKey={(row) => `${row.trade_date}:${row.source}`}
+                    dataSource={securityInfo.suspensionHistory}
+                    locale={{ emptyText: "该股票暂无 suspend_d 停牌记录" }}
+                    columns={[
+                      { title: "停牌日期", dataIndex: "trade_date" },
+                      { title: "停牌", dataIndex: "is_suspended", render: (value: unknown) => Number(value) ? <Tag color="error">停牌</Tag> : <Tag color="success">正常</Tag> },
+                      { title: "可买", dataIndex: "can_buy", render: (value: unknown) => Number(value) ? "是" : "否" },
+                      { title: "可卖", dataIndex: "can_sell", render: (value: unknown) => Number(value) ? "是" : "否" },
+                      { title: "来源", dataIndex: "source", render: (value: string) => dataSourceLabel(value) }
+                    ]}
+                  />
+                )
+              },
+              {
+                key: "limits",
+                label: `涨跌停历史 (${securityInfo.limitHistory.length})`,
+                children: (
+                  <Table
+                    size="small"
+                    pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                    rowKey={(row) => `${row.trade_date}:${row.source}`}
+                    dataSource={securityInfo.limitHistory}
+                    locale={{ emptyText: "该股票暂无 stk_limit 记录" }}
+                    columns={[
+                      { title: "交易日", dataIndex: "trade_date" },
+                      { title: "涨停价", dataIndex: "limit_up", render: (value: number) => <span className="quote-up-text">{quoteNumber(value)}</span> },
+                      { title: "跌停价", dataIndex: "limit_down", render: (value: number) => <span className="quote-down-text">{quoteNumber(value)}</span> },
+                      { title: "ST", dataIndex: "is_st", render: (value: unknown) => Number(value) ? <Tag color="warning">是</Tag> : "否" },
+                      { title: "来源", dataIndex: "source", render: (value: string) => dataSourceLabel(value) }
+                    ]}
+                  />
+                )
+              },
+              {
+                key: "coverage",
+                label: "数据档案",
+                children: (
+                  <Tabs
+                    size="small"
+                    items={[
+                      {
+                        key: "coverage-detail",
+                        label: `数据覆盖 (${securityInfo.coverage.length})`,
+                        children: <Table size="small" pagination={false} rowKey="key" dataSource={securityInfo.coverage} columns={[
+                          { title: "数据库数据", dataIndex: "label" },
+                          { title: "记录数", dataIndex: "rows", align: "right", render: (value: number) => value.toLocaleString() },
+                          { title: "起始日期", dataIndex: "firstDate", render: (value: string | null) => value || "-" },
+                          { title: "最新日期", dataIndex: "lastDate", render: (value: string | null) => value || "-" },
+                          { title: "来源", dataIndex: "sources", render: (sources: string[]) => <Space wrap>{sources.map((source) => <Tag key={source}>{dataSourceLabel(source)}</Tag>)}</Space> }
+                        ]} />
+                      },
+                      {
+                        key: "identifier-detail",
+                        label: `标识符 (${securityInfo.identifiers.length})`,
+                        children: <Table size="small" pagination={false} rowKey={(row) => `${row.provider}:${row.identifier_type}:${row.identifier_value}`} dataSource={securityInfo.identifiers} columns={[
+                          { title: "系统", dataIndex: "provider" },
+                          { title: "类型", dataIndex: "identifier_type" },
+                          { title: "标识值", dataIndex: "identifier_value" },
+                          { title: "交易所", dataIndex: "exchange" },
+                          { title: "主标识", dataIndex: "is_primary", render: (value: boolean | number) => value ? <Tag color="blue">是</Tag> : "否" }
+                        ]} />
+                      }
+                    ]}
+                  />
+                )
+              },
+              {
+                key: "memberships",
+                label: `股票池 (${securityInfo.memberships.length})`,
+                children: (
+                  <Table
+                    size="small"
+                    pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                    rowKey={(row) => `${row.universe_code}:${row.start_date}`}
+                    dataSource={securityInfo.memberships}
+                    locale={{ emptyText: "暂无股票池或指数成分记录" }}
+                    columns={[
+                      { title: "股票池 / 指数", dataIndex: "universe_code" },
+                      { title: "生效日期", dataIndex: "start_date" },
+                      { title: "结束日期", dataIndex: "end_date", render: (value: string | null) => value || "当前" },
+                      { title: "权重", dataIndex: "weight", render: (value: number | null) => value ?? "-" },
+                      { title: "来源", dataIndex: "source" }
+                    ]}
+                  />
+                )
+              }
+            ]}
+          />
         </Card>
-      )}
-      {queryResult && !queryResult.enabled && <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={queryResult.error ?? "Selected data source is unavailable."} />}
-      {queryResult?.enabled && queryResult.message && <Alert style={{ marginBottom: 12 }} type="info" showIcon message={queryResult.message} />}
-      {queryResult?.enabled && queryResult.items.length === 0 && <Alert style={{ marginBottom: 12 }} type="info" showIcon message="No local bars matched the selected filters. Use Download to fetch and save data locally." />}
-      {queryResult?.enabled && queryResult.items.length > 0 && (
-        <>
-          <Space wrap style={{ marginBottom: 12 }}>
-            <Tag color="blue">{queryResult.source ?? "data"}</Tag>
-            <Tag>{queryResult.count} bars</Tag>
-            <Tag>{`${queryResult.items[0].timestamp.slice(0, 10)} -> ${queryResult.items[queryResult.items.length - 1].timestamp.slice(0, 10)}`}</Tag>
-            <Tag>{queryResult.items[0].source}</Tag>
-          </Space>
-          <ReactECharts style={{ height: compact ? 360 : 540, marginBottom: 8 }} option={chartOption} />
-        </>
       )}
       {selectedAssetClass !== "equity" && selectedProvider !== "binance" && (
         <Alert style={{ marginBottom: 12 }} type="warning" showIcon message="This asset class currently uses local LEAN files or CSV import unless Binance crypto daily is selected." />
@@ -1262,7 +1451,8 @@ export function ProjectsPage() {
 export function DataPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const catalog = useAsyncData<DataSyncCatalog>(api.dataCatalog, {
-    provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0, activeRun: null, latestRun: null
+    provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0,
+    activeRun: null, latestRun: null, hasCompletedInitialSync: false, recommendedMode: "initial_full"
   }, false);
   const [syncRun, setSyncRun] = useState<DataSyncRun>();
   const [syncActionLoading, setSyncActionLoading] = useState(false);
@@ -1279,9 +1469,11 @@ export function DataPage() {
   const [downloadDataset, setDownloadDataset] = useState<DataSyncCatalog["items"][number] | null>(null);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [downloadTasks, setDownloadTasks] = useState<Record<string, Task>>({});
+  const [showAdditionalDatasets, setShowAdditionalDatasets] = useState(false);
   const selectedStorageTarget = Form.useWatch("storageTarget", downloadForm);
   const selectedStorage = storageTargets.data.find((item) => item.id === selectedStorageTarget);
   const [csvForm] = Form.useForm();
+  const [csvImporting, setCsvImporting] = useState(false);
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
 
@@ -1304,6 +1496,17 @@ export function DataPage() {
     () => catalog.data.items.map((item) => ({ ...item, syncItem: syncItemsByDataset.get(item.dataset_key) })),
     [catalog.data.items, syncItemsByDataset]
   );
+  const oneClickCatalogRows = useMemo(
+    () => catalogRows.filter((item) => item.sync_policy !== "on_demand"),
+    [catalogRows]
+  );
+  const additionalCatalogRows = useMemo(
+    () => catalogRows.filter((item) => item.sync_policy === "on_demand"),
+    [catalogRows]
+  );
+  const visibleCatalogRows = showAdditionalDatasets
+    ? [...oneClickCatalogRows, ...additionalCatalogRows]
+    : oneClickCatalogRows;
   const syncProgress = useMemo(() => {
     const items = currentSync?.items ?? [];
     const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled"]);
@@ -1427,10 +1630,13 @@ export function DataPage() {
   }
 
   function confirmFullSync() {
+    const incremental = catalog.data.hasCompletedInitialSync;
     Modal.confirm({
-      title: "更新本地全部市场与研究数据？",
-      content: "将按当前 5000 积分权限高速增量更新可批量接口并修复缺口。港美股和每小时级限频数据不会扫描，仅在实际使用时按需获取。任务可安全取消和续跑。",
-      okText: "开始更新",
+      title: incremental ? "增量更新本地全部市场与研究数据？" : "首次全量建立本地数据库？",
+      content: incremental
+        ? "将从已保存的水位和检查点开始，仅拉取新增或缺失数据。港美股和每小时级限频数据不会扫描，仅在实际使用时按需获取。"
+        : "尚未发现成功完成的首次建库记录。将按当前权限全量建立本地市场与研究数据库，完成后系统会持久记住，后续按钮自动切换为增量更新。",
+      okText: incremental ? "开始增量更新" : "开始全量建库",
       onOk: () => startFullSync("auto")
     });
   }
@@ -1474,7 +1680,22 @@ export function DataPage() {
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
-    if (!file) return message.error("Choose a CSV file");
+    if (!file) return message.error("请选择 CSV 文件");
+    if (!String(file.name || "").toLowerCase().endsWith(".csv")) {
+      return message.error("文件扩展名必须是 .csv");
+    }
+    const preview = await file.slice(0, 64 * 1024).text();
+    const lines = preview.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line: string) => line.trim());
+    if (lines.length < 2) {
+      return message.error("CSV 必须包含表头和至少一行数据");
+    }
+    const headers = lines[0].split(",").map((value: string) => value.trim().replace(/^['\"]|['\"]$/g, ""));
+    const requiredHeaders = ["timestamp", "open", "high", "low", "close", "volume"];
+    const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
+    if (missingHeaders.length > 0) {
+      return message.error(`CSV 缺少字段：${missingHeaders.join(", ")}。请下载并使用标准模板。`);
+    }
+    setCsvImporting(true);
     const formData = new FormData();
     formData.append("symbol", values.symbol ?? "");
     formData.append("assetClass", values.assetClass ?? "equity");
@@ -1489,9 +1710,15 @@ export function DataPage() {
     formData.append("closeCol", "close");
     formData.append("volumeCol", "volume");
     formData.append("file", file);
-    await api.importCsv(formData);
-    message.success("CSV imported");
-    csvForm.resetFields();
+    try {
+      const result = await api.importCsv(formData);
+      message.success(`CSV 导入成功：${Number(result.rows || 0).toLocaleString()} rows`);
+      csvForm.resetFields();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setCsvImporting(false);
+    }
   }
 
   return (
@@ -1510,7 +1737,7 @@ export function DataPage() {
                   <Button loading={syncActionLoading} onClick={() => startFullSync("incremental")}>重新增量</Button>
                   <Button danger loading={syncActionLoading} onClick={confirmRebuild}>全量重建</Button>
                 </>
-              : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>一键更新全部数据</Button>}
+              : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>{catalog.data.hasCompletedInitialSync ? "一键增量更新" : "一键全量更新"}</Button>}
         </Space>}
       >
         {catalog.error && <Alert type="warning" showIcon message="同步目录尚未初始化" description={catalog.error.message} style={{ marginBottom: 12 }} />}
@@ -1631,14 +1858,28 @@ export function DataPage() {
         )}
         {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
         {catalogRows.length > 0 && (
-          <Table
-            className="data-catalog-table"
-            size="small"
-            rowKey="dataset_key"
-            dataSource={catalogRows}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
-            tableLayout="fixed"
-            columns={[
+          <>
+            <div className="data-catalog-visibility">
+              <div>
+                <strong>一键更新数据集（{oneClickCatalogRows.length}）</strong>
+                <div className="data-catalog-meta">默认仅显示参与一键全量/增量更新的数据及状态。</div>
+              </div>
+              {additionalCatalogRows.length > 0 && (
+                <Button onClick={() => setShowAdditionalDatasets((current) => !current)}>
+                  {showAdditionalDatasets
+                    ? "收起其他数据集"
+                    : `展开其他按需数据集（${additionalCatalogRows.length}）`}
+                </Button>
+              )}
+            </div>
+            <Table
+              className="data-catalog-table"
+              size="small"
+              rowKey="dataset_key"
+              dataSource={visibleCatalogRows}
+              pagination={showAdditionalDatasets ? { pageSize: 20, showSizeChanger: true } : false}
+              tableLayout="fixed"
+              columns={[
               {
                 title: "数据集",
                 width: "21%",
@@ -1747,8 +1988,9 @@ export function DataPage() {
                   );
                 }
               }
-            ]}
-          />
+              ]}
+            />
+          </>
         )}
       </Card>
       <Modal
@@ -1816,8 +2058,66 @@ export function DataPage() {
           </Form.Item>
         </Form>
       </Modal>
-      <MarketDataDownloader unboundedPreview showLimitInput={false} />
-      <Card title="Import CSV" style={{ marginTop: 16 }}>
+      <Card title="按数据集预览" style={{ marginTop: 16 }}>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="10 个一键更新数据集已按业务对象分组"
+          description="股票页合并 stock_basic、daily、adj_factor、suspend_d、stk_limit；其余数据集分别按交易日历、指数、期货和期权预览。"
+        />
+        <Tabs
+          destroyInactiveTabPane={false}
+          items={[
+            {
+              key: "stocks",
+              label: "股票 Preview",
+              children: <MarketDataDownloader unboundedPreview showLimitInput={false} />
+            },
+            {
+              key: "calendar",
+              label: "交易日历 Preview",
+              children: <DatasetPreviewPanel datasets={[
+                { key: "trade_cal", label: "交易日历 · trade_cal", keywordPlaceholder: "可按市场或来源筛选" }
+              ]} />
+            },
+            {
+              key: "indices",
+              label: "指数 Preview",
+              children: <DatasetPreviewPanel datasets={[
+                { key: "index_basic", label: "指数资料 · index_basic", keywordPlaceholder: "指数代码、名称、发布机构" },
+                { key: "index_daily", label: "指数日线 · index_daily", keywordPlaceholder: "指数代码，例如 000300.SH" }
+              ]} />
+            },
+            {
+              key: "futures",
+              label: "期货 Preview",
+              children: <DatasetPreviewPanel datasets={[
+                { key: "fut_basic", label: "期货合约 · fut_basic", keywordPlaceholder: "合约代码、名称或品种" }
+              ]} />
+            },
+            {
+              key: "options",
+              label: "期权 Preview",
+              children: <DatasetPreviewPanel datasets={[
+                { key: "opt_basic", label: "期权合约 · opt_basic", keywordPlaceholder: "期权代码、名称或标的" }
+              ]} />
+            }
+          ]}
+        />
+      </Card>
+      <Card
+        title="Import CSV"
+        style={{ marginTop: 16 }}
+        extra={<Button icon={<FileTextOutlined />} href="/api/data/import-csv/template">下载 CSV 模板</Button>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="请使用标准日线 OHLCV 模板"
+          description="必需字段：timestamp, open, high, low, close, volume。日期使用 YYYY-MM-DD；价格必须大于0；high 不得低于 open/close，low 不得高于 open/close；volume 必须为非负数。股票代码在下方单独选择，不要写入 CSV。"
+        />
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>
           <div className="field-grid three">
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={csvAssetClass} market={csvMarket} /></Form.Item>
@@ -1825,8 +2125,22 @@ export function DataPage() {
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
           </div>
           <Space wrap>
-            <Form.Item name="file" label="CSV" rules={[{ required: true }]}><Upload beforeUpload={() => false} maxCount={1}><Button>Choose CSV</Button></Upload></Form.Item>
-            <Button type="primary" htmlType="submit">Import</Button>
+            <Form.Item name="file" label="CSV 文件" rules={[{ required: true, message: "请选择 CSV 文件" }]}>
+              <Upload
+                accept=".csv,text/csv"
+                beforeUpload={(file) => {
+                  if (!file.name.toLowerCase().endsWith(".csv")) {
+                    message.error("只支持 .csv 文件");
+                    return Upload.LIST_IGNORE;
+                  }
+                  return false;
+                }}
+                maxCount={1}
+              >
+                <Button>选择 CSV</Button>
+              </Upload>
+            </Form.Item>
+            <Button type="primary" htmlType="submit" loading={csvImporting}>校验并导入</Button>
           </Space>
         </Form>
       </Card>
