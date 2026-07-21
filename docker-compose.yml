@@ -21,6 +21,7 @@ services:
   mysql:
     logging: *bounded-logging
     image: mysql:8.4
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: lean-root
       MYSQL_DATABASE: lean_market
@@ -29,8 +30,8 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-2G}
-      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-512M}
+      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-1G}
+      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-256M}
       - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
       - --binlog-row-image=MINIMAL
       - --max-allowed-packet=256M
@@ -43,6 +44,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 30s
+    stop_grace_period: 2m
 
   clickhouse:
     logging: *bounded-logging

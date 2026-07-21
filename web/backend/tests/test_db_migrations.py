@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 
 def test_init_db_adds_data_assets_status_before_status_index(tmp_path, monkeypatch):
     import app.db as db_module
@@ -80,3 +82,62 @@ def test_mysql_index_parser_handles_leading_migration_comment():
         "idx_backtest_runs_task_created",
         "backtest_runs",
     )
+
+
+def test_mysql_connect_retries_transient_handshake_failures(monkeypatch):
+    import app.db as db_module
+
+    sentinel = object()
+    calls = []
+    delays = []
+
+    def connect(database_url=None):
+        calls.append(database_url)
+        if len(calls) < 3:
+            raise RuntimeError(2013, "Lost connection during handshake")
+        return sentinel
+
+    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "4")
+    monkeypatch.setenv("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0.1")
+    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+    monkeypatch.setattr(db_module.time, "sleep", delays.append)
+
+    assert db_module._connect_mysql("mysql+pymysql://example") is sentinel
+    assert calls == ["mysql+pymysql://example"] * 3
+    assert delays == [0.1, 0.2]
+
+
+def test_mysql_connect_raises_retryable_domain_error_after_exhaustion(monkeypatch):
+    import app.db as db_module
+
+    def connect(database_url=None):
+        raise RuntimeError(2003, "Connection refused")
+
+    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "2")
+    monkeypatch.setenv("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0")
+    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+
+    with pytest.raises(db_module.DatabaseUnavailableError) as error:
+        db_module._connect_mysql()
+
+    assert "2 connection attempts" in str(error.value)
+    assert error.value.__cause__.args[0] == 2003
+
+
+def test_mysql_connect_does_not_retry_configuration_errors(monkeypatch):
+    import app.db as db_module
+
+    calls = 0
+
+    def connect(database_url=None):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError(1045, "Access denied")
+
+    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "5")
+    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+
+    with pytest.raises(RuntimeError, match="Access denied"):
+        db_module._connect_mysql()
+
+    assert calls == 1

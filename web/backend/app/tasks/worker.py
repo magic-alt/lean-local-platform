@@ -8,7 +8,7 @@ from .celery_app import celery_app
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
-from ..db import db, json_dump, row_to_dict, utc_now
+from ..db import DatabaseUnavailableError, db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.ids import new_run_id
 from ..lean_engine.reports import render_report
@@ -191,7 +191,14 @@ def dispatch_experiment_batch_task(batch_id: str):
     return dispatch_window(batch_id)
 
 
-@celery_app.task(name="lean_web.reconcile_experiment_batches")
+@celery_app.task(
+    name="lean_web.reconcile_experiment_batches",
+    autoretry_for=(DatabaseUnavailableError,),
+    retry_backoff=5,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=5,
+)
 def reconcile_experiment_batches_task():
     from ..services.experiment_batches import dispatch_window, list_batches
 
@@ -429,7 +436,14 @@ def _broker_unacked_sync_tags(client: Any, run_id: str) -> list[str]:
     ]
 
 
-@celery_app.task(name="lean_web.recover_data_sync")
+@celery_app.task(
+    name="lean_web.recover_data_sync",
+    autoretry_for=(DatabaseUnavailableError,),
+    retry_backoff=5,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=5,
+)
 def recover_data_sync_task():
     """Requeue database runs whose Celery message disappeared after restart."""
     stale_seconds = max(60, int(os.environ.get("LEAN_DATA_SYNC_STALE_SECONDS", "300")))

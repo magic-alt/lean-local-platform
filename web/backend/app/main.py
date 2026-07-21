@@ -10,7 +10,7 @@ import uuid
 from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
 from .core.config import FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
-from .db import init_db
+from .db import DatabaseUnavailableError, init_db
 from .services.projects import consolidate_automatic_copies
 from .services.workflows import record_workflow_event
 from .observability.metrics import metrics_middleware
@@ -47,7 +47,11 @@ async def trace_workflow_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Trace-ID"] = trace_id
     response.headers["X-Workflow-ID"] = workflow_id
-    if response.status_code >= 400 and request.url.path.startswith("/api/"):
+    if (
+        response.status_code >= 400
+        and request.url.path.startswith("/api/")
+        and not getattr(request.state, "database_unavailable", False)
+    ):
         try:
             record_workflow_event(
                 workflow_id=workflow_id,
@@ -88,6 +92,24 @@ async def lean_web_error_handler(request: Request, exc: LeanWebError) -> JSONRes
             trace_id=getattr(request.state, "trace_id", None),
             workflow_id=getattr(request.state, "workflow_id", None),
         ),
+    )
+
+
+@app.exception_handler(DatabaseUnavailableError)
+async def database_unavailable_handler(request: Request, exc: DatabaseUnavailableError) -> JSONResponse:
+    request.state.database_unavailable = True
+    return JSONResponse(
+        status_code=503,
+        content=error_payload(
+            str(exc),
+            error_code="DATABASE_UNAVAILABLE",
+            category="infrastructure",
+            retryable=True,
+            details={"retryAfterSeconds": 10},
+            trace_id=getattr(request.state, "trace_id", None),
+            workflow_id=getattr(request.state, "workflow_id", None),
+        ),
+        headers={"Retry-After": "10"},
     )
 
 

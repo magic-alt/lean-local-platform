@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -30,6 +31,13 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+
+
+class DatabaseUnavailableError(RuntimeError):
+    """Raised after transient MySQL connection failures exhaust bounded retries."""
+
+
+TRANSIENT_MYSQL_CONNECTION_CODES = {1040, 2003, 2006, 2013}
 
 
 JSON_COLUMNS = {
@@ -356,6 +364,54 @@ class MySQLConnection:
         self._connection.close()
 
 
+def _transient_mysql_connection_error(exc: Exception) -> bool:
+    try:
+        return int(exc.args[0]) in TRANSIENT_MYSQL_CONNECTION_CODES
+    except (IndexError, TypeError, ValueError):
+        return False
+
+
+def _connect_mysql(database_url: str | None = None) -> MySQLConnection:
+    attempts = max(1, min(int(os.environ.get("LEAN_MYSQL_CONNECT_ATTEMPTS", "5")), 10))
+    base_delay = max(0.0, min(float(os.environ.get("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0.5")), 5.0))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return MySQLConnection(database_url)
+        except Exception as exc:
+            if not _transient_mysql_connection_error(exc):
+                raise
+            last_error = exc
+            if attempt >= attempts:
+                break
+            delay = min(base_delay * (2 ** (attempt - 1)), 5.0)
+            logger.warning(
+                "MySQL connection unavailable (attempt %s/%s); retrying in %.1fs: %s",
+                attempt,
+                attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise DatabaseUnavailableError(
+        f"MySQL is temporarily unavailable after {attempts} connection attempts."
+    ) from last_error
+
+
+def _rollback_quietly(connection: sqlite3.Connection | MySQLConnection) -> None:
+    try:
+        connection.rollback()
+    except Exception:
+        logger.warning("Database rollback failed after the original operation error", exc_info=True)
+
+
+def _close_quietly(connection: sqlite3.Connection | MySQLConnection) -> None:
+    try:
+        connection.close()
+    except Exception:
+        logger.warning("Database connection close failed", exc_info=True)
+
+
 def _split_sql_script(script: str) -> list[str]:
     statements: list[str] = []
     current: list[str] = []
@@ -486,7 +542,7 @@ def _translate_mysql_sql(sql: str) -> str:
 def connect() -> sqlite3.Connection | MySQLConnection:
     init_storage()
     if database_backend() == "mysql":
-        return MySQLConnection()
+        return _connect_mysql()
     connection = sqlite3.connect(_sqlite_db_path())
     connection.row_factory = sqlite3.Row
     return connection
@@ -499,10 +555,10 @@ def db() -> Iterable[sqlite3.Connection | MySQLConnection]:
         yield connection
         connection.commit()
     except Exception:
-        connection.rollback()
+        _rollback_quietly(connection)
         raise
     finally:
-        connection.close()
+        _close_quietly(connection)
 
 
 @contextmanager
@@ -522,7 +578,7 @@ def bulk_db() -> Iterable[sqlite3.Connection | MySQLConnection]:
     require_loader = os.environ.get("LEAN_REQUIRE_LOADER_DATABASE", "0").lower() in {"1", "true", "yes", "on"}
     connection: MySQLConnection | None = None
     try:
-        connection = MySQLConnection(loader_url)
+        connection = _connect_mysql(loader_url)
         if disable_binlog:
             connection.execute("set session sql_log_bin=0")
     except Exception as exc:
@@ -534,15 +590,15 @@ def bulk_db() -> Iterable[sqlite3.Connection | MySQLConnection]:
         # user created by start_web_single_instance.sh.  Keep that path usable
         # and retain normal business-session binlogging instead of failing a run.
         logger.warning("Bulk loader session unavailable; falling back to the normal database connection: %s", exc)
-        connection = MySQLConnection(DATABASE_URL)
+        connection = _connect_mysql(DATABASE_URL)
     try:
         yield connection
         connection.commit()
     except Exception:
-        connection.rollback()
+        _rollback_quietly(connection)
         raise
     finally:
-        connection.close()
+        _close_quietly(connection)
 
 
 def _columns(connection: sqlite3.Connection | MySQLConnection, table: str) -> set[str]:
