@@ -359,8 +359,11 @@ export interface ExperimentBatchPreview {
 export interface HelpArticleSummary {
   slug: string;
   title: string;
+  group: "guide" | "reference";
   category: string;
   order: number;
+  summary: string;
+  status: "current" | "historical";
   snippet: string;
 }
 

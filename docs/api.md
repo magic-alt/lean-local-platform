@@ -348,7 +348,15 @@ GET /api/help/articles
 GET /api/help/articles/{slug}
 ```
 
-Help articles are loaded from `docs/help` and power the searchable in-app Docs page. Article filenames must be lowercase URL-safe slugs.
+Help articles are registered by `docs/help/catalog.json` and power the searchable in-app Docs page. Catalog sources are restricted to Markdown under `docs/`; slugs must be lowercase and URL-safe. List items retain `slug`, `title`, `order` and `snippet`, and also expose `group`, `category`, `summary` and `status` so the frontend can distinguish tutorials, references and historical snapshots.
+
+Search matches titles, summaries, headings, body text, configuration keys and API paths. The frontend route `/#/docs/{slug}?section={heading}` provides reload-safe article and section deep links. Screenshot assets are served by an internal allowlisted help route and only accept PNG, JPEG and WebP under `docs/help/assets`.
+
+`docs/help/api-reference.md` is generated from OpenAPI and checked with:
+
+```bash
+web/backend/.venv/bin/python scripts/generate_help_api_reference.py --check
+```
 
 ## Object Store
 

@@ -13,25 +13,30 @@
     "test:e2e:report": "NODE_PATH=./node_modules playwright show-report ../../tests/e2e/reports/html",
     "test:e2e:smoke": "NODE_PATH=./node_modules playwright test --project=chromium --grep @smoke",
     "test:e2e:backtest": "NODE_PATH=./node_modules playwright test --project=chromium --grep @backtest",
-    "test:e2e:compat": "NODE_PATH=./node_modules playwright test --project=chromium-1920"
+    "test:e2e:compat": "NODE_PATH=./node_modules playwright test --project=chromium-1920",
+    "docs:screenshots": "UPDATE_DOC_SCREENSHOTS=1 NODE_PATH=./node_modules playwright test 11-docs-screenshots.spec.ts --project=chromium"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
+    "@monaco-editor/react": "^4.7.0",
     "@vitejs/plugin-react": "^5.0.0",
     "antd": "^6.0.0",
     "dayjs": "^1.11.21",
     "echarts": "^6.0.0",
     "echarts-for-react": "^3.0.2",
-    "@monaco-editor/react": "^4.7.0",
+    "github-slugger": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.0.0",
+    "rehype-slug": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "vite": "^7.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@playwright/test": "^1.54.0",
     "typescript": "^5.8.0"
   }
 }

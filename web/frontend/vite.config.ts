@@ -41,6 +41,14 @@ export default defineConfig({
       "/api": {
         target: apiProxyTarget,
         changeOrigin: true
+      },
+      "/openapi.json": {
+        target: apiProxyTarget,
+        changeOrigin: true
+      },
+      "/docs": {
+        target: apiProxyTarget,
+        changeOrigin: true
       }
     }
   }

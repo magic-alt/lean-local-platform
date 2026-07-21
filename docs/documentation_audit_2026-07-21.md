@@ -14,8 +14,10 @@ This audit compared repository documentation with current API routes, migrations
 | `docs/api.md` | Added preflight, examples, experiment batches, preview/on-demand/CSV template, report objects/export, help and database outage semantics |
 | `docs/deployment.md` | Added full worker/beat profile, build semantics, MySQL memory defaults, bounded retry and OOM diagnostics |
 | `docs/roadmap.md` | Marked implemented batch/rolling/walk-forward/Markdown features and retained real remaining gaps |
-| `docs/help/*` | Expanded in-app data, configuration and troubleshooting guidance and added an index |
+| `docs/help/*` | Rebuilt as a catalog-driven tutorial/reference center with GFM tables, deep links, screenshots, complete workflow guides and historical labeling |
 | Web/backend/frontend READMEs | Updated feature lists and complete Compose worker topology |
+
+The help center now directly serves selected canonical repository documents instead of copying them into a second reference tree. Its generated API index is checked against FastAPI OpenAPI, and `scripts/check_help_docs.py` validates every catalog source, relative Markdown link and screenshot.
 
 ## Historical Preservation
 
@@ -33,11 +35,11 @@ Some inventories change more frequently than prose. Use these interfaces as auth
 - Examples: `GET /api/examples` and `examples/catalog.json`.
 - Provider policy and permission: `GET /api/data/catalog`.
 - Runtime migrations: `scripts/db_migrate.py --status --json`.
-- In-app articles: `GET /api/help/articles` backed by lowercase Markdown filenames in `docs/help`.
+- In-app articles: `GET /api/help/articles` backed by `docs/help/catalog.json`; catalog entries may point to approved Markdown under `docs/`.
 
 ## Known Remaining Documentation Work
 
-- Add screenshots after the current Data Preview, batch workbench and report layouts are visually accepted.
+- Re-capture the tracked E2E screenshots with `npm run docs:screenshots` after material UI layout changes.
 - Add a production backup/restore drill transcript after the first scheduled exercise.
 - Add exchange-specific futures/options and convertible-bond runbooks when their acceptance gates are complete.
 - Keep environment defaults synchronized with `.env.example` and Compose whenever resource tuning changes.

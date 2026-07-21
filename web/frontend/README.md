@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Vite proxies `/api` to `http://127.0.0.1:8000`.
+Vite proxies `/api`, `/docs` and `/openapi.json` to `http://127.0.0.1:8000`.
 
 For stable environment behavior, use the default pair:
 - Backend API: `127.0.0.1:8000`
@@ -29,23 +29,30 @@ npm run build
 Pages:
 
 - Dashboard
-- Workspace
 - Projects
 - Data
 - Backtests
 - Optimization
 - Research
 - Reports
-- Object Store
+- Paper
+- Insights
 - Tasks and logs
+- Monitoring
 - Docs
 - Settings
 
 Main workflow:
 
-1. Open `Workspace`.
+1. Open `Projects`.
 2. Create or select a project, or instantiate a backtest/optimization/research example.
 3. Use `Data` for first full/then incremental one-click data, explicit on-demand downloads, CSV templates and dataset previews.
 4. Run one job or create an experiment batch across symbols, strategies, parameters, rolling windows or a PIT universe.
 5. Inspect child progress, metrics, charts, order markers, artifacts and structured reports; cancel or retry failed batch items when needed.
-6. Use `Docs` to search configuration, strategy and troubleshooting guidance.
+6. Use `Docs` for searchable GFM tutorials, complete generated API inventory, canonical technical references, history and reload-safe article/section links.
+
+Regenerate tracked documentation screenshots only when the corresponding UI has materially changed:
+
+```bash
+npm run docs:screenshots
+```

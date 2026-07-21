@@ -126,7 +126,14 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 | [当前 Roadmap](docs/roadmap.md) | 当前能力与后续优先级 |
 | [历史审计](docs/history/platform-audit-2026-07.md) | 2026-07 起的问题、证据和状态增量 |
 | [历史修复记录](docs/history/README.md) | 故障根因、修复和遗留风险 |
-| [应用内说明](docs/help/index.md) | Web Docs 页面加载的操作说明 |
+| [应用内文档中心](docs/help/index.md) | 可搜索的操作教程、完整 API 索引、技术参考和历史记录 |
+
+应用内 Docs 使用 GFM Markdown，支持表格、代码复制、文章/章节深链和关键流程截图。完整端点索引由 OpenAPI 生成，可运行以下命令检查内容、链接和接口清单是否同步：
+
+```bash
+web/backend/.venv/bin/python scripts/check_help_docs.py
+web/backend/.venv/bin/python scripts/generate_help_api_reference.py --check
+```
 
 ## 贡献与提交
 

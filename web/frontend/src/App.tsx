@@ -53,7 +53,7 @@ function AppShell() {
   ], []);
   return (
     <Layout className="app-layout">
-      <Sider breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
+      <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
       <Layout>
         <Header className="app-header"><Space><strong>LEAN Local Workbench</strong><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></Space></Header>
         <Content className="app-content">
@@ -67,7 +67,8 @@ function AppShell() {
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/paper" element={<PaperPage />} />
             <Route path="/research" element={<ResearchPage />} />
-            <Route path="/docs" element={<DocsPage />} />
+            <Route path="/docs" element={<Navigate to="/docs/index" replace />} />
+            <Route path="/docs/:slug" element={<DocsPage />} />
             <Route path="/ashare-research" element={<Navigate to="/research" replace />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/insights" element={<InsightsPage />} />

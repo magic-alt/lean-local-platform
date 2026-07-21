@@ -45,6 +45,20 @@ npm run build
 
 This runs `tsc -b` and Vite build.
 
+Validate the in-app documentation sources, links, screenshots and generated API endpoint inventory with:
+
+```bash
+web/backend/.venv/bin/python scripts/check_help_docs.py
+web/backend/.venv/bin/python scripts/generate_help_api_reference.py --check
+```
+
+The Docs Playwright case verifies GFM tables, relative article links, reload-safe deep links, search and page overflow. Screenshots are deliberately opt-in because they update tracked assets:
+
+```bash
+cd web/frontend
+npm run docs:screenshots
+```
+
 ## Current Acceptance Commands
 
 After P0/P1 changes:
