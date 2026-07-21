@@ -13,6 +13,8 @@ LEAN 是唯一正式回测执行器。单次回测验证策略、数据和执行
 5. 成功后检查指标、图表、订单、持仓、Validation、Admission 和 Fingerprint。
 6. 需要归档时从 Reports 生成统一报告。
 
+New Backtest 将 Project/名称、标的与行情、周期与执行、策略参数分组。Fee、Slippage 和 Data Source 保持在执行配置中，Docker Image 收入 Runtime environment；折叠高级区不改变默认镜像或提交 payload。
+
 `projectId` 对 create 和 preflight 都是必填字段。worker 执行提交时复制的不可变项目快照，不使用默认 demo 算法。
 
 ## Preflight 检查
@@ -80,6 +82,8 @@ curl -X POST http://127.0.0.1:8000/api/backtests/preflight \
 ## 批次预览和上限
 
 提交前调用 `POST /api/experiment-batches/preview`。页面显示展开工作单元数、`maxBatchRuns` 上限、有效并发、PIT 解析结果和警告。
+
+批次核心区直接显示项目、标的来源、日期和资金；Optimization 的原始参数网格 JSON 只在高级优化设置中显示。先点“预览展开”，确认工作单元数量后再排队。
 
 ```json
 {

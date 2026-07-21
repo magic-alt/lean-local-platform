@@ -72,6 +72,7 @@ import { DateStringPicker } from "../components/DateStringPicker";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { ExampleGallery } from "../components/examples/ExampleGallery";
 import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
+import { FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
@@ -310,15 +311,17 @@ export function ResearchPage() {
               <>
                 <Card title="Start Research">
                   <Form layout="vertical" onFinish={startResearchSession}>
-                    <div className="field-grid">
-                      <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+                    <FormSection title="Research environment">
+                    <FormGrid>
+                      <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true }]}>
                         <Select placeholder="Project" options={projects.data.map((p) => ({ value: p.id, label: p.name }))} />
                       </Form.Item>
                       <Form.Item name="port" label="Preferred Port (optional)">
                         <InputNumber min={1024} max={65535} style={{ width: "100%" }} />
                       </Form.Item>
-                    </div>
-                    <Button data-testid="start-research-button" type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={sessionBusy === "start"}>Start</Button>
+                    </FormGrid>
+                    </FormSection>
+                    <FormActions><Button data-testid="start-research-button" type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={sessionBusy === "start"}>Start</Button></FormActions>
                   </Form>
                 </Card>
                 <Card title="Sessions" style={{ marginTop: 16 }}>
@@ -418,9 +421,10 @@ export function ResearchPage() {
               <>
                 <Card title="Factor Evaluation">
                   <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: researchStart, endDate: today, forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
-                    <div className="field-grid six">
-                      <Form.Item name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
+                    <FormSection title="Factor and universe">
+                    <FormGrid>
+                      <Form.Item className="form-field--wide" name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
+                      <Form.Item className="form-field--wide" name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
                       <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                       <Form.Item name="endDate" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
                       <Form.Item name="forwardDays" label="Forward Days"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
@@ -434,8 +438,9 @@ export function ResearchPage() {
                           }))}
                         />
                       </Form.Item>
-                    </div>
-                    <Button type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={toolBusy === "factor"}>Evaluate</Button>
+                    </FormGrid>
+                    </FormSection>
+                    <FormActions><Button type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={toolBusy === "factor"}>Evaluate</Button></FormActions>
                   </Form>
                 </Card>
                 {factorResult && (

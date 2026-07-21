@@ -15,6 +15,8 @@ Optimization 将参数候选展开成标准 LEAN 子回测，因此共享单次�
 
 `POST /api/optimize` 接受一个项目、一个标的和参数网格：
 
+页面中的 Project、市场、标的、周期和候选上限直接显示；由策略模板定义的动态参数网格也始终可见。Docker Image、Custom Parameter Grid JSON 和 Fixed Parameters JSON 位于 Advanced optimization settings，JSON 输入始终占整行。
+
 ```json
 {
   "projectId": "ema-project",

@@ -29,11 +29,14 @@ Project 是可编辑、可版本化的策略工作区；Strategy Template 定义
 
 ## 创建和编辑项目
 
-1. 在 Projects 选择 Asset、Market、Venue、Resolution、Data Type 和 Strategy。
-2. 创建后选择 Current Project，并检查项目配置。
-3. 在 Strategy Source 中编辑主文件；Python 项目会做基础语法检查。
-4. 保存配置与代码后再进入 Backtests。
-5. 需要比较不同策略版本时克隆项目，不要反复覆盖同一个生产候选项目。
+1. 在 Projects 的 Project identity 区填写 Name、Asset 和 Strategy，在 Market data 区选择 Market、Venue、Resolution 和 Data Type。
+2. Algorithm Class 默认自动生成；只有需要手工覆盖时才展开 Advanced settings。
+3. 创建后选择 Current Project，并按基本信息、市场数据、回测默认值和策略参数检查配置；Docker Image 位于 Runtime environment。
+4. 在 Strategy Source 中编辑主文件；Python 项目会做基础语法检查。
+5. 保存配置与代码后再进入 Backtests。
+6. 需要比较不同策略版本时克隆项目，不要反复覆盖同一个生产候选项目。
+
+表单在桌面最多显示四列，平板自动两列，手机单列。长名称、标的搜索和 JSON 会跨列显示；字段 DOM 顺序即键盘 Tab 顺序。
 
 相关接口：
 

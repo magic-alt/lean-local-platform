@@ -25,6 +25,8 @@ Research 提供两种入口：网页快捷研究适合标准化、可重复任�
 4. 打开 Jupyter，在项目工作区保存 Notebook 和输出。
 5. 完成后停止或删除会话，避免长期占用 Docker 内存和端口。
 
+Start Research 将 Project 作为宽字段，并在同一紧凑区提供可选端口。Factor Evaluation 按因子/股票池和日期/评价参数分组，在桌面最多四列显示。
+
 ```json
 POST /api/research
 {

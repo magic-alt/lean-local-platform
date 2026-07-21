@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { api } from "../../api";
 import type { ExperimentBatch, ExperimentBatchPreview, Project } from "../../api";
 import { DateStringPicker } from "../DateStringPicker";
+import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
 
 
 const MODES = {
@@ -132,24 +133,34 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           start: dayjs().subtract(5, "year").format("YYYY-MM-DD"), end: dayjs().format("YYYY-MM-DD"), cash: 300000,
           maxCandidates: 200, factorNames: "momentum,volatility", parameterGridJson: '{"fast":[5,10,20],"slow":[30,60]}'
         }}>
-          <div className="field-grid">
-            <Form.Item name="name" label="批次名称" rules={[{ required: true }]}><Input /></Form.Item>
+          <FormSection title="批次与标的">
+          <FormGrid>
+            <Form.Item className="form-field--wide" name="name" label="批次名称" rules={[{ required: true }]}><Input /></Form.Item>
             <Form.Item name="mode" label="运行模式"><Select options={MODES[kind]} onChange={() => setPreview(undefined)} /></Form.Item>
-            {activeProjectRequired && <Form.Item name="projectIds" label="项目" rules={[{ required: true }]}><Select mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
+            {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
             {kind !== "research" && <Form.Item name="symbolSource" label="标的来源"><Select options={[{ value: "symbols", label: "股票代码" }, { value: "universe", label: "PIT股票池" }]} /></Form.Item>}
-            {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
+            {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item className="form-field--wide" name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
             {kind !== "research" && (symbolSource === "universe" || mode === "dynamic_universe") && <Form.Item name="universeCode" label="股票池"><Select options={["CSI300", "CSI500", "CSI1000", "SSE50", "STAR50", "ALL_A"].map((value) => ({ value, label: value }))} /></Form.Item>}
-            {kind !== "research" && <Form.Item name="start" label="开始日期"><DateStringPicker /></Form.Item>}
-            {kind !== "research" && <Form.Item name="end" label="结束日期"><DateStringPicker /></Form.Item>}
-            {kind !== "research" && <Form.Item name="cash" label="每个运行初始资金"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>}
-            {kind === "research" && <Form.Item name="factorNames" label="因子/研究项"><Input placeholder="momentum,volatility" /></Form.Item>}
-          </div>
+            {kind === "research" && <Form.Item className="form-field--wide" name="factorNames" label="因子/研究项"><Input placeholder="momentum,volatility" /></Form.Item>}
+          </FormGrid>
+          </FormSection>
+          {kind !== "research" && <FormSection title="回测范围">
+          <FormGrid>
+            <Form.Item name="start" label="开始日期"><DateStringPicker /></Form.Item>
+            <Form.Item name="end" label="结束日期"><DateStringPicker /></Form.Item>
+            <Form.Item name="cash" label="每个运行初始资金"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+          </FormGrid>
+          </FormSection>}
           {kind === "optimization" && <>
-            <Form.Item name="parameterGridJson" label="通用参数网格 JSON"><Input.TextArea rows={3} /></Form.Item>
-            {mode === "multi_strategy" && <Form.Item name="parameterGridsJson" label="各项目参数网格（可选，以 projectId 为键）"><Input.TextArea rows={3} placeholder='{"project-id":{"period":[10,20,30]}}' /></Form.Item>}
+            <AdvancedFields label="高级优化设置">
+              <FormGrid>
+                <Form.Item className="form-field--full" name="parameterGridJson" label="通用参数网格 JSON"><Input.TextArea rows={3} /></Form.Item>
+                {mode === "multi_strategy" && <Form.Item className="form-field--full" name="parameterGridsJson" label="各项目参数网格（可选，以 projectId 为键）"><Input.TextArea rows={3} placeholder='{"project-id":{"period":[10,20,30]}}' /></Form.Item>}
+              </FormGrid>
+            </AdvancedFields>
           </>}
           {preview && <Alert style={{ marginBottom: 12 }} type={preview.withinLimit ? "success" : "error"} showIcon message={`将展开 ${preview.expandedCount} 个工作单元 · 上限 ${preview.limit} · 并发 ${preview.effectiveConcurrency}`} description={preview.warnings.join(" ") || "股票池和参数已经解析，可以排队。"} />}
-          <Space><Button onClick={runPreview}>预览展开</Button><Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={busy}>确认并排队</Button></Space>
+          <FormActions><Button onClick={runPreview}>预览展开</Button><Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={busy}>确认并排队</Button></FormActions>
         </Form>
       </Card>
       <Card title="批次历史" style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>}>

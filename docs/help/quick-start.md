@@ -65,16 +65,19 @@ curl http://127.0.0.1:8000/api/health/database
 
 进入 Projects：
 
-1. 选择市场、资产类别、分辨率和策略模板。
-2. 创建项目后在 Strategy Source 编辑代码。
-3. 检查 `project.json` 中的模板、参数、基准、费用和滑点配置。
-4. 保存后，回测会复制不可变项目快照；后续修改不会改变已经提交的运行。
+1. 在紧凑的核心区域填写 Name、Asset Class、Strategy、Market、Venue、Resolution 和 Data Type。
+2. 只有需要覆盖自动生成入口类时才展开 Advanced settings 填写 Algorithm Class；折叠不会清除已输入内容。
+3. 创建项目后在 Strategy Source 编辑代码。
+4. 检查 `project.json` 中的模板、参数、基准、费用和滑点配置。
+5. 保存后，回测会复制不可变项目快照；后续修改不会改变已经提交的运行。
 
 第一次建议使用 Buy & Hold 或 EMA Cross。详细模板和案例见 [策略与模板](strategies.md)。
 
 ## 6. 运行首个回测
 
 进入 Backtests，选择刚创建的 Project，填写股票、日期、资金和基准。
+
+页面将标的与行情、周期与执行、动态策略参数分组显示。Docker Image 位于 Runtime environment 高级区；动态策略参数始终可见，不会因高级区折叠而跳过。
 
 ```json
 {

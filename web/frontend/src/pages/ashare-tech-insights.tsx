@@ -7,6 +7,7 @@ import type { AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTec
 import { ApiError } from "../api/client";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { FormActions, FormGrid } from "../components/forms/FormLayout";
 import { useAsyncData } from "../hooks";
 
 const emptyList = { items: [], count: 0, limit: 50, offset: 0 };
@@ -343,17 +344,19 @@ export function AshareTechInsights() {
       </Card>}
       <Modal title="添加A股股票" open={addOpen} onCancel={() => setAddOpen(false)} footer={null} destroyOnHidden>
         <Form form={addForm} layout="vertical" onFinish={addStock} initialValues={{ groupKey: "core", ruleTags: [] }}>
-          <Form.Item name="code" label="股票代码" rules={[{ required: true }, { pattern: /^\d{6}$/, message: "请输入6位股票代码" }]}>
-            <SecuritySearch market="china" placeholder="代码 / 公司名 / 拼音 / 别名" />
-          </Form.Item>
-          <Form.Item name="groupKey" label="加入固定分组" rules={[{ required: true }]}>
-            <Select options={watchlist.data.groups.map((group) => ({ value: group.key, label: group.name }))} />
-          </Form.Item>
-          <Form.Item name="ruleTags" label="特殊低吸约束">
-            <Checkbox.Group options={ruleTagOptions} />
-          </Form.Item>
+          <FormGrid modal>
+            <Form.Item name="code" label="股票代码" rules={[{ required: true }, { pattern: /^\d{6}$/, message: "请输入6位股票代码" }]}>
+              <SecuritySearch market="china" placeholder="代码 / 公司名 / 拼音 / 别名" />
+            </Form.Item>
+            <Form.Item name="groupKey" label="加入固定分组" rules={[{ required: true }]}>
+              <Select options={watchlist.data.groups.map((group) => ({ value: group.key, label: group.name }))} />
+            </Form.Item>
+            <Form.Item className="form-field--full" name="ruleTags" label="特殊低吸约束">
+              <Checkbox.Group options={ruleTagOptions} />
+            </Form.Item>
+          </FormGrid>
           <Alert type="info" showIcon message="保存前必须通过 TuShare 确认为在市A股，名称由系统自动填写。" style={{ marginBottom: 16 }} />
-          <Button type="primary" htmlType="submit" loading={mutating}>验证并添加</Button>
+          <FormActions><Button type="primary" htmlType="submit" loading={mutating}>验证并添加</Button></FormActions>
         </Form>
       </Modal>
     </>

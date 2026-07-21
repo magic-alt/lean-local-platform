@@ -21,6 +21,8 @@ LEAN Paper 必须同时提供 `projectId` 和 `sourceBacktestId`。候选接口�
 4. 配置市场、资金、基准、持仓上限、现金下限和黑白名单。
 5. 创建后按交易日顺序运行。
 
+Create Paper Session 只展示当前模式需要的字段：LEAN Walk-forward 显示 Project 与 Trusted Backtest，Signal Simulation 显示 Market、Symbol 与 Initial Cash；切换模式不会产生另一模式的隐藏必填校验。
+
 ```json
 {
   "name": "EMA walk-forward",

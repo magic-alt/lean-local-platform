@@ -4,6 +4,8 @@ Settings 保存网页默认值，`.env` 和 Compose 环境变量控制服务、�
 
 ## Web Settings
 
+页面按 Market defaults、Backtest defaults、Task capacity 和 Runtime environment 分组。Docker 与 Research Image 位于默认折叠的 Runtime environment；保存仍提交完整的已编辑设置，折叠不会清空值。
+
 | 设置 | 说明 |
 | --- | --- |
 | `defaultAssetClass` | 新建项目/表单的默认资产类别 |

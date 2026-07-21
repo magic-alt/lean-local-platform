@@ -26,7 +26,10 @@ export class StrategyPage extends BasePage {
     if (values.market) await this.selectByTestId("project-market-select", values.market);
     if (values.resolution) await this.selectByTestId("project-resolution-select", values.resolution);
     if (values.strategy) await this.selectByTestId("project-template-select", values.strategy);
-    if (values.className) await this.fillByLabel("Class", values.className);
+    if (values.className) {
+      await this.page.getByText("Advanced settings", { exact: true }).click();
+      await this.fillByLabel("Algorithm Class", values.className);
+    }
     await this.page.getByRole("button", { name: "Create" }).click();
     await expect(this.page.getByRole("heading", { name: new RegExp(`Current Project:.*${values.name}`) })).toBeVisible();
   }

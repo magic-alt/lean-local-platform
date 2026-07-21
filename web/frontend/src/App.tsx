@@ -55,7 +55,7 @@ function AppShell() {
     <Layout className="app-layout">
       <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
       <Layout>
-        <Header className="app-header"><Space><strong>LEAN Local Workbench</strong><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></Space></Header>
+        <Header className="app-header"><Space className="app-header__content"><strong>LEAN Local Workbench</strong><span className="app-header__badges"><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></span></Space></Header>
         <Content className="app-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />

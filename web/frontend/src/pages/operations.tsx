@@ -72,6 +72,7 @@ import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
+import { AdvancedFields, FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { candlestickOption } from "../charts/candlestick";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
@@ -212,19 +213,20 @@ export function PaperPage() {
           onFinishFailed={() => message.warning("请先选择 Project 和验证通过的 Backtest")}
           initialValues={{ autoAdvance: true, mode: "lean_walkforward", market: "china", cash: 100000 }}
         >
-          <div className="field-grid four">
+          <FormSection title="Session setup">
+          <FormGrid>
             <Form.Item name="mode" label="Mode" rules={[{ required: true }]}>
               <Select options={[
                 { value: "lean_walkforward", label: "LEAN Walk-forward" },
                 { value: "signal_simulation", label: "Signal Simulation" }
               ]} />
             </Form.Item>
-            <Form.Item name="name" label="Name"><Input placeholder="600460 MACD daily paper" /></Form.Item>
+            <Form.Item className="form-field--wide" name="name" label="Name"><Input placeholder="600460 MACD daily paper" /></Form.Item>
             {paperMode === "lean_walkforward" ? <>
-              <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+              <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true }]}>
                 <Select allowClear options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} />
               </Form.Item>
-              <Form.Item name="sourceBacktestId" label="Trusted Backtest" rules={[{ required: true }]}>
+              <Form.Item className="form-field--wide" name="sourceBacktestId" label="Trusted Backtest" rules={[{ required: true }]}>
                 <Select
                   loading={candidatesLoading}
                   disabled={!projectId}
@@ -246,7 +248,8 @@ export function PaperPage() {
               <DateStringPicker placeholder="Default: next trading day after backtest" />
             </Form.Item>
             <Form.Item name="autoAdvance" valuePropName="checked"><Checkbox>工作日收盘后自动推进</Checkbox></Form.Item>
-          </div>
+          </FormGrid>
+          </FormSection>
           {paperMode === "lean_walkforward" && projectId && !candidatesLoading && candidates.length === 0 && (
             <Alert
               type="warning"
@@ -265,7 +268,7 @@ export function PaperPage() {
               style={{ marginBottom: 16 }}
             />
           )}
-          <Button data-testid="create-paper-button" type="primary" htmlType="submit" loading={creating} disabled={creating || (paperMode === "lean_walkforward" && (candidatesLoading || !selectedCandidate))}>Create</Button>
+          <FormActions><Button data-testid="create-paper-button" type="primary" htmlType="submit" loading={creating} disabled={creating || (paperMode === "lean_walkforward" && (candidatesLoading || !selectedCandidate))}>Create</Button></FormActions>
         </Form>
       </Card>
       <Card title="Sessions" style={{ marginTop: 16 }}>
@@ -615,7 +618,8 @@ export function SettingsPage() {
       <div className="toolbar"><h1 className="page-title">Settings</h1><Button icon={<ReloadOutlined />} onClick={settings.reload}>Refresh</Button></div>
       <Card title="Defaults">
         <Form form={form} layout="vertical" onFinish={submit}>
-          <div className="field-grid">
+          <FormSection title="Market defaults">
+          <FormGrid>
             <Form.Item name="defaultAssetClass" label="Default Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="defaultMarket" label="Default Market"><Select options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="defaultVenue" label="Default Venue"><Select options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
@@ -623,19 +627,32 @@ export function SettingsPage() {
             <Form.Item name="defaultDataType" label="Default Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="defaultProvider" label="Default Provider"><Select options={providers.data.map((item) => ({ value: item.key, label: item.disabledByDefault || item.enabledByDefault === false ? `${item.name} (disabled)` : item.name, disabled: item.disabledByDefault || item.enabledByDefault === false }))} /></Form.Item>
             <Form.Item name="defaultAdjust" label="Default Adjust"><Select options={[{ value: "", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Backtest defaults">
+          <FormGrid>
             <Form.Item name="defaultStrategyTemplate" label="Default Strategy"><Select options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="defaultStart" label="Default Start"><DateStringPicker /></Form.Item>
             <Form.Item name="defaultEnd" label="Default End"><DateStringPicker /></Form.Item>
             <Form.Item name="defaultCash" label="Default Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="chartPointLimit" label="Chart Point Limit"><InputNumber min={1000} style={{ width: "100%" }} /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Task capacity">
+          <FormGrid>
             <Form.Item name="maxConcurrentJobs" label="Max Concurrent Jobs"><InputNumber min={1} max={8} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="maxBatchRuns" label="Max Batch Runs"><InputNumber min={1} max={50000} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="jobTimeoutSeconds" label="Job Timeout Seconds"><InputNumber min={60} style={{ width: "100%" }} /></Form.Item>
             <Form.Item name="logLevel" label="Log Level"><Select options={["DEBUG", "INFO", "WARNING", "ERROR"].map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="dockerImage" label="Docker Image"><Input /></Form.Item>
-            <Form.Item name="researchImage" label="Research Image"><Input /></Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit">Save Settings</Button>
+          </FormGrid>
+          </FormSection>
+          <AdvancedFields label="Runtime environment">
+            <FormGrid>
+              <Form.Item className="form-field--wide" name="dockerImage" label="Docker Image"><Input /></Form.Item>
+              <Form.Item className="form-field--wide" name="researchImage" label="Research Image"><Input /></Form.Item>
+            </FormGrid>
+          </AdvancedFields>
+          <FormActions><Button type="primary" htmlType="submit">Save Settings</Button></FormActions>
         </Form>
       </Card>
     </>

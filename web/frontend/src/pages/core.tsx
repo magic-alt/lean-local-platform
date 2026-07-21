@@ -79,6 +79,7 @@ import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { AdvancedFields, FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { DatasetPreviewPanel } from "../components/data/DatasetPreviewPanel";
 import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { ExampleGallery } from "../components/examples/ExampleGallery";
@@ -637,7 +638,8 @@ function MarketDataDownloader({
           overwrite: false
         }}
       >
-        <div className="field-grid six">
+        <FormSection title="Data source" description="Select the store, market and bar definition.">
+          <FormGrid>
           {showSourceSelect && (
             <Form.Item name="source" label="Preview Store">
               <Select
@@ -709,6 +711,29 @@ function MarketDataDownloader({
               <Select options={[{ value: "raw", label: "Raw" }, { value: "qfq", label: "QFQ" }, { value: "hfq", label: "HFQ" }]} />
             </Form.Item>
           )}
+          </FormGrid>
+        </FormSection>
+        <FormSection title="Instrument scope" description="Search one or more symbols to preview or download.">
+          <FormGrid>
+            <Form.Item className="form-field--full" label="Symbols">
+              <SecuritySearch
+                assetClass={selectedAssetClass}
+                market={selectedMarket}
+                value={symbolsText}
+                onChange={(value) => setSymbolsText(value.toUpperCase())}
+                onSelectSecurity={(security) => {
+                  setSymbolsText(security.symbol);
+                  const nextListedDate = security.listedDate ?? undefined;
+                  setListedDate(nextListedDate);
+                  if (nextListedDate) form.setFieldValue("startDate", nextListedDate);
+                }}
+                placeholder={selectedAssetClass === "equity" ? "搜索代码 / 公司 / 拼音，或直接输入代码" : "输入 Symbol"}
+              />
+            </Form.Item>
+          </FormGrid>
+        </FormSection>
+        <FormSection title="Time range" description="Choose the requested history window.">
+          <FormGrid>
           <Form.Item
             name="startDate"
             label="Start"
@@ -753,32 +778,29 @@ function MarketDataDownloader({
           >
             <DateStringPicker testId="market-data-end-input" />
           </Form.Item>
+          </FormGrid>
+        </FormSection>
+        {(showLimitInput || showOutputSize) && <FormSection title="Output options">
+          <FormGrid>
           {showLimitInput && <Form.Item name="limit" label="Preview Rows"><InputNumber min={1} max={5000} style={{ width: "100%" }} /></Form.Item>}
           {showOutputSize && (
             <Form.Item name="outputsize" label="Output Size">
               <Select disabled={selectedProvider !== "alpha_vantage"} options={[{ value: "compact" }, { value: "full" }]} />
             </Form.Item>
           )}
-          {(showApiKey && (selectedProvider === "alpha_vantage")) && (
-            <Form.Item name="apiKey" label="API Key"><Input.Password placeholder="or environment variable" /></Form.Item>
-          )}
-          {showOverwrite && <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>}
-        </div>
-        <Space.Compact style={{ width: "100%", marginBottom: 12 }}>
-          <SecuritySearch
-            assetClass={selectedAssetClass}
-            market={selectedMarket}
-            value={symbolsText}
-            onChange={(value) => setSymbolsText(value.toUpperCase())}
-            onSelectSecurity={(security) => {
-              setSymbolsText(security.symbol);
-              const nextListedDate = security.listedDate ?? undefined;
-              setListedDate(nextListedDate);
-              if (nextListedDate) form.setFieldValue("startDate", nextListedDate);
-            }}
-            placeholder={selectedAssetClass === "equity" ? "搜索代码 / 公司 / 拼音，或直接输入代码" : "输入 Symbol"}
-            style={{ flex: 1 }}
-          />
+          </FormGrid>
+        </FormSection>}
+        {((showApiKey && selectedProvider === "alpha_vantage") || showOverwrite) && (
+          <AdvancedFields>
+            <FormGrid>
+              {(showApiKey && selectedProvider === "alpha_vantage") && (
+                <Form.Item className="form-field--wide" name="apiKey" label="API Key"><Input.Password placeholder="or environment variable" /></Form.Item>
+              )}
+              {showOverwrite && <Form.Item name="overwrite" valuePropName="checked" label=" "><Checkbox>Overwrite local files</Checkbox></Form.Item>}
+            </FormGrid>
+          </AdvancedFields>
+        )}
+        <FormActions>
           <Button
             data-testid="market-data-preview-button"
             icon={<ReloadOutlined />}
@@ -786,7 +808,7 @@ function MarketDataDownloader({
             onClick={() => void form.validateFields().then(previewMarketData).catch(() => undefined)}
           >Preview</Button>
           <Button data-testid="market-data-fetch-button" type="primary" icon={<CloudDownloadOutlined />} htmlType="submit" loading={fetchLoading}>Download</Button>
-        </Space.Compact>
+        </FormActions>
       </Form>
       {securityInfo && (
         <Card size="small" className="stock-preview-card" style={{ marginBottom: 12 }}>
@@ -1293,8 +1315,9 @@ export function ProjectsPage() {
       </div>
       <Card title="Create Project">
         <Form form={createForm} layout="vertical" onFinish={createProject} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", templateKey: "ema_cross" }}>
-          <div className="field-grid">
-            <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
+          <FormSection title="Project identity" description="Choose the project name, asset and starter strategy.">
+          <FormGrid>
+            <Form.Item className="form-field--wide" name="name" label="Name" rules={[{ required: true }]}><Input placeholder="A Share RSI Strategy" /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class">
               <Select
                 data-testid="project-asset-select"
@@ -1306,14 +1329,21 @@ export function ProjectsPage() {
                 }}
               />
             </Form.Item>
+            <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Market data" description="Defaults used when the project is opened for a backtest.">
+          <FormGrid>
             <Form.Item name="market" label="Market"><Select data-testid="project-market-select" virtual={false} options={markets.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select data-testid="project-venue-select" virtual={false} disabled={selectedAssetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="project-resolution-select" virtual={false} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="project-data-type-select" virtual={false} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-            <Form.Item name="algorithmClass" label="Class"><Input placeholder="Auto-generated if empty" /></Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit">Create</Button>
+          </FormGrid>
+          </FormSection>
+          <AdvancedFields>
+            <FormGrid><Form.Item className="form-field--wide" name="algorithmClass" label="Algorithm Class"><Input placeholder="Auto-generated if empty" /></Form.Item></FormGrid>
+          </AdvancedFields>
+          <FormActions><Button type="primary" htmlType="submit">Create Project</Button></FormActions>
         </Form>
       </Card>
       {selectedProject && (
@@ -1338,8 +1368,9 @@ export function ProjectsPage() {
               setPreflight(undefined);
             }}
           >
-            <div className="field-grid">
-              <Form.Item name="name" label="Project Name" rules={[{ required: true }]}><Input placeholder="Project name" /></Form.Item>
+            <FormSection title="Basic information">
+            <FormGrid>
+              <Form.Item className="form-field--wide" name="name" label="Project Name" rules={[{ required: true }]}><Input placeholder="Project name" /></Form.Item>
               <Form.Item name="assetClass" label="Asset">
                 <Select
                   data-testid="project-asset-select"
@@ -1351,6 +1382,11 @@ export function ProjectsPage() {
                   }}
                 />
               </Form.Item>
+              <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            </FormGrid>
+            </FormSection>
+            <FormSection title="Market data">
+            <FormGrid>
               <Form.Item name="market" label="Market">
                 <Select
                   data-testid="project-market-select"
@@ -1376,15 +1412,18 @@ export function ProjectsPage() {
               <Form.Item name="dataType" label="Data Type">
                 <Select data-testid="project-data-type-select" virtual={false} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} />
               </Form.Item>
-              <Form.Item name="templateKey" label="Strategy"><Select data-testid="project-template-select" virtual={false} options={templates.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
-              <Form.Item name="source" label="Data Source">
+              <Form.Item className="form-field--wide" name="source" label="Data Source">
                 {selectedMarket === "china" ? (
                   <Select virtual={false} showSearch optionFilterProp="label" options={A_SHARE_BACKTEST_SOURCE_OPTIONS} />
                 ) : (
                   <Input placeholder="optional provider source" />
                 )}
               </Form.Item>
-              <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={selectedAssetClass} market={selectedMarket} localSymbols={symbols} /></Form.Item>
+            </FormGrid>
+            </FormSection>
+            <FormSection title="Backtest defaults">
+            <FormGrid>
+              <Form.Item className="form-field--wide" name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={selectedAssetClass} market={selectedMarket} localSymbols={symbols} /></Form.Item>
               <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker /></Form.Item>
               <Form.Item name="end" label="End" rules={[{ required: true, message: "End date is required" }, dateRule("End date"), ({ getFieldValue }) => ({ validator(_, value) {
                 const start = getFieldValue("start");
@@ -1397,12 +1436,15 @@ export function ProjectsPage() {
               <Form.Item name="cash" label="Cash">
                 <InputNumber min={1} style={{ width: "100%" }} />
               </Form.Item>
-              <Form.Item name="dockerImage" label="Docker Image"><Input /></Form.Item>
               <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input /></Form.Item>
               <Form.Item name="feeModel" label="Fee Model"><Select virtual={false} options={[{ value: "default", label: "Default A-share costs" }, { value: "zero", label: "Zero Fees (research only)" }]} /></Form.Item>
               <Form.Item name="slippageModel" label="Slippage Model"><Select virtual={false} options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
-            </div>
-            {selectedTemplate && <div className="field-grid">{strategyFields(selectedTemplate)}</div>}
+            </FormGrid>
+            </FormSection>
+            {selectedTemplate && <FormSection title="Strategy parameters"><FormGrid>{strategyFields(selectedTemplate)}</FormGrid></FormSection>}
+            <AdvancedFields label="Runtime environment">
+              <FormGrid><Form.Item className="form-field--wide" name="dockerImage" label="Docker Image"><Input /></Form.Item></FormGrid>
+            </AdvancedFields>
             {preflight?.ready && (
               <Alert
                 type={preflight.repaired.length > 0 ? "warning" : "success"}
@@ -1413,10 +1455,10 @@ export function ProjectsPage() {
                   : `Data is ready from ${preflight.effectiveSource || "the selected source"}.`}
               />
             )}
-            <Space wrap>
+            <FormActions>
               <Button icon={<SaveOutlined />} type="default" onClick={saveProject} loading={saving} disabled={saving || !selectedProjectId}>Save{dirty ? " Changes" : ""}</Button>
               <Button type="primary" icon={<PlayCircleOutlined />} onClick={runBacktest} loading={submitting} disabled={submitting || !selectedProjectId}>Save & Run</Button>
-            </Space>
+            </FormActions>
           </Form>
           <div className="grid" style={{ marginTop: 16 }}>
             <Card><Statistic title="Backtests" value={projectRuns.length} /></Card>
@@ -2042,7 +2084,7 @@ export function DataPage() {
         />
         <Form form={downloadForm} layout="vertical" onFinish={submitOnDemandDownload}>
           <Form.Item name="dataset" label="数据集"><Input disabled /></Form.Item>
-          <div className="field-grid two">
+          <FormGrid modal>
             <Form.Item name="storageTarget" label="下载地址" rules={[{ required: true, message: "请选择下载地址" }]}>
               <Select
                 placeholder="请选择，不使用默认硬盘目录"
@@ -2056,11 +2098,11 @@ export function DataPage() {
             <Form.Item name="relativePath" label="目标子目录" rules={[{ required: true }]}>
               <Input placeholder="例如 tushare-on-demand/fund_nav" />
             </Form.Item>
-          </div>
+          </FormGrid>
           {selectedStorage && (
             <Alert type="success" showIcon style={{ marginBottom: 12 }} message={`实际保存到：${selectedStorage.displayPath}`} />
           )}
-          <div className="field-grid three">
+          <FormGrid modal>
             <Form.Item name="format" label="文件格式" rules={[{ required: true }]}>
               <Select options={[{ value: "parquet", label: "Parquet" }, { value: "jsonl", label: "JSON Lines" }]} />
             </Form.Item>
@@ -2074,11 +2116,11 @@ export function DataPage() {
             <Form.Item label="接口限制">
               <Input disabled value={downloadDataset?.rate_limit_per_hour ? `${downloadDataset.rate_limit_per_hour} 次/小时` : "全局 500 次/分钟"} />
             </Form.Item>
-          </div>
-          <div className="field-grid two">
+          </FormGrid>
+          <FormGrid modal>
             <Form.Item name="startDate" label="开始日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
             <Form.Item name="endDate" label="结束日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
-          </div>
+          </FormGrid>
           <Form.Item
             name="apiParameters"
             label="额外 TuShare 参数（JSON，可选）"
@@ -2097,7 +2139,7 @@ export function DataPage() {
           description="股票页合并 stock_basic、daily、adj_factor、suspend_d、stk_limit；其余数据集分别按交易日历、指数、期货和期权预览。"
         />
         <Tabs
-          destroyInactiveTabPane={false}
+          destroyOnHidden={false}
           items={[
             {
               key: "stocks",
@@ -2149,11 +2191,11 @@ export function DataPage() {
           description="必需字段：timestamp, open, high, low, close, volume。日期使用 YYYY-MM-DD；价格必须大于0；high 不得低于 open/close，low 不得高于 open/close；volume 必须为非负数。股票代码在下方单独选择，不要写入 CSV。"
         />
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>
-          <div className="field-grid three">
+          <FormGrid>
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={csvAssetClass} market={csvMarket} /></Form.Item>
             <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
-          </div>
+          </FormGrid>
           <Space wrap>
             <Form.Item name="file" label="CSV 文件" rules={[{ required: true, message: "请选择 CSV 文件" }]}>
               <Upload
@@ -2277,15 +2319,24 @@ export function BacktestsPage() {
             parameters: templateDefaults(selectedTemplate)
           }}
         >
-          <div className="field-grid six">
-            <Form.Item name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: defaultBenchmark(nextMarket), source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
-            <Form.Item name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
+          <FormSection title="Strategy" description="Select the project snapshot and give this run a recognizable name.">
+          <FormGrid>
+            <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: defaultBenchmark(nextMarket), source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
+            <Form.Item className="form-field--wide" name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Instrument & data">
+          <FormGrid>
             <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
             <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", defaultBenchmark(value)); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="dataType" label="Data Type"><Select data-testid="backtest-data-type-select" virtual={false} showSearch optionFilterProp="label" onChange={setDataType} options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><SecuritySearch data-testid="backtest-symbol-input" assetClass={assetClass} market={market} localSymbols={symbols} /></Form.Item>
+            <Form.Item className="form-field--wide" name="symbol" label="Symbol" rules={[{ required: true, message: "Symbol is required" }]}><SecuritySearch data-testid="backtest-symbol-input" assetClass={assetClass} market={market} localSymbols={symbols} /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Period">
+          <FormGrid>
             <Form.Item name="start" label="Start" rules={[{ required: true, message: "Start date is required" }, dateRule("Start date")]}><DateStringPicker testId="backtest-start-input" /></Form.Item>
             <Form.Item
               name="end"
@@ -2323,18 +2374,25 @@ export function BacktestsPage() {
               <InputNumber style={{ width: "100%" }} data-testid="backtest-cash-input" />
             </Form.Item>
             <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true, message: "Benchmark is required" }]}><Input data-testid="backtest-benchmark-input" /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormSection title="Execution configuration">
+          <FormGrid>
             <Form.Item name="feeModel" label="Fee Model"><Select data-testid="backtest-fee-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default A-share costs" }, { value: "zero", label: "Zero Fees (research only)" }]} /></Form.Item>
             <Form.Item name="slippageModel" label="Slippage Model"><Select data-testid="backtest-slippage-model-select" virtual={false} showSearch optionFilterProp="label" options={[{ value: "default", label: "Default" }, { value: "zero", label: "Zero Slippage" }]} /></Form.Item>
-            <Form.Item name="source" label="Data Source">
+            <Form.Item className="form-field--wide" name="source" label="Data Source">
               {market === "china" ? (
                 <Select data-testid="backtest-source-select" virtual={false} showSearch optionFilterProp="label" options={A_SHARE_BACKTEST_SOURCE_OPTIONS} />
               ) : (
                 <Input data-testid="backtest-source-input" placeholder="optional provider source" />
               )}
             </Form.Item>
-            <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
-            {strategyFields(selectedTemplate)}
-          </div>
+          </FormGrid>
+          </FormSection>
+          {selectedTemplate && <FormSection title="Strategy parameters"><FormGrid>{strategyFields(selectedTemplate)}</FormGrid></FormSection>}
+          <AdvancedFields label="Runtime environment">
+            <FormGrid><Form.Item className="form-field--wide" name="dockerImage" label="Docker Image"><Input /></Form.Item></FormGrid>
+          </AdvancedFields>
           {preflight?.ready && (
             <Alert
               type={preflight.repaired.length > 0 ? "warning" : "success"}
@@ -2345,7 +2403,7 @@ export function BacktestsPage() {
                 : `Data ready from ${preflight.effectiveSource || "the selected source"}.`}
             />
           )}
-          <Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run</Button>
+          <FormActions><Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run Backtest</Button></FormActions>
         </Form>
       </Card>
       <BatchWorkbench kind="backtest" projects={projects.data} />
@@ -2799,34 +2857,46 @@ export function OptimizationPage() {
               <>
                 <Card title="Parameter Grid">
                   <Form form={form} layout="vertical" onFinish={submit} initialValues={{ assetClass: "equity", market: "china", venue: "china", resolution: "daily", dataType: "trade", symbol: "000001", start: "2024-01-01", end: "2026-07-13", cash: 300000, maxCandidates: 50, dockerImage: defaultSettings.dockerImage }}>
-                    <div className="field-grid">
-                      <Form.Item name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
+                    <FormSection title="Strategy and market">
+                    <FormGrid>
+                      <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projects.data.map((p) => ({ value: p.id, label: p.name }))} /></Form.Item>
                       <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
                       <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
                       <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
                       <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
                       <Form.Item name="dataType" label="Data Type"><Select options={(selectedAssetInfo?.dataTypes ?? ["trade"]).map((value) => ({ value, label: value }))} /></Form.Item>
-                      <Form.Item name="symbol" label="Symbol"><SecuritySearch assetClass={assetClass} market={market} /></Form.Item>
+                      <Form.Item className="form-field--wide" name="symbol" label="Symbol"><SecuritySearch assetClass={assetClass} market={market} /></Form.Item>
+                    </FormGrid>
+                    </FormSection>
+                    <FormSection title="Period and search">
+                    <FormGrid>
                       <Form.Item name="start" label="Start"><DateStringPicker /></Form.Item>
                       <Form.Item name="end" label="End"><DateStringPicker /></Form.Item>
                       <Form.Item name="cash" label="Cash"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
                       <Form.Item name="maxCandidates" label="Max Candidates"><InputNumber min={1} max={200} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="dockerImage" label="Image"><Input /></Form.Item>
-                    </div>
-                    <div className="field-grid">
+                    </FormGrid>
+                    </FormSection>
+                    <FormSection title="Parameter grid">
+                    <FormGrid>
                       {(selectedTemplate?.parameters ?? []).map((parameter) => (
                         <Form.Item key={parameter.key} name={["parameterGrid", parameter.key]} label={`${parameter.label} Grid`}>
                           <Input placeholder={String(parameter.default ?? "")} />
                         </Form.Item>
                       ))}
-                    </div>
-                    <Form.Item name="parameterGridJson" label="Custom Parameter Grid JSON">
-                      <Input.TextArea rows={3} placeholder='{"period":[10,20,30],"threshold":[0.1,0.2]}' />
-                    </Form.Item>
-                    <Form.Item name="parametersJson" label="Fixed Parameters JSON">
-                      <Input.TextArea rows={3} placeholder='{"benchmarkSymbol":"SPY"}' />
-                    </Form.Item>
-                    <Button type="primary" icon={<SlidersOutlined />} htmlType="submit">Queue Optimization</Button>
+                    </FormGrid>
+                    </FormSection>
+                    <AdvancedFields label="Advanced optimization settings">
+                      <FormGrid>
+                        <Form.Item className="form-field--wide" name="dockerImage" label="Docker Image"><Input /></Form.Item>
+                        <Form.Item className="form-field--full" name="parameterGridJson" label="Custom Parameter Grid JSON">
+                          <Input.TextArea rows={3} placeholder='{"period":[10,20,30],"threshold":[0.1,0.2]}' />
+                        </Form.Item>
+                        <Form.Item className="form-field--full" name="parametersJson" label="Fixed Parameters JSON">
+                          <Input.TextArea rows={3} placeholder='{"benchmarkSymbol":"SPY"}' />
+                        </Form.Item>
+                      </FormGrid>
+                    </AdvancedFields>
+                    <FormActions><Button type="primary" icon={<SlidersOutlined />} htmlType="submit">Queue Optimization</Button></FormActions>
                   </Form>
                 </Card>
                 <Card title="Optimization Runs" style={{ marginTop: 16 }}>
@@ -2860,10 +2930,10 @@ export function OptimizationPage() {
                     onFinish={submitPortfolio}
                     initialValues={{ objective: "sharpe", step: 0.1, maxWeight: 1.0 }}
                   >
-                    <Form.Item name="runIds" label="Run IDs" rules={[{ required: true }]}>
+                    <Form.Item className="form-field--full" name="runIds" label="Run IDs" rules={[{ required: true }]}>
                       <Input.TextArea rows={4} placeholder="run-id-1, run-id-2" />
                     </Form.Item>
-                    <div className="field-grid">
+                    <FormGrid>
                       <Form.Item name="objective" label="Objective">
                         <Select options={[
                           { value: "sharpe", label: "Maximum Sharpe" },
@@ -2877,8 +2947,8 @@ export function OptimizationPage() {
                       <Form.Item name="maxWeight" label="Maximum Weight">
                         <InputNumber min={0.01} max={1} step={0.05} style={{ width: "100%" }} />
                       </Form.Item>
-                    </div>
-                    <Button type="primary" htmlType="submit" loading={portfolioSubmitting}>Optimize Weights</Button>
+                    </FormGrid>
+                    <FormActions><Button type="primary" htmlType="submit" loading={portfolioSubmitting}>Optimize Weights</Button></FormActions>
                   </Form>
                 </Card>
                 {portfolioResult && (

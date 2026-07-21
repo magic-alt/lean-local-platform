@@ -22,6 +22,7 @@ import { api } from "../api";
 import type { InsightReport, PaperSession } from "../api";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { useAsyncData } from "../hooks";
 import { AshareTechInsights } from "./ashare-tech-insights";
 
@@ -166,18 +167,20 @@ function GenericInsightsPage() {
           onFinish={submit}
           initialValues={{ assetClass: "equity", market: "china", venue: "china", lookbackBars: 120 }}
         >
-          <div className="field-grid">
+          <FormSection title="Instrument and analysis range">
+          <FormGrid>
             <Form.Item name="assetClass" label="Asset Class" rules={[{ required: true }]}>
               <Select options={capabilities.data.assetClasses.map((value) => ({ value, label: value }))} />
             </Form.Item>
-            <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={assetClass} market={market} placeholder="代码 / 公司名 / 拼音 / 别名" /></Form.Item>
+            <Form.Item className="form-field--wide" name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={assetClass} market={market} placeholder="代码 / 公司名 / 拼音 / 别名" /></Form.Item>
             <Form.Item name="market" label="Market"><Input placeholder="china / usa" /></Form.Item>
             <Form.Item name="venue" label="Venue"><Input placeholder="china / coinbase / comex" /></Form.Item>
             <Form.Item name="asOfDate" label="As-of Date"><DateStringPicker /></Form.Item>
             <Form.Item name="lookbackBars" label="Lookback Bars"><InputNumber min={60} max={500} style={{ width: "100%" }} /></Form.Item>
-            <Form.Item name="backtestRunId" label="Optional Backtest Run"><Input allowClear /></Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit" loading={submitting} disabled={!capabilities.data.configured}>Generate Insight</Button>
+            <Form.Item className="form-field--wide" name="backtestRunId" label="Optional Backtest Run"><Input allowClear /></Form.Item>
+          </FormGrid>
+          </FormSection>
+          <FormActions><Button type="primary" htmlType="submit" loading={submitting} disabled={!capabilities.data.configured}>Generate Insight</Button></FormActions>
         </Form>
       </Card>
 
