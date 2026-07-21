@@ -7,7 +7,7 @@ from typing import Any
 from .celery_app import celery_app
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
-from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
+from ..core.config import DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import DatabaseUnavailableError, db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.ids import new_run_id
@@ -181,7 +181,9 @@ def _task_project(task, run: dict[str, Any] | None = None):
             "snapshot": True,
         }
     project_id = task.get("project_id")
-    return get_project(project_id) if project_id else None
+    if not project_id:
+        raise LeanPlatformError("project_required: Backtest tasks must reference a project snapshot.")
+    return get_project(project_id)
 
 
 @celery_app.task(name="lean_web.dispatch_experiment_batch")
@@ -507,13 +509,30 @@ def run_backtest_task(self, task_id: str, run_id: str):
     task = get_task(task_id)
     parameters = task["parameters"]
     existing_run = get_backtest(run_id)
-    project = _task_project(task, existing_run)
     if existing_run and existing_run.get("status") == CANCELLED:
         append_log(task_id, "Backtest was cancelled before the worker started it.")
         update_task(task_id, status=CANCELLED, error="Cancellation requested by user.", finished_at=utc_now())
         _record_task_metric("backtest", CANCELLED)
         _record_backtest_metric(CANCELLED)
         return {"status": CANCELLED, "run_id": run_id}
+    try:
+        project = _task_project(task, existing_run)
+    except Exception as exc:
+        error = str(exc)
+        finished_at = utc_now()
+        append_log(task_id, f"Backtest rejected before execution: {error}")
+        update_task(task_id, status=FAILED, error=error, finished_at=finished_at)
+        update_backtest(
+            run_id,
+            status=FAILED,
+            error=error,
+            error_message=error,
+            failure_json=failure_metadata("project", error, retryable=False),
+            finished_at=finished_at,
+        )
+        _record_task_metric("backtest", FAILED)
+        _record_backtest_metric(FAILED)
+        return {"status": FAILED, "run_id": run_id, "error": error}
 
     settings = get_settings()
     max_concurrent = int(settings.get("maxConcurrentJobs") or 1)
@@ -544,7 +563,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
 
     run_dir = RUNS_DIR / run_id
     lean_cache: dict[str, Any] = {}
-    strategy_path = Path(project["project_path"]) / project["main_file"] if project else ALGORITHM_PATH
+    strategy_path = Path(project["project_path"]) / project["main_file"]
 
     def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> None:
         fingerprint = build_run_fingerprint(
@@ -635,27 +654,18 @@ def run_backtest_task(self, task_id: str, run_id: str):
             parameters["end"],
         )
         update_fingerprint()
-        if project:
-            project_path = Path(project["project_path"])
-            output = runner.run_backtest(
-                run_id,
-                parameters,
-                run_dir=run_dir,
-                output_callback=lambda line: append_log(task_id, line),
-                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                algorithm_path=project_path / project["main_file"],
-                algorithm_class=project["algorithm_class"],
-                language=project["language"],
-                project_dir=project_path,
-            )
-        else:
-            output = runner.run_backtest(
-                run_id,
-                parameters,
-                run_dir=run_dir,
-                output_callback=lambda line: append_log(task_id, line),
-                docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-            )
+        project_path = Path(project["project_path"])
+        output = runner.run_backtest(
+            run_id,
+            parameters,
+            run_dir=run_dir,
+            output_callback=lambda line: append_log(task_id, line),
+            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+            algorithm_path=project_path / project["main_file"],
+            algorithm_class=project["algorithm_class"],
+            language=project["language"],
+            project_dir=project_path,
+        )
 
         latest_run = get_backtest(run_id)
         if latest_run and latest_run.get("status") == CANCELLED:

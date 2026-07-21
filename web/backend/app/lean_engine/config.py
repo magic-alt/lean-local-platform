@@ -28,9 +28,10 @@ def lean_job_parameters(parameters: dict[str, Any]) -> dict[str, str]:
 def base_config(
     algorithm_id: str,
     parameters: dict[str, Any],
-    algorithm_class: str = "DockerDemoAlgorithm",
-    algorithm_location: str = "/Lean/DockerDemoAlgorithm.py",
-    language: str = "Python",
+    *,
+    algorithm_class: str,
+    algorithm_location: str,
+    language: str,
 ) -> dict[str, Any]:
     python_paths = ["/Lean/Run"] if parameters.get("ashareRules") or parameters.get("hkRules") else []
     return {

@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/check_changelog.py" --staged

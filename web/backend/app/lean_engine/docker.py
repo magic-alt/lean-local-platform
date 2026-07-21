@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import (
-    ALGORITHM_PATH,
     DATA_DIR,
     DEFAULT_DOCKER_IMAGE,
     HOST_DATA_DIR,
@@ -26,9 +25,8 @@ def docker_command(
     config_path: Path,
     results_dir: Path,
     image: str = DEFAULT_DOCKER_IMAGE,
-    algorithm_path: Path = ALGORITHM_PATH,
-    algorithm_container_path: str = "/Lean/DockerDemoAlgorithm.py",
-    project_dir: Path | None = None,
+    *,
+    project_dir: Path,
     support_dir: Path | None = None,
 ) -> list[str]:
     docker = shutil.which("docker")
@@ -65,10 +63,7 @@ def docker_command(
         f"{mount_source(OBJECT_STORE_DIR)}:/Lean/Launcher/bin/Debug/storage",
         image,
     ]
-    if project_dir is not None:
-        command[-1:-1] = ["-v", f"{mount_source(project_dir)}:/Lean/Project:ro"]
-    else:
-        command[-1:-1] = ["-v", f"{mount_source(algorithm_path)}:{algorithm_container_path}:ro"]
+    command[-1:-1] = ["-v", f"{mount_source(project_dir)}:/Lean/Project:ro"]
     if support_dir is not None:
         command[-1:-1] = ["-v", f"{mount_source(support_dir)}:/Lean/Run:ro"]
     return command
@@ -95,10 +90,11 @@ def run_docker_backtest(
     docker_image: str,
     run_dir: Path,
     output_callback,
-    algorithm_path: Path = ALGORITHM_PATH,
-    algorithm_class: str = "DockerDemoAlgorithm",
-    language: str = "Python",
-    project_dir: Path | None = None,
+    *,
+    algorithm_path: Path,
+    algorithm_class: str,
+    language: str,
+    project_dir: Path,
 ) -> dict[str, Any]:
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +107,15 @@ def run_docker_backtest(
 
         write_hk_execution_artifacts(run_dir, parameters)
     config_path = run_dir / "config.json"
-    algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
+    project_dir = project_dir.resolve()
+    algorithm_path = algorithm_path.resolve()
+    try:
+        relative_algorithm_path = algorithm_path.relative_to(project_dir)
+    except ValueError as exc:
+        raise LeanPlatformError("Project algorithm must be located inside the project directory.") from exc
+    if not algorithm_path.is_file():
+        raise LeanPlatformError(f"Project algorithm not found: {algorithm_path}")
+    algorithm_container_path = f"/Lean/Project/{relative_algorithm_path.as_posix()}"
     config_path.write_text(
         json.dumps(
             base_config(
@@ -130,8 +134,6 @@ def run_docker_backtest(
         config_path,
         results_dir,
         docker_image,
-        algorithm_path=algorithm_path,
-        algorithm_container_path=algorithm_container_path,
         project_dir=project_dir,
         support_dir=run_dir if parameters.get("ashareRules") or parameters.get("hkRules") else None,
     )

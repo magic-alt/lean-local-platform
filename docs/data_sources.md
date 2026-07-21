@@ -1,0 +1,97 @@
+# Data Sources and Governance
+
+Last reviewed: 2026-07-21.
+
+LEAN is the execution engine; this repository remains responsible for provider
+access, licensing, normalization, quality checks and local storage. Downloaded
+market data and provider source files are runtime data and must not be committed
+to Git.
+
+## Provider roles
+
+| Provider | Role | Persistence policy |
+| --- | --- | --- |
+| TuShare Pro | Primary China market build and incremental sync | Canonical MySQL tables plus compressed batch archive metadata |
+| AKShare | Public reference, selected China/Hong Kong fallback and preview support | Canonical rows with explicit source and certification |
+| JQData / RQData | Licensed research and PIT coverage where configured | Imported only with local credentials and entitlement checks |
+| TQSDK | Futures contract and market-data workflows | Imported on demand with provider attribution |
+| CSV | User-supplied portable import | Validated against the downloadable templates before canonical write |
+| Binance and other public adapters | Non-China research workflows | Subject to current availability, rate limits and source certification |
+
+Provider availability does not imply permission to redistribute data. Operators
+must comply with each provider's account terms, exchange rules and retention
+requirements. Credentials belong in `.env` or the runtime secret directory and
+must never appear in source-controlled files.
+
+## TuShare full-library contract
+
+The Data page manages ten core datasets in the one-click build/update workflow:
+`stock_basic`, `trade_cal`, `daily`, `adj_factor`, `suspend_d`, `stk_limit`,
+`index_basic`, `index_daily`, `fut_basic` and `opt_basic`. `daily_basic` is an
+on-demand canonical dataset and is not part of the ten-dataset one-click scope.
+
+- Before the first successful library build, the UI exposes a full update.
+- After the build marker and dataset watermarks exist, the same workflow is an
+  incremental update.
+- Datasets marked on-demand are downloaded separately and allow the operator to
+  choose an approved storage target.
+- Provider calls, processed rows, inserted rows, validation, quarantine,
+  checkpoint and heartbeat state are persisted independently.
+
+See [Data Pipeline](data_pipeline.md) for normalization, validation, recovery
+and archive details.
+
+## Storage boundaries
+
+```text
+TuShare / other providers
+        -> validation and normalization
+        -> MySQL canonical tables
+        -> compressed provider batch archives and metadata
+        -> rebuildable LEAN cache under LEAN_DATA_DIR
+        -> optional Parquet / ClickHouse derived copies
+```
+
+- MySQL is the canonical runtime fact store.
+- `web/runtime/` contains local runs, projects, reports, uploads, source caches
+  and object-store files. It is excluded from Git.
+- `LEAN_DATA_DIR` defaults to the workspace-level `Data` directory outside this
+  repository. LEAN zip, factor and map files are rebuildable caches.
+- `LEAN_PARQUET_DIR` defaults to `LEAN_DATA_DIR/parquet`; DuckDB only queries
+  those derived exports.
+- Portable source manifests live in `config/data-sources/`. They may contain
+  logical source names, hashes and manual corrections, but never local absolute
+  paths or downloaded documents.
+
+## Correctness and verification
+
+Every import must retain provider identity, batch or archive identity and its
+coverage window. Validation includes schema/type normalization, primary-key
+deduplication, OHLC bounds, positive prices and adjustment factors, trade-date
+coverage, source-priority rules and dataset-specific checks. Invalid records are
+quarantined rather than silently accepted.
+
+For production research, verify:
+
+1. Dataset sync state is successful and its watermark covers the requested end date.
+2. Validation has no critical report or unresolved quarantine.
+3. Symbol, exchange, market and provider identifiers resolve to one canonical instrument.
+4. Benchmark, trade status, adjustment and PIT universe data cover the full backtest window.
+5. The run fingerprint records dataset versions, hashes, source certification and LEAN cache state.
+
+The platform must not substitute current constituents for missing historical
+PIT membership or silently mix providers with different adjustment semantics.
+
+## Portable CSI300 evidence
+
+`config/data-sources/csi300_pit_sources.json` records the verified official
+source hashes, coverage boundary and manual events. Referenced XLS/PDF files are
+resolved below `web/runtime/source-cache/csi300-official/` or an explicit
+`--cache-dir`; the manifest itself is machine-independent.
+
+```bash
+web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --dry-run --validate
+```
+
+The current verified official-cache reconstruction starts at 2017-12-08. The
+earlier CSI300 history remains an explicit coverage gap in the living roadmap.

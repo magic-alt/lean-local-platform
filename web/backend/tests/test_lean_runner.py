@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.lean import base_config, docker_command
 from app.runners.lean_runner import LeanRunner
 
@@ -11,6 +13,14 @@ def test_container_name_is_stable_and_bounded():
     assert len(name) <= 60
 
 
+def test_worker_project_resolution_rejects_legacy_projectless_task():
+    from app.lean_engine.errors import LeanPlatformError
+    from app.tasks.worker import _task_project
+
+    with pytest.raises(LeanPlatformError, match="project_required"):
+        _task_project({"project_id": None, "parameters": {}})
+
+
 def test_docker_command_uses_argument_list_and_expected_mounts(tmp_path, monkeypatch):
     import app.lean as lean
 
@@ -18,16 +28,20 @@ def test_docker_command_uses_argument_list_and_expected_mounts(tmp_path, monkeyp
     config_path = tmp_path / "run" / "config.json"
     results_dir = tmp_path / "run" / "results"
     algorithm_path = tmp_path / "algo.py"
+    project_dir = tmp_path / "project"
     config_path.parent.mkdir()
     results_dir.mkdir()
     algorithm_path.write_text("# test", encoding="utf-8")
+    project_dir.mkdir()
+    project_algorithm = project_dir / "main.py"
+    project_algorithm.write_text("# test", encoding="utf-8")
 
     support_dir = tmp_path / "run"
     command = docker_command(
         config_path,
         results_dir,
         image="quantconnect/lean:test",
-        algorithm_path=algorithm_path,
+        project_dir=project_dir,
         support_dir=support_dir,
     )
 
@@ -49,7 +63,7 @@ def test_docker_command_maps_container_paths_to_host_paths(tmp_path, monkeypatch
     container_data = container_root / "Data"
     config_path = container_root / "web" / "runtime" / "runs" / "job" / "config.json"
     results_dir = container_root / "web" / "runtime" / "runs" / "job" / "results"
-    algorithm_path = container_root / "DockerDemoAlgorithm.py"
+    project_dir = container_root / "web" / "runtime" / "projects" / "project-1"
     support_dir = container_root / "web" / "runtime" / "runs" / "job"
 
     monkeypatch.setattr(lean.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
@@ -65,18 +79,24 @@ def test_docker_command_maps_container_paths_to_host_paths(tmp_path, monkeypatch
         config_path,
         results_dir,
         image="quantconnect/lean:test",
-        algorithm_path=algorithm_path,
+        project_dir=project_dir,
         support_dir=support_dir,
     )
 
     assert f"{host_root / 'web' / 'runtime' / 'runs' / 'job' / 'config.json'}:/Lean/Launcher/bin/Debug/config.json:ro" in command
     assert f"{host_data}:/Lean/Data:ro" in command
     assert f"{host_root / 'web' / 'runtime' / 'runs' / 'job' / 'results'}:/Lean/Results" in command
-    assert f"{host_root / 'DockerDemoAlgorithm.py'}:/Lean/DockerDemoAlgorithm.py:ro" in command
+    assert f"{host_root / 'web' / 'runtime' / 'projects' / 'project-1'}:/Lean/Project:ro" in command
 
 
 def test_base_config_adds_python_path_for_ashare_rules():
-    config = base_config("job-1", {"ticker": "600519", "assetClass": "equity", "ashareRules": True})
+    config = base_config(
+        "job-1",
+        {"ticker": "600519", "assetClass": "equity", "ashareRules": True},
+        algorithm_class="Algorithm",
+        algorithm_location="/Lean/Project/main.py",
+        language="Python",
+    )
 
     assert config["python-additional-paths"] == ["/Lean/Run"]
 
@@ -92,6 +112,10 @@ def test_lean_runner_mounts_hongkong_execution_support(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner_module, "docker_command", fake_docker_command)
     run_dir = tmp_path / "hk-run"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    algorithm_path = project_dir / "custom.py"
+    algorithm_path.write_text("class Custom: pass\n", encoding="utf-8")
     workspace = LeanRunner().prepare(
         "hk-job",
         {
@@ -101,10 +125,15 @@ def test_lean_runner_mounts_hongkong_execution_support(tmp_path, monkeypatch):
             "hkRules": True,
         },
         run_dir,
+        algorithm_path=algorithm_path,
+        algorithm_class="Custom",
+        language="Python",
+        project_dir=project_dir,
     )
 
     assert (run_dir / "hk_execution.py").is_file()
     assert captured["support_dir"] == run_dir
+    assert workspace.algorithm_container_path == "/Lean/Project/custom.py"
     assert json.loads(workspace.config_path.read_text(encoding="utf-8"))["python-additional-paths"] == ["/Lean/Run"]
 
 
@@ -126,6 +155,10 @@ def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monk
             return DockerRunResult(exit_code=1, error="unit failure")
 
     monkeypatch.setattr(runner_module, "DockerRunner", DummyDockerRunner)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    algorithm_path = project_dir / "main.py"
+    algorithm_path.write_text("class Algorithm: pass\n", encoding="utf-8")
 
     output = LeanRunner(timeout_seconds=10).run_backtest(
         "job-1",
@@ -138,6 +171,10 @@ def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monk
         },
         tmp_path / "run",
         output_callback=lambda line: None,
+        algorithm_path=algorithm_path,
+        algorithm_class="Algorithm",
+        language="Python",
+        project_dir=project_dir,
     )
 
     manifest_path = output["artifact_manifest_path"]

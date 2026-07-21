@@ -2,7 +2,6 @@ import sys
 import types
 
 from .core.config import (
-    ALGORITHM_PATH,
     DATA_DIR,
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_RESEARCH_IMAGE,
@@ -10,21 +9,18 @@ from .core.config import (
     HOST_PLATFORM_DIR,
     OBJECT_STORE_DIR,
     PLATFORM_DIR,
-    PLOT_SCRIPT,
     REPO_ROOT,
 )
 from .lean_engine import *
 from .lean_engine import data_paths as _data_paths
 from .lean_engine import data_writers as _data_writers
 from .lean_engine import docker as _docker
-from .lean_engine import reports as _reports
 from .lean_engine import research as _research
 
 shutil = _docker.shutil
 
 
 _SYNC_TARGETS = {
-    "ALGORITHM_PATH": (_docker,),
     "DATA_DIR": (_data_paths, _docker, _research),
     "DEFAULT_DOCKER_IMAGE": (_docker,),
     "DEFAULT_RESEARCH_IMAGE": (_research,),
@@ -32,8 +28,7 @@ _SYNC_TARGETS = {
     "HOST_PLATFORM_DIR": (_docker,),
     "OBJECT_STORE_DIR": (_docker, _research),
     "PLATFORM_DIR": (_docker,),
-    "PLOT_SCRIPT": (_reports,),
-    "REPO_ROOT": (_data_paths, _data_writers, _docker, _reports, _research),
+    "REPO_ROOT": (_data_paths, _data_writers, _docker, _research),
 }
 
 

@@ -15,6 +15,11 @@ from ..tasks.worker import generate_report_task
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
+REPORT_FILE_CACHE_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+}
+
 
 class ReportRequest(BaseModel):
     runId: str
@@ -302,7 +307,7 @@ def report_file(report_id: str):
     path = Path(item.get("report_path") or item.get("report_html_path") or "")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report file not found.")
-    return FileResponse(path)
+    return FileResponse(path, headers=REPORT_FILE_CACHE_HEADERS)
 
 
 def _export_report_item(report_id: str) -> dict[str, Any]:
@@ -330,6 +335,7 @@ def export_report(report_id: str, format: str = "html"):
             headers={
                 "Content-Disposition": f'inline; filename="{filename_base}.html"',
                 "X-Content-Type-Options": "nosniff",
+                **REPORT_FILE_CACHE_HEADERS,
             },
         )
 

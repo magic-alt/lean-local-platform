@@ -1,6 +1,47 @@
 from fastapi.testclient import TestClient
 
 
+def test_backtest_create_requires_project_id(tmp_path, monkeypatch):
+    import app.db as db_module
+    from app.main import app
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
+    db_module.init_db()
+
+    payload = {
+        "symbol": "SPY",
+        "start": "2024-01-01",
+        "end": "2024-01-31",
+        "cash": 100000,
+    }
+    response = TestClient(app).post("/api/backtests", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "VALIDATION_ERROR"
+
+
+def test_backtest_create_rejects_unknown_project(tmp_path, monkeypatch):
+    import app.db as db_module
+    from app.main import app
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
+    db_module.init_db()
+
+    payload = {
+        "symbol": "SPY",
+        "start": "2024-01-01",
+        "end": "2024-01-31",
+        "cash": 100000,
+        "projectId": "missing-project",
+    }
+    response = TestClient(app).post("/api/backtests", json=payload)
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "NOT_FOUND"
+
+
 def test_backtests_empty_list_with_temp_db(tmp_path, monkeypatch):
     import app.db as db_module
     from app.main import app

@@ -15,12 +15,18 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", REPO_ROOT / "Data")).expanduser()
-RUNS_DIR = SCRIPT_DIR / "runs"
-RESULTS_DIR = SCRIPT_DIR / "results"
+REPO_ROOT = SCRIPT_DIR.parents[1]
+BACKEND_DIR = REPO_ROOT / "web" / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.reporting.html_report import render_report_file  # noqa: E402
+
+DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", REPO_ROOT.parent / "Data")).expanduser()
+EXAMPLE_RUNTIME_DIR = REPO_ROOT / "web" / "runtime" / "examples" / "lean-docker-demo"
+RUNS_DIR = EXAMPLE_RUNTIME_DIR / "runs"
+RESULTS_DIR = EXAMPLE_RUNTIME_DIR / "results"
 ALGORITHM_PATH = SCRIPT_DIR / "DockerDemoAlgorithm.py"
-PLOT_SCRIPT = SCRIPT_DIR / "plot_results.py"
 
 
 def display_path(path):
@@ -115,7 +121,7 @@ def write_lean_daily_zip(symbol, rows, source, overwrite=False):
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(f"{ticker}.csv", "\n".join(csv_lines) + "\n")
 
-    metadata_dir = SCRIPT_DIR / "data-metadata"
+    metadata_dir = EXAMPLE_RUNTIME_DIR / "data-metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "symbol": ticker.upper(),
@@ -368,18 +374,7 @@ def run_backtest(args):
         die(f"expected result file not found: {result_json}")
 
     report = results_dir / "report.html"
-    subprocess.run(
-        [
-            sys.executable,
-            str(PLOT_SCRIPT),
-            "--input",
-            str(result_json),
-            "--output",
-            str(report),
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-    )
+    render_report_file(result_json, report)
 
     print(f"run dir: {run_dir}")
     print(f"results: {result_json}")
@@ -393,18 +388,7 @@ def generate_report(args):
     if not input_path.exists():
         die(f"input result JSON does not exist: {input_path}")
     output = Path(args.output) if args.output else input_path.with_name("report.html")
-    subprocess.run(
-        [
-            sys.executable,
-            str(PLOT_SCRIPT),
-            "--input",
-            str(input_path),
-            "--output",
-            str(output),
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-    )
+    render_report_file(input_path, output)
     print(output)
     if args.open:
         subprocess.run(["open", str(output)], check=False)

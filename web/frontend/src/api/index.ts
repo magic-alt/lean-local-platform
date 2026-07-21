@@ -342,7 +342,7 @@ export const api = {
     end: string;
     cash: number;
     dockerImage: string;
-    projectId?: string;
+    projectId: string;
     benchmarkSymbol?: string;
     feeModel?: string;
     slippageModel?: string;
@@ -370,7 +370,7 @@ export const api = {
     slow?: number;
     cash: number;
     dockerImage: string;
-    projectId?: string;
+    projectId: string;
     benchmarkSymbol?: string;
     feeModel?: string;
     slippageModel?: string;
@@ -475,7 +475,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   reportExportUrl: (id: string, format: "html" | "markdown") =>
-    `/api/reports/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
+    `/api/reports/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}&view=report-layout-v2`,
   objectStoreItems: () => request<ObjectStoreItem[]>("/api/object-store"),
   uploadObjectStoreItem: (key: string, formData: FormData) =>
     request<ObjectStoreItem>(`/api/object-store/${encodePath(key)}`, {

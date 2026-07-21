@@ -2,6 +2,8 @@
 
 This document describes the output layers from LEAN raw files to parsed API/UI payloads.
 
+Last reviewed: 2026-07-21.
+
 ## Raw LEAN Artifacts
 
 Typical files in `web/runtime/runs/<run_id>/results`:
@@ -28,6 +30,10 @@ ashare_trade_status.json
 ```
 
 All important raw artifacts are archived to `stored_objects` under namespace `backtest-results`.
+
+The generated HTML report uses a structured header for run metadata, available charts and a folded source path. Existing static reports are not rewritten automatically; regenerate a report to receive a newer layout.
+
+`report-layout-v2` is the canonical layout. Web backtests, the standalone example and Reports-page generation all use `app.reporting.html_report`; future reports therefore use the same header. Existing filesystem reports can be migrated atomically with `scripts/regenerate_backtest_reports.py`; the script also refreshes artifact-manifest size/layout metadata and can add both files as the latest stored-object versions with `--archive`.
 
 ## Parsed Result Row
 
@@ -93,6 +99,18 @@ created_at
 }
 ```
 
+Report access is exposed separately:
+
+```text
+GET /api/reports/{report_id}
+GET /api/reports/{report_id}/file
+GET /api/reports/{report_id}/objects
+GET /api/reports/{report_id}/objects/{object_id}
+GET /api/reports/{report_id}/export?format=html|markdown
+```
+
+Report file responses disable browser/proxy caching. HTML and Markdown are supported export formats; raw result/summary objects remain available for reproducibility.
+
 ## Metrics
 
 The parser preserves LEAN statistics and computes or exposes:
@@ -143,4 +161,3 @@ Holdings are taken from LEAN result fields when present. If LEAN output shape ch
 ## Validation Snapshot
 
 P1 stores `validation` and `experiment` inside `performance` as a result-time snapshot. This keeps trust metadata attached to the parsed result even if `backtest_runs` changes later.
-

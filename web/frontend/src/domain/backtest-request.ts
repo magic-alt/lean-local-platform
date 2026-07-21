@@ -38,7 +38,7 @@ export interface BacktestRequestPayload {
   end: string;
   cash: number;
   dockerImage: string;
-  projectId?: string;
+  projectId: string;
   benchmarkSymbol?: string;
   source?: string;
   parameters: Record<string, unknown>;
@@ -61,6 +61,10 @@ export function buildBacktestRequest(
   const slippageModel = values.slippageModel ?? "default";
   const benchmarkSymbol = values.benchmarkSymbol;
   const source = values.source;
+  const projectId = context.projectId ?? values.projectId;
+  if (!projectId) {
+    throw new Error("Project strategy is required");
+  }
   return {
     ...values,
     symbol: String(values.symbol ?? "").trim().toUpperCase(),
@@ -69,7 +73,7 @@ export function buildBacktestRequest(
     venue: context.venue ?? values.venue ?? market,
     resolution: context.resolution ?? values.resolution,
     dataType: context.dataType ?? values.dataType,
-    projectId: context.projectId ?? values.projectId,
+    projectId,
     parameters: {
       ...(values.parameters ?? {}),
       benchmarkSymbol,

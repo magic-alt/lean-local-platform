@@ -22,6 +22,7 @@ from ..services.backtest_preflight import prepare_backtest_request
 from ..services.experiments import get_experiment_versions
 from ..services.result_service import result_for_job
 from ..services.run_paths import run_directory, run_file
+from ..services.projects import get_project
 from ..services.strategy_admission import admission_for_run
 from ..services.tasks import task_logs
 from ..tasks.worker import run_backtest_task
@@ -45,7 +46,7 @@ class BacktestRequest(BaseModel):
     slow: int | None = Field(default=None, ge=1)
     cash: float = Field(default=100000, gt=0)
     dockerImage: str = DEFAULT_DOCKER_IMAGE
-    projectId: str | None = None
+    projectId: str
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -77,9 +78,10 @@ def backtests(
 
 @router.post("")
 def create_backtest(request: BacktestRequest):
+    get_project(request.projectId)
+    payload = request.model_dump()
+    payload["extra"] = request.model_extra or {}
     try:
-        payload = request.model_dump()
-        payload["extra"] = request.model_extra or {}
         run = create_backtest_job(payload)
     except Exception as exc:
         run = create_failed_backtest_job(payload, str(exc))
@@ -96,6 +98,7 @@ def create_backtest(request: BacktestRequest):
 
 @router.post("/preflight")
 def preflight_backtest(request: BacktestRequest):
+    get_project(request.projectId)
     payload = request.model_dump()
     payload["extra"] = request.model_extra or {}
     try:

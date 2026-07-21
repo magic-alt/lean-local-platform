@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, JOB_TIMEOUT_SECONDS
+from ..core.config import DEFAULT_DOCKER_IMAGE, JOB_TIMEOUT_SECONDS
 from ..lean_engine.config import base_config
 from ..lean_engine.docker import docker_command
+from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.reports import render_report
 from ..lean_engine.results import extract_statistics
 from ..services.ashare_execution import write_ashare_execution_artifacts
@@ -99,18 +100,27 @@ class LeanRunner:
         run_id: str,
         parameters: dict[str, Any],
         run_dir: Path,
+        *,
         docker_image: str = DEFAULT_DOCKER_IMAGE,
-        algorithm_path: Path = ALGORITHM_PATH,
-        algorithm_class: str = "DockerDemoAlgorithm",
-        language: str = "Python",
-        project_dir: Path | None = None,
+        algorithm_path: Path,
+        algorithm_class: str,
+        language: str,
+        project_dir: Path,
     ) -> BacktestWorkspace:
         results_dir = run_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         write_ashare_execution_artifacts(run_dir, parameters)
         write_hk_execution_artifacts(run_dir, parameters)
         config_path = run_dir / "config.json"
-        algorithm_container_path = "/Lean/Project/main.py" if project_dir is not None else "/Lean/DockerDemoAlgorithm.py"
+        project_dir = project_dir.resolve()
+        algorithm_path = algorithm_path.resolve()
+        try:
+            relative_algorithm_path = algorithm_path.relative_to(project_dir)
+        except ValueError as exc:
+            raise LeanPlatformError("Project algorithm must be located inside the project directory.") from exc
+        if not algorithm_path.is_file():
+            raise LeanPlatformError(f"Project algorithm not found: {algorithm_path}")
+        algorithm_container_path = f"/Lean/Project/{relative_algorithm_path.as_posix()}"
         config_path.write_text(
             json.dumps(
                 base_config(
@@ -128,8 +138,6 @@ class LeanRunner:
             config_path,
             results_dir,
             docker_image,
-            algorithm_path=algorithm_path,
-            algorithm_container_path=algorithm_container_path,
             project_dir=project_dir,
             support_dir=run_dir if parameters.get("ashareRules") or parameters.get("hkRules") else None,
         )
@@ -228,11 +236,12 @@ class LeanRunner:
         parameters: dict[str, Any],
         run_dir: Path,
         output_callback: Callable[[str], None],
+        *,
         docker_image: str = DEFAULT_DOCKER_IMAGE,
-        algorithm_path: Path = ALGORITHM_PATH,
-        algorithm_class: str = "DockerDemoAlgorithm",
-        language: str = "Python",
-        project_dir: Path | None = None,
+        algorithm_path: Path,
+        algorithm_class: str,
+        language: str,
+        project_dir: Path,
     ) -> dict[str, Any]:
         workspace = self.prepare(
             run_id,

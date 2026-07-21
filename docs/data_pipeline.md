@@ -1,179 +1,128 @@
 # Data Pipeline
 
-The data layer supports research tables, A-share reference data, LEAN cache generation, Parquet export, object storage, and quality gates. The current trusted chain focuses on A-share daily data and benchmark coverage for LEAN backtests.
+Last reviewed: 2026-07-21.
 
-TuShare Pro is the default A-share production interface. JQData, AKShare, and the remaining public/vendor interfaces are kept in the priority chain for supplementation, fallback, and multi-source verification. The enabled TuShare Pro permissions cover A-share/fund/futures/options basics, HK/US/FX basics, low-frequency quotes, financial statements, macro data, ST status, stock connect lists, pledge/unlock/repurchase/holding-change references, Dragon Tiger data, and margin trading references; adapters should only call endpoints available under that entitlement.
+MySQL is the runtime source of truth for market/reference data and synchronization state. LEAN files, Parquet and ClickHouse are generated or mirrored layers and must remain rebuildable. SQLite is used only by isolated tests.
 
-## Layering
-
-```text
-Raw source data
-  -> import scripts or API adapters
-  -> normalized database tables
-  -> data quality reports and reference tables
-  -> LEAN cache files under Data/
-  -> object store archive
-  -> optional Parquet datasets
-  -> backtest fingerprint and validation metadata
-```
-
-## Storage Roles
-
-### Raw
-
-Raw data is fetched by scripts and service adapters:
-
-- `scripts/import_ashare_free_sample.py`
-- `scripts/import_csi300_benchmark.py`
-- `scripts/import_ashare_reference_public.py`
-- `scripts/import_tqsdk_futures.py`
-- `web/backend/app/services/ashare_source_adapters.py`
-- `web/backend/app/services/tushare_adapter.py`
-
-Raw provider payloads are not yet consistently archived as immutable snapshots. For production research this should become a required step.
-
-### Normalized Database
-
-`web/backend/app/db.py` defines the canonical schema. Key tables:
-
-- `instruments`
-- `market_daily_bars`
-- `market_trade_status`
-- `ashare_daily_bars`
-- `ashare_trade_status`
-- `trade_calendar`
-- `securities`
-- `adjustment_factors`
-- `corporate_actions`
-- `universe_membership`
-- `index_membership_events`
-- `financial_statements`
-- `financial_facts`
-- `factor_values`
-- `parquet_datasets`
-- `parquet_files`
-- `data_quality_reports`
-- `stored_objects`
-
-MySQL is the default database through `LEAN_DATABASE_URL`. SQLite remains useful for tests and small local runs.
-
-### LEAN Cache
-
-LEAN reads from `Data/`, mounted into Docker as `/Lean/Data:ro`.
-
-For A-share daily equity data, the cache includes:
+## Data Layers
 
 ```text
-Data/equity/china/daily/<symbol>.zip
-Data/equity/china/factor_files/<symbol>.csv
-Data/equity/china/map_files/<symbol>.csv
+Provider / CSV
+  -> normalize, validate, deduplicate, quarantine
+  -> MySQL canonical tables and import metadata
+  -> LEAN cache for execution
+  -> Parquet/DuckDB for analytical scans
+  -> optional ClickHouse mirror
 ```
 
-`ensure_ashare_lean_cache()` restores or rebuilds cache files before Docker execution. Cache file hashes are recorded in the run fingerprint.
+Key canonical domains include instruments and identifiers, A-share/reference tables, daily bars, trade status, adjustment factors, trading calendars, PIT memberships, futures/options contracts and import/quality metadata.
 
-### Parquet
+## One-Click Build and Incremental Update
 
-Parquet support is under `web/backend/app/services/parquet_lake.py` and API routes under `/api/data/parquet/*`.
+The Data page exposes exactly 10 bulk datasets:
 
-Parquet is intended for fast research scans and factor analysis. It should not replace the canonical database or LEAN data folder in the production backtest chain.
+| Dataset | Purpose |
+| --- | --- |
+| `stock_basic` | A-share security master and listing state |
+| `trade_cal` | Exchange trading calendar |
+| `daily` | A-share daily OHLCV |
+| `adj_factor` | Adjustment factors and LEAN factor inputs |
+| `suspend_d` | Suspension history |
+| `stk_limit` | Daily limit-up/limit-down prices |
+| `index_basic` | Index master data |
+| `index_daily` | Index daily bars and benchmarks |
+| `fut_basic` | Futures contract master data |
+| `opt_basic` | Options contract master data |
 
-### Object Store
+If no successful full build is recorded, the UI says “一键全量更新”. After a successful build, persisted sync metadata makes the same action “一键增量更新”. A restart does not reset this decision.
 
-`stored_objects` and `stored_object_chunks` archive:
+Sync runs are idempotent, cancellable and resumable. They persist per-dataset progress, true provider call counts, checkpoints, heartbeats, watermarks, validation totals, empty-result counts and quarantined rows. `daily` and everyday `stk_limit` updates can use trade-date increments; long initial histories use bounded concurrent fetch plus batched sequential writes.
 
-- LEAN raw outputs.
-- LEAN cache files.
-- Content-addressed, gzip-compressed TuShare response batches when a canonical
-  table cannot losslessly represent the provider response.
-- Reports and generated artifacts.
-- Other binary/text objects through `/api/object-store`.
+## On-Demand Datasets
 
-The object store can live in MySQL chunks or local runtime storage depending on configuration.
+All registry entries outside the 10 bulk datasets use `sync_policy=on_demand`. They do not participate in one-click update. The user starts them explicitly, chooses an approved host-visible storage target, and may select a database or file/Parquet-oriented result according to the dataset workflow.
 
-## Data Quality
+The 50 GB default limit (`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB`) applies only to on-demand MySQL cache writes. It does not cap one-click construction.
 
-Current quality checks include:
+## Correctness and Audit Chain
 
-- duplicate dates
-- invalid OHLC price shape
-- abnormal or zero volume
-- missing/incomplete A-share bars
-- missing trade status
-- critical multi-source discrepancy reports
-- benchmark row coverage
-- provider permission discovery and per-dataset synchronization checkpoints
-- quarantine and audited replacement of untrusted legacy partitions
+Every provider batch is checked in stages:
 
-The Data page exposes a one-click TuShare Pro update backed by
-`provider_dataset_catalog`, `provider_raw_records`, `data_sync_runs`,
-`data_sync_items`, and `data_record_issues`. The checked-in low-frequency
-registry covers the locally configured 5,000-point entitlement across equities,
-indices, funds, convertible bonds, futures, options, HK/US equities, FX, macro,
-and reference events. `provider_raw_records` is a lightweight key/date/hash
-index and never stores per-row payload JSON. Datasets with lossless canonical
-tables keep only canonical rows plus ingestion manifests. Other datasets keep
-the lightweight index and a content-addressed gzip batch in the database object
-store, cataloged by `provider_raw_archives`, so raw responses remain auditable
-without duplicating large JSON text in every indexed row.
+1. Verify endpoint permission, request scope and response schema.
+2. Normalize identifiers, dates, numbers and nulls.
+3. Validate required fields, primary keys, date ranges and OHLC relationships.
+4. Deduplicate within the response and upsert using canonical keys.
+5. Resolve trade-status source precedence in memory or per batch.
+6. Quarantine invalid rows with reason and source metadata.
+7. Persist manifest counts, request/payload hashes, validation results and watermarks.
+8. Compare database counts/date bounds and, where configured, cross-source or Parquet consistency.
 
-Legacy installations can inspect old per-row payload usage with
-`web/backend/.venv/bin/python scripts/cleanup_provider_raw_json.py`. Run the
-same command with `--execute` only after data synchronization is idle. The
-cleanup archives noncanonical payloads, verifies each compressed object by
-reading it back, clears row JSON in resumable key ranges, and preserves record
-keys, dates, hashes, watermarks, and manifests. Rebuild
-`provider_raw_records` afterward if MySQL must return freed pages to the
-filesystem.
+“Processed” is not equivalent to “inserted”: idempotent replays can process valid rows while updating or skipping existing keys. A zero-row result may be legitimate for a symbol/date scope, but is recorded separately for coverage analysis.
 
-Important services:
+## Raw Provider Retention
 
-- `data_quality.py`: row normalization and QA.
-- `ashare_multisource.py`: source comparison and critical gate.
-- `ashare_repository.py`: A-share coverage, status, reference data, universe APIs.
-- `backtest_validation.py`: per-run validation summary.
+`provider_raw_records` is a lightweight key/date/hash index. It does not store a complete JSON document for every canonical row.
 
-## A-Share Rules Affecting Backtests
+- Losslessly represented canonical datasets retain standard-table rows plus request, key and payload hashes.
+- Responses that cannot be mapped losslessly are serialized once per batch, gzip-compressed, content-addressed and cataloged by `provider_raw_archives` in the MySQL object store.
+- This removes the former third copy of large payloads while preserving source/batch auditability.
 
-The trusted A-share backtest path records and enforces:
+Historical row JSON can be cleaned with:
 
-- T+1 sell restriction through `AShareExecutionHelper`.
-- suspended day buy/sell block through `ashare_trade_status`.
-- limit-up buy block.
-- limit-down sell block.
-- lot size, default 100 shares.
-- commission rate.
-- minimum commission.
-- sell stamp tax.
-- transfer fee.
-- constant bps slippage.
-- explicit benchmark requirement.
+```bash
+cd web/backend
+.venv/bin/python ../../scripts/cleanup_provider_raw_json.py --help
+```
 
-Known limitations:
+The script validates the target, clears JSON in resumable key ranges and preserves record hashes/metadata. Do not truncate `provider_raw_records`. Physical disk space usually is not returned until a separate low-traffic InnoDB table-space rebuild, which needs temporary free space and a backup.
 
-- Matching is still constrained by what LEAN and the helper implement; this is not yet a full exchange simulator.
-- Intraday auction rules are not fully modeled.
-- Board-specific limit rules depend on the quality of imported trade status and reference data.
-- ETF, convertible bond, and futures rules exist partially and need separate acceptance gates.
+## CSV Import
 
-## Versioning and Fingerprints
+Download a schema-specific template from `GET /api/data/import-csv/template` before importing. The backend validates required columns and data types before converting supported equity, crypto and futures daily files into canonical/LEAN formats. Invalid CSV input is rejected with actionable field errors rather than partially imported silently.
 
-Each backtest stores:
+## Dataset Preview
 
-- `fingerprint`: git state, parameters hash, data row counts, batch id, cache hashes, Docker image digest.
-- `validation`: A-share rules, data gates, benchmark gates.
-- `experiment`: strategy, parameters, data, environment, and validation summary.
-- `strategy_versions`: strategy path, source hash, git commit, git dirty state.
-- `dataset_versions`: data scope, row counts, trade status counts, benchmark rows, cache hashes.
-- `experiments`: run-to-version linkage plus full fingerprint/validation snapshots.
+`GET /api/data/dataset-preview/{dataset}` supplies data-aware previews:
 
-The first three fields live on `backtest_runs` as JSON columns. The version records live in normalized tables.
+- stocks: profile, daily bars, adjustment factors, suspension and limit history;
+- trading calendar: market/date sessions;
+- indexes: index master and daily bars;
+- futures/options: contract master data.
 
-## Upgrade Path
+Preview values are JSON-safe and formatted defensively so an unfamiliar Provider field cannot blank the full application.
 
-P1 requirements that are still incomplete or partial:
+## Derived Layers
 
-- immutable raw provider snapshots
-- richer version browsing and comparison UI
-- full data quality reports for ETF, convertible bonds, futures, and factors
-- PIT data coverage report for every research universe
-- board-specific A-share limit rules as first-class metadata
+### LEAN cache
+
+LEAN consumes files from `LEAN_DATA_DIR`. Before a run, required files can be restored from `stored_objects` or rebuilt from MySQL canonical data. Their identifiers and hashes are included in the run fingerprint.
+
+### Parquet and DuckDB
+
+`parquet_datasets` and `parquet_files` track scope, row counts, date ranges, hashes and schema versions. Consistency jobs compare MySQL counts/date ranges, file hashes and DuckDB reads. Parquet is not a metadata database.
+
+### ClickHouse
+
+ClickHouse is optional and mirrors committed MySQL data. Health/table checks should occur at task/batch scope, writes should be accumulated, and mirror failure must have an independent retry/watermark rather than rolling back authoritative MySQL data.
+
+## Disk Safety and Size Reporting
+
+- One-click sync has no database-size ceiling.
+- It stops before free disk would fall below `max(500 GiB, 50% of total capacity)`.
+- API and workers use the same read-only MySQL data-directory observer mount so the catalog and live task report the same physical allocated size.
+- Logical table size, InnoDB allocated size and host free disk are different metrics; documentation and UI label the physical value explicitly.
+- Bulk loader sessions disable binlog for rebuildable provider data. Business metadata retains normal durability; binlogs use minimal row images and expire by configuration.
+
+## A-Share Backtest Contract
+
+Trusted China-equity runs require canonical daily bars, a real benchmark, trading calendar and applicable execution status. The helper enforces T+1 selling, suspension and limit blocks, lot rounding, cash buffer, fees and slippage. The run stores fingerprint, validation and experiment snapshots plus normalized strategy/dataset version links.
+
+Known limitations remain: intraday auction mechanics are incomplete; board-specific rules depend on imported reference quality; ETF, convertible bond and futures acceptance are not yet exchange-grade.
+
+## Remaining Data Work
+
+- CSI300 official PIT membership before 2017-12-08.
+- PIT coverage reports for every offered research universe.
+- Full ETF, convertible-bond, futures/options and factor quality gates.
+- Scheduled incremental Parquet and ClickHouse maintenance with visible watermarks.
+- Cross-asset adjustment, continuous-contract and corporate-action acceptance.

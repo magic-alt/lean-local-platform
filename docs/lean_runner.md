@@ -44,7 +44,7 @@ config.json                      -> /Lean/Launcher/bin/Debug/config.json:ro
 LEAN_DATA_DIR                    -> /Lean/Data:ro
 results/                         -> /Lean/Results
 OBJECT_STORE_DIR                 -> /Lean/Launcher/bin/Debug/storage
-project directory or algorithm   -> /Lean/Project:ro or /Lean/DockerDemoAlgorithm.py:ro
+immutable project snapshot       -> /Lean/Project:ro
 run directory                    -> /Lean/Run:ro, only for A-share support files
 ```
 
@@ -72,7 +72,7 @@ When `ashareRules=true`, `write_ashare_execution_artifacts()` writes:
 - `ashare_execution.py`: fee model, slippage model, T+1, lot rounding, buy/sell blocking helper.
 - `ashare_trade_status.json`: per-symbol/per-date status from `ashare_trade_status`.
 
-The strategy template or `DockerDemoAlgorithm.py` imports `AShareExecutionHelper` and calls it instead of raw `set_holdings()` for A-share execution.
+The generated strategy template imports `AShareExecutionHelper` and calls it instead of raw `set_holdings()` for A-share execution. Production backtests always execute a versioned project snapshot; the standalone Docker demo is not a runner fallback.
 
 ## Output Contract
 

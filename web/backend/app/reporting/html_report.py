@@ -3,11 +3,14 @@ import argparse
 import html
 import json
 import math
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 COLORS = ["#2563eb", "#dc2626", "#059669", "#7c3aed", "#d97706", "#0891b2"]
+REPORT_LAYOUT_VERSION = "report-layout-v2"
 
 
 def load_json(path):
@@ -284,10 +287,71 @@ def orders_table(markers):
     )
 
 
+def report_header(data, source_path, charts):
+    configuration = data.get("algorithmConfiguration") or {}
+    parameters = configuration.get("parameters") or {}
+    source = Path(source_path)
+    run_id = source.stem
+    report_name = str(configuration.get("name") or "LEAN Backtest Report")
+    symbol = str(parameters.get("ticker") or parameters.get("symbol") or "-")
+    market = str(parameters.get("market") or parameters.get("venue") or "-")
+    provider = str(parameters.get("providerSource") or parameters.get("source") or "-")
+    start_date = str(parameters.get("start") or configuration.get("startDate") or "-")[:10]
+    end_date = str(parameters.get("end") or configuration.get("endDate") or "-")[:10]
+    currency = str(configuration.get("accountCurrency") or "")
+    initial_cash = parameters.get("initialCash") or parameters.get("initial_cash") or parameters.get("cash")
+    try:
+        cash_text = f"{float(initial_cash):,.2f} {currency}".strip()
+    except (TypeError, ValueError):
+        cash_text = str(initial_cash or "-")
+    generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    chart_names = [str(name) for name in charts]
+    chart_chips = "".join(f'<li class="chart-chip">{html.escape(name)}</li>' for name in chart_names)
+
+    return f"""
+<header class="report-header" data-report-layout="{REPORT_LAYOUT_VERSION}">
+  <div class="report-heading">
+    <div>
+      <p class="eyebrow">QUANTCONNECT LEAN · 回测分析</p>
+      <h1>{html.escape(report_name)}</h1>
+      <p class="report-subtitle">运行编号 <code>{html.escape(run_id)}</code></p>
+    </div>
+    <div class="report-badge">已生成报告</div>
+  </div>
+  <dl class="report-meta">
+    <div><dt>回测标的</dt><dd>{html.escape(symbol)}</dd></div>
+    <div><dt>市场</dt><dd>{html.escape(market)}</dd></div>
+    <div><dt>回测区间</dt><dd>{html.escape(start_date)} <span>至</span> {html.escape(end_date)}</dd></div>
+    <div><dt>数据源</dt><dd>{html.escape(provider)}</dd></div>
+    <div><dt>初始资金</dt><dd>{html.escape(cash_text)}</dd></div>
+    <div><dt>报告生成时间</dt><dd>{html.escape(generated_at)}</dd></div>
+  </dl>
+  <section class="chart-index" aria-labelledby="chart-index-title">
+    <div class="chart-index-heading">
+      <div>
+        <h2 id="chart-index-title">可用图表</h2>
+        <p>从 LEAN 结果中检测到 {len(chart_names)} 个图表；下方展示核心绩效图表，其余数据保留在结果文件中。</p>
+      </div>
+      <strong>{len(chart_names)}</strong>
+    </div>
+    <ul class="chart-chips">{chart_chips or '<li class="chart-chip muted-chip">无图表</li>'}</ul>
+  </section>
+  <details class="source-details">
+    <summary>数据来源详情</summary>
+    <dl>
+      <div><dt>结果文件</dt><dd><code>{html.escape(source.name)}</code></dd></div>
+      <div><dt>运行环境路径</dt><dd><code>{html.escape(str(source))}</code></dd></div>
+    </dl>
+  </details>
+</header>
+"""
+
+
 def build_report(data, source_path):
     charts = data.get("charts") or {}
     statistics = data.get("statistics") or {}
     markers = order_markers(data)
+    report_title = str((data.get("algorithmConfiguration") or {}).get("name") or "LEAN Backtest Report")
 
     equity_chart = get_chart(data, "Strategy Equity")
     drawdown_chart = get_chart(data, "Drawdown")
@@ -299,7 +363,8 @@ def build_report(data, source_path):
     body = [
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        "<title>LEAN Docker Demo Backtest Report</title>",
+        f'<meta name="report-layout" content="{REPORT_LAYOUT_VERSION}">',
+        f"<title>{html.escape(report_title)}</title>",
         """
 <style>
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #111827; }
@@ -307,6 +372,29 @@ main { max-width: 1160px; margin: 0 auto; padding: 28px 22px 48px; }
 h1 { margin: 0 0 6px; font-size: 28px; }
 h2 { margin: 0 0 14px; font-size: 18px; }
 .muted { color: #64748b; margin: 0 0 22px; }
+.report-header { margin-bottom: 18px; overflow: hidden; background: #fff; border: 1px solid #dbe4ef; border-radius: 14px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }
+.report-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px 26px 20px; background: linear-gradient(135deg, #f8fbff 0%, #fff 58%, #eef6ff 100%); border-bottom: 1px solid #e5edf6; }
+.eyebrow { margin: 0 0 8px; color: #2563eb; font-size: 11px; font-weight: 800; letter-spacing: 0.12em; }
+.report-subtitle { margin: 8px 0 0; color: #64748b; font-size: 13px; }
+.report-subtitle code { color: #334155; overflow-wrap: anywhere; }
+.report-badge { flex: 0 0 auto; padding: 7px 11px; color: #166534; background: #dcfce7; border: 1px solid #bbf7d0; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.report-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 6px 26px 18px; }
+.report-meta > div { min-width: 0; padding: 14px 16px 10px 0; }
+.report-meta dt, .source-details dt { margin-bottom: 5px; color: #64748b; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; }
+.report-meta dd, .source-details dd { margin: 0; color: #172033; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.report-meta dd span { color: #94a3b8; font-weight: 400; }
+.chart-index { margin: 0 26px 18px; padding: 16px 18px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }
+.chart-index-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.chart-index-heading h2 { margin: 0 0 4px; font-size: 15px; }
+.chart-index-heading p { margin: 0; color: #64748b; font-size: 12px; line-height: 1.55; }
+.chart-index-heading strong { display: grid; flex: 0 0 34px; height: 34px; place-items: center; color: #1d4ed8; background: #dbeafe; border-radius: 9px; font-size: 14px; }
+.chart-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 13px 0 0; padding: 0; list-style: none; }
+.chart-chip { max-width: 100%; padding: 5px 9px; color: #334155; background: #fff; border: 1px solid #dbe4ef; border-radius: 999px; font-size: 12px; overflow-wrap: anywhere; }
+.muted-chip { color: #94a3b8; }
+.source-details { margin: 0 26px 22px; color: #475569; font-size: 12px; }
+.source-details summary { width: fit-content; cursor: pointer; color: #475569; font-weight: 650; }
+.source-details dl { display: grid; gap: 10px; margin: 12px 0 0; padding: 13px 15px; background: #f8fafc; border-radius: 8px; }
+.source-details code { white-space: normal; overflow-wrap: anywhere; }
 .stats { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .stat, .chart-card, .orders { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
 .stat-label { color: #64748b; font-size: 12px; margin-bottom: 6px; }
@@ -317,12 +405,27 @@ svg { width: 100%; height: auto; display: block; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; }
 th { color: #475569; font-weight: 700; }
-@media (max-width: 860px) { .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
+@media (max-width: 860px) {
+  .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .report-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  main { padding: 14px 10px 32px; }
+  .report-heading { padding: 20px 18px 16px; }
+  .report-heading { display: block; }
+  .report-badge { display: inline-block; margin-top: 14px; }
+  .report-meta { grid-template-columns: 1fr; padding: 6px 18px 14px; }
+  .chart-index, .source-details { margin-right: 18px; margin-left: 18px; }
+}
+@media print {
+  body { background: #fff; }
+  main { max-width: none; padding: 0; }
+  .report-header, .stat, .chart-card, .orders { box-shadow: none; break-inside: avoid; }
+}
 </style>
 """,
         "</head><body><main>",
-        "<h1>LEAN Docker Demo Backtest Report</h1>",
-        f'<p class="muted">Generated from {html.escape(str(source_path))}. Charts available: {html.escape(", ".join(charts.keys()))}</p>',
+        report_header(data, source_path, charts.keys()),
         f'<section class="stats">{stat_cards(statistics)}</section>',
         make_svg(
             "Strategy Equity",
@@ -354,16 +457,33 @@ th { color: #475569; font-weight: 700; }
     return "\n".join(body)
 
 
+def render_report_file(input_path, output_path):
+    """Render a LEAN JSON result to an HTML file using an atomic replace."""
+    data = load_json(input_path)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    report = build_report(data, input_path)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(report)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(output)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(description="Render a LEAN backtest JSON file as a standalone HTML report.")
-    parser.add_argument("--input", default="docker-demo/results/docker-demo-backtest.json")
-    parser.add_argument("--output", default="docker-demo/results/report.html")
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    data = load_json(args.input)
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_report(data, args.input), encoding="utf-8")
+    output = render_report_file(args.input, args.output)
     print(output)
 
 

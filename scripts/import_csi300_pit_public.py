@@ -31,7 +31,9 @@ from app.services.csi300_pit import (  # noqa: E402
 
 def _load_manifest(path: Path) -> dict[str, Any]:
     if not path.exists():
-        raise RuntimeError(f"Manifest not found: {path}. Copy data_sources/csi300_pit_sources.example.json first.")
+        raise RuntimeError(
+            f"Manifest not found: {path}. Copy config/data-sources/csi300_pit_sources.example.json first."
+        )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -245,12 +247,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import CSI300 point-in-time membership from public source manifests.")
     parser.add_argument(
         "--manifest",
-        default=str(ROOT / "data_sources" / "csi300_pit_sources.json"),
+        default=str(ROOT / "config" / "data-sources" / "csi300_pit_sources.json"),
         help="JSON manifest with official CSIndex notices and manual corrections.",
     )
     parser.add_argument(
         "--cache-dir",
-        default=str(ROOT / "web" / "runtime" / "source-cache" / "csi300"),
+        default=str(ROOT / "web" / "runtime" / "source-cache" / "csi300-official"),
         help="Directory for downloaded source artifacts.",
     )
     parser.add_argument("--replace-universe", action="store_true", help="Delete existing rows for manifest index_code before materializing.")

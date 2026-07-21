@@ -28,21 +28,14 @@ Projects created from the UI are persisted under `web/runtime/projects`.
 
 ## Existing Templates
 
-- `buy_hold`
-- `ema_cross`
-- `sma_cross`
-- `macd`
-- `rsi_reversion`
-- `donchian_breakout`
-- `bollinger_reversion`
-- `etf_rotation`
-- `crypto_momentum`
-- `future_trend`
-- `blank`
+- Built-in service templates include `buy_hold`, `ema_cross`, `sma_cross`, `macd`, `rsi_reversion`, `donchian_breakout`, `bollinger_reversion`, `etf_rotation`, `crypto_momentum`, `future_trend` and `blank`.
+- File-backed manifests under `strategies/templates/` extend the catalog, currently including `risk_parity`, `dynamic_universe` and other repository templates.
+- `GET /api/strategies/templates` is authoritative; documentation should not duplicate a permanently fixed list.
+- `GET /api/examples` adds runnable backtest, optimization and research cases on top of strategy templates. Examples may specify batch mode, universe rules and defaults, then instantiate a project/workflow through the API.
 
-## Recommended Manifest Shape
+## File-Backed Manifest Shape
 
-The current in-code dictionary is sufficient for P1. For P2, move each template into a directory:
+Reusable templates may live in a directory:
 
 ```text
 strategies/templates/<key>/
@@ -120,7 +113,7 @@ The helper enforces:
 
 ## Benchmark Rule
 
-A-share templates must require a real benchmark. Constant benchmark fallback is disabled in both `DockerDemoAlgorithm.py` and generated templates. Missing benchmark data should block the run before Docker execution.
+A-share templates must require a real benchmark. Constant benchmark fallback is disabled in generated production templates. Missing benchmark data should block the run before Docker execution.
 
 ## Testing Expectations
 
@@ -131,4 +124,5 @@ Every production template should eventually have:
 - minimum LEAN integration test with fixture data.
 - A-share rule test if it supports China equity.
 - result parser smoke test.
-
+- example-catalog validation when the template is referenced by `examples/catalog.json`.
+- dynamic-universe/PIT coverage test when `executionScope=dynamic_universe`.

@@ -2,6 +2,8 @@
 
 This project is designed for local or single-host deployment first. Distributed scheduling and broker connectivity are later-stage work.
 
+Last reviewed: 2026-07-21.
+
 ## Local Development
 
 Backend:
@@ -44,8 +46,10 @@ docker compose up -d mysql redis
 Full app profile:
 
 ```bash
-docker compose --profile app up -d --build mysql redis api worker data-worker backtest-worker
+docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
 ```
+
+Use `--build` after Dockerfile, dependency or frontend build-input changes. Ordinary restarts do not need it. For the workstation workflow, `scripts/start_web_single_instance.sh` is preferred because it serializes launchers and protects an active data sync from worker replacement.
 
 Optional observability/data services:
 
@@ -93,6 +97,10 @@ BACKTEST_JOB_TIMEOUT_SECONDS
 BACKTEST_MAX_CONCURRENT_JOBS
 LEAN_DB_OBJECT_STORE_ENABLED
 LEAN_DB_OBJECT_CHUNK_BYTES
+LEAN_MYSQL_CONNECT_ATTEMPTS
+LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS
+LEAN_MYSQL_BUFFER_POOL_SIZE
+LEAN_MYSQL_REDO_LOG_CAPACITY
 TUSHARE_TOKEN
 ```
 
@@ -134,6 +142,29 @@ Business binlogs use `MINIMAL` row images and expire after seven days. Bulk
 provider-cache sessions do not write binlogs, preventing rebuildable history
 from consuming storage twice.
 
+## MySQL Memory and Recovery
+
+The Compose workstation defaults are intentionally conservative:
+
+```text
+LEAN_MYSQL_BUFFER_POOL_SIZE=1G
+LEAN_MYSQL_REDO_LOG_CAPACITY=256M
+LEAN_MYSQL_CONNECT_ATTEMPTS=5
+LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS=0.5
+```
+
+MySQL uses `restart: unless-stopped`. API/worker connection establishment retries transient MySQL codes 1040, 2003, 2006 and 2013 for a bounded period. If recovery is not complete, API requests return retryable HTTP 503 `DATABASE_UNAVAILABLE`; periodic recovery/reconciliation tasks retry through Celery instead of turning a short outage into a permanent failed coordinator run.
+
+Docker Desktop memory is shared by MySQL, workers, LEAN, Research, ClickHouse and observability containers. A `Lost connection ... (2013)` burst across unrelated endpoints usually indicates a server restart or OOM rather than a bad query in each endpoint. Check:
+
+```bash
+docker compose ps mysql
+docker inspect lean-platform-mysql-1 --format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}'
+docker compose logs --tail=200 mysql
+```
+
+If `OOMKilled=true` or exit code is 137, stop unused stacks/LEAN containers, increase Docker's total memory if appropriate, and keep buffer/worker concurrency within the host budget. Do not mask repeated OOM by adding unlimited client retries.
+
 `BACKTEST_MAX_CONCURRENT_JOBS` is enforced by database-backed `scheduler_leases` before a LEAN container starts. When no slot is available, the Celery task remains queued and retries instead of launching another container.
 
 Default database URL is MySQL:
@@ -157,7 +188,7 @@ This lets the worker start sibling LEAN containers. Treat this as privileged acc
 ## Data Directories
 
 ```text
-Data/
+LEAN_DATA_DIR (default workspace parent/Data)
   LEAN cache mounted into containers.
 
 web/runtime/runs/
@@ -222,4 +253,5 @@ Use dependency health before running long backtests.
 - Run Docker integration tests after image upgrades.
 - Pin LEAN image digest for reproducible releases.
 - Monitor MySQL disk growth from `stored_object_chunks`.
+- Monitor MySQL restarts/OOM state and Docker total memory, not only query latency.
 - Archive or prune old `web/runtime/runs` after verifying object-store persistence.

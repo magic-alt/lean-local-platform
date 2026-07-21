@@ -5,7 +5,7 @@ import re
 import shutil
 from typing import Any
 
-from ..core.config import ALGORITHM_PATH, DEFAULT_DOCKER_IMAGE, RUNS_DIR
+from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, utc_now
 from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
 from ..lean_engine.errors import LeanPlatformError
@@ -35,6 +35,13 @@ def failure_metadata(stage: str, error: str, *, retryable: bool = False, details
 
 
 def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
+    project_id = str(request_data.get("projectId") or "").strip()
+    if not project_id:
+        raise LeanPlatformError("project_required: Select a project before starting a backtest.")
+    project = get_project(project_id)
+    if project["language"] != "Python":
+        raise LeanPlatformError("CSharp project execution is not enabled in this local web version yet.")
+
     prepared = prepare_backtest_request(request_data, repair=True)
     parameters = prepared["parameters"]
     preflight = prepared["preflight"]
@@ -42,53 +49,42 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     parameters["initial_cash"] = parameters["cash"]
     fingerprint_parameters = dict(parameters)
     fingerprint_parameters["preflight"] = preflight
-    project_id = request_data.get("projectId")
-    if project_id:
-        project = get_project(project_id)
-        if project["language"] != "Python":
-            raise LeanPlatformError("CSharp project execution is not enabled in this local web version yet.")
-
     docker_image = request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE
     parameters["dockerImage"] = docker_image
     run_id = new_run_id(parameters["ticker"], parameters["start"], parameters["end"])
     run_dir = RUNS_DIR / run_id
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
-    if project_id:
-        shared_snapshot = request_data.get("sharedStrategySnapshotDir")
-        snapshot_dir = Path(shared_snapshot).resolve() if shared_snapshot else run_dir / "strategy"
-        snapshot_source = request_data.get("strategySnapshotSourceDir")
-        source_path = Path(snapshot_source).resolve() if snapshot_source else Path(project["project_path"]).resolve()
-        if shared_snapshot:
+    shared_snapshot = request_data.get("sharedStrategySnapshotDir")
+    snapshot_dir = Path(shared_snapshot).resolve() if shared_snapshot else run_dir / "strategy"
+    snapshot_source = request_data.get("strategySnapshotSourceDir")
+    source_path = Path(snapshot_source).resolve() if snapshot_source else Path(project["project_path"]).resolve()
+    if shared_snapshot:
+        allowed_root = RUNS_DIR.resolve()
+        if allowed_root not in snapshot_dir.parents or not snapshot_dir.is_dir():
+            raise LeanPlatformError("Shared strategy snapshot must be a managed directory under runs.")
+    else:
+        if snapshot_source:
             allowed_root = RUNS_DIR.resolve()
-            if allowed_root not in snapshot_dir.parents or not snapshot_dir.is_dir():
-                raise LeanPlatformError("Shared strategy snapshot must be a managed directory under runs.")
-        else:
-            if snapshot_source:
-                allowed_root = RUNS_DIR.resolve()
-                if source_path != allowed_root and allowed_root not in source_path.parents:
-                    raise LeanPlatformError("Paper strategy snapshot must be stored under the managed runs directory.")
-                if not source_path.is_dir():
-                    raise LeanPlatformError("Paper strategy snapshot directory is missing.")
-            shutil.copytree(source_path, snapshot_dir)
-        parameters["strategySnapshotDir"] = str(snapshot_dir)
-        parameters["strategySnapshotMainFile"] = (
-            request_data.get("strategySnapshotMainFile") if snapshot_source else None
-        ) or project["main_file"]
-        parameters["strategySnapshotAlgorithmClass"] = (
-            request_data.get("strategySnapshotAlgorithmClass") if snapshot_source else None
-        ) or project["algorithm_class"]
-        parameters["strategySnapshotLanguage"] = (
-            request_data.get("strategySnapshotLanguage") if snapshot_source else None
-        ) or project["language"]
+            if source_path != allowed_root and allowed_root not in source_path.parents:
+                raise LeanPlatformError("Paper strategy snapshot must be stored under the managed runs directory.")
+            if not source_path.is_dir():
+                raise LeanPlatformError("Paper strategy snapshot directory is missing.")
+        shutil.copytree(source_path, snapshot_dir)
+    parameters["strategySnapshotDir"] = str(snapshot_dir)
+    parameters["strategySnapshotMainFile"] = (
+        request_data.get("strategySnapshotMainFile") if snapshot_source else None
+    ) or project["main_file"]
+    parameters["strategySnapshotAlgorithmClass"] = (
+        request_data.get("strategySnapshotAlgorithmClass") if snapshot_source else None
+    ) or project["algorithm_class"]
+    parameters["strategySnapshotLanguage"] = (
+        request_data.get("strategySnapshotLanguage") if snapshot_source else None
+    ) or project["language"]
     task = create_task("backtest", f"Backtest {parameters['ticker']}", parameters, project_id, run_id, status=CREATED)
     now = utc_now()
     name = request_data.get("name") or f"{parameters['ticker']} {parameters['start']} -> {parameters['end']}"
-    strategy_path = (
-        Path(parameters["strategySnapshotDir"]) / str(parameters["strategySnapshotMainFile"])
-        if project_id
-        else ALGORITHM_PATH
-    )
+    strategy_path = Path(parameters["strategySnapshotDir"]) / str(parameters["strategySnapshotMainFile"])
     fingerprint = build_run_fingerprint(
         run_id=run_id,
         parameters=fingerprint_parameters,

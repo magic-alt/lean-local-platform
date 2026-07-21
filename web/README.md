@@ -8,10 +8,10 @@ This platform wraps the open-source `quantconnect/lean` Docker image with a loca
 - Optional infra: ClickHouse, Prometheus, Grafana through root `docker-compose.yml`.
 - Frontend: React, Vite, TypeScript, Ant Design, ECharts, Monaco Editor.
 - Runtime state: `web/runtime/`.
-- LEAN data: repository `Data/`.
+- LEAN data: `LEAN_DATA_DIR` (by default the workspace parent `Data/` directory).
 - Docker execution: local `quantconnect/lean` image with mounted project, data, config, results, and object store.
 
-MySQL stores searchable metadata, market data, PIT memberships, backtest results, and binary stored objects. SQLite is only a migration source or test backend. Original LEAN JSON, logs, and HTML reports still have filesystem cache copies under `runtime/`, and are archived into MySQL `stored_objects/stored_object_chunks`.
+MySQL stores searchable metadata, market data, PIT memberships, sync/batch lifecycle, backtest results, and binary stored objects. SQLite is an isolated test backend only, not a runtime fallback. Original LEAN JSON, logs, and HTML reports still have filesystem cache copies under `runtime/`, and are archived into MySQL `stored_objects/stored_object_chunks`.
 LEAN-format zip files remain the LEAN engine input cache. When ClickHouse is available, imported OHLCV rows can also be mirrored into `lean_market.market_bars` for query acceleration, but MySQL is the runtime source of truth.
 
 ## Run Locally
@@ -106,24 +106,28 @@ When `frontend/dist` exists, FastAPI serves it at `/`; API routes remain under `
 
 - Single-user project workspace with overview, code, data, backtest, results, and logs tabs.
 - Project creation, deletion, strategy-template selection, and Monaco-based project editing.
+- Example gallery and database-backed batches for backtests, optimization, and research.
 - Current Dow Jones Industrial Average component universe, as of 2026-06-29, with local-data readiness flags.
 - CSV import plus Yahoo Finance, Stooq, Alpha Vantage, Sina Finance, EastMoney, AKShare, and TongHuaShun daily data import into LEAN zip format.
 - US, China A-share, and Hong Kong daily equity data workflows.
-- Docker backtests with persisted logs, artifacts, charts, and HTML reports.
+- Docker backtests with persisted logs, artifacts, charts, structured HTML reports and Markdown export.
 - Equity and asset-price charts with order time markers.
 - Settings page for default market, provider, strategy, Docker images, cash, and date ranges.
 - Local grid optimization through Celery tasks.
-- Detached research container launcher.
+- Multi-symbol/multi-strategy/rolling/PIT-universe batches with cancellation, failed retry and CSV export.
+- Research examples, batch research and detached container launcher.
 - Local Object Store file upload/download/delete.
 - Task queue and logs.
 - Dependency health at `/api/health/dependencies`.
 - Prometheus metrics at `/metrics`.
 - Monitoring page with Grafana and Prometheus links.
 - ClickHouse bar preview from the Data Library when the mirror is available.
+- Ten-dataset first-full/then-incremental TuShare build, explicit on-demand storage selection, CSV templates and data-aware previews.
+- Searchable in-app Docs backed by `docs/help`.
 
 ## Data Providers
 
-The web UI writes imported daily bars into the repository `Data/` directory in LEAN's expected zip format. The backtest engine then reads the same files through the mounted Docker volume.
+The web UI writes imported daily bars into `LEAN_DATA_DIR` in LEAN's expected zip format. The backtest engine then reads the same files through the mounted Docker volume.
 
 - `Yahoo Finance`: US equities, no API key, useful for demos, but the chart endpoint can rate-limit shared networks.
 - `Stooq`: US equities, no API key, useful when CSV downloads are allowed, but it can return browser-verification pages from some networks.

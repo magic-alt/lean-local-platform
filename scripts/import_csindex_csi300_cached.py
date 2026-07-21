@@ -285,7 +285,10 @@ def _write_manifest(path: Path, *, source_records: list[dict[str, Any]], initial
             "as_of_date": COVERAGE_START,
         },
         "initial_members": initial_members,
-        "sources": source_records,
+        "sources": [
+            {key: value for key, value in source.items() if key != "local_path"}
+            for source in source_records
+        ],
         "manual_events": MANUAL_EVENTS,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -294,7 +297,7 @@ def _write_manifest(path: Path, *, source_records: list[dict[str, Any]], initial
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import CSI300 PIT membership from cached official CSIndex files.")
     parser.add_argument("--cache-dir", default=str(ROOT / "web" / "runtime" / "source-cache" / "csi300-official"))
-    parser.add_argument("--manifest-out", default=str(ROOT / "data_sources" / "csi300_pit_sources.json"))
+    parser.add_argument("--manifest-out", default=str(ROOT / "config" / "data-sources" / "csi300_pit_sources.json"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--acknowledge-partial-coverage",

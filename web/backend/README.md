@@ -31,17 +31,17 @@ Required supporting service:
 redis-server --port 6379
 ```
 
-Compose startup with MySQL, Redis, API, and worker:
+Compose startup with the complete application worker split:
 
 ```bash
 cd /Users/kaermax/lean-platform
-docker compose --profile app up -d --build mysql redis api worker
+docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
 ```
 
 If a host port is already in use:
 
 ```bash
-LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker
+LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
 ```
 
 Useful environment variables:
@@ -59,6 +59,9 @@ Main modules:
 - `app/services/`: project, task, and object-store domain services.
 - `app/tasks/`: Celery app and worker jobs.
 - `app/lean.py`: LEAN Docker command construction, data conversion helpers, and result parsing.
+- `app/migrations/versions/`: ordered runtime schema migrations; run status checks before starting workers after upgrades.
+
+The API also serves the example catalog, experiment batches, dataset previews/on-demand downloads and help articles. MySQL connection startup uses bounded transient retries and returns retryable `DATABASE_UNAVAILABLE` rather than a generic 500 when the server is temporarily restarting.
 
 Useful data maintenance tasks:
 

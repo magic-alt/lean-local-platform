@@ -32,7 +32,11 @@ def test_china_strategy_template_hard_fails_without_real_benchmark():
 def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():
     from pathlib import Path
 
-    code = Path(__file__).resolve().parents[3].joinpath("DockerDemoAlgorithm.py").read_text(encoding="utf-8")
+    code = (
+        Path(__file__).resolve().parents[3]
+        .joinpath("examples", "lean-docker-demo", "DockerDemoAlgorithm.py")
+        .read_text(encoding="utf-8")
+    )
 
     assert "constant benchmark fallback is disabled" in code
     assert "backtest is blocked" in code

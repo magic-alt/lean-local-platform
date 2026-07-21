@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a local QuantConnect LEAN platform with a FastAPI backend and React frontend. Core backend code lives in `web/backend/app/`: API routers in `api/`, domain services in `services/`, Celery tasks in `tasks/`, LEAN/Docker helpers in `lean_engine/`, and migrations in `migrations/`. Backend tests are in `web/backend/tests/`. Frontend source is in `web/frontend/src/`. Operational scripts are in `scripts/`, strategy templates in `strategies/templates/`, documentation in `docs/`, and runtime artifacts under `web/runtime/` or external `Data/` paths.
+This repository contains a local QuantConnect LEAN platform with a FastAPI backend and React frontend. Core backend code lives in `web/backend/app/`: API routers in `api/`, domain services in `services/`, Celery tasks in `tasks/`, LEAN/Docker helpers in `lean_engine/`, and migrations in `migrations/`. Backend tests are in `web/backend/tests/`. Frontend source is in `web/frontend/src/`. Operational scripts are in `scripts/`, standalone examples in `examples/`, portable configuration in `config/`, strategy templates in `strategies/templates/`, documentation in `docs/`, and runtime artifacts under `web/runtime/` or external `Data/` paths. Root-level `results/`, `runs/`, `Data/`, and `parquet/` directories are not supported.
 
 ## Build, Test, and Development Commands
 
@@ -39,6 +39,8 @@ Use pytest for backend coverage; name tests `test_*.py` and keep fixtures local 
 ## Commit & Pull Request Guidelines
 
 Recent commits use concise imperative messages, usually lowercase, such as `remove sqlite runtime defaults` or `align data providers with multi-source fallback`. Keep commits scoped and avoid mixing generated artifacts with code changes. Pull requests should describe the behavioral change, list verification commands, note data or migration impacts, and include screenshots for visible UI changes.
+
+Every commit must update the `Unreleased` section of `CHANGELOG.md`. Enable the tracked hook with `./scripts/install_git_hooks.sh`; the hook rejects commits that do not stage the changelog.
 
 ## Security & Configuration Tips
 

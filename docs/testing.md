@@ -20,6 +20,10 @@ Important unit-level coverage:
 - A-share repository/reference data: `tests/test_ashare_reference_public.py`, `tests/test_pit_data.py`
 - Parquet lake: `tests/test_parquet_lake.py`
 - API smoke: `tests/test_api_smoke.py`
+- data sync lifecycle/archive: `tests/test_data_sync*.py`
+- examples and experiment batches: `tests/test_experiment_examples.py`, `tests/test_experiment_batches.py`
+- report generation/export: `tests/test_plot_results.py`, report API/service tests
+- transient MySQL failure handling: database and middleware/task recovery tests
 
 ## Integration Tests
 
@@ -123,8 +127,8 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 
 ## Test Gaps
 
-- No browser E2E suite yet.
+- The repository has a browser E2E area, but coverage is not yet a required full release gate for every page.
 - No frontend component tests yet.
 - No formal benchmark golden files for all templates yet.
 - No full exchange-grade A-share matching acceptance test yet.
-
+- No resource-pressure/OOM recovery test representative of the complete Docker Desktop stack yet.

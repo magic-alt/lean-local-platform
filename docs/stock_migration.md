@@ -1,5 +1,7 @@
 # Stock Project Migration Record
 
+Historical record reviewed 2026-07-21. This file intentionally preserves the original migration boundary and source commit; current architecture and Roadmap status live in `docs/architecture.md` and `docs/roadmap.md`.
+
 The former Backtrader platform is frozen as a source archive. LEAN is the only
 production backtest engine for this repository.
 

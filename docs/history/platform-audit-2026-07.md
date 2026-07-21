@@ -4,6 +4,23 @@
 仓库：`/Users/kaermax/lean-platform`  
 当前分支：`main`  
 基准 commit：`8e51ae4 Add P2 factor, cbond, and futures research support`  
+
+> 历史保留说明：本文是从 2026-07-04 开始的时点复审，下面的问题、当时数据量、测试数和两周计划均作为历史证据保留，不因后续修复而删除。当前能力以 [living roadmap](../roadmap.md) 为准，逐次故障与修复见本目录的 [历史索引](README.md)。
+
+## 2026-07-21 状态增量
+
+| 历史条目 | 当前状态 | 后续说明 |
+| --- | --- | --- |
+| P0-006 全 A 数据导入 | 基础建库已完成 | Data 页已支持 10 个 TuShare 数据集首次全量、后续增量；仍需持续检查权限、覆盖率和隔离行 |
+| P0-007 指数行情 | 扩展完成度提高 | `index_basic`、`index_daily` 已纳入一键更新；特定 benchmark 仍需回测前覆盖校验 |
+| P0-008 复权口径 | 基础链路已完成 | `adj_factor` 纳入建库、LEAN factor cache 可重建；跨资产口径仍需持续验收 |
+| P0-009 CSI300 早期 PIT | 仍未完成 | 2017 年以前的官方历史成分缺口不能用当前成分回填 |
+| P1-002 每日任务链 | 部分完成 | Celery beat 已有恢复/协调任务；无人值守 Paper 日链路和通知仍需完整验收 |
+| P1-004 QA 前置门禁 | 基础版已完成 | 回测预检覆盖 benchmark、行情和质量门禁；ETF、转债、期货仍需扩展 |
+| P2-001 Provider 契约 | TuShare 主链路已完成 | 数据集 catalog、sync run、checkpoint、watermark、隔离和压缩归档已落地 |
+| P2-005 前端和报告 | 持续改进 | 已有数据集 Preview、应用内 Docs、批量实验、结构化报告；bundle 和更多导出格式仍是后续项 |
+
+2026-07-21 新增的批量实验、数据同步性能、MySQL 恢复、Preview 和报告问题记录在 [历史修复记录](2026-07-platform-fixes.md)。本节只更新状态，不覆盖本文后续原始问题描述。
 2026-07-07 更新：本次升级新增 Level 3 shadow production gate、daily shadow pipeline、paper constraints acceptance、Level 3 one-shot audit、instrument identifier backfill、coverage API、lightweight reports API 和 migration status/verify 命令。Level 3 Pass 仍以真实 MySQL/API/Docker/LEAN 验收报告为准；只有 `run_level3_shadow_audit.py` 在真实环境输出 `LEVEL3_PASS` 时，才允许把状态从 Candidate 提升为 Pass。
 当前状态：工作区包含本次 P0 修复、本地 TuShare Pro token 配置支持、AKShare 沪深300日线导入脚本、沪深300 PIT 成分导入管线、MySQL 运行主库切换、Parquet/DuckDB 派生行情仓、A 股多源校验，以及 Level 3 复审后补齐的 5 个阻塞项：增量导入不再覆盖 LEAN 长历史缓存、Paper 显式 execution policy、`000300` benchmark 行情、run fingerprint、回测前 LEAN Data cache 自动恢复/校验。2026-07-05 继续补齐 P1 稳定模拟盘能力：真实 LEAN Docker integration 已在有 Docker 权限环境通过，Paper 日报落库/API 化，Paper 组合约束支持最大持仓、单票权重、现金下限、黑名单、观察池/只观察名单，Compose 支持 Redis/API/MySQL 等宿主端口覆盖并完成 API/worker/MySQL/Redis 一键启动验收，交易状态写入新增来源优先级，OHLCV 推断状态不会覆盖官方/手工状态。默认运行库已从 SQLite 改为 `mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market`；`web/runtime/HS300.sqlite3` 目前只保留为测试模板/备份。MySQL 已全量导入 `HS300.sqlite3`，并补充通用 `instruments`、`market_daily_bars`、`market_trade_status` 和 `stored_objects/stored_object_chunks`。Parquet 文件是从 MySQL 标准行情表导出的可重建研究层，不作为事实源；`CSI300` PIT 覆盖仍从 `2017-12-08` 起，尚不是 2005 年指数发布以来的完整全历史。
 

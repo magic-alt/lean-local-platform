@@ -38,12 +38,14 @@ Pages:
 - Reports
 - Object Store
 - Tasks and logs
+- Docs
 - Settings
 
 Main workflow:
 
 1. Open `Workspace`.
-2. Create or select a project and choose a strategy template.
-3. Use the `Data` tab to download US, A-share, or Hong Kong symbols into local LEAN data.
-4. Use the `Backtest` tab to run Docker LEAN against the selected project, market, symbol, and strategy parameters.
-5. Open `Results` to inspect metrics, charts, order markers, artifacts, and reports.
+2. Create or select a project, or instantiate a backtest/optimization/research example.
+3. Use `Data` for first full/then incremental one-click data, explicit on-demand downloads, CSV templates and dataset previews.
+4. Run one job or create an experiment batch across symbols, strategies, parameters, rolling windows or a PIT universe.
+5. Inspect child progress, metrics, charts, order markers, artifacts and structured reports; cancel or retry failed batch items when needed.
+6. Use `Docs` to search configuration, strategy and troubleshooting guidance.

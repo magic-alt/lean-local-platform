@@ -1,138 +1,161 @@
 # Architecture
 
-This platform is a local QuantConnect/LEAN based research and backtesting system. LEAN is the only production backtest engine. Other engines, if ever added, must stay outside the production chain as research comparison tools.
+Last reviewed: 2026-07-21.
+
+This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
 ## Current Level
 
-Current implementation is between Level 3 and early Level 4:
+The core Level 3 chain and the main Level 4 experiment workflows are implemented:
 
-- Level 3 main chain is available: Web -> Backend -> Celery task -> LEAN Docker -> raw artifacts -> parser -> UI.
-- P0 has hardened the LEAN run chain with artifact manifests and raw artifact archiving.
-- P1 has added trusted backtest validation metadata for A-share rules, data coverage, benchmark coverage, QA gates, experiment fingerprint, and UI visibility.
-- P1 also has database-backed scheduler leases for `maxConcurrentJobs` and version rows for strategy, dataset, and experiment records.
-- Strategy admission adds regime-complete baselines and drift gates before a parameter set can be used by the portfolio optimizer.
-- P2/P3 features exist only partially. Optimization, factors, paper replay, convertible bonds, futures, ClickHouse, Prometheus, and Grafana have code or infrastructure, but they are not yet the primary acceptance chain.
+- Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
+- A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.
+- Strategy, dataset and experiment versions plus run fingerprints are persisted for reproducibility.
+- Backtests, optimization and research expose an example catalog and database-backed experiment batches.
+- Data synchronization is resumable and auditable through sync runs, checkpoints, heartbeats, watermarks, validation results and quarantined rows.
+- Paper Replay, factors, ClickHouse, Parquet/DuckDB and observability exist, but some cross-asset and production acceptance gates remain incomplete.
 
-## Module Map
+## Component Map
 
 ```text
 Browser
-  -> web/frontend/src
-      App.tsx, api.ts, components.tsx
-  -> FastAPI backend
-      web/backend/app/main.py
-      web/backend/app/api/*
-  -> Services
-      backtest_service.py
-      backtest_validation.py
-      strategy_admission.py
-      portfolio_optimization.py
-      result_service.py
-      strategies.py
-      scheduler.py, experiments.py
-      data.py, ashare_repository.py, lean_cache.py
-  -> Task layer
-      tasks/worker.py
-      tasks/celery_app.py
-      Redis broker
-  -> Runner layer
-      runners/lean_runner.py
-      runners/docker_runner.py
-      lean.py config/mount helpers
-  -> LEAN Docker container
-      pinned quantconnect/lean digest by default
-  -> Storage
-      MySQL or SQLite via db.py
-      stored_objects/stored_object_chunks
-      web/runtime/runs/<run_id>
-      Data/ LEAN cache
-      parquet datasets
+  -> React/Vite frontend
+       pages, API client, charts, Docs, dataset previews, batch workbench
+  -> FastAPI
+       API schemas and request validation
+  -> Domain services and repositories
+       backtests, data sync, experiments, reports, paper, research
+  -> MySQL runtime fact store
+       metadata, canonical market data, PIT data, results, stored objects
+  -> Celery / Redis
+       default, data, data-demand and backtest queues; beat coordination
+  -> LEAN / Research Docker containers
+       isolated run workspaces and read-only Data mounts
+
+Derived and optional stores
+  MySQL -> LEAN Data cache
+  MySQL -> Parquet -> DuckDB
+  MySQL -> optional ClickHouse mirror
+  run workspace <-> stored_objects archive
 ```
 
 ## Directory Responsibilities
 
 ```text
-web/frontend/
-  React/Vite UI. Owns pages, API client types, charts, status and validation display.
+web/frontend/src/
+  React UI, API types, charts, batch workflows, previews and searchable docs.
 
 web/backend/app/api/
-  FastAPI route layer. Routes should validate HTTP shape and delegate to services.
+  FastAPI route layer. HTTP validation and delegation only.
 
 web/backend/app/services/
-  Business logic. Backtest creation, validation, result parsing, data import, A-share rules, object storage.
-
-web/backend/app/runners/
-  Execution adapters. LeanRunner prepares workspaces and DockerRunner runs/stops containers.
-
-web/backend/app/tasks/
-  Celery tasks for async backtests, data fetch, optimization, reports.
+  Business logic for backtests, validation, data sync, batches, reports and paper.
 
 web/backend/app/repositories/
-  Database persistence helpers for backtests and results.
+  Database persistence helpers.
 
-web/backend/app/domain/
-  Shared domain constants and small domain helpers such as backtest status normalization.
+web/backend/app/runners/ and web/backend/app/lean_engine/
+  LEAN configuration, isolated workspaces and Docker execution.
+
+web/backend/app/reporting/
+  Canonical HTML report renderer shared by live runs and report regeneration.
+
+web/backend/app/tasks/
+  Celery task definitions, recovery and batch coordination.
+
+web/backend/app/migrations/versions/
+  Ordered MySQL schema migrations. The current latest migration is 0018.
 
 web/backend/tests/
-  Unit and integration tests. Docker/LEAN tests are gated by RUN_LEAN_DOCKER_INTEGRATION=1.
+  Unit and opt-in Docker/LEAN integration tests.
 
 web/runtime/
-  Runtime state: runs, projects, uploads, reports, object-store, local SQLite if used.
+  Rebuildable or archived runtime cache: projects, runs, reports and uploads.
 
-Data/
-  LEAN data cache. Mounted read-only into LEAN containers.
+LEAN_DATA_DIR (default: workspace parent/Data)
+  LEAN execution cache and derived Parquet datasets; not the metadata fact store.
 
-scripts/
-  Data import, migration, comparison, and replay scripts.
-
-docs/
-  Architecture and operating documentation.
+docs/help/
+  Articles served by the in-app Docs page.
 ```
 
 ## Main Backtest Chain
 
 ```text
-Strategy selection or project upload
-  -> parameter form
+Project/template selection (projectId required)
+  -> POST /api/backtests/preflight
   -> POST /api/backtests
-  -> create_backtest_job()
-  -> validate_backtest_parameters()
-  -> A-share preflight, QA gate, benchmark gate when market=china
-  -> create task and backtest_runs row
-  -> acquire scheduler lease before LEAN execution
-  -> Celery run_backtest_task()
-  -> LeanRunner.run_backtest()
-  -> create web/runtime/runs/<run_id>
-  -> write config.json and optional A-share helper files
-  -> docker run pinned quantconnect/lean image
-  -> tee Docker/LEAN console output to results/stdout.log and task log
-  -> write raw LEAN results
-  -> write artifact-manifest.json
-  -> parse result JSON and order events
-  -> archive raw artifacts into stored_objects
-  -> save parsed backtest_results row
-  -> GET /api/backtests/<id>/result, /validation, /logs, /chart-data
-  -> UI details, charts, validation/admission tabs, reports
+  -> validate parameters, data, benchmark and QA gates
+  -> persist task, run and version metadata
+  -> acquire database scheduler lease
+  -> Celery run_backtest_task
+  -> prepare isolated web/runtime/runs/<run_id>
+  -> restore or rebuild required LEAN cache from MySQL/object archive
+  -> run pinned LEAN Docker image
+  -> preserve stdout, result JSON, summary and order events
+  -> parse metrics/charts and create artifact manifest
+  -> archive artifacts in stored_objects/stored_object_chunks
+  -> persist result, fingerprint, validation and experiment snapshots
+  -> expose result, logs, objects, structured report and export APIs
 ```
 
-## Runtime Dependencies
+## Experiment Batch Chain
 
-- Python backend: FastAPI, Celery, Redis client, PyMySQL, Pandas-like data tooling as listed in `web/backend/requirements.txt`.
-- Frontend: Vite, React, Ant Design, ECharts.
-- Docker: required for LEAN backtest execution.
-- Redis: required for async task dispatch.
-- MySQL: default database via `LEAN_DATABASE_URL`; SQLite is still supported in tests and local fallback paths.
-- Data folder: `LEAN_DATA_DIR`, defaulting to `../Data` relative to the platform workspace.
-- Optional services: ClickHouse, Prometheus, Grafana.
+```text
+Example or batch form
+  -> POST /api/experiment-batches/preview
+  -> validate expansion against maxBatchRuns
+  -> POST /api/experiment-batches
+  -> persist batch and child specifications
+  -> dispatch a bounded window of child work
+  -> standard backtest / optimization / research service
+  -> reconcile terminal children in a periodic task
+  -> aggregate progress and metrics
+  -> cancel, retry failed children or export CSV
+```
+
+Supported batch shapes include independent symbol/strategy matrices, multi-strategy runs, parameter grids, rolling windows, point-in-time universe portfolios, walk-forward optimization and research batches. A batch does not bypass the global LEAN scheduler lease limit.
+
+## Data Synchronization Chain
+
+```text
+TuShare Pro
+  -> capability/policy check
+  -> concurrent bounded fetch and rate limiting
+  -> normalize, validate, deduplicate and quarantine
+  -> batched canonical MySQL writes
+  -> persist manifest, checkpoint, watermark and validation
+  -> update optional ClickHouse mirror / derived cache work
+```
+
+The 10 one-click datasets are listed in [data_pipeline.md](data_pipeline.md). Other catalog entries are on-demand. Canonical data is not duplicated as per-row JSON; non-canonical responses use content-addressed gzip batch archives.
+
+## Storage Ownership
+
+- MySQL: authoritative runtime metadata, canonical data, PIT membership, task state, reports and binary archives.
+- `stored_objects` / `stored_object_chunks`: durable artifact and cache archive inside MySQL.
+- `web/runtime`: local execution/debug cache; safe to prune only after verifying required objects are archived.
+- `Data/`: LEAN-readable cache generated or restored from authoritative data.
+- Parquet/DuckDB: rebuildable analytical layer.
+- ClickHouse: optional mirror with an independent health/watermark boundary; never the source of truth.
+- SQLite: tests only. Do not reintroduce it as a local runtime fallback.
+
+## Failure and Recovery Boundaries
+
+- MySQL connection establishment retries transient 1040/2003/2006/2013 errors a bounded number of times.
+- API requests return HTTP 503 with `DATABASE_UNAVAILABLE` while MySQL is temporarily unavailable; periodic Celery coordinators retry.
+- Sync runs persist heartbeat and checkpoint state. Recovery only takes over orphaned work and replays an idempotent small batch at most.
+- Experiment batches are reconciled from database child state after restarts.
+- Report and dataset preview failures are contained to their feature area and must not blank the whole application.
 
 ## Architectural Rules
 
 - LEAN remains the only production backtest executor.
-- API routes should not grow Docker or filesystem orchestration logic; that belongs in services/runners.
-- Each run must have an isolated `web/runtime/runs/<run_id>` workspace.
-- Raw outputs must be preserved before and after parsing.
-- Task cancellation must go through the service layer so Celery revoke, LEAN container stop, child run status, and related task state stay consistent.
-- API errors must retain `detail` for compatibility and also expose `error_code`, `category`, and `retryable` for UI handling.
-- Every trusted backtest should carry `fingerprint`, `validation`, and `experiment` metadata.
-- Every trusted backtest should persist linked `strategy_versions`, `dataset_versions`, and `experiments` rows.
-- A-share backtests must use explicit benchmark data and must not fall back to constant benchmark curves.
+- MySQL remains the only runtime fact store; derived stores must be rebuildable.
+- API routes delegate orchestration to services/runners.
+- Every run uses an isolated workspace and preserves raw artifacts before parsing.
+- Trusted runs persist fingerprint, validation, experiment and normalized version links.
+- A-share runs require real benchmark data and cannot use a constant fallback.
+- Cancellation flows through services so Celery state, containers and database state remain consistent.
+- Provider data must retain audit hashes and source/batch metadata without duplicating canonical payloads.
+- Historical problem records under `docs/history/`, including `platform-audit-2026-07.md`, are append-only evidence.

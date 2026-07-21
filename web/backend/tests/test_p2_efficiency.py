@@ -218,7 +218,8 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
 
     markdown = client.get("/api/reports/backtest:run-a/export", params={"format": "markdown"})
     assert markdown.status_code == 200
-    assert "Backtest Report" in markdown.text
+    assert "# Local equity SPY Backtest" in markdown.text
+    assert "report-layout-v2" in markdown.text
     assert markdown.headers["content-type"].startswith("text/plain")
     assert markdown.headers["content-disposition"].startswith("inline;")
     assert 'filename="backtest-report-run-a.md"' in markdown.headers["content-disposition"]

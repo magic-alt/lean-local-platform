@@ -1,6 +1,52 @@
-# Git 修复摘要记录
+# Changelog
 
-本文档用于记录每次 git 修复提交的摘要。每次提交后按时间倒序追加一节，包含日期、commit、标题和修复要点。
+本文档记录用户可见行为、架构、数据和运维变更。自 2026-07-21 起，每次提交必须在 `Unreleased` 中增加一条简明记录；提交自身的 hash 不写入同一提交，Git 历史是 hash 的权威记录。
+
+## Unreleased
+
+- 2026-07-21 — reorganize repository boundaries：将独立 Docker/CLI demo 移入 `examples/`，正式报告生成器移入后端 reporting 包，回测强制使用项目快照，统一源码、运行产物和 portable data manifest 边界。
+- 2026-07-21 — align reports and documentation：统一所有 HTML/Markdown 报告表头与缓存策略，更新 README、架构、数据源、部署、帮助和历史问题文档。
+
+## 2026-07-08 至 2026-07-21 — 历史里程碑回填（63 commits）
+
+### 2026-07-21 — 稳定性、预览和实验工作台
+
+- 修复 MySQL 临时断连的 API、Celery 周期任务重试和结构化错误响应。
+- 修复指数、期货和期权数据集预览的不可序列化字段与前端空白页。
+- 增加 Backtests、Optimization、Research 案例模板、批量实验、取消、失败重试和导出工作流。
+
+### 2026-07-19 至 2026-07-20 — TuShare 全库同步与数据页面
+
+- 完成十数据集首次全量、后续增量同步，增加 checkpoint、heartbeat、watermark、孤儿任务恢复和真实 API 调用指标。
+- 批量化 MySQL 写入、交易状态来源判优和 loader 连接，删除逐行完整 JSON 重复写放大，改用轻量 raw 索引与压缩批次归档。
+- 增加股票、交易日历、指数、期货和期权预览，按需数据集可选择存储目标，CSV 导入提供模板。
+- 统一磁盘/MySQL 容量统计和安全线，改进单实例启动、退出清理与 worker 恢复。
+
+### 2026-07-17 至 2026-07-18 — Paper、Insights 与跨市场链路
+
+- 增加基于验证通过项目快照的 LEAN Paper walk-forward、约束验收和日终报告。
+- 修复 A 股及港股回测验证、图表、结果展示和跨市场数据同步。
+- 增加多模型技术洞察、报告刷新、行业展示和可编辑分析工作流。
+
+### 2026-07-14 至 2026-07-16 — 项目回测与执行可信度
+
+- 改进项目创建、克隆、参数模板、数据预览和回测配置流程。
+- 强制 A 股 next-open、涨跌停、停牌、T+1、费用和滑点执行验证。
+- 将正式研究、优化和回测统一到 LEAN 项目与可复现运行指纹。
+
+### 2026-07-09 — Web 启动、任务与项目工作区
+
+- 增加单实例 Web 启动、自动端口回退、完整 Compose profile、可选 `--build` 和健康检查。
+- 修复队列无 worker、陈旧 queued 任务、任务删除、页面轮询和端口日志污染。
+- 重构项目工作流并增加更新/克隆 API，简化数据表单和历史结果展示。
+- 修复 LEAN orders、fills、holdings 推断和图表记录渲染。
+
+### 2026-07-08 — MySQL 与多数据源统一
+
+- 移除 SQLite 运行默认值和旧迁移回退，统一 MySQL 运行事实库与后端目标。
+- 将 TuShare 设为默认 A 股生产源，增加 JQData CSI1000、Binance crypto 和多源 fallback。
+- 重构 Data 页面、CSV 导入和本地历史维护，增加 Web E2E 回测覆盖。
+- 修复数据库健康检查、前后端端口绑定、启动等待和行情 source resolution。
 
 ## 2026-07-07 - 本次提交 - Add Level 3 shadow pass pipeline
 

@@ -2,12 +2,15 @@
 
 The backend is FastAPI, mounted from `web/backend/app/main.py`. All routes are local and unauthenticated in the current personal platform version.
 
+Last reviewed: 2026-07-21. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
+
 ## Common Behavior
 
 - JSON request/response by default.
 - Expected domain errors return structured JSON with `detail`, `message`, `error_code`, `category`, and `retryable`.
 - Missing resources return HTTP 404 with `error_code=NOT_FOUND`.
 - Redis/Celery dispatch failure returns HTTP 503 with `error_code=SERVICE_UNAVAILABLE` and `retryable=true`.
+- Temporary MySQL connection failure returns HTTP 503 with `error_code=DATABASE_UNAVAILABLE` and `retryable=true` after bounded connection retries.
 - Some list endpoints return arrays directly; newer endpoints may return `{items, count, limit, offset}`.
 - Backtest logs currently return the latest tail, not a cursor-based stream.
 
@@ -16,6 +19,7 @@ The backend is FastAPI, mounted from `web/backend/app/main.py`. All routes are l
 ```text
 GET    /api/backtests
 POST   /api/backtests
+POST   /api/backtests/preflight
 GET    /api/backtests/{run_id}
 GET    /api/backtests/{run_id}/status
 GET    /api/backtests/{run_id}/result
@@ -42,14 +46,18 @@ GET    /api/backtests/{run_id}/artifacts/{name}
   "end": "2024-01-04",
   "cash": 100000,
   "dockerImage": "quantconnect/lean:latest",
-  "projectId": null,
+  "projectId": "my-strategy-20260721153000",
   "parameters": {
     "benchmarkSymbol": "000300"
   }
 }
 ```
 
+`projectId` is required for both create and preflight requests. Missing values return 422; unknown projects return 404. The worker executes the immutable project snapshot and has no default demo-algorithm fallback. Historical runs with `project_id=null` remain readable.
+
 For China equity, the service injects A-share trading config and blocks runs with missing benchmark or critical QA gates.
+
+`POST /api/backtests/preflight` validates the proposed project, parameters, data scope, benchmark and quality gates without dispatching a LEAN container. Batch preview uses the same contracts before expansion.
 
 `GET /api/backtests/{run_id}/versions` returns the normalized version records linked to a run:
 
@@ -80,6 +88,24 @@ GET    /api/projects/{project_id}/files
 GET    /api/projects/{project_id}/file
 PUT    /api/projects/{project_id}/file
 ```
+
+## Examples and Experiment Batches
+
+```text
+GET    /api/examples
+GET    /api/examples/{kind}/{key}
+POST   /api/examples/{kind}/{key}/instantiate
+
+POST   /api/experiment-batches/preview
+GET    /api/experiment-batches
+POST   /api/experiment-batches
+GET    /api/experiment-batches/{batch_id}
+POST   /api/experiment-batches/{batch_id}/cancel
+POST   /api/experiment-batches/{batch_id}/retry-failed
+GET    /api/experiment-batches/{batch_id}/export.csv
+```
+
+The example catalog covers backtest, optimization and research workflows. Preview expands symbols, strategies, parameter grids, rolling windows or PIT-universe instructions and rejects a request that exceeds `maxBatchRuns`. Creation persists the batch and its child specifications; dispatch remains bounded by the batch window and the global scheduler lease limit. Cancellation and retry update persisted child state and survive service restarts.
 
 ## Tasks
 
@@ -140,10 +166,15 @@ Configure only the key for the provider you want to use. Provider defaults are `
 GET    /api/reports
 POST   /api/reports
 GET    /api/reports/{report_id}
+GET    /api/reports/{report_id}/objects
+GET    /api/reports/{report_id}/objects/{object_id}
 GET    /api/reports/{report_id}/file
+GET    /api/reports/{report_id}/export?format=html|markdown
 ```
 
 Backtest reports are synthesized from `backtest_runs`, `backtest_results`, and `stored_objects`. They include `fingerprint`, `validation`, `experiment`, and all archived backtest artifacts when available.
+
+Report file responses use `Cache-Control: no-store`. HTML and Markdown export are implemented; PDF, CSV and JSON report exports are not yet supported.
 
 ## Data
 
@@ -153,16 +184,23 @@ GET    /api/securities/search
 GET    /api/data-assets
 GET    /api/data/providers
 GET    /api/data/providers/availability
+GET    /api/data/catalog
+GET    /api/data/dataset-preview/{dataset}
+GET    /api/data/on-demand/storage-targets
+POST   /api/data/on-demand/downloads
 GET    /api/asset-classes
 GET    /api/data/files
 GET    /api/data/query
 POST   /api/data/fetch
 POST   /api/data/fetch-batch
+GET    /api/data/import-csv/template
 POST   /api/data/import-csv
 POST   /api/data/fetch-alpha-vantage
 POST   /api/data/free/ashare/daily/import-sample
 POST   /api/data/intraday/import
 ```
+
+Dataset preview is data-aware for stocks, calendars, indexes, futures and options. The on-demand routes only accept datasets marked `sync_policy=on_demand` and an approved selectable storage target. CSV clients should download the matching template before import.
 
 Parquet and quality routes:
 
@@ -199,6 +237,7 @@ GET    /api/data/catalog
 GET    /api/data/sync-runs
 POST   /api/data/sync-runs
 GET    /api/data/sync-runs/{run_id}
+GET    /api/data/sync-runs/{run_id}/validation
 POST   /api/data/sync-runs/{run_id}/cancel
 POST   /api/data/sync-runs/{run_id}/resume
 ```
@@ -207,8 +246,10 @@ The Data page full-update workflow probes the configured TuShare Pro token at
 runtime. The local entitlement hint is 5,000 points, while successful endpoint
 probes remain authoritative because some datasets require separate grants. The
 sync boundary is low-frequency research data; real-time, minute, Tick, and news
-streams are excluded. Runs are incremental, idempotent, cancellable, and
-resumable from per-dataset checkpoints.
+streams are excluded. The first successful one-click build is full; subsequent
+one-click runs are incremental. Runs are idempotent, cancellable, and resumable
+from per-dataset checkpoints. Only the 10 bulk datasets documented in
+`docs/data_pipeline.md` participate; other catalog entries are on-demand.
 
 ## Research, Optimization, Factors
 
@@ -300,6 +341,15 @@ GET /api/health/database
 GET /metrics
 ```
 
+## Help Articles
+
+```text
+GET /api/help/articles
+GET /api/help/articles/{slug}
+```
+
+Help articles are loaded from `docs/help` and power the searchable in-app Docs page. Article filenames must be lowercase URL-safe slugs.
+
 ## Object Store
 
 ```text
@@ -335,6 +385,7 @@ CONFLICT
 VALIDATION_ERROR
 RATE_LIMITED
 SERVICE_UNAVAILABLE
+DATABASE_UNAVAILABLE
 INTERNAL_ERROR
 HTTP_ERROR
 LEAN_WEB_ERROR

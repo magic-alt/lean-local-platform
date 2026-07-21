@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+TEST_PROJECT_ID = "test-project"
+
 
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
@@ -32,6 +34,29 @@ def configure_temp_platform(tmp_path, monkeypatch):
     monkeypatch.setattr(assets_module, "DATA_DIR", data_dir)
     monkeypatch.setattr(assets_module, "REPO_ROOT", tmp_path)
     db_module.init_db()
+    project_dir = tmp_path / "projects" / TEST_PROJECT_ID
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "main.py").write_text("class TestAlgorithm: pass\n", encoding="utf-8")
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into projects
+                (id, name, language, algorithm_class, project_path, main_file, config_json, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(id) do update set project_path=excluded.project_path
+            """,
+            (
+                TEST_PROJECT_ID,
+                "Test Project",
+                "Python",
+                "TestAlgorithm",
+                str(project_dir),
+                "main.py",
+                json.dumps({"templateKey": "ema_cross"}),
+                "now",
+                "now",
+            ),
+        )
     return data_dir
 
 
@@ -236,6 +261,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
             "start": "2024-01-02",
             "end": "2024-01-04",
             "cash": 100000,
+            "projectId": TEST_PROJECT_ID,
             "fast": 1,
             "slow": 2,
             "extra": {
@@ -352,6 +378,7 @@ def test_backtest_preflight_counts_distinct_bar_dates_across_sources(tmp_path, m
             "start": "2024-01-02",
             "end": "2024-01-04",
             "cash": 100000,
+            "projectId": TEST_PROJECT_ID,
         }
     )
 
@@ -414,6 +441,7 @@ def test_backtest_creation_without_explicit_source_requires_default_production_s
                 "start": "2024-01-02",
                 "end": "2024-01-04",
                 "cash": 100000,
+                "projectId": TEST_PROJECT_ID,
             }
         )
 
@@ -475,6 +503,7 @@ def test_backtest_creation_does_not_silently_fall_back_to_other_source(tmp_path,
                 "end": "2024-01-04",
                 "cash": 100000,
                 "source": "tushare",
+                "projectId": TEST_PROJECT_ID,
             }
         )
 
@@ -500,6 +529,7 @@ def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exis
             "start": "2024-01-02",
             "end": "2024-01-04",
             "cash": 100000,
+            "projectId": TEST_PROJECT_ID,
         }
     )
 
@@ -526,6 +556,7 @@ def test_backtest_creation_allows_missing_local_ashare_cache_for_worker_restore(
             "start": "2024-01-02",
             "end": "2024-01-04",
             "cash": 100000,
+            "projectId": TEST_PROJECT_ID,
         }
     )
 
@@ -555,6 +586,7 @@ def test_backtest_creation_blocks_missing_benchmark(tmp_path, monkeypatch):
                 "end": "2024-01-04",
                 "cash": 100000,
                 "parameters": {"benchmarkSymbol": "999999"},
+                "projectId": TEST_PROJECT_ID,
             }
         )
 
@@ -598,6 +630,7 @@ def test_backtest_creation_blocks_critical_quality_report(tmp_path, monkeypatch)
                 "start": "2024-01-02",
                 "end": "2024-01-04",
                 "cash": 100000,
+                "projectId": TEST_PROJECT_ID,
             }
         )
 
@@ -1131,6 +1164,7 @@ def test_ashare_end_date_coverage_blocks_or_marks_truncated_runs(tmp_path, monke
         "start": "2024-01-02",
         "end": "2024-01-10",
         "cash": 100000,
+        "projectId": TEST_PROJECT_ID,
     }
 
     monkeypatch.setattr(

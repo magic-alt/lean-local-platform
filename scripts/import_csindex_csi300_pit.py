@@ -410,7 +410,7 @@ def write_manifest(path: Path, *, sources: list[dict[str, Any]], initial_members
         "initial_announce_date": "2005-04-08",
         "initial_effective_date": "2005-04-08",
         "initial_members": initial_members,
-        "sources": sources,
+        "sources": [{key: value for key, value in source.items() if key != "local_path"} for source in sources],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -427,7 +427,7 @@ def _event_distribution(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import real CSI300 PIT membership from official CSIndex announcements.")
     parser.add_argument("--cache-dir", default=str(ROOT / "web" / "runtime" / "source-cache" / "csi300-official"))
-    parser.add_argument("--manifest-out", default=str(ROOT / "data_sources" / "csi300_pit_sources.json"))
+    parser.add_argument("--manifest-out", default=str(ROOT / "config" / "data-sources" / "csi300_pit_sources.json"))
     parser.add_argument("--rows", type=int, default=50)
     parser.add_argument("--sleep", type=float, default=0.05)
     parser.add_argument("--dry-run", action="store_true")
