@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ..core.errors import LeanWebError, NotFoundError
 from ..services import experiment_batches
+from ..services.history_resources import delete_experiment_batch
 from ..tasks.worker import dispatch_experiment_batch_task
 
 
@@ -51,6 +52,16 @@ def detail(batch_id: str):
         return experiment_batches.detail(batch_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/{batch_id}")
+def delete(batch_id: str):
+    try:
+        return delete_experiment_batch(batch_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{batch_id}/cancel")

@@ -112,3 +112,13 @@ curl http://127.0.0.1:8000/api/health/database
 - 寻找稳健参数并做样本外验证：[Optimization](optimization.md)。
 - 使用 Notebook 或标准研究任务继续分析：[Research](research.md)。
 - 使用可信历史运行启动逐日模拟：[Paper](paper.md)。
+
+## 本地历史与安全删除
+
+Dashboard 的 `Manage Local History` 只负责导航到各类历史，不再直接清空所有结果。Backtests 支持单条或勾选后批量删除；Projects、Optimization、Research、Reports、Paper、Tasks 和批次历史在各自页面删除。
+
+- 活动中的 run、task、Research、Paper 或批次必须先取消或停止。
+- 删除 Backtest 会同时删除它的结果、生成报告和受管运行产物；被 Paper 引用时会拒绝删除。
+- 删除 Project 是级联操作，必须输入项目名，并会明确列出关联范围。
+- 删除 Generated Report 不删除源 Backtest；Backtest 自带报告随 Backtest 管理。
+- 全局维护 API 仍保留给运维，但真实删除需要精确输入 `DELETE ALL LOCAL HISTORY`，页面不会调用这一危险路径。

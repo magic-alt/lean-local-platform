@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Progress,
   Select,
   Space,
@@ -267,6 +268,7 @@ function metricTruthy(value: unknown) {
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const runs = useAsyncData(api.backtests, []);
   const tasks = useAsyncData(api.tasks, []);
   const latest = runs.data[0];
@@ -276,30 +278,13 @@ export function Dashboard() {
   const successRate = finishedRuns.length ? Math.round((successfulRuns / finishedRuns.length) * 100) : 0;
   const durations = runs.data.map((run) => run.duration_seconds).filter((value): value is number => typeof value === "number");
   const averageDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0;
-  async function clearLocalHistory() {
-    Modal.confirm({
-      title: "Clear local history and cache?",
-      content: "This will remove backtest/research history records and local runtime/cache files. Market data files and market data database entries will not be cleared.",
-      okText: "Clear",
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await api.clearLocalHistory({ force: true });
-          message.success("Local history cleared");
-          await Promise.all([runs.reload(), tasks.reload()]);
-        } catch (error) {
-          message.error((error as Error).message);
-        }
-      }
-    });
-  }
   return (
     <>
       <div className="toolbar">
         <h1 className="page-title">Dashboard</h1>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => { runs.reload(); tasks.reload(); }}>Refresh</Button>
-          <Button danger icon={<DeleteOutlined />} onClick={clearLocalHistory}>Clear Local History</Button>
+          <Button icon={<DeleteOutlined />} onClick={() => setHistoryOpen(true)}>Manage Local History</Button>
         </Space>
       </div>
       <Card className="workflow-card" style={{ marginBottom: 16 }}>
@@ -324,6 +309,36 @@ export function Dashboard() {
         <Card><Statistic title="Latest Symbol" value={latest?.symbol ?? "N/A"} /></Card>
       </div>
       <Card title="Recent Backtests"><RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
+      <Modal
+        title="Manage local history"
+        open={historyOpen}
+        onCancel={() => setHistoryOpen(false)}
+        footer={<Button onClick={() => setHistoryOpen(false)}>Close</Button>}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="There is no global one-click delete."
+          description="Review a resource page, then delete one item or an explicit selection. Running work must be cancelled or stopped first. Market data is never included."
+          style={{ marginBottom: 16 }}
+        />
+        <div className="history-resource-list">
+          {[
+            { label: "Backtests", count: runs.data.length, route: "/backtests" },
+            { label: "Tasks", count: tasks.data.length, route: "/tasks" },
+            { label: "Optimizations", route: "/optimization" },
+            { label: "Research sessions", route: "/research" },
+            { label: "Reports", route: "/reports" },
+            { label: "Paper sessions", route: "/paper" },
+            { label: "Projects", route: "/projects" },
+          ].map((item) => (
+            <div className="history-resource-row" key={item.route}>
+              <div><strong>{item.label}</strong>{item.count != null && <span className="muted"> · {item.count} local records</span>}</div>
+              <Button size="small" onClick={() => { setHistoryOpen(false); navigate(item.route); }}>Review</Button>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </>
   );
 }
@@ -1214,11 +1229,24 @@ export function ProjectsPage() {
   }
 
   function deleteProject(project: Project) {
+    let confirmation = "";
     Modal.confirm({
       title: `Delete ${project.name}?`,
-      content: "This will delete the project and its related runs, reports, tasks, and runtime files.",
+      content: <div>
+        <Alert
+          type="error"
+          showIcon
+          message="This is a cascading delete"
+          description={`The project, ${project.run_count ?? 0} backtests, related reports, tasks, optimizations, research sessions and managed runtime files will be removed.`}
+          style={{ marginBottom: 12 }}
+        />
+        <p>Type the project name to confirm:</p>
+        <Input placeholder={project.name} onChange={(event) => { confirmation = event.target.value; }} />
+      </div>,
+      okText: "Delete project and history",
       okButtonProps: { danger: true },
       onOk: async () => {
+        if (confirmation !== project.name) throw new Error("Project name does not match.");
         await api.deleteProject(project.id);
         message.success("Project deleted");
         await projects.reload();
@@ -1396,7 +1424,7 @@ export function ProjectsPage() {
             <Card><Statistic title="Symbol" value={String(form.getFieldValue("symbol") || "-")} /></Card>
             <Card><Statistic title="Local Symbols" value={symbols.length} /></Card>
           </div>
-          <Card title="Project Backtests" style={{ marginTop: 16 }}><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
+          <Card title="Project Backtests" style={{ marginTop: 16 }}><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} onDelete={async (run) => { await api.deleteBacktest(run.id); await Promise.all([runs.reload(), projects.reload()]); }} /></Card>
         </Card>
         <Card
           title="Strategy Source"
@@ -2331,7 +2359,7 @@ export function BacktestsPage() {
           <Button htmlType="submit">Filter</Button>
           <Button onClick={() => { historyForm.resetFields(); setFilters({}); }}>Clear</Button>
         </Form>
-        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(`/runs/${id}`)} />
+        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(`/runs/${id}`)} onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }} />
       </Card>
     </>
   );
@@ -2803,11 +2831,12 @@ export function OptimizationPage() {
                 </Card>
                 <Card title="Optimization Runs" style={{ marginTop: 16 }}>
                   <Table<OptimizationRun> rowKey="id" dataSource={optimizations.data} size="small" columns={[
-                    { title: "ID", dataIndex: "id", ellipsis: true },
+                    { title: "Optimization", render: (_, run) => <div className="table-primary-cell"><strong>{String(run.parameters?.ticker ?? run.parameters?.symbol ?? "Optimization")}</strong><span className="muted copyable-id">{run.id}</span></div> },
                     { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
                     { title: "Candidates", render: (_, run) => run.result?.candidateCount ?? run.result?.candidates?.length ?? "-" },
                     { title: "Best", render: (_, run) => shortValue(bestCandidate(run)?.overrides ?? "-") },
-                    { title: "Created", dataIndex: "created_at" }
+                    { title: "Created", dataIndex: "created_at" },
+                    { title: "Actions", render: (_, run) => <Popconfirm title="Delete this optimization?" description="Candidate results and managed runtime files will be removed." okText="Delete" okButtonProps={{ danger: true }} disabled={["created", "queued", "running"].includes(run.status)} onConfirm={async () => { try { await api.deleteOptimization(run.id); message.success("Optimization deleted"); await optimizations.reload(); } catch (error) { message.error((error as Error).message); } }}><Button size="small" danger disabled={["created", "queued", "running"].includes(run.status)}>Delete</Button></Popconfirm> }
                   ]} />
                 </Card>
               </>

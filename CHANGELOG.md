@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-21 — make Web tables and history cleanup safer：统一全站表格多行展示、表头/行态和响应式布局，重组超宽科技日报列；取消 Dashboard 一键强制清空，新增 Backtest、Optimization、Research、Report、Paper、Task、Project 和实验批次的受保护删除入口。
 - 2026-07-21 — pin the primary Web navigation：将 Dashboard 至 Settings 主导航固定为独立全高侧栏，右侧长页面滚动时保持可见，低高度视口仅在导航内部滚动。
 - 2026-07-21 — rebuild the in-app documentation center：使用 GFM Markdown 渲染、可复制深链、合并式目录和响应式表格重构 Web Docs；扩充数据、策略、回测、优化、Research、Paper、报告和排障教程，纳入仓库参考/历史文档、OpenAPI 全端点索引、链接校验和隔离 E2E 截图。
 - 2026-07-21 — reorganize repository boundaries：将独立 Docker/CLI demo 移入 `examples/`，正式报告生成器移入后端 reporting 包，回测强制使用项目快照，统一源码、运行产物和 portable data manifest 边界。

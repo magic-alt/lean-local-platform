@@ -338,7 +338,7 @@ export function ResearchPage() {
                         {["stopped", "failed", "cancelled"].includes(session.status) && <Button size="small" loading={sessionBusy === `restart:${session.id}`} onClick={() => sessionAction(session, "restart")}>Restart</Button>}
                         <Button size="small" loading={sessionBusy === `logs:${session.id}`} onClick={() => showLogs(session)}>Logs</Button>
                         <Button size="small" loading={sessionBusy === `check:${session.id}`} onClick={() => checkSession(session)}>Check</Button>
-                        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteSession(session)} />
+                        <Button size="small" danger icon={<DeleteOutlined />} disabled={["queued", "starting", "running"].includes(session.status)} onClick={() => deleteSession(session)} />
                       </Space> }
                     ]}
                   />

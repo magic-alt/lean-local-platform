@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE
+from ..core.errors import NotFoundError
 from ..lean_engine.results import extract_chart_data, infer_holdings_from_orders
 from ..repositories.backtest_repository import get_backtest
 from ..services.backtest_service import (
@@ -20,6 +21,7 @@ from ..services.backtest_service import (
 )
 from ..services.backtest_preflight import prepare_backtest_request
 from ..services.experiments import get_experiment_versions
+from ..services.history_resources import delete_backtest
 from ..services.result_service import result_for_job
 from ..services.run_paths import run_directory, run_file
 from ..services.projects import get_project
@@ -121,6 +123,16 @@ def detail(run_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="Backtest run not found.")
     return _with_artifacts(run)
+
+
+@router.delete("/{run_id}")
+def delete(run_id: str):
+    try:
+        return delete_backtest(run_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{run_id}/status")

@@ -101,6 +101,8 @@ export const api = {
   experimentBatchPreview: (payload: Record<string, unknown>) => request<ExperimentBatchPreview>("/api/experiment-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   createExperimentBatch: (payload: Record<string, unknown>) => request<ExperimentBatch>("/api/experiment-batches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   experimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}`),
+  deleteExperimentBatch: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/experiment-batches/${encodeURIComponent(id)}`, { method: "DELETE" }),
   cancelExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
   experimentBatchExportUrl: (id: string) => `/api/experiment-batches/${encodeURIComponent(id)}/export.csv`,
@@ -394,6 +396,8 @@ export const api = {
     request<BacktestAdmissionResponse>(`/api/backtests/${encodeURIComponent(id)}/admission?profile=${encodeURIComponent(profile)}`),
   cancelBacktest: (id: string) =>
     request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  deleteBacktest: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/backtests/${encodeURIComponent(id)}`, { method: "DELETE" }),
   logs: (id: string) =>
     request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
   chartData: (id: string) =>
@@ -404,6 +408,8 @@ export const api = {
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   optimizations: () => request<OptimizationRun[]>("/api/optimize"),
+  deleteOptimization: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/optimize/${encodeURIComponent(id)}`, { method: "DELETE" }),
   createOptimization: (payload: {
     projectId: string;
     symbol: string;
@@ -468,6 +474,8 @@ export const api = {
       { method: "DELETE" }
     ),
   reports: () => request<ReportRecord[]>("/api/reports"),
+  deleteReport: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/reports/${encodeURIComponent(id)}`, { method: "DELETE" }),
   createReport: (payload: { runId: string }) =>
     request<ReportRecord>("/api/reports", {
       method: "POST",
@@ -485,6 +493,8 @@ export const api = {
   deleteObjectStoreItem: (key: string) =>
     request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
   paperSessions: () => request<PaperSession[]>("/api/paper"),
+  deletePaperSession: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/paper/${encodeURIComponent(id)}`, { method: "DELETE" }),
   paperSession: (id: string) => request<PaperSession>(`/api/paper/${encodeURIComponent(id)}`),
   paperCandidates: (projectId: string) =>
     request<PaperBacktestCandidate[]>(`/api/paper/candidates?projectId=${encodeURIComponent(projectId)}`),
@@ -598,13 +608,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
     }),
-  clearLocalHistory: (payload?: { dryRun?: boolean; force?: boolean }) =>
+  clearLocalHistory: (payload?: { dryRun?: boolean; force?: boolean; confirmation?: string }) =>
     request<MaintenanceHistoryClearResult>("/api/maintenance/clear-history", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         dryRun: payload?.dryRun ?? false,
-        force: payload?.force ?? false
+        force: payload?.force ?? false,
+        confirmation: payload?.confirmation
       })
     }),
   factorEngines: () => request<{ available: Record<string, boolean>; selected: string }>("/api/factors/engines"),

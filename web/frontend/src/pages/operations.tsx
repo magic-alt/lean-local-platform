@@ -286,6 +286,25 @@ export function PaperPage() {
               {!session.legacy_read_only && <Button size="small" onClick={() => status(session, "paused")}>Pause</Button>}
               {!session.legacy_read_only && <Button size="small" danger onClick={() => status(session, "stopped")}>Stop</Button>}
               <Button size="small" onClick={() => loadDetail(session)}>Details</Button>
+              <Popconfirm
+                title="Delete this Paper session?"
+                description="Signals, orders, positions, snapshots, daily reports and walk-forward runs will be removed."
+                okText="Delete"
+                okButtonProps={{ danger: true }}
+                disabled={["created", "queued", "running"].includes(session.status)}
+                onConfirm={async () => {
+                  try {
+                    await api.deletePaperSession(session.id);
+                    if (selectedSession?.id === session.id) setSelectedSession(null);
+                    message.success("Paper session deleted");
+                    await sessions.reload();
+                  } catch (error) {
+                    message.error((error as Error).message);
+                  }
+                }}
+              >
+                <Button size="small" danger disabled={["created", "queued", "running"].includes(session.status)}>Delete</Button>
+              </Popconfirm>
             </Space> }
           ]}
         />
@@ -383,13 +402,14 @@ export function ReportsPage() {
           dataSource={reports.data}
           size="small"
           columns={[
-            { title: "ID", dataIndex: "id", ellipsis: true },
             {
-              title: "Source",
-              dataIndex: "source",
-              render: (value) => value === "backtest_run" ? "Backtest" : value === "generated_report" ? "Generated report" : value || "-"
+              title: "Report",
+              render: (_, report) => <div className="table-primary-cell">
+                <strong>{report.source === "backtest_run" ? "Backtest report" : "Generated report"}</strong>
+                <span className="muted copyable-id">{report.id}</span>
+              </div>
             },
-            { title: "Run", dataIndex: "run_id", ellipsis: true },
+            { title: "Run", dataIndex: "run_id" },
             { title: "Status", dataIndex: "status", render: (s) => <StatusTag status={s} /> },
             { title: "Trust", render: (_, report) => <ValidationStatusTag validation={report.validation ?? report.result?.performance?.validation} /> },
             { title: "Benchmark", dataIndex: "benchmark", render: (value) => shortValue(value) },
@@ -403,6 +423,29 @@ export function ReportsPage() {
                   </Space>
                 </Tooltip>
               )
+            },
+            {
+              title: "Actions",
+              render: (_, report) => report.source === "generated_report" ? (
+                <Popconfirm
+                  title="Delete this generated report?"
+                  description="The report record and managed report file will be removed. The source backtest remains."
+                  okText="Delete"
+                  okButtonProps={{ danger: true }}
+                  disabled={["created", "queued", "running"].includes(report.status)}
+                  onConfirm={async () => {
+                    try {
+                      await api.deleteReport(report.id);
+                      message.success("Report deleted");
+                      await reports.reload();
+                    } catch (error) {
+                      message.error((error as Error).message);
+                    }
+                  }}
+                >
+                  <Button size="small" danger disabled={["created", "queued", "running"].includes(report.status)}>Delete</Button>
+                </Popconfirm>
+              ) : <Tooltip title="Delete this item from Backtests; its report is part of the run."><span className="muted">Managed by backtest</span></Tooltip>
             }
           ]}
         />
@@ -453,11 +496,13 @@ export function TasksPage() {
                 <a onClick={() => open(task)}>Logs</a>
                 <Popconfirm
                   title="Delete task?"
+                  description="Only terminal tasks can be deleted. Cancel active work first."
                   okText="Delete"
                   okButtonProps={{ danger: true, loading: deletingTaskId === task.id }}
+                  disabled={["created", "queued", "running"].includes(task.status)}
                   onConfirm={() => remove(task)}
                 >
-                  <Button size="small" danger loading={deletingTaskId === task.id}>Delete</Button>
+                  <Button size="small" danger disabled={["created", "queued", "running"].includes(task.status)} loading={deletingTaskId === task.id}>Delete</Button>
                 </Popconfirm>
               </Space>
             )

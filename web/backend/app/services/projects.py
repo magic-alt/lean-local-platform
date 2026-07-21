@@ -348,6 +348,16 @@ def delete_project(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
     deleted = {"runs": 0, "tasks": 0, "reports": 0, "project": project_id}
     with db() as connection:
+        active_runs = connection.execute(
+            "select count(*) as count from backtest_runs where project_id = ? and status in ('created','queued','checking','running')",
+            (project_id,),
+        ).fetchone()
+        active_tasks = connection.execute(
+            "select count(*) as count from tasks where project_id = ? and status in ('created','queued','running')",
+            (project_id,),
+        ).fetchone()
+        if int(active_runs["count"] or 0) or int(active_tasks["count"] or 0):
+            raise ValueError("Cancel active project runs and tasks before deleting the project.")
         runs = connection.execute("select * from backtest_runs where project_id = ?", (project_id,)).fetchall()
         run_ids = [row["id"] for row in runs]
         for row in runs:
@@ -361,6 +371,7 @@ def delete_project(project_id: str) -> dict[str, Any]:
                 deleted["reports"] += 1
             connection.execute(f"delete from reports where run_id in ({placeholders})", run_ids)
             connection.execute(f"delete from experiments where run_id in ({placeholders})", run_ids)
+            connection.execute(f"delete from backtest_results where job_id in ({placeholders})", run_ids)
             connection.execute(f"delete from backtest_runs where id in ({placeholders})", run_ids)
 
         tasks = connection.execute("select * from tasks where project_id = ?", (project_id,)).fetchall()

@@ -41,3 +41,5 @@ def delete(task_id: str):
         return delete_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Task not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

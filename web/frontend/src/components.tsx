@@ -1,5 +1,6 @@
-import { Card, Empty, Table, Tag } from "antd";
+import { Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
 import ReactECharts from "echarts-for-react";
+import { useState } from "react";
 import { BacktestRun, ChartData, OrderMarkerPoint, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
 
@@ -84,32 +85,129 @@ function lineWithOrdersOption(
   return option;
 }
 
-export function RunsTable({ runs, onOpen }: { runs: BacktestRun[]; onOpen: (id: string) => void }) {
+export function RunsTable({
+  runs,
+  onOpen,
+  onDelete,
+}: {
+  runs: BacktestRun[];
+  onOpen: (id: string) => void;
+  onDelete?: (run: BacktestRun) => Promise<void>;
+}) {
+  const [selected, setSelected] = useState<React.Key[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const trusted = (run: BacktestRun) =>
     ["success", "succeeded"].includes(run.status) && run.validation?.passed !== false;
+  const canDelete = (run: BacktestRun) => !["created", "queued", "checking", "running"].includes(run.status);
+  async function deleteSelected() {
+    if (!onDelete) return;
+    const targets = runs.filter((run) => selected.includes(run.id) && canDelete(run));
+    setDeleting(true);
+    try {
+      for (const run of targets) await onDelete(run);
+      setSelected([]);
+      message.success(`${targets.length} backtest${targets.length === 1 ? "" : "s"} deleted`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
   return (
-    <Table
-      data-testid="runs-table"
-      rowKey="id"
-      dataSource={runs}
-      size="small"
-      pagination={{ pageSize: 8 }}
-      locale={{ emptyText: <Empty description="No backtests found" /> }}
-      columns={[
-        { title: "Name", dataIndex: "name", ellipsis: true },
-        { title: "Run", dataIndex: "id", ellipsis: true },
-        { title: "Symbol", dataIndex: "symbol" },
-        { title: "Asset", render: (_, run) => run.asset_class ?? run.parameters.assetClass ?? "equity" },
-        { title: "Venue", render: (_, run) => run.venue ?? run.parameters.venue ?? run.parameters.market ?? "-" },
-        { title: "Status", dataIndex: "status", render: (status: RunStatus) => <StatusTag status={status} /> },
-        { title: "Failure", render: (_, run) => run.failure ? `${run.failure.stage}: ${run.failure.code}` : "-" },
-        { title: "Period", render: (_, run) => `${run.parameters.start} -> ${run.parameters.end}` },
-        { title: "Net Profit", render: (_, run) => trusted(run) ? run.statistics?.["Net Profit"] ?? "-" : "untrusted" },
-        { title: "Sharpe", render: (_, run) => trusted(run) ? run.statistics?.["Sharpe Ratio"] ?? "-" : "untrusted" },
-        { title: "Duration", render: (_, run) => run.duration_seconds == null ? "-" : `${run.duration_seconds}s` },
-        { title: "Action", render: (_, run) => <a data-testid={`open-run-${run.id}`} onClick={() => onOpen(run.id)}>Open</a> }
-      ]}
-    />
+    <div className="resource-table">
+      {onDelete && selected.length > 0 && (
+        <div className="table-selection-bar">
+          <span>{selected.length} selected</span>
+          <Popconfirm
+            title={`Delete ${selected.length} selected backtests?`}
+            description="Only completed or cancelled backtests can be deleted. Results, reports and managed artifacts are removed together."
+            okText="Delete selected"
+            okButtonProps={{ danger: true }}
+            onConfirm={deleteSelected}
+          >
+            <Button danger size="small" loading={deleting}>Delete selected</Button>
+          </Popconfirm>
+        </div>
+      )}
+      <Table
+        data-testid="runs-table"
+        rowKey="id"
+        dataSource={runs}
+        size="small"
+        tableLayout="fixed"
+        rowSelection={onDelete ? {
+          selectedRowKeys: selected,
+          onChange: setSelected,
+          getCheckboxProps: (run) => ({ disabled: !canDelete(run) }),
+        } : undefined}
+        pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 20, 50] }}
+        locale={{ emptyText: <Empty description="No backtests found" /> }}
+        columns={[
+          {
+            title: "Backtest",
+            width: "24%",
+            render: (_, run) => <div className="table-primary-cell">
+              <Typography.Text strong>{run.name || run.symbol || "Unnamed backtest"}</Typography.Text>
+              <Typography.Text type="secondary" copyable={{ text: run.id }}>{run.id}</Typography.Text>
+              <span>{run.symbol}</span>
+            </div>
+          },
+          {
+            title: "Market",
+            width: "12%",
+            render: (_, run) => <div className="table-primary-cell">
+              <span>{run.asset_class ?? run.parameters.assetClass ?? "equity"}</span>
+              <Typography.Text type="secondary">{run.venue ?? run.parameters.venue ?? run.parameters.market ?? "-"}</Typography.Text>
+            </div>
+          },
+          {
+            title: "Status",
+            width: "14%",
+            render: (_, run) => <div className="table-primary-cell">
+              <StatusTag status={run.status as RunStatus} />
+              {run.failure && <Typography.Text type="danger">{run.failure.stage}: {run.failure.code}</Typography.Text>}
+            </div>
+          },
+          {
+            title: "Period",
+            width: "15%",
+            render: (_, run) => <div className="table-primary-cell"><span>{run.parameters.start}</span><Typography.Text type="secondary">to {run.parameters.end}</Typography.Text></div>
+          },
+          {
+            title: "Result",
+            width: "15%",
+            render: (_, run) => trusted(run)
+              ? <div className="table-primary-cell"><span>Return {run.statistics?.["Net Profit"] ?? "-"}</span><Typography.Text type="secondary">Sharpe {run.statistics?.["Sharpe Ratio"] ?? "-"}</Typography.Text></div>
+              : <Typography.Text type="secondary">Metrics unavailable</Typography.Text>
+          },
+          { title: "Duration", width: "9%", render: (_, run) => run.duration_seconds == null ? "-" : `${run.duration_seconds}s` },
+          {
+            title: "Actions",
+            width: onDelete ? "16%" : "10%",
+            render: (_, run) => <Space wrap>
+              <Button type="link" size="small" data-testid={`open-run-${run.id}`} onClick={() => onOpen(run.id)}>Open</Button>
+              {onDelete && <Popconfirm
+                title="Delete this backtest?"
+                description="Its result, generated reports and managed artifacts will also be deleted."
+                okText="Delete"
+                okButtonProps={{ danger: true }}
+                disabled={!canDelete(run)}
+                onConfirm={async () => {
+                  try {
+                    await onDelete(run);
+                    message.success("Backtest deleted");
+                  } catch (error) {
+                    message.error((error as Error).message);
+                  }
+                }}
+              >
+                <Button danger size="small" disabled={!canDelete(run)}>Delete</Button>
+              </Popconfirm>}
+            </Space>
+          }
+        ]}
+      />
+    </div>
   );
 }
 

@@ -12,11 +12,12 @@ router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
 class ClearHistoryRequest(BaseModel):
     dryRun: bool = False
     force: bool = False
+    confirmation: str | None = None
 
 
 @router.post("/clear-history")
 def clear_history(request: ClearHistoryRequest):
-    result = clear_local_history(dry_run=request.dryRun, force=request.force)
+    result = clear_local_history(dry_run=request.dryRun, force=request.force, confirmation=request.confirmation)
     if result.get("status") == "blocked":
         raise HTTPException(status_code=409, detail=result)
     return result

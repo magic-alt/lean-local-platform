@@ -132,8 +132,103 @@ body {
   min-width: 0;
 }
 
-.ant-table {
+.ant-table-wrapper,
+.ant-table,
+.ant-table-container,
+.ant-table-content {
+  min-width: 0;
+}
+
+.app-content .ant-table {
   overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.app-content .ant-table-thead > tr > th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  vertical-align: top;
+}
+
+.app-content .ant-table-tbody > tr > td {
+  color: #1e293b;
+  line-height: 1.45;
+  vertical-align: top;
+}
+
+.app-content .ant-table-cell,
+.app-content .ant-table-cell.ant-table-cell-ellipsis {
+  min-width: 0;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.app-content .ant-table-cell.ant-table-cell-ellipsis > * {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.app-content .ant-table-tbody > tr:nth-child(even) > td {
+  background: #fbfdff;
+}
+
+.app-content .ant-table-tbody > tr:hover > td {
+  background: #f0f7ff !important;
+}
+
+.table-primary-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.table-primary-cell .ant-typography,
+.copyable-id {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.resource-table {
+  min-width: 0;
+}
+
+.table-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  color: #334155;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+}
+
+.history-resource-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-resource-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
 }
 
 .data-catalog-table .ant-table {
@@ -143,6 +238,28 @@ body {
 .data-catalog-table .ant-table-cell {
   vertical-align: top;
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .app-content {
+    padding: 10px;
+  }
+
+  .app-content .ant-card-body {
+    padding: 12px;
+  }
+
+  .app-content .ant-table-thead > tr > th,
+  .app-content .ant-table-tbody > tr > td {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .history-resource-row,
+  .table-selection-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .data-catalog-visibility {

@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **212** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **217** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -32,6 +32,7 @@
 | `GET` | `/api/backtests` | Backtests | `status` (query)<br>`projectId` (query)<br>`symbol` (query)<br>`fromDate` (query)<br>`toDate` (query) | `200` - |
 | `POST` | `/api/backtests` | Create Backtest | body `BacktestRequest` | `200` - |
 | `POST` | `/api/backtests/preflight` | Preflight Backtest | body `BacktestRequest` | `200` - |
+| `DELETE` | `/api/backtests/{run_id}` | Delete | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}` | Detail | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/admission` | Admission | `run_id` (path, required)<br>`profile` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/artifacts/{name}` | Artifact | `run_id` (path, required)<br>`name` (path, required) | `200` - |
@@ -119,6 +120,7 @@
 | `GET` | `/api/experiment-batches` | Batches | - | `200` - |
 | `POST` | `/api/experiment-batches` | Create | body `ExperimentBatchRequest` | `200` - |
 | `POST` | `/api/experiment-batches/preview` | Preview | body `ExperimentBatchRequest` | `200` - |
+| `DELETE` | `/api/experiment-batches/{batch_id}` | Delete | `batch_id` (path, required) | `200` - |
 | `GET` | `/api/experiment-batches/{batch_id}` | Detail | `batch_id` (path, required) | `200` - |
 | `POST` | `/api/experiment-batches/{batch_id}/cancel` | Cancel | `batch_id` (path, required) | `200` - |
 | `GET` | `/api/experiment-batches/{batch_id}/export.csv` | Export | `batch_id` (path, required) | `200` - |
@@ -228,6 +230,7 @@
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/optimize` | List Optimizations | - | `200` - |
 | `POST` | `/api/optimize` | Create Optimization | body `OptimizationRequest` | `200` - |
+| `DELETE` | `/api/optimize/{optimization_id}` | Delete | `optimization_id` (path, required) | `200` - |
 | `GET` | `/api/optimize/{optimization_id}` | Detail | `optimization_id` (path, required) | `200` - |
 
 ## paper
@@ -237,6 +240,7 @@
 | `GET` | `/api/paper` | List Sessions | - | `200` - |
 | `POST` | `/api/paper` | Create Session | body `PaperSessionCreate` | `200` - |
 | `GET` | `/api/paper/candidates` | Candidates | `projectId` (query, required) | `200` - |
+| `DELETE` | `/api/paper/{session_id}` | Delete | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}` | Detail | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/orders` | Orders | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/positions` | Positions | `session_id` (path, required) | `200` - |
@@ -288,6 +292,7 @@
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/reports` | List Reports | `limit` (query)<br>`offset` (query)<br>`paged` (query)<br>`source` (query)<br>`status` (query)<br>`runId` (query)<br>`detail` (query) | `200` - |
 | `POST` | `/api/reports` | Create Report | body `ReportRequest` | `200` - |
+| `DELETE` | `/api/reports/{report_id}` | Delete | `report_id` (path, required) | `200` - |
 | `GET` | `/api/reports/{report_id}` | Detail | `report_id` (path, required) | `200` - |
 | `GET` | `/api/reports/{report_id}/export` | Export Report | `report_id` (path, required)<br>`format` (query) | `200` - |
 | `GET` | `/api/reports/{report_id}/file` | Report File | `report_id` (path, required) | `200` - |

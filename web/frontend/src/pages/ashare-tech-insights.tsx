@@ -50,29 +50,21 @@ function energyState(item: AshareTechMarketEnvironmentItem) {
 }
 
 const marketColumns = [
-  { title: "代码", dataIndex: "code", width: 110 },
-  { title: "名称", dataIndex: "name", width: 130 },
+  { title: "市场", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => <div className="table-primary-cell"><strong>{item.name}</strong><span className="muted">{item.code}</span></div> },
   { title: "日期", dataIndex: "date", width: 110 },
-  { title: "收盘", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => number(item.close), width: 100 },
-  { title: "涨跌幅", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => changeValue(item.changePct), width: 100 },
-  { title: "量比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.volumeRatio20), width: 90 },
-  { title: "额比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.amountRatio20), width: 90 },
+  { title: "行情", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => <div className="table-primary-cell"><span>收盘 {number(item.close)}</span>{changeValue(item.changePct)}</div> },
+  { title: "量能", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => <div className="table-primary-cell"><span>量比 {ratio(item.volumeRatio20)}</span><span>额比 {ratio(item.amountRatio20)}</span></div> },
   { title: "量能判断", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => energyState(item), width: 110 },
-  { title: "来源", dataIndex: "source", width: 180 }
+  { title: "来源", dataIndex: "source" }
 ];
 
 const sectorColumns = [
-  { title: "规范主题", dataIndex: "keyword", width: 110 },
-  { title: "实际板块", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.matchedName || item.name, width: 150 },
-  { title: "匹配方式", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.matchRule === "alias" ? <Tag color="blue">别名：{item.matchedKeyword}</Tag> : <Tag>精确</Tag>, width: 150 },
-  { title: "代码", dataIndex: "code", width: 120 },
+  { title: "主题 / 板块", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => <div className="table-primary-cell"><strong>{item.keyword}</strong><span>{item.matchedName || item.name} · {item.code}</span>{item.matchRule === "alias" ? <Tag color="blue">别名：{item.matchedKeyword}</Tag> : <Tag>精确</Tag>}</div> },
   { title: "涨跌幅", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => changeValue(item.changePct), width: 100 },
-  { title: "量比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.volumeRatio20), width: 90 },
-  { title: "额比20", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => ratio(item.amountRatio20), width: 90 },
-  { title: "换手率", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => item.turnoverRate == null ? "-" : `${item.turnoverRate.toFixed(2)}%`, width: 90 },
+  { title: "流动性", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => <div className="table-primary-cell"><span>量比 {ratio(item.volumeRatio20)} · 额比 {ratio(item.amountRatio20)}</span><span>换手 {item.turnoverRate == null ? "-" : `${item.turnoverRate.toFixed(2)}%`}</span></div> },
   { title: "连续回调", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => `${item.pullbackDays || 0}日`, width: 100 },
   { title: "量能判断", render: (_: unknown, item: AshareTechMarketEnvironmentItem) => energyState(item), width: 110 },
-  { title: "来源", dataIndex: "source", width: 180 }
+  { title: "来源", dataIndex: "source" }
 ];
 
 const groupColumns = [
@@ -84,35 +76,14 @@ const groupColumns = [
 ];
 
 const stockColumns = [
-  { title: "代码", dataIndex: "code", fixed: "left" as const, width: 86 },
-  { title: "名称", dataIndex: "name", fixed: "left" as const, width: 130 },
-  { title: "收盘", render: (_: unknown, item: AshareTechStockRow) => number(item.close), width: 80 },
-  { title: "涨跌%", render: (_: unknown, item: AshareTechStockRow) => number(item.changePct), width: 80 },
-  { title: "MA5", render: (_: unknown, item: AshareTechStockRow) => number(item.ma5), width: 75 },
-  { title: "MA10", render: (_: unknown, item: AshareTechStockRow) => number(item.ma10), width: 75 },
-  { title: "MA20", render: (_: unknown, item: AshareTechStockRow) => number(item.ma20), width: 75 },
-  { title: "MA60", render: (_: unknown, item: AshareTechStockRow) => number(item.ma60), width: 75 },
-  { title: "MA120", render: (_: unknown, item: AshareTechStockRow) => number(item.ma120), width: 78 },
-  { title: "偏离MA20%", render: (_: unknown, item: AshareTechStockRow) => number(item.ma20DeviationPct), width: 105 },
-  { title: "偏离MA60%", render: (_: unknown, item: AshareTechStockRow) => number(item.ma60DeviationPct), width: 105 },
-  { title: "20日回撤%", render: (_: unknown, item: AshareTechStockRow) => number(item.drawdown20Pct), width: 105 },
-  { title: "量比20", render: (_: unknown, item: AshareTechStockRow) => number(item.volumeRatio20), width: 85 },
-  { title: "额比20", render: (_: unknown, item: AshareTechStockRow) => number(item.amountRatio20), width: 85 },
-  { title: "换手率%", render: (_: unknown, item: AshareTechStockRow) => number(item.turnoverRate), width: 90 },
-  { title: "MA20位置", dataIndex: "ma20Position", width: 90 },
-  { title: "MA60位置", dataIndex: "ma60Position", width: 90 },
-  { title: "均线方向", dataIndex: "movingAverageDirection", width: 160 },
-  { title: "结构", dataIndex: "priceStructure", width: 100 },
-  { title: "量价", dataIndex: "volumePriceState", width: 125 },
-  { title: "MACD", dataIndex: "macdStatus", width: 165 },
-  { title: "方向", dataIndex: "direction", width: 105 },
-  { title: "触发类型", dataIndex: "triggerType", width: 190 },
-  { title: "关键支撑", render: (_: unknown, item: AshareTechStockRow) => number(item.keySupport), width: 95 },
-  { title: "观察区", render: (_: unknown, item: AshareTechStockRow) => item.observationZone?.map(number).join("–") || "-", width: 145 },
-  { title: "失效条件", render: (_: unknown, item: AshareTechStockRow) => item.invalidation == null ? "-" : `收盘低于 ${number(item.invalidation)}`, width: 145 },
-  { title: "数据完整度", render: (_: unknown, item: AshareTechStockRow) => item.dataCompleteness?.missing?.length ? `降级：${item.dataCompleteness.missing.join("；")}` : `${item.dataCompleteness?.sampleCount || 0}日/完整`, width: 220 },
-  { title: "公告风险", dataIndex: "announcementRisk", width: 190 },
-  { title: "结论", render: (_: unknown, item: AshareTechStockRow) => <Tag color={labelColor(item.conclusion)}>{item.conclusion}</Tag>, width: 110, fixed: "right" as const }
+  { title: "股票", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><strong>{item.name}</strong><span className="muted">{item.code}</span></div> },
+  { title: "行情", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><span>收盘 {number(item.close)}</span><span>涨跌 {number(item.changePct)}%</span><span>20日回撤 {number(item.drawdown20Pct)}%</span></div> },
+  { title: "均线", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><span>MA5/20/60</span><span>{number(item.ma5)} / {number(item.ma20)} / {number(item.ma60)}</span><span>偏离20/60 {number(item.ma20DeviationPct)}% / {number(item.ma60DeviationPct)}%</span></div> },
+  { title: "量价", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><span>量比/额比 {number(item.volumeRatio20)} / {number(item.amountRatio20)}</span><span>换手 {number(item.turnoverRate)}%</span><span>{item.volumePriceState}</span></div> },
+  { title: "技术结构", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><span>{item.ma20Position} · {item.ma60Position}</span><span>{item.movingAverageDirection}</span><span>{item.priceStructure} · {item.macdStatus}</span></div> },
+  { title: "关键价位", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><span>支撑 {number(item.keySupport)}</span><span>观察 {item.observationZone?.map(number).join("–") || "-"}</span><span>{item.invalidation == null ? "无失效价" : `失效：收盘低于 ${number(item.invalidation)}`}</span></div> },
+  { title: "判断", render: (_: unknown, item: AshareTechStockRow) => <div className="table-primary-cell"><Tag color={labelColor(item.conclusion)}>{item.conclusion}</Tag><span>{item.direction} · {item.triggerType}</span><span>{item.announcementRisk || "无公告风险提示"}</span></div> },
+  { title: "数据", render: (_: unknown, item: AshareTechStockRow) => item.dataCompleteness?.missing?.length ? `降级：${item.dataCompleteness.missing.join("；")}` : `${item.dataCompleteness?.sampleCount || 0}日 / 完整` }
 ];
 
 export function AshareTechInsights() {
@@ -331,10 +302,10 @@ export function AshareTechInsights() {
           {report.modelNarrative && <Alert type="info" style={{ marginTop: 12 }} message={`模型叙述（${report.narrativeStatus}）`} description={Object.values(report.modelNarrative).join(" ")} />}
           {(report.sourceConflicts?.length || 0) > 0 && <Alert type="warning" style={{ marginTop: 12 }} message="来源冲突（采用TuShare并降级）" description={<pre>{JSON.stringify(report.sourceConflicts, null, 2)}</pre>} />}
         </>}
-        {report?.focus && <><Divider>2. 重点提醒表</Divider><Table rowKey="code" size="small" dataSource={report.focus} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} /></>}
+        {report?.focus && <><Divider>2. 重点提醒表</Divider><Table rowKey="code" size="small" tableLayout="fixed" dataSource={report.focus} columns={stockColumns} pagination={false} /></>}
         {report?.fullPool && <><Divider>3. 全池分析表（{report.fullPool.length}只）</Divider>
           {[...new Set(report.fullPool.map((item) => item.group))].map((group) => <Card key={group} type="inner" title={group} style={{ marginBottom: 12 }}>
-            <Table rowKey="code" size="small" dataSource={report.fullPool?.filter((item) => item.group === group)} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} />
+            <Table rowKey="code" size="small" tableLayout="fixed" dataSource={report.fullPool?.filter((item) => item.group === group)} columns={stockColumns} pagination={false} />
           </Card>)}
         </>}
         {report?.groupSummary && <><Divider>4. 板块趋势总结</Divider>
@@ -353,19 +324,19 @@ export function AshareTechInsights() {
           />}
           <Table<AshareTechMarketEnvironmentItem>
             rowKey={(item) => `${item.source}:${item.code}`} size="small" dataSource={sectorEnvironment}
-            columns={sectorColumns} scroll={{ x: 1150 }} pagination={false}
+            columns={sectorColumns} tableLayout="fixed" pagination={false}
           />
           <Typography.Title level={5} style={{ marginTop: 20 }}>观察池分组表现</Typography.Title>
           <Table<AshareTechGroupSummary>
             rowKey="group" size="small" dataSource={report.groupSummary}
-            columns={groupColumns} scroll={{ x: 920 }} pagination={false}
+            columns={groupColumns} tableLayout="fixed" pagination={false}
           />
           <Typography.Paragraph type="secondary" style={{ marginTop: 10 }}>
             分组涨跌采用观察池内个股等权平均，成交额为组内个股合计，仅用于内部环境比较，不替代正式行业指数。
           </Typography.Paragraph>
           {(report.policyEvidence?.length || 0) > 0 && <><Typography.Title level={5}>最近7日官方政策证据</Typography.Title><ul>{report.policyEvidence?.map((item) => <li key={item.url}>{item.date} {item.source}：<a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></li>)}</ul></>}
         </>}
-        {report?.doNotChase && <><Divider>5. 今日不追高/只观察</Divider><Table rowKey="code" size="small" dataSource={report.doNotChase} columns={stockColumns} scroll={{ x: 1900 }} pagination={false} /></>}
+        {report?.doNotChase && <><Divider>5. 今日不追高/只观察</Divider><Table rowKey="code" size="small" tableLayout="fixed" dataSource={report.doNotChase} columns={stockColumns} pagination={false} /></>}
         {report?.nextTradingDayWatch && <><Divider>6. 下一交易日观察清单</Divider><ol>{report.nextTradingDayWatch.map((item, index) => <li key={`${item.code}-${index}`}>{item.code} {item.name}：{item.condition}；失效位 {item.invalidation ?? "数据缺失"}</li>)}</ol></>}
         {report?.finalThreeLines && <><Divider>7. 三行最终结论</Divider><Space direction="vertical"><div>最值得跟踪：{report.finalThreeLines.mostWorthTracking}</div><div>最应回避追高/警惕破位：{report.finalThreeLines.avoidChasingOrBreakdown}</div><div>总体阶段：{report.finalThreeLines.overallStage}</div></Space></>}
         {report?.disclaimer && <Alert type="info" message={report.disclaimer} style={{ marginTop: 16 }} />}

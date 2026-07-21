@@ -195,7 +195,7 @@ def _clear_target_directory(target: Path, dry_run: bool) -> tuple[int, int, int,
     return removed_files, removed_dirs, removed_bytes, removed
 
 
-def clear_local_history(*, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+def clear_local_history(*, dry_run: bool = False, force: bool = False, confirmation: str | None = None) -> dict[str, Any]:
     running_tasks: list[str] = []
     database_counts: dict[str, int] = {}
     deleted_rows: dict[str, int] = {}
@@ -208,6 +208,16 @@ def clear_local_history(*, dry_run: bool = False, force: bool = False) -> dict[s
             database_counts[table] = _count_table_rows(connection, table)
         database_counts["stored_objects"] = _count_table_rows(connection, "stored_objects")
         database_counts["stored_object_chunks"] = _count_table_rows(connection, "stored_object_chunks")
+
+        if not dry_run and confirmation != "DELETE ALL LOCAL HISTORY":
+            return {
+                "status": "blocked",
+                "dryRun": False,
+                "force": force,
+                "message": "Explicit confirmation is required. Prefer deleting selected resources from their own page.",
+                "activeTaskCount": len(running_tasks),
+                "database": database_counts,
+            }
 
         if running_tasks and not force:
             return {

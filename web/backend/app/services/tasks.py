@@ -238,7 +238,7 @@ def cancel_task(task_id: str) -> dict[str, Any]:
 def delete_task(task_id: str) -> dict[str, Any]:
     task = get_task(task_id)
     if not is_terminal(task.get("status")):
-        task = cancel_task(task_id)
+        raise ValueError("Active tasks must be cancelled before deletion.")
 
     log_path = task.get("log_path")
     with db() as connection:

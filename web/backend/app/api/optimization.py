@@ -6,10 +6,12 @@ from pydantic import BaseModel, Field
 
 from .common import dispatch_task
 from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
+from ..core.errors import NotFoundError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.config import validate_backtest_parameters
 from ..lean_engine.errors import LeanPlatformError
 from ..services.optimization import normalize_parameter_grid
+from ..services.history_resources import delete_optimization
 from ..services.projects import get_project
 from ..services.strategies import list_templates
 from ..services.tasks import create_task
@@ -115,3 +117,13 @@ def detail(optimization_id: str):
     if item is None:
         raise HTTPException(status_code=404, detail="Optimization run not found.")
     return item
+
+
+@router.delete("/{optimization_id}")
+def delete(optimization_id: str):
+    try:
+        return delete_optimization(optimization_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

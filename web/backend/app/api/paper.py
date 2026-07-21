@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services import paper as paper_service
+from ..core.errors import NotFoundError
+from ..services.history_resources import delete_paper_session
 from ..tasks.worker import (
     fail_paper_walkforward_task,
     finalize_paper_walkforward_task,
@@ -122,6 +124,16 @@ def detail(session_id: str):
         "snapshots": paper_service.list_snapshots(session_id),
         "runs": paper_service.list_walkforward_runs(session_id),
     }
+
+
+@router.delete("/{session_id}")
+def delete(session_id: str):
+    try:
+        return delete_paper_session(session_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{session_id}/signals")

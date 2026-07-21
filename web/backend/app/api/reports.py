@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
+from ..core.errors import NotFoundError
 from ..services.db_object_store import get_object, read_bytes
 from ..services.report_export import markdown_report, report_payload
+from ..services.history_resources import delete_generated_report
 from ..services.tasks import create_task
 from ..tasks.worker import generate_report_task
 
@@ -271,6 +273,16 @@ def detail(report_id: str):
     if item is None:
         raise HTTPException(status_code=404, detail="Report not found.")
     return item
+
+
+@router.delete("/{report_id}")
+def delete(report_id: str):
+    try:
+        return delete_generated_report(report_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{report_id}/objects")
