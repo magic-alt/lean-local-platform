@@ -106,3 +106,29 @@ web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
 
 The current verified official-cache reconstruction starts at 2017-12-08. The
 earlier CSI300 history remains an explicit coverage gap in the living roadmap.
+
+TuShare Pro also exposes monthly `index_weight` snapshots. They are useful as
+an independent historical cross-check, but are not CSIndex official source
+attachments and cannot silently replace the official `CSI300` universe. The
+governed importer therefore writes only the `CSI300_TUSHARE` shadow universe:
+
+```bash
+# Strict read-only validation; any incomplete snapshot fails.
+web/backend/.venv/bin/python scripts/import_tushare_csi300_pit.py \
+  --start-date 2005-01-01 --end-date 2026-07-22 --dry-run
+
+# Explicitly quarantine incomplete snapshots while validating the remaining
+# shadow series. Remove --dry-run only after reviewing the generated report.
+web/backend/.venv/bin/python scripts/import_tushare_csi300_pit.py \
+  --start-date 2005-01-01 --end-date 2026-07-22 \
+  --dry-run --quarantine-incomplete \
+  --report-out web/runtime/audit/csi300-tushare-dry-run.json
+```
+
+The importer requires 300 distinct members per usable snapshot, a weight sum
+within tolerance, bounded snapshot gaps and no duplicate constituent/date key.
+It stores a deterministic compressed provider archive, lightweight row hashes,
+canonical weights and no-lookahead snapshot intervals only when `--dry-run` is
+removed. Incomplete snapshots remain visible in the report and are never
+filled with current constituents. Promotion remains blocked until the shadow
+series is reconciled against the official announcement bundle.

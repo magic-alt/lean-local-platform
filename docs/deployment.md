@@ -138,10 +138,12 @@ limits, and do not mount the shared object store or a host gateway alias.
 High-throughput TuShare synchronization can be tuned with
 `LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
 `LEAN_TUSHARE_FETCH_CONCURRENCY`, `LEAN_STK_LIMIT_FETCH_CONCURRENCY`,
-`LEAN_DATA_SYNC_BATCH_UNITS` (8-32 instruments per commit), and
-`LEAN_DATA_SYNC_CHUNK_ROWS`. Initial `stk_limit` history uses concurrent
-instrument prefetch plus a sequential batch writer; later increments use one
-market-wide request per missing trade date.
+`LEAN_SUSPEND_FETCH_CONCURRENCY`, `LEAN_DATA_SYNC_BATCH_UNITS`, and
+`LEAN_DATA_SYNC_CHUNK_ROWS`. Daily history additionally uses
+`LEAN_DAILY_SYNC_BATCH_UNITS` and `LEAN_DAILY_SYNC_CHUNK_ROWS`; the defaults
+aggregate 64 instruments or 500,000 rows. Initial `stk_limit` and `suspend_d`
+history use concurrent instrument prefetch plus a sequential batch writer;
+later increments use one market-wide request per missing trade date.
 
 The workstation profile treats on-demand MySQL writes as a bounded cache.
 `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 and applies only to on-demand

@@ -514,10 +514,11 @@ def upsert_daily_bars(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(row["symbol"], []).append(row)
-    for symbol, symbol_rows in grouped.items():
-        upsert_market_daily_bars(
-            symbol_rows,
-            symbol=symbol,
+    if bulk and len(grouped) > 1:
+        from .market_repository import upsert_market_daily_bars_batch
+
+        upsert_market_daily_bars_batch(
+            rows,
             asset_class="equity",
             market="china",
             venue="china",
@@ -526,8 +527,23 @@ def upsert_daily_bars(
             resolution="daily",
             data_type="trade",
             adjust=adjust,
-            bulk=bulk,
+            bulk=True,
         )
+    else:
+        for symbol, symbol_rows in grouped.items():
+            upsert_market_daily_bars(
+                symbol_rows,
+                symbol=symbol,
+                asset_class="equity",
+                market="china",
+                venue="china",
+                source=source,
+                batch_id=batch_id,
+                resolution="daily",
+                data_type="trade",
+                adjust=adjust,
+                bulk=bulk,
+            )
 
 
 def _trade_status_source_priority(source: str) -> int:

@@ -31,7 +31,7 @@ from .ashare_repository import (
     upsert_index_weights,
     upsert_trade_status,
 )
-from .data import import_ashare_research_data
+from .data import import_ashare_research_batch
 from .db_object_store import put_bytes
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
@@ -133,7 +133,6 @@ LOSSLESS_CANONICAL_NORMALIZERS = {
     "adj_factor",
     "daily_basic",
     "financial",
-    "index_weight",
     "stk_limit",
 }
 DATASET_REGISTRY = tuple(
@@ -141,10 +140,14 @@ DATASET_REGISTRY = tuple(
         spec,
         sync_policy="on_demand" if spec.key not in BULK_DATASET_KEYS else "bulk",
         # These datasets are losslessly represented by their canonical tables;
-        # manifests retain request, key and payload hashes for audit. Avoid a
-        # third JSON copy with random hash-key and secondary-index writes.
+        # manifests retain request, key and payload hashes for audit. Daily is
+        # intentionally excluded, as is index_weight: production certification
+        # and PIT governance require a deterministic compressed provider
+        # archive. This does not restore per-row JSON;
+        # provider_raw_records.payload_json remains empty and the
+        # content-addressed gzip object is deduplicated.
         retain_raw=False
-        if spec.key == "daily" or spec.normalizer in LOSSLESS_CANONICAL_NORMALIZERS
+        if spec.normalizer in LOSSLESS_CANONICAL_NORMALIZERS
         else spec.retain_raw,
     )
     for spec in DATASET_REGISTRY
@@ -352,6 +355,44 @@ def _query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str
     if hasattr(pro, "query"):
         return _records(pro.query(spec.api_name, **params))
     return _records(getattr(pro, spec.api_name)(**params))
+
+
+_BULK_MARKET_VARIANTS: dict[str, tuple[str, ...]] = {
+    "index_basic": ("MSCI", "CSI", "SSE", "SZSE", "CICC", "SW", "OTH"),
+    "fut_basic": ("CFFEX", "DCE", "CZCE", "SHFE", "INE", "GFEX"),
+    "opt_basic": ("SSE", "SZSE", "CFFEX", "DCE", "CZCE", "SHFE"),
+}
+
+
+def _complete_global_query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fetch complete small catalogs and split capped long index windows."""
+    variants = _BULK_MARKET_VARIANTS.get(spec.key)
+    if variants:
+        records: list[dict[str, Any]] = []
+        for value in variants:
+            key = "exchange" if spec.key in {"fut_basic", "opt_basic"} else "market"
+            records.extend(_query(pro, spec, {**params, key: value}))
+        deduplicated = {_record_key(spec, row): row for row in records}
+        return list(deduplicated.values())
+
+    if spec.key == "index_daily" and params.get("start_date") and params.get("end_date"):
+        start = date.fromisoformat(str(params["start_date"])[:4] + "-" + str(params["start_date"])[4:6] + "-" + str(params["start_date"])[6:8])
+        end = date.fromisoformat(str(params["end_date"])[:4] + "-" + str(params["end_date"])[4:6] + "-" + str(params["end_date"])[6:8])
+        records = []
+        cursor = start
+        while cursor <= end:
+            window_end = min(end, cursor + timedelta(days=2_499))
+            records.extend(
+                _query(
+                    pro,
+                    spec,
+                    {**params, "start_date": _compact(cursor), "end_date": _compact(window_end)},
+                )
+            )
+            cursor = window_end + timedelta(days=1)
+        deduplicated = {_record_key(spec, row): row for row in records}
+        return list(deduplicated.values())
+    return _query(pro, spec, params)
 
 
 def _call_with_retry(call: Callable[[], T], *, attempts: int = 3) -> T:
@@ -570,6 +611,10 @@ def _validate_dataset_rows(spec: DatasetSpec, rows: list[dict[str, Any]]) -> dic
         "warnings": warnings[:50],
         "checkedRows": len(rows),
         "rejectedRows": len({item["row"] for item in errors}),
+        # Reuse the key digest in the ingestion manifest. Previously every
+        # successful batch hashed every natural key a second time during the
+        # metadata transaction.
+        "keysSha256": hashlib.sha256("|".join(sorted(seen)).encode("utf-8")).hexdigest(),
     }
     if errors:
         raise ValueError(f"{spec.key} validation gate failed: {json_dump(result)}")
@@ -627,13 +672,22 @@ def _ingestion_manifest_parameters(
     coverage_end: str | None,
     status: str = "success",
 ) -> tuple[Any, ...]:
-    canonical_keys = "|".join(sorted(_record_key(spec, row) for row in rows))
+    # json.dumps performs the traversal in C and is materially faster than the
+    # generic Python recursive hasher for multi-million-row rebuilds. Sorted
+    # keys and compact separators keep the digest deterministic.
+    canonical_payload = json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
     return (
         str(uuid.uuid4()), run_id, "tushare", spec.key, scope_key, json_dump(request),
         len(rows), len(rows) - int(validation.get("rejectedRows") or 0),
         int(validation.get("rejectedRows") or 0),
-        _content_sha256(rows),
-        hashlib.sha256(canonical_keys.encode("utf-8")).hexdigest(),
+        hashlib.sha256(canonical_payload).hexdigest(),
+        str(validation.get("keysSha256") or hashlib.sha256(b"").hexdigest()),
         coverage_start, coverage_end, status, json_dump(validation),
         json_dump(endpoint_counts), utc_now(),
     )
@@ -961,7 +1015,6 @@ def _archive_raw_batch(
     """Store one compressed provider response instead of duplicated row JSON."""
     if not rows or not spec.retain_raw:
         return {}
-    payload_sha256 = _content_sha256(rows)
     payload = json.dumps(
         rows,
         ensure_ascii=False,
@@ -969,7 +1022,12 @@ def _archive_raw_batch(
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
-    compressed = gzip.compress(payload, compresslevel=3, mtime=0)
+    # The serialized provider payload is already canonical (sorted keys and
+    # compact separators). Hash those bytes directly instead of traversing
+    # every row a second time with the generic content hasher.
+    payload_sha256 = hashlib.sha256(payload).hexdigest()
+    gzip_level = max(1, min(9, int(os.environ.get("LEAN_RAW_ARCHIVE_GZIP_LEVEL", "1"))))
+    compressed = gzip.compress(payload, compresslevel=gzip_level, mtime=0)
     archive_sha256 = hashlib.sha256(compressed).hexdigest()
     _assert_disk_capacity(len(compressed) * 2)
     # Content-addressed keys deduplicate identical responses across retries and
@@ -1046,6 +1104,7 @@ def _save_raw(
     batch_id: str,
     *,
     assume_new: bool = False,
+    archive: bool = True,
 ) -> tuple[int, int]:
     now = utc_now()
     prepared: dict[str, tuple[Any, ...]] = {}
@@ -1073,7 +1132,7 @@ def _save_raw(
     if not prepared:
         return 0, 0
 
-    if spec.retain_raw:
+    if spec.retain_raw and archive:
         _archive_raw_batch(spec, canonical_rows, batch_id)
 
     # The row table now contains only keys, dates and hashes. Reserve enough
@@ -1639,7 +1698,15 @@ def _raw_row_for_symbol(spec: DatasetSpec, row: dict[str, Any], symbol: str | No
         return row
     suffix = ".SH" if symbol.startswith(("5", "6", "9")) else ".BJ" if symbol.startswith(("4", "8")) else ".SZ"
     result = {**row, spec.instrument_field or "ts_code": f"{symbol}{suffix}"}
-    if spec.normalizer == "dividend":
+    if spec.normalizer == "daily":
+        # ``TushareAdapter.daily_rows`` deliberately exposes the canonical
+        # market-data shape (``date``/``symbol``), while the provider lineage
+        # manifest and lightweight raw index use TuShare's
+        # ``trade_date``/``ts_code`` contract.  Validate the provider-shaped
+        # audit row, not the canonical import row, otherwise every real daily
+        # response is rejected even though its date was normalized correctly.
+        result.setdefault("trade_date", row.get("date"))
+    elif spec.normalizer == "dividend":
         result.setdefault("ann_date", (row.get("metadata") or {}).get("announce_date") or row.get("ex_date"))
         result.setdefault("end_date", row.get("ex_date"))
         result.setdefault("div_proc", (row.get("metadata") or {}).get("process"))
@@ -1766,14 +1833,18 @@ def _sync_daily(
     started = time.monotonic()
     api_before = _api_snapshot(adapter)
     endpoint_calls: dict[str, int] = {}
-    api_calls = 0
-    downloaded = 0
-    committed = 0
-    empty_units = 0
-    validated = 0
-    timings = {"fetchWait": 0.0, "validate": 0.0, "mysqlAndDerived": 0.0}
+    api_calls = downloaded = committed = empty_units = validated = 0
+    timings = {
+        "fetchWait": 0.0,
+        "validate": 0.0,
+        "rawArchive": 0.0,
+        "canonicalCompareWrite": 0.0,
+        "metadata": 0.0,
+    }
     spec = next(item for item in DATASET_REGISTRY if item.key == "daily")
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
+    batch_units = max(8, min(128, int(os.environ.get("LEAN_DAILY_SYNC_BATCH_UNITS", "64"))))
+    chunk_rows = max(20_000, int(os.environ.get("LEAN_DAILY_SYNC_CHUNK_ROWS", "500000")))
 
     work: list[tuple[int, dict[str, Any], str, str, str]] = []
     for index, security in enumerate(securities, start=1):
@@ -1785,6 +1856,7 @@ def _sync_daily(
         delisted_date = str(security.get("delisted_date") or "")
         symbol_end = min(end_date, delisted_date) if delisted_date else end_date
         work.append((index, security, symbol, start, symbol_end))
+    _ensure_work_items(run_id, spec.key, [(symbol, index) for index, _, symbol, _, _ in work])
 
     def fetch(item: tuple[int, dict[str, Any], str, str, str]) -> list[dict[str, Any]]:
         _, _, symbol, start, symbol_end = item
@@ -1793,17 +1865,88 @@ def _sync_daily(
         try:
             return _call_with_retry(
                 lambda: adapter.daily_rows(
-                    symbol,
-                    start,
-                    symbol_end,
-                    adjust="raw",
-                    include_limits=False,
-                    include_adjustments=False,
-                    include_index_fallback=False,
+                    symbol, start, symbol_end, adjust="raw", include_limits=False,
+                    include_adjustments=False, include_index_fallback=False,
+                    max_window_days=8000,
                 )
             )
         except TypeError:
             return _call_with_retry(lambda: adapter.daily_rows(symbol, start, symbol_end, adjust="raw"))
+
+    buffered: list[dict[str, Any]] = []
+    buffered_rows = 0
+
+    def publish(last_entry: dict[str, Any], queue_depth: int) -> None:
+        _item(
+            run_id, "daily", processed=processed, inserted=inserted, updated=updated, failed=failed,
+            checkpoint={"symbol": last_entry["symbol"], "index": last_entry["index"], "total": len(securities)},
+            metrics=_throughput_metrics(
+                started, phase="load", api_calls=api_calls, downloaded=downloaded,
+                committed=committed, queue_depth=queue_depth, processed_units=processed,
+                total_units=len(securities), empty_units=empty_units, validated=validated,
+                endpoint_calls=endpoint_calls, timings=timings,
+                rate_units=processed - session_processed_base,
+            ),
+        )
+
+    def flush(queue_depth: int) -> None:
+        nonlocal buffered, buffered_rows, processed, inserted, updated, committed, empty_units
+        if not buffered:
+            return
+        all_audit_rows = [row for entry in buffered for row in entry["raw_rows"]]
+        def archive() -> float:
+            archive_started = time.perf_counter()
+            if all_audit_rows:
+                _archive_raw_batch(spec, all_audit_rows, batch_id)
+            return (time.perf_counter() - archive_started) * 1000
+
+        # Archive serialization/compression is independent from canonical
+        # comparison. Overlap them so provenance retention no longer stalls
+        # the single database writer pipeline.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="daily-archive") as archive_executor:
+            archive_future = archive_executor.submit(archive)
+            stage_started = time.perf_counter()
+            result = import_ashare_research_batch(
+                [
+                    {
+                        "symbol": entry["symbol"], "rows": entry["rows"],
+                        "listed_date": entry["security"].get("listed_date"),
+                        "delisted_date": entry["security"].get("delisted_date"),
+                    }
+                    for entry in buffered if entry["rows"]
+                ],
+                sync_run_id=run_id,
+            )
+            timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
+            timings["rawArchive"] += archive_future.result()
+        metadata_entries = [
+            {
+                "work_key": entry["symbol"], "scope_key": entry["symbol"],
+                "request": {"symbol": entry["symbol"], "startDate": entry["start"], "endDate": entry["end"]},
+                "raw_rows": entry["raw_rows"], "validation": entry["validation"],
+                "coverage_start": entry["start"], "coverage_end": entry["end"],
+                "write_watermark": entry["start"] <= entry["end"],
+            }
+            for entry in buffered
+        ]
+        row_counts = {entry["symbol"]: len(entry["rows"]) for entry in buffered}
+        stage_started = time.perf_counter()
+        _persist_instrument_batch_metadata(
+            run_id=run_id, spec=spec, entries=metadata_entries,
+            endpoint_counts=endpoint_calls, row_counts=row_counts,
+            batch_id=str(result.get("batch_id") or batch_id),
+        )
+        timings["metadata"] += (time.perf_counter() - stage_started) * 1000
+        batch_rows = sum(row_counts.values())
+        inserted += batch_rows
+        updated += int(result.get("updatedRows") or 0)
+        committed += batch_rows
+        empty_units += sum(1 for entry in buffered if not entry["rows"])
+        processed += len(buffered)
+        last_entry = buffered[-1]
+        buffered = []
+        buffered_rows = 0
+        publish(last_entry, queue_depth)
 
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-daily") as executor:
         pending: dict[int, Any] = {}
@@ -1812,9 +1955,9 @@ def _sync_daily(
             item = work[submit_cursor]
             pending[item[0]] = executor.submit(fetch, item)
             submit_cursor += 1
-
         for index, security, symbol, start, symbol_end in work:
             if _cancelled(run_id, task_id):
+                flush(len(pending))
                 for future in pending.values():
                     future.cancel()
                 break
@@ -1826,129 +1969,31 @@ def _sync_daily(
                 endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
                 api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
-                if rows:
-                    stage_started = time.perf_counter()
-                    audit_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
-                    validation = _validate_dataset_rows(spec, audit_rows)
-                    validated += len(rows)
-                    timings["validate"] += (time.perf_counter() - stage_started) * 1000
-                    estimated_bytes = sum(
-                        len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
-                        for row in rows
-                    ) * 10
-                    _assert_disk_capacity(estimated_bytes)
-                    stage_started = time.perf_counter()
-                    # Keep a lightweight raw-row index plus one deterministic,
-                    # compressed provider response. payload_json stays empty.
-                    _save_raw(spec, audit_rows, batch_id)
-                    result = import_ashare_research_data(
-                        symbol=symbol, provider="tushare", market="china", rows=rows,
-                        source="tushare", overwrite=True, adjust="raw", outputsize="full",
-                        asset_class="equity", venue="china", resolution="daily", data_type="trade",
-                        start_date=start, end_date=symbol_end,
-                        repair_ohlc_errors=True,
-                        suspension_evidence_rows=[],
-                        infer_suspensions_from_authoritative_absence=True,
-                        bulk_write=True,
-                        materialize_derived=False,
-                        provenance={
-                            "environment": "production",
-                            "syncRunId": run_id,
-                            "datasetKey": spec.key,
-                            "scopeKey": symbol,
-                            "providerEvidence": "ingestion_manifest_and_raw_archive",
-                        },
-                    )
-                    timings["mysqlAndDerived"] += (time.perf_counter() - stage_started) * 1000
-                    inserted += int(result.get("rows") or len(rows))
-                    committed += int(result.get("rows") or len(rows))
-                    _record_ingestion_manifest(
-                        run_id=run_id,
-                        spec=spec,
-                        scope_key=symbol,
-                        request={"symbol": symbol, "startDate": start, "endDate": symbol_end},
-                        rows=audit_rows,
-                        validation=validation,
-                        endpoint_counts=endpoint_calls,
-                        coverage_start=start,
-                        coverage_end=symbol_end,
-                    )
-                    with db() as connection:
-                        connection.execute(
-                            """
-                            update data_record_issues
-                            set status='resolved', resolved_at=?, resolution_batch_id=?
-                            where dataset_key='daily' and instrument_code=? and status='open'
-                              and issue_code in ('untrusted_source','sync_failed')
-                            """,
-                            (utc_now(), str(result.get("batch_id") or batch_id), symbol),
-                        )
-                else:
-                    empty_units += 1
-                    audit_rows = []
-                    validation = _validate_dataset_rows(spec, [])
-                    _record_ingestion_manifest(
-                        run_id=run_id,
-                        spec=spec,
-                        scope_key=symbol,
-                        request={"symbol": symbol, "startDate": start, "endDate": symbol_end},
-                        rows=[],
-                        validation=validation,
-                        endpoint_counts=endpoint_calls,
-                        coverage_start=start,
-                        coverage_end=symbol_end,
-                    )
-                if start <= symbol_end:
-                    _set_coverage_watermark(
-                        spec,
-                        scope_key=symbol,
-                        coverage_start=start,
-                        coverage_end=symbol_end,
-                        rows=audit_rows,
-                        run_id=run_id,
-                        validation_status=str(validation["status"]),
-                    )
+                stage_started = time.perf_counter()
+                audit_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
+                validation = _validate_dataset_rows(spec, audit_rows)
+                validated += len(rows)
+                timings["validate"] += (time.perf_counter() - stage_started) * 1000
+                buffered.append(
+                    {"index": index, "security": security, "symbol": symbol, "start": start,
+                     "end": symbol_end, "rows": rows, "raw_rows": audit_rows, "validation": validation}
+                )
+                buffered_rows += len(rows)
+                if buffered_rows >= chunk_rows or len(buffered) >= batch_units:
+                    flush(len(pending))
             except Exception as exc:  # noqa: BLE001
                 failed += 1
-                with db() as connection:
-                    connection.execute(
-                        """
-                        insert into data_record_issues
-                            (id,dataset_key,source,instrument_code,start_date,end_date,issue_code,severity,status,details_json,detected_at)
-                        values (?, 'daily', 'tushare', ?, ?, ?, 'sync_failed', 'error', 'open', ?, ?)
-                        """,
-                        (str(uuid.uuid4()), symbol, start, symbol_end, json_dump({"error": str(exc)}), utc_now()),
-                    )
-            processed += 1
+                processed += 1
+                _record_sync_failure(spec, symbol, start, symbol_end, exc)
+                _mark_work_items(run_id, spec.key, [symbol], status="failed", error=str(exc))
+                publish({"symbol": symbol, "index": index}, len(pending))
             if submit_cursor < len(work):
                 next_item = work[submit_cursor]
                 pending[next_item[0]] = executor.submit(fetch, next_item)
                 submit_cursor += 1
             if not _current_task(run_id, task_id):
                 break
-            _item(
-                run_id,
-                "daily",
-                processed=processed,
-                inserted=inserted,
-                failed=failed,
-                checkpoint={"symbol": symbol, "index": index, "total": len(securities)},
-                metrics=_throughput_metrics(
-                    started,
-                    phase="load",
-                    api_calls=api_calls,
-                    downloaded=downloaded,
-                    committed=committed,
-                    queue_depth=len(pending),
-                    processed_units=processed,
-                    total_units=len(securities),
-                    empty_units=empty_units,
-                    validated=validated,
-                    endpoint_calls=endpoint_calls,
-                    timings=timings,
-                    rate_units=processed - session_processed_base,
-                ),
-            )
+        flush(len(pending))
     return processed, inserted, updated, failed
 
 
@@ -2137,6 +2182,37 @@ def _open_sync_failure_instruments(spec: DatasetSpec) -> set[str]:
     return {str(row["instrument_code"]) for row in rows if row["instrument_code"]}
 
 
+def _changed_adjustment_factor_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only missing/provider-corrected factors for an idempotent rebuild."""
+    if not rows:
+        return []
+    symbols = sorted({str(row["symbol"]) for row in rows})
+    placeholders = ",".join("?" for _ in symbols)
+    first_date = min(str(row["trade_date"]) for row in rows)
+    last_date = max(str(row["trade_date"]) for row in rows)
+    with db() as connection:
+        existing_rows = connection.execute(
+            f"""
+            select symbol,trade_date,adj_factor from adjustment_factors
+            where source='tushare' and symbol in ({placeholders})
+              and trade_date>=? and trade_date<=?
+            """,
+            [*symbols, first_date, last_date],
+        ).fetchall()
+    existing = {
+        (str(row["symbol"]), str(row["trade_date"])): float(row["adj_factor"])
+        for row in existing_rows
+    }
+    changed: list[dict[str, Any]] = []
+    for row in rows:
+        key = (str(row["symbol"]), str(row["trade_date"]))
+        previous = existing.get(key)
+        value = float(row["adj_factor"])
+        if previous is None or abs(previous - value) > max(1e-10, abs(value) * 1e-12):
+            changed.append(row)
+    return changed
+
+
 def _flush_adj_factor_batch(
     spec: DatasetSpec,
     batch_id: str,
@@ -2154,8 +2230,9 @@ def _flush_adj_factor_batch(
         # Normalized factors are the canonical cache. Keeping an additional
         # JSON copy more than doubles space and write amplification.
         inserted, updated = len(rows), 0
-    if rows:
-        upsert_adjustment_factors(rows, source="tushare", batch_id=batch_id, bulk=True)
+    changed_rows = _changed_adjustment_factor_rows(rows)
+    if changed_rows:
+        upsert_adjustment_factors(changed_rows, source="tushare", batch_id=batch_id, bulk=True)
     counts = {work_key: len(values) for work_key, values in entries}
     return inserted, updated, len(rows), counts
 
@@ -2410,7 +2487,7 @@ def _sync_stk_limit_fast(
     *,
     full_refresh: bool,
 ) -> tuple[int, int, int, int]:
-    """Batch price-limit history and use market-wide calls for increments."""
+    """Batch sparse trade-status history and use market-wide increments."""
     state = _item_state(run_id, spec.key)
     checkpoint = state.get("checkpoint") or {}
     legacy_resume = max(0, int(checkpoint.get("index") or 0))
@@ -2428,24 +2505,30 @@ def _sync_stk_limit_fast(
     validated = 0
     empty_units = 0
     timings = {"fetchWait": 0.0, "validate": 0.0, "mysqlWrite": 0.0, "metadata": 0.0}
-    chunk_rows = max(10_000, int(os.environ.get("LEAN_DATA_SYNC_CHUNK_ROWS", "100000")))
-    batch_units = max(8, min(32, int(os.environ.get("LEAN_DATA_SYNC_BATCH_UNITS", "16"))))
+    chunk_rows = max(10_000, int(os.environ.get("LEAN_DATA_SYNC_CHUNK_ROWS", "250000")))
+    batch_units = max(8, min(64, int(os.environ.get("LEAN_DATA_SYNC_BATCH_UNITS", "32"))))
     general_concurrency = int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))
+    concurrency_key = (
+        "LEAN_SUSPEND_FETCH_CONCURRENCY"
+        if spec.normalizer == "suspend_d"
+        else "LEAN_STK_LIMIT_FETCH_CONCURRENCY"
+    )
     concurrency = max(
         1,
-        min(8, int(os.environ.get("LEAN_STK_LIMIT_FETCH_CONCURRENCY", str(min(8, general_concurrency))))),
+        min(16, int(os.environ.get(concurrency_key, str(min(16, general_concurrency))))),
     )
 
     securities = _listed_securities()
     coverage_by_scope = {} if full_refresh else _coverage_watermarks(spec)
     listed_scope_keys = {str(item["symbol"]) for item in securities}
     retry_failed_only = bool(checkpoint.get("retryFailedOnly"))
+    date_fetch_name = "suspend_rows_for_date" if spec.normalizer == "suspend_d" else "limit_prices_for_date"
     date_mode = bool(
         not full_refresh
         and not retry_failed_only
         and listed_scope_keys
         and listed_scope_keys.issubset(coverage_by_scope)
-        and hasattr(adapter, "limit_prices_for_date")
+        and hasattr(adapter, date_fetch_name)
     )
     existing_statuses = _work_status(run_id, spec.key)
     work: list[dict[str, Any]] = []
@@ -2476,7 +2559,8 @@ def _sync_stk_limit_fast(
         total = len(work)
 
         def fetch(entry: dict[str, Any]) -> list[dict[str, Any]]:
-            return _call_with_retry(lambda: adapter.limit_prices_for_date(str(entry["work_key"])))
+            method = getattr(adapter, date_fetch_name)
+            return _call_with_retry(lambda: method(str(entry["work_key"])))
 
     else:
         selected = securities
@@ -2550,6 +2634,62 @@ def _sync_stk_limit_fast(
     buffered_rows = 0
     failure_samples: list[dict[str, Any]] = []
 
+    def changed_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if spec.normalizer != "stk_limit" or not rows:
+            return rows
+        symbols = sorted({str(row["symbol"]) for row in rows})
+        placeholders = ",".join("?" for _ in symbols)
+        first_date = min(str(row["trade_date"]) for row in rows)
+        last_date = max(str(row["trade_date"]) for row in rows)
+        parameters = [*symbols, first_date, last_date]
+        with db() as connection:
+            ashare_rows = connection.execute(
+                f"""
+                select symbol,trade_date,limit_up,limit_down from ashare_trade_status
+                where symbol in ({placeholders}) and trade_date>=? and trade_date<=?
+                """,
+                parameters,
+            ).fetchall()
+            market_rows = connection.execute(
+                f"""
+                select symbol,trade_date,limit_up,limit_down from market_trade_status
+                where source='tushare:stk_limit' and asset_class='equity'
+                  and market='china' and venue='china' and symbol in ({placeholders})
+                  and trade_date>=? and trade_date<=?
+                """,
+                parameters,
+            ).fetchall()
+
+        def values(items: list[Any]) -> dict[tuple[str, str], tuple[float | None, float | None]]:
+            return {
+                (str(item["symbol"]), str(item["trade_date"])): (
+                    float(item["limit_up"]) if item["limit_up"] is not None else None,
+                    float(item["limit_down"]) if item["limit_down"] is not None else None,
+                )
+                for item in items
+            }
+
+        ashare = values(ashare_rows)
+        market = values(market_rows)
+
+        def same(left: tuple[float | None, float | None] | None, row: dict[str, Any]) -> bool:
+            if left is None:
+                return False
+            right = (row.get("limit_up"), row.get("limit_down"))
+            for previous, current in zip(left, right, strict=True):
+                if previous is None or current is None:
+                    if previous is not None or current is not None:
+                        return False
+                elif abs(previous - float(current)) > max(1e-8, abs(float(current)) * 1e-10):
+                    return False
+            return True
+
+        return [
+            row for row in rows
+            if not same(ashare.get((str(row["symbol"]), str(row["trade_date"]))), row)
+            or not same(market.get((str(row["symbol"]), str(row["trade_date"]))), row)
+        ]
+
     def flush() -> None:
         nonlocal buffered, buffered_rows, inserted, updated, processed, committed, validated, empty_units
         if not buffered:
@@ -2594,7 +2734,7 @@ def _sync_stk_limit_fast(
             add, change = _save_raw(spec, all_raw_rows, batch_id, assume_new=assume_new)
         else:
             add, change = len(all_rows), 0
-        _normalize_optional(spec, all_rows, batch_id, bulk=True)
+        _normalize_optional(spec, changed_status_rows(all_rows), batch_id, bulk=True)
         timings["mysqlWrite"] += (time.perf_counter() - stage_started) * 1000
         stage_started = time.perf_counter()
         if date_mode:
@@ -2909,7 +3049,7 @@ def _sync_generic(
             task_id,
             full_refresh=full_refresh,
         )
-    if spec.normalizer == "stk_limit":
+    if spec.normalizer in {"stk_limit", "suspend_d"}:
         return _sync_stk_limit_fast(
             adapter,
             spec,
@@ -3012,7 +3152,7 @@ def _sync_generic(
                 else:
                     normalized = None
                 rows = normalized if normalized is not None else _call_with_retry(
-                    lambda: _query(
+                    lambda: _complete_global_query(
                         adapter.pro,
                         spec,
                         request,

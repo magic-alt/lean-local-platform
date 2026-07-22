@@ -332,6 +332,61 @@ def _market_source_lineage(
         }
         archive_evidence = {str(item["run_id"]) for item in archive_rows}
 
+    # A governed full rebuild may prove that existing canonical rows are
+    # byte-for-byte unchanged. In that case rewriting millions of identical
+    # rows only to replace batch_id is unnecessary write amplification. Accept
+    # the latest completed run-level lineage after its per-symbol manifest,
+    # raw archive and completion evidence have all passed; the consistency
+    # report below still compares canonical MySQL and Parquet contents.
+    governed_run_id: str | None = None
+    governed_manifests: dict[str, dict[str, Any]] = {}
+    with db() as connection:
+        governed_run = connection.execute(
+            """
+            select id,summary_json from data_sync_runs
+            where provider=? and status='success' and canonical_status='ready'
+              and mode in ('initial_full','full_rebuild')
+            order by finished_at desc limit 1
+            """,
+            (PRIMARY_DATA_SOURCE,),
+        ).fetchone()
+        if governed_run:
+            try:
+                run_summary = json.loads(governed_run["summary_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                run_summary = {}
+            daily_evidence = next(
+                (
+                    item for item in (run_summary.get("completionEvidence") or {}).get("items", [])
+                    if item.get("datasetKey") == "daily"
+                ),
+                {},
+            )
+            candidate_run_id = str(governed_run["id"])
+            if daily_evidence.get("passed"):
+                archive = connection.execute(
+                    """
+                    select count(*) as count from provider_raw_archives a
+                    join stored_objects o on o.id=a.object_id
+                    where a.run_id=? and a.dataset_key='daily'
+                      and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                    """,
+                    (candidate_run_id,),
+                ).fetchone()
+                if archive and int(archive["count"] or 0) > 0:
+                    governed_run_id = candidate_run_id
+                    governed_manifests = {
+                        str(item["scope_key"]): dict(item)
+                        for item in connection.execute(
+                            """
+                            select scope_key,status,response_rows,rejected_rows
+                            from provider_ingestion_manifests
+                            where run_id=? and provider=? and dataset_key='daily'
+                            """,
+                            (candidate_run_id, PRIMARY_DATA_SOURCE),
+                        ).fetchall()
+                    }
+
     invalid: list[dict[str, Any]] = []
     for row, qa_report, batch_config in parsed_rows:
         provenance = batch_config.get("provenance") or {}
@@ -353,12 +408,23 @@ def _market_source_lineage(
             sync_run_id
             and provenance.get("providerEvidence") == "ingestion_manifest_and_raw_archive"
             and provenance.get("datasetKey") == "daily"
-            and str(provenance.get("scopeKey") or "") == symbol
+            and (
+                str(provenance.get("scopeKey") or "") == symbol
+                or symbol in {str(item) for item in (provenance.get("scopeKeys") or [])}
+            )
             and str(manifest.get("status") or "").lower() == "success"
             and int(manifest.get("response_rows") or 0) > 0
             and int(manifest.get("rejected_rows") or 0) == 0
             and sync_run_id in archive_evidence
         )
+        governed_manifest = governed_manifests.get(symbol) or {}
+        run_level_evidence_valid = bool(
+            governed_run_id
+            and str(governed_manifest.get("status") or "").lower() == "success"
+            and int(governed_manifest.get("response_rows") or 0) > 0
+            and int(governed_manifest.get("rejected_rows") or 0) == 0
+        )
+        evidence_valid = evidence_valid or run_level_evidence_valid
         valid = bool(
             row["batch_id"]
             and str(row["provider"] or "").lower() == PRIMARY_DATA_SOURCE

@@ -1,11 +1,14 @@
 import json
 import time
 import re
+import zlib
+from bisect import bisect_left, bisect_right
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
 from ..core.config import REPO_ROOT
-from ..db import db, json_dump, utc_now
+from ..db import bulk_db, database_backend, db, json_dump, utc_now
 from ..lean_engine.data_paths import list_local_symbols
 from ..lean_engine.data_writers import (
     write_lean_crypto_daily_zip,
@@ -31,7 +34,7 @@ from ..domain.assets import (
 from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
-from .market_repository import upsert_instrument, upsert_market_daily_bars
+from .market_repository import instrument_id, upsert_instrument, upsert_market_daily_bars
 from .data_provider_manager import DATA_PROVIDER_MANAGER, ProviderExhaustedError, provider_requirements
 from .source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
@@ -721,8 +724,328 @@ def import_ashare_research_data(
     except DataQualityError as exc:
         finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
         raise
+
+
+def _daily_values_match(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    for field in (
+        "open", "high", "low", "close", "volume", "amount", "turnover_rate",
+        "prev_close", "pct_change", "adj_factor",
+    ):
+        left = existing.get(field)
+        right = incoming.get(field)
+        if left is None or right is None:
+            if left is not None or right is not None:
+                return False
+            continue
+        left_number = float(left)
+        right_number = float(right)
+        if abs(left_number - right_number) > max(1e-8, abs(right_number) * 1e-10):
+            return False
+    return True
+
+
+def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """Return exact changed keys while avoiding an unconditional full readback."""
+    fields = (
+        "open", "high", "low", "close", "volume", "amount", "turnover_rate",
+        "prev_close", "pct_change", "adj_factor",
+    )
+
+    def token(value: Any) -> str:
+        if value is None:
+            return "~"
+        scaled = (Decimal(str(value)) * Decimal("10000")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return str(int(scaled))
+
+    incoming: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        symbol = str(row["symbol"])
+        item = incoming.setdefault(symbol, {"count": 0, "first_date": None, "last_date": None, "checksum": 0})
+        trade_date = str(row["trade_date"])
+        payload = "|".join([symbol, trade_date, *(token(row.get(field)) for field in fields)])
+        item["count"] += 1
+        item["first_date"] = min(item["first_date"] or trade_date, trade_date)
+        item["last_date"] = max(item["last_date"] or trade_date, trade_date)
+        item["checksum"] ^= zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF
+
+    symbols = sorted(incoming)
+    market_instrument_ids = [instrument_id("equity", "china", symbol, "china") for symbol in symbols]
+    first_date = min(str(row["trade_date"]) for row in rows)
+    last_date = max(str(row["trade_date"]) for row in rows)
+    placeholders = ",".join("?" for _ in symbols)
+    encoded_fields = ",".join(
+        f"coalesce(cast(round({field}*10000) as char),'~')" for field in fields
+    )
+    checksum = (
+        # PyMySQL applies %-formatting when parameters are present, so the
+        # DATE_FORMAT percent signs must be doubled in the SQL text.
+        "bit_xor(crc32(concat_ws('|',symbol,date_format(trade_date,'%%Y-%%m-%%d'),"
+        + encoded_fields
+        + "))) as checksum"
+    )
+    parameters = [*symbols, first_date, last_date]
+    market_parameters = [*market_instrument_ids, first_date, last_date]
+    with db() as connection:
+        ashare_rows = connection.execute(
+            f"""
+            select symbol,count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date,{checksum}
+            from ashare_daily_bars
+            where source='tushare' and adjust='raw' and symbol in ({placeholders})
+              and trade_date>=? and trade_date<=?
+            group by symbol
+            """,
+            parameters,
+        ).fetchall()
+        market_rows = connection.execute(
+            f"""
+            select min(symbol) as symbol,count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date,{checksum}
+            from market_daily_bars
+            where source='tushare' and adjust='raw' and asset_class='equity' and market='china'
+              and venue='china' and resolution='daily' and data_type='trade'
+              and instrument_id in ({placeholders})
+              and trade_date>=? and trade_date<=?
+            group by instrument_id
+            """,
+            market_parameters,
+        ).fetchall()
+
+    def comparable(row: Any) -> tuple[int, str, str, int]:
+        return (
+            int(row["count"] or 0), str(row["first_date"] or "")[:10],
+            str(row["last_date"] or "")[:10], int(row["checksum"] or 0),
+        )
+
+    ashare = {str(row["symbol"]): comparable(row) for row in ashare_rows}
+    market = {str(row["symbol"]): comparable(row) for row in market_rows}
+    changed_symbols = {
+        symbol
+        for symbol, item in incoming.items()
+        if comparable(item) != ashare.get(symbol) or comparable(item) != market.get(symbol)
+    }
+    if not changed_symbols:
+        return set()
+
+    # A fingerprint mismatch normally means one provider correction among
+    # thousands of unchanged bars. Read only those symbols and return only
+    # the corrected/missing dates, instead of rewriting the complete history.
+    changed_placeholders = ",".join("?" for _ in changed_symbols)
+    parameters = [*sorted(changed_symbols), first_date, last_date]
+    changed_market_parameters = [
+        *(instrument_id("equity", "china", symbol, "china") for symbol in sorted(changed_symbols)),
+        first_date,
+        last_date,
+    ]
+    columns = "symbol,trade_date," + ",".join(fields)
+    with db() as connection:
+        ashare_exact = connection.execute(
+            f"""
+            select {columns} from ashare_daily_bars
+            where source='tushare' and adjust='raw'
+              and symbol in ({changed_placeholders})
+              and trade_date>=? and trade_date<=?
+            """,
+            parameters,
+        ).fetchall()
+        market_exact = connection.execute(
+            f"""
+            select {columns} from market_daily_bars
+            where source='tushare' and adjust='raw' and asset_class='equity'
+              and market='china' and venue='china' and resolution='daily'
+              and data_type='trade' and instrument_id in ({changed_placeholders})
+              and trade_date>=? and trade_date<=?
+            """,
+            changed_market_parameters,
+        ).fetchall()
+    ashare_values = {
+        (str(row["symbol"]), str(row["trade_date"])): dict(row)
+        for row in ashare_exact
+    }
+    market_values = {
+        (str(row["symbol"]), str(row["trade_date"])): dict(row)
+        for row in market_exact
+    }
+    return {
+        (str(row["symbol"]), str(row["trade_date"]))
+        for row in rows
+        if str(row["symbol"]) in changed_symbols
+        and (
+            (str(row["symbol"]), str(row["trade_date"])) not in ashare_values
+            or (str(row["symbol"]), str(row["trade_date"])) not in market_values
+            or not _daily_values_match(
+                ashare_values[(str(row["symbol"]), str(row["trade_date"]))], row
+            )
+            or not _daily_values_match(
+                market_values[(str(row["symbol"]), str(row["trade_date"]))], row
+            )
+        )
+    }
+
+
+def import_ashare_research_batch(
+    entries: list[dict[str, Any]],
+    *,
+    sync_run_id: str,
+) -> dict[str, Any]:
+    """Validate many symbols, but write only new/corrected canonical rows."""
+    if not entries:
+        return {"rows": 0, "changedRows": 0, "unchangedRows": 0, "batch_id": None, "qa": {"passed": True}}
+    symbols = [str(entry["symbol"]) for entry in entries]
+    batch = create_import_batch(
+        "tushare",
+        "china",
+        "equity",
+        {
+            "symbols": symbols,
+            "adjust": "raw",
+            "environment": "production",
+            "synthetic": False,
+            "provenance": {
+                "environment": "production",
+                "syncRunId": sync_run_id,
+                "datasetKey": "daily",
+                "scopeKeys": symbols,
+                "providerEvidence": "ingestion_manifest_and_raw_archive",
+            },
+        },
+    )
+    batch_id = str(batch["id"])
+    normalized_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    qa_by_symbol: dict[str, dict[str, Any]] = {}
+    try:
+        for entry in entries:
+            symbol = str(entry["symbol"])
+            normalized = normalize_ashare_daily_rows(
+                symbol,
+                list(entry.get("rows") or []),
+                source="tushare",
+                batch_id=batch_id,
+                adjust="raw",
+            )
+            _repair_ohlc_rows(normalized)
+            normalized_by_symbol[symbol] = normalized
+
+        all_rows = [row for rows in normalized_by_symbol.values() for row in rows]
+        if not all_rows:
+            report = {"passed": True, "environment": "production", "symbols": symbols, "items": {}}
+            finish_import_batch(batch_id, "success", qa_report=report)
+            return {"rows": 0, "changedRows": 0, "unchangedRows": 0, "batch_id": batch_id, "qa": report}
+
+        calendar_start = min(row["trade_date"] for row in all_rows)
+        calendar_end = max(row["trade_date"] for row in all_rows)
+        calendar = trade_dates_between("china", calendar_start, calendar_end)
+        for entry in entries:
+            symbol = str(entry["symbol"])
+            rows = normalized_by_symbol[symbol]
+            if not rows:
+                qa_by_symbol[symbol] = {"passed": True, "rows": 0, "missing_trade_dates": []}
+                continue
+            first_date = rows[0]["trade_date"]
+            last_date = rows[-1]["trade_date"]
+            expected = calendar[bisect_left(calendar, first_date) : bisect_right(calendar, last_date)]
+            preliminary = validate_ashare_daily_rows(
+                rows,
+                calendar_dates=expected,
+                listed_date=entry.get("listed_date"),
+                delisted_date=entry.get("delisted_date"),
+                source="tushare",
+                batch_id=batch_id,
+            )
+            inferred_suspensions = set(preliminary.get("missing_trade_dates") or [])
+            report = validate_ashare_daily_rows(
+                rows,
+                calendar_dates=expected,
+                suspended_trade_dates=inferred_suspensions,
+                listed_date=entry.get("listed_date"),
+                delisted_date=entry.get("delisted_date"),
+                source="tushare",
+                batch_id=batch_id,
+            )
+            report.setdefault("warnings", []).append(
+                f"suspensions_inferred_from_authoritative_daily_absence={len(inferred_suspensions)}"
+            )
+            assert_quality_passed(report)
+            qa_by_symbol[symbol] = report
+
+        if database_backend() == "mysql":
+            changed_keys = _mysql_changed_daily_keys(all_rows)
+            changed_rows = [row for row in all_rows if (row["symbol"], row["trade_date"]) in changed_keys]
+            # The distinction is informational; exact INSERT/UPDATE counts are
+            # intentionally not obtained with another full-row readback.
+            inserted_rows = len(changed_rows)
+        else:
+            placeholders = ",".join("?" for _ in symbols)
+            with db() as connection:
+                existing_rows = connection.execute(
+                    f"""
+                    select symbol,trade_date,open,high,low,close,volume,amount,turnover_rate,
+                           prev_close,pct_change,adj_factor
+                    from ashare_daily_bars
+                    where source='tushare' and adjust='raw' and symbol in ({placeholders})
+                      and trade_date>=? and trade_date<=?
+                    """,
+                    [*symbols, calendar_start, calendar_end],
+                ).fetchall()
+                market_rows = connection.execute(
+                    f"""
+                    select symbol,trade_date from market_daily_bars
+                    where source='tushare' and adjust='raw' and asset_class='equity'
+                      and market='china' and venue='china' and resolution='daily'
+                      and data_type='trade' and symbol in ({placeholders})
+                      and trade_date>=? and trade_date<=?
+                    """,
+                    [*symbols, calendar_start, calendar_end],
+                ).fetchall()
+            existing = {(str(row["symbol"]), str(row["trade_date"])): dict(row) for row in existing_rows}
+            market_keys = {(str(row["symbol"]), str(row["trade_date"])) for row in market_rows}
+            changed_rows = [
+                row
+                for row in all_rows
+                if (row["symbol"], row["trade_date"]) not in existing
+                or (row["symbol"], row["trade_date"]) not in market_keys
+                or not _daily_values_match(existing[(row["symbol"], row["trade_date"])], row)
+            ]
+            inserted_rows = sum(
+                1 for row in changed_rows if (row["symbol"], row["trade_date"]) not in existing
+            )
+        if changed_rows:
+            upsert_daily_bars(changed_rows, source="tushare", batch_id=batch_id, adjust="raw", bulk=True)
+            upsert_trade_status(
+                build_ashare_trade_status(changed_rows),
+                source="tushare:ohlcv_inferred",
+                batch_id=batch_id,
+                bulk=True,
+            )
+            verified_factors = [row for row in changed_rows if row.get("adj_factor_verified", True)]
+            if verified_factors:
+                upsert_adjustment_factors(verified_factors, source="tushare", batch_id=batch_id, bulk=True)
+
+        aggregate_report = {
+            "passed": all(bool(item.get("passed")) for item in qa_by_symbol.values()),
+            "environment": "production",
+            "synthetic": False,
+            "symbolCount": len(symbols),
+            "rowCount": len(all_rows),
+            "changedRows": len(changed_rows),
+            "insertedRows": inserted_rows,
+            "updatedRows": len(changed_rows) - inserted_rows,
+            "unchangedRows": len(all_rows) - len(changed_rows),
+            "items": qa_by_symbol,
+        }
+        finish_import_batch(batch_id, "success", qa_report=aggregate_report)
+        return {
+            "rows": len(all_rows),
+            "changedRows": len(changed_rows),
+            "insertedRows": inserted_rows,
+            "updatedRows": len(changed_rows) - inserted_rows,
+            "unchangedRows": len(all_rows) - len(changed_rows),
+            "batch_id": batch_id,
+            "qa": aggregate_report,
+        }
+    except DataQualityError as exc:
+        finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
+        raise
     except Exception as exc:
-        finish_import_batch(batch_id, "failed", qa_report=qa_report, error=str(exc))
+        finish_import_batch(batch_id, "failed", qa_report={"passed": False, "items": qa_by_symbol}, error=str(exc))
         raise
 
 

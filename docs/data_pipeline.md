@@ -36,7 +36,9 @@ The Data page exposes exactly 10 bulk datasets:
 
 If no successful full build is recorded, the UI says “一键全量更新”. After a successful build, persisted sync metadata makes the same action “一键增量更新”. A restart does not reset this decision.
 
-Sync runs are idempotent, cancellable and resumable. They persist per-dataset progress, true provider call counts, checkpoints, heartbeats, watermarks, validation totals, empty-result counts and quarantined rows. `daily` and everyday `stk_limit` updates can use trade-date increments; long initial histories use bounded concurrent fetch plus batched sequential writes.
+Sync runs are idempotent, cancellable and resumable. They persist per-dataset progress, true provider call counts, checkpoints, heartbeats, watermarks, validation totals, empty-result counts and quarantined rows. `daily`, `suspend_d` and `stk_limit` use bounded concurrent fetch plus a single batched writer for initial history; everyday sparse-status updates use one market-wide request per trade date. A governed daily rebuild validates and archives every response, compares deterministic database fingerprints, reads exact rows only for mismatching symbols, and writes only missing/provider-corrected dates. `adj_factor` and `stk_limit` likewise skip unchanged canonical rows. Long `daily` requests use safe 22-year windows, while `index_daily` uses capped 2,500-day windows so provider row limits cannot silently truncate history.
+
+The small reference catalogs are fetched across every supported scope: index markets (`MSCI`, `CSI`, `SSE`, `SZSE`, `CICC`, `SW`, `OTH`), futures exchanges (`CFFEX`, `DCE`, `CZCE`, `SHFE`, `INE`, `GFEX`) and option exchanges (`SSE`, `SZSE`, `CFFEX`, `DCE`, `CZCE`, `SHFE`).
 
 ## On-Demand Datasets
 
@@ -122,6 +124,8 @@ Known limitations remain: intraday auction mechanics are incomplete; board-speci
 ## Remaining Data Work
 
 - CSI300 official PIT membership before 2017-12-08.
+- Reconcile the `CSI300_TUSHARE` monthly-snapshot shadow universe against
+  immutable CSIndex adjustment notices before any promotion to `CSI300`.
 - PIT coverage reports for every offered research universe.
 - Full ETF, convertible-bond, futures/options and factor quality gates.
 - Scheduled incremental Parquet and ClickHouse maintenance with visible watermarks.

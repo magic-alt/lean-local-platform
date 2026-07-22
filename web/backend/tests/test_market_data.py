@@ -16,6 +16,41 @@ def configure_temp_db(tmp_path, monkeypatch):
     return db_module
 
 
+def test_batch_daily_writer_reuses_existing_instrument_id(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    from app.services.market_repository import upsert_instrument, upsert_market_daily_bars_batch
+
+    existing_id = upsert_instrument(
+        symbol="000001",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        source="tushare",
+    )
+    result = upsert_market_daily_bars_batch(
+        [
+            {
+                "symbol": "000001",
+                "trade_date": "2026-07-17",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 1000,
+            }
+        ],
+        source="tushare",
+        bulk=True,
+    )
+
+    with db_module.db() as connection:
+        row = connection.execute(
+            "select instrument_id from market_daily_bars where symbol='000001'"
+        ).fetchone()
+    assert result == {"count": 1, "symbols": 1}
+    assert row["instrument_id"] == existing_id
+
+
 def test_query_database_bars_reads_local_market_daily_table(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
     with db_module.db() as connection:

@@ -245,6 +245,91 @@ def upsert_market_daily_bars(
     return {"instrumentId": item_id, "count": len(parameters)}
 
 
+def upsert_market_daily_bars_batch(
+    rows: list[dict[str, Any]],
+    *,
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    source: str,
+    batch_id: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    bulk: bool = False,
+) -> dict[str, Any]:
+    """Write many symbols with one instrument lookup and one SQL pipeline."""
+    if not rows:
+        return {"count": 0, "symbols": 0}
+    target_venue = (venue or market).lower()
+    symbols = sorted({str(row.get("symbol") or "").upper() for row in rows if row.get("symbol")})
+    if not symbols:
+        raise ValueError("symbol is required for market_daily_bars.")
+    placeholders = ",".join("?" for _ in symbols)
+    with db() as connection:
+        existing = connection.execute(
+            f"""
+            select instrument_id,symbol from instruments
+            where asset_class=? and market=? and venue=? and symbol in ({placeholders})
+            """,
+            [asset_class.lower(), market.lower(), target_venue, *symbols],
+        ).fetchall()
+    instrument_ids = {str(item["symbol"]): str(item["instrument_id"]) for item in existing}
+    for symbol in symbols:
+        if symbol not in instrument_ids:
+            instrument_ids[symbol] = upsert_instrument(
+                symbol=symbol,
+                asset_class=asset_class,
+                market=market,
+                venue=target_venue,
+                source=source,
+                status="active",
+            )
+    now = utc_now()
+    parameters = []
+    for row in rows:
+        symbol = str(row["symbol"]).upper()
+        parameters.append(
+            (
+                instrument_ids[symbol], symbol, asset_class.lower(), market.lower(), target_venue,
+                normalize_date(row.get("trade_date") or row.get("date"), "trade_date"),
+                resolution, data_type, optional_float(row.get("open")), optional_float(row.get("high")),
+                optional_float(row.get("low")), optional_float(row.get("close")),
+                optional_float(row.get("settle") or row.get("settle_price")), optional_float(row.get("volume")),
+                optional_float(row.get("amount")), optional_float(row.get("turnover_rate") or row.get("turnoverRate")),
+                optional_float(row.get("open_interest") or row.get("openInterest")),
+                optional_float(row.get("prev_close") or row.get("pre_close") or row.get("prevClose")),
+                optional_float(row.get("pct_change") or row.get("pctChange")), adjust or "raw",
+                optional_float(row.get("adj_factor") or row.get("adjFactor")), source, batch_id, now,
+            )
+        )
+    sql = """
+        insert into market_daily_bars
+            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
+             open, high, low, close, settle, volume, amount, turnover_rate, open_interest,
+             prev_close, pct_change, adjust, adj_factor, source, batch_id, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(instrument_id, trade_date, resolution, data_type, adjust, source) do update set
+            open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+            settle=excluded.settle, volume=excluded.volume, amount=excluded.amount,
+            turnover_rate=excluded.turnover_rate, open_interest=excluded.open_interest,
+            prev_close=excluded.prev_close, pct_change=excluded.pct_change,
+            adj_factor=excluded.adj_factor, batch_id=excluded.batch_id, created_at=excluded.created_at
+    """
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for chunk in _chunks(parameters):
+            connection.executemany(sql, chunk)
+        invalidate_source_certification(
+            source,
+            asset_class=asset_class,
+            market=market,
+            venue=target_venue,
+            connection=connection,
+        )
+    return {"count": len(parameters), "symbols": len(symbols)}
+
+
 def upsert_market_trade_status(
     rows: list[dict[str, Any]],
     *,

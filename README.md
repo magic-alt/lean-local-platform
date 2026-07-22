@@ -99,6 +99,11 @@ web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
 web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
   --manifest config/data-sources/csi300_pit_sources.example.json \
   --dry-run --validate
+
+# TuShare CSI300 历史权重只读治理检查（仅影子 universe，不替代官方 PIT）
+web/backend/.venv/bin/python scripts/import_tushare_csi300_pit.py \
+  --start-date 2005-01-01 --end-date 2026-07-22 \
+  --dry-run --quarantine-incomplete
 ```
 
 CSI300 官方缓存重建目前从 2017-12-08 开始，不能用当前成分替代更早的历史

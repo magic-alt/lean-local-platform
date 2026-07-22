@@ -336,6 +336,12 @@ def test_raw_row_hashing_does_not_serialize_json(tmp_path, monkeypatch):
     from app.services import data_sync
 
     spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
+    archived = []
+    monkeypatch.setattr(
+        data_sync,
+        "_archive_raw_batch",
+        lambda selected, rows, batch_id: archived.append((selected.key, rows, batch_id)) or {},
+    )
     monkeypatch.setattr(
         data_sync.json,
         "dumps",
@@ -347,6 +353,45 @@ def test_raw_row_hashing_does_not_serialize_json(tmp_path, monkeypatch):
         [{"ts_code": "600519.SH", "trade_date": "20260716", "close": 1500.0}],
         "batch-no-json",
     ) == (1, 0)
+    assert archived == [
+        (
+            "daily",
+            [{"ts_code": "600519.SH", "trade_date": "20260716", "close": 1500.0}],
+            "batch-no-json",
+        )
+    ]
+
+
+def test_daily_raw_evidence_is_one_compressed_archive_without_row_json(tmp_path, monkeypatch):
+    import gzip
+    import json
+
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services.data_sync import DATASET_REGISTRY, _save_raw
+    from app.services.db_object_store import read_bytes
+
+    spec = next(item for item in DATASET_REGISTRY if item.key == "daily")
+    rows = [
+        {"ts_code": "600519.SH", "trade_date": "20260716", "close": 1500.0},
+        {"ts_code": "600519.SH", "trade_date": "20260717", "close": 1510.0},
+    ]
+
+    assert spec.retain_raw is True
+    assert _save_raw(spec, rows, "daily-archive-run") == (2, 0)
+    with db() as connection:
+        archive = connection.execute(
+            "select * from provider_raw_archives where run_id='daily-archive-run' and dataset_key='daily'"
+        ).fetchone()
+        raw = connection.execute(
+            "select count(*) as count,min(payload_json) as min_payload,max(payload_json) as max_payload "
+            "from provider_raw_records where dataset_key='daily'"
+        ).fetchone()
+
+    assert archive["row_count"] == 2
+    assert raw["count"] == 2
+    assert raw["min_payload"] == raw["max_payload"] == ""
+    assert json.loads(gzip.decompress(read_bytes(archive["object_id"]))) == rows
 
 
 def test_retained_raw_data_uses_one_compressed_batch_archive(tmp_path, monkeypatch):
@@ -638,21 +683,77 @@ def test_daily_bulk_sync_uses_authoritative_absence_without_nested_suspend_calls
     monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
     imported = []
 
-    def fake_import(**kwargs):
-        imported.append(kwargs)
-        return {"rows": 1, "batch_id": "batch"}
+    def fake_import(entries, **kwargs):
+        imported.append({"entries": entries, **kwargs})
+        return {"rows": 1, "changedRows": 1, "insertedRows": 1, "updatedRows": 0, "batch_id": "batch"}
 
-    monkeypatch.setattr(data_sync, "import_ashare_research_data", fake_import)
+    monkeypatch.setattr(data_sync, "import_ashare_research_batch", fake_import)
 
     class Adapter:
         def daily_rows(self, symbol, start, end, **kwargs):
             return [{"symbol": symbol, "trade_date": "2026-07-17", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
 
     assert data_sync._sync_daily(Adapter(), run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
-    assert imported[0]["suspension_evidence_rows"] == []
-    assert imported[0]["infer_suspensions_from_authoritative_absence"] is True
-    assert imported[0]["bulk_write"] is True
-    assert imported[0]["materialize_derived"] is False
+    assert imported[0]["entries"][0]["symbol"] == "000001"
+    assert imported[0]["sync_run_id"] == run["id"]
+
+
+def test_daily_bulk_sync_validates_real_adapter_date_shape(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"], mode="full_rebuild")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-17"}],
+    )
+    imported = []
+
+    def fake_import(entries, **kwargs):
+        imported.append({"entries": entries, **kwargs})
+        return {"rows": 1, "changedRows": 1, "insertedRows": 1, "updatedRows": 0, "batch_id": "batch"}
+
+    monkeypatch.setattr(data_sync, "import_ashare_research_batch", fake_import)
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            # This is the actual canonical shape returned by
+            # TushareAdapter.daily_rows; it intentionally has ``date`` rather
+            # than the raw provider field ``trade_date``.
+            return [
+                {
+                    "date": "2026-07-17",
+                    "open": 1.0,
+                    "high": 1.1,
+                    "low": 0.9,
+                    "close": 1.0,
+                    "volume": 100,
+                }
+            ]
+
+    assert data_sync._sync_daily(
+        Adapter(), run["id"], run["id"], "2026-07-17", full_refresh=True
+    ) == (1, 1, 0, 0)
+    assert imported[0]["entries"][0]["rows"][0]["date"] == "2026-07-17"
+    with db() as connection:
+        manifest = connection.execute(
+            "select * from provider_ingestion_manifests where run_id=? and dataset_key='daily'",
+            (run["id"],),
+        ).fetchone()
+        raw = connection.execute(
+            "select * from provider_raw_records where batch_id=? and dataset_key='daily'",
+            (run["id"],),
+        ).fetchone()
+        archive = connection.execute(
+            "select * from provider_raw_archives where run_id=? and dataset_key='daily'",
+            (run["id"],),
+        ).fetchone()
+    assert manifest["status"] == "success"
+    assert manifest["response_rows"] == 1
+    assert raw is None
+    assert archive["row_count"] == 1
 
 
 def test_empty_instrument_result_advances_coverage_watermark(tmp_path, monkeypatch):
@@ -1090,6 +1191,58 @@ def test_correct_tushare_endpoint_parameters_are_registered():
     assert specs["lpr"].api_name == "shibor_lpr"
 
 
+def test_complete_global_query_covers_all_contract_exchanges():
+    from app.services import data_sync
+
+    calls = []
+
+    class Pro:
+        def query(self, endpoint, **params):
+            calls.append((endpoint, params))
+            return [{"ts_code": f"{params['exchange']}.001"}]
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "fut_basic")
+    rows = data_sync._complete_global_query(Pro(), spec, {"exchange": "CFFEX"})
+
+    assert [params["exchange"] for _, params in calls] == [
+        "CFFEX", "DCE", "CZCE", "SHFE", "INE", "GFEX"
+    ]
+    assert len(rows) == 6
+
+
+def test_complete_index_daily_query_splits_provider_capped_history():
+    from datetime import date
+    from app.services import data_sync
+
+    calls = []
+
+    class Pro:
+        def query(self, endpoint, **params):
+            calls.append(params)
+            return [
+                {
+                    "ts_code": "000300.SH",
+                    "trade_date": params["end_date"],
+                }
+            ]
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "index_daily")
+    rows = data_sync._complete_global_query(
+        Pro(), spec, {"ts_code": "000300.SH", "start_date": "19900101", "end_date": "20260717"}
+    )
+
+    assert len(calls) > 1
+    for params in calls:
+        start = date.fromisoformat(
+            f"{params['start_date'][:4]}-{params['start_date'][4:6]}-{params['start_date'][6:8]}"
+        )
+        end = date.fromisoformat(
+            f"{params['end_date'][:4]}-{params['end_date'][4:6]}-{params['end_date'][6:8]}"
+        )
+        assert (end - start).days <= 2_499
+    assert len(rows) == len(calls)
+
+
 def test_daily_catalog_coverage_uses_normalized_table(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, utc_now
@@ -1183,6 +1336,19 @@ def test_adj_factor_sync_persists_only_normalized_rows(tmp_path, monkeypatch):
         ("2026-07-16", 123.4),
         ("2026-07-17", 123.5),
     ]
+
+
+def test_adj_factor_rebuild_filters_unchanged_rows_but_keeps_corrections(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+    from app.services.ashare_repository import upsert_adjustment_factors
+
+    row = {"symbol": "000001", "trade_date": "2026-07-17", "adj_factor": 123.5}
+    upsert_adjustment_factors([row], source="tushare", batch_id="old", bulk=True)
+
+    assert data_sync._changed_adjustment_factor_rows([row]) == []
+    corrected = {**row, "adj_factor": 123.6}
+    assert data_sync._changed_adjustment_factor_rows([corrected]) == [corrected]
 
 
 def test_generic_sync_records_instrument_failure_instead_of_swallowing_it(tmp_path, monkeypatch):

@@ -620,11 +620,12 @@ class TushareAdapter:
         end_date: str,
         *,
         index: bool = False,
+        max_window_days: int = 3650,
     ) -> list[dict[str, Any]]:
         endpoint = self.pro.index_daily if index else self.pro.daily
         code = to_tushare_index_code(symbol) if index else to_tushare_stock_code(symbol)
         records_by_date: dict[str, dict[str, Any]] = {}
-        for window_start, window_end in _date_windows(start_date, end_date):
+        for window_start, window_end in _date_windows(start_date, end_date, max_days=max_window_days):
             frame = endpoint(
                 ts_code=code,
                 start_date=window_start,
@@ -774,14 +775,17 @@ class TushareAdapter:
         include_limits: bool = True,
         include_adjustments: bool = True,
         include_index_fallback: bool = True,
+        max_window_days: int = 3650,
     ) -> list[dict[str, Any]]:
         if adjust and adjust.lower() not in {"", "raw"}:
             raise LeanWebError("TuShare adapter imports raw daily bars plus adj_factor; do not request qfq/hfq here.")
         is_index = False
-        records = self._daily_market_records(symbol, start_date, end_date)
+        records = self._daily_market_records(symbol, start_date, end_date, max_window_days=max_window_days)
         if not records and include_index_fallback:
             try:
-                records = self._daily_market_records(symbol, start_date, end_date, index=True)
+                records = self._daily_market_records(
+                    symbol, start_date, end_date, index=True, max_window_days=max_window_days
+                )
                 is_index = True
             except Exception:
                 records = []
