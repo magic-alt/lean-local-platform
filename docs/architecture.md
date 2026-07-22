@@ -1,19 +1,21 @@
 # Architecture
 
-Last reviewed: 2026-07-21.
+Last reviewed: 2026-07-22.
 
 This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
 ## Current Level
 
-The core Level 3 chain and the main Level 4 experiment workflows are implemented:
+The main chains are implemented, but the independent 2026-07-22 audit did not
+accept Level 3, Level 4 or Level 5. Current code is a remediation candidate,
+not a maturity pass:
 
 - Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
 - A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.
 - Strategy, dataset and experiment versions plus run fingerprints are persisted for reproducibility.
 - Backtests, optimization and research expose an example catalog and database-backed experiment batches.
 - Data synchronization is resumable and auditable through sync runs, checkpoints, heartbeats, watermarks, validation results and quarantined rows.
-- Paper Replay, factors, ClickHouse, Parquet/DuckDB and observability exist, but some cross-asset and production acceptance gates remain incomplete.
+- Paper Replay, factors, ClickHouse, Parquet/DuckDB and observability exist, but real multi-day LEAN Paper, fault injection, production-scale DR and portable PIT source evidence remain incomplete.
 
 ## Component Map
 
@@ -30,7 +32,7 @@ Browser
   -> Celery / Redis
        default, data, data-demand and backtest queues; beat coordination
   -> LEAN / Research Docker containers
-       isolated run workspaces and read-only Data mounts
+       digest allowlists, bounded resources, reduced mounts and isolated runs
 
 Derived and optional stores
   MySQL -> LEAN Data cache
@@ -64,7 +66,7 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0018.
+  Ordered MySQL schema migrations. The current latest migration is 0020.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.
@@ -85,10 +87,10 @@ docs/help/
 Project/template selection (projectId required)
   -> POST /api/backtests/preflight
   -> POST /api/backtests
-  -> validate parameters, data, benchmark and QA gates
+  -> validate persisted source certification, data, benchmark, QA and reference gates
   -> persist task, run and version metadata
   -> acquire database scheduler lease
-  -> Celery run_backtest_task
+  -> Celery run_backtest_task -> repeat the fail-closed gates
   -> prepare isolated web/runtime/runs/<run_id>
   -> restore or rebuild required LEAN cache from MySQL/object archive
   -> run pinned LEAN Docker image
@@ -155,6 +157,7 @@ The 10 one-click datasets are listed in [data_pipeline.md](data_pipeline.md). Ot
 - API routes delegate orchestration to services/runners.
 - Every run uses an isolated workspace and preserves raw artifacts before parsing.
 - Trusted runs persist fingerprint, validation, experiment and normalized version links.
+- A production source is trusted only after persisted batch lineage, QA and MySQL/Parquet/DuckDB/file-hash consistency certification; provider names alone grant no trust.
 - A-share runs require real benchmark data and cannot use a constant fallback.
 - Cancellation flows through services so Celery state, containers and database state remain consistent.
 - Provider data must retain audit hashes and source/batch metadata without duplicating canonical payloads.

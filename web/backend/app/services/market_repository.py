@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from .source_gate import invalidate_source_certification
 
 
 INSTRUMENT_NAMESPACE = uuid.UUID("ed487062-bcf1-47c6-8f1a-1973b5f9edb0")
@@ -234,6 +235,13 @@ def upsert_market_daily_bars(
     with connection_factory() as connection:
         for chunk in _chunks(parameters):
             connection.executemany(sql, chunk)
+        invalidate_source_certification(
+            source,
+            asset_class=asset_class,
+            market=market,
+            venue=venue or market,
+            connection=connection,
+        )
     return {"instrumentId": item_id, "count": len(parameters)}
 
 

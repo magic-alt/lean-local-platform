@@ -43,6 +43,7 @@ HISTORY_TABLES = (
 )
 
 TASK_TERMINAL_STATUSES = {"created", "queued", "running"}
+HISTORY_OBJECT_NAMESPACES = ("backtest-results", "reports", "object-store")
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -206,8 +207,24 @@ def clear_local_history(*, dry_run: bool = False, force: bool = False, confirmat
 
         for table in HISTORY_TABLES:
             database_counts[table] = _count_table_rows(connection, table)
-        database_counts["stored_objects"] = _count_table_rows(connection, "stored_objects")
-        database_counts["stored_object_chunks"] = _count_table_rows(connection, "stored_object_chunks")
+        placeholders = ",".join("?" for _ in HISTORY_OBJECT_NAMESPACES)
+        object_rows = connection.execute(
+            f"select id from stored_objects where namespace in ({placeholders})",
+            HISTORY_OBJECT_NAMESPACES,
+        ).fetchall()
+        history_object_ids = [row["id"] for row in object_rows]
+        database_counts["stored_objects"] = len(history_object_ids)
+        if history_object_ids:
+            object_placeholders = ",".join("?" for _ in history_object_ids)
+            database_counts["stored_object_chunks"] = int(
+                connection.execute(
+                    f"select count(*) as count from stored_object_chunks where object_id in ({object_placeholders})",
+                    history_object_ids,
+                ).fetchone()["count"]
+                or 0
+            )
+        else:
+            database_counts["stored_object_chunks"] = 0
 
         if not dry_run and confirmation != "DELETE ALL LOCAL HISTORY":
             return {
@@ -243,8 +260,19 @@ def clear_local_history(*, dry_run: bool = False, force: bool = False, confirmat
         for table in HISTORY_TABLES:
             deleted_rows[table] = _delete_all_rows(connection, table)
 
-        deleted_rows["stored_object_chunks"] = _delete_all_rows(connection, "stored_object_chunks")
-        deleted_rows["stored_objects"] = _delete_all_rows(connection, "stored_objects")
+        if history_object_ids:
+            object_placeholders = ",".join("?" for _ in history_object_ids)
+            deleted_rows["stored_object_chunks"] = connection.execute(
+                f"delete from stored_object_chunks where object_id in ({object_placeholders})",
+                history_object_ids,
+            ).rowcount
+            deleted_rows["stored_objects"] = connection.execute(
+                f"delete from stored_objects where id in ({object_placeholders})",
+                history_object_ids,
+            ).rowcount
+        else:
+            deleted_rows["stored_object_chunks"] = 0
+            deleted_rows["stored_objects"] = 0
 
     runtime_summary = {
         "filesRemoved": 0,

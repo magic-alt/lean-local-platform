@@ -13,7 +13,7 @@ LEAN 是唯一正式回测执行器。单次回测验证策略、数据和执行
 5. 成功后检查指标、图表、订单、持仓、Validation、Admission 和 Fingerprint。
 6. 需要归档时从 Reports 生成统一报告。
 
-New Backtest 将 Project/名称、标的与行情、周期与执行、策略参数分组。Fee、Slippage 和 Data Source 保持在执行配置中，Docker Image 收入 Runtime environment；折叠高级区不改变默认镜像或提交 payload。
+New Backtest 将 Project/名称、标的与行情、周期与执行、策略参数分组。Fee、Slippage 和 Data Source 保持在执行配置中，Docker Image 收入 Runtime environment；折叠高级区不改变默认镜像或提交 payload。未认证或研究数据必须显式勾选 Research data override；此类运行不得成为 LEAN Paper 的可信输入。
 
 `projectId` 对 create 和 preflight 都是必填字段。worker 执行提交时复制的不可变项目快照，不使用默认 demo 算法。
 
@@ -34,6 +34,7 @@ preflight 失败应先修复根因。不要通过删除质量检查或使用未�
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/backtests/preflight \
+  -H "Authorization: Bearer $(cat web/runtime/secrets/api_token)" \
   -H 'Content-Type: application/json' \
   -d '{
     "projectId":"my-ema-project",

@@ -39,7 +39,13 @@ from ..services.intraday import import_intraday_bars
 from ..services.instrument_identity import identifier_coverage, identifiers_for_symbol
 from ..services.market_repository import upsert_market_daily_bars
 from ..services.db_object_store import put_file
-from ..services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, require_source_allowed, source_certification
+from ..services.source_gate import (
+    DATA_SOURCE_PRIORITY,
+    PRIMARY_DATA_SOURCE,
+    require_source_allowed,
+    resolve_source_context,
+    source_certification,
+)
 from ..services.security_search import search_securities as search_security_catalog
 from ..services.security_profile import security_profile
 from ..services.dataset_preview import dataset_preview
@@ -442,6 +448,15 @@ def query_data(
             return [provider_source]
 
         def query_one(selected_source: str | None) -> dict[str, Any]:
+            source_context = resolve_source_context(
+                {},
+                source=selected_source or PRIMARY_DATA_SOURCE,
+                allow_research_source=allowResearchSource,
+                asset_class=asset_class,
+                market=query_market or query_venue or "china",
+                venue=query_venue or query_market,
+            )
+            selected_source = str(source_context["source"])
             if query_source in {"duckdb", "parquet"}:
                 return query_duckdb_bars(
                     asset_class=asset_class,
@@ -455,6 +470,7 @@ def query_data(
                     start_date=startDate,
                     end_date=endDate,
                     limit=limit,
+                    allow_research_source=allowResearchSource,
                 )
             query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
             return query(
@@ -492,7 +508,12 @@ def query_data(
         payload["providerSource"] = selected_provider
         payload["providerMode"] = "auto" if auto_provider or not strict_provider else "strict"
         payload["sourceAttempts"] = attempts
-        payload["sourceCertification"] = source_certification(selected_provider, asset_class=assetClass, market=market or venue or "china", venue=venue or market)
+        payload["sourceCertification"] = source_certification(
+            selected_provider,
+            asset_class=assetClass,
+            market=market or venue or "china",
+            venue=venue or market,
+        )
         return payload
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

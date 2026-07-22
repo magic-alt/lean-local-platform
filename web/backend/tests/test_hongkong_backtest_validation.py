@@ -36,6 +36,13 @@ def test_hongkong_validation_records_execution_rules(monkeypatch):
         "slippageBps": 5.0,
     }
     fingerprint = {
+        "datasetCertification": {
+            "source": "tushare",
+            "environment": "production",
+            "isProduction": True,
+            "isCertified": True,
+            "qaStatus": "ok",
+        },
         "data": {
             "benchmark": {
                 "row_count": 20,

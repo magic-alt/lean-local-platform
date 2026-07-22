@@ -560,9 +560,45 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
             insert into experiments
                 (id, run_id, strategy_version_id, dataset_version_id, parameter_hash, fingerprint_json,
                  validation_json, experiment_json, created_at, updated_at)
-            values (?, ?, ?, ?, ?, '{}', '{}', '{}', ?, ?)
+            values (?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?)
             """,
-            ("experiment-1", "trusted-run", "strategy-v1", "dataset-v1", "params-v1", now, now),
+            (
+                "experiment-1",
+                "trusted-run",
+                "strategy-v1",
+                "dataset-v1",
+                "params-v1",
+                json_dump(
+                    {
+                        "datasetCertification": {
+                            "source": "tushare",
+                            "environment": "production",
+                            "isProduction": True,
+                            "isCertified": True,
+                            "qaStatus": "ok",
+                        }
+                    }
+                ),
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "update backtest_runs set fingerprint_json = ? where id = ?",
+            (
+                json_dump(
+                    {
+                        "datasetCertification": {
+                            "source": "tushare",
+                            "environment": "production",
+                            "isProduction": True,
+                            "isCertified": True,
+                            "qaStatus": "ok",
+                        }
+                    }
+                ),
+                "trusted-run",
+            ),
         )
         connection.execute(
             """

@@ -32,6 +32,9 @@ cp .env.example .env
 ./scripts/start_web_single_instance.sh
 ```
 
+启动脚本会在 `web/runtime/secrets/` 生成并复用本地 API Token，由前端代理
+自动携带。直接调用 API 时必须发送 Bearer Token；正式配置不得关闭认证。
+
 只有 Dockerfile、依赖或镜像构建内容发生变化时才需要：
 
 ```bash
@@ -65,6 +68,11 @@ Data 页一键更新范围以代码中的 `BULK_DATASET_KEYS` 为准，当前为
 首次完整成功后系统保存建库状态和水位，按钮切换为增量更新。`daily_basic`
 等其他数据集通过按需操作单独下载。
 
+同步完成状态采用证据门禁：每个数据集必须同时具有 ready item、成功
+ingestion manifest、适用的 watermark，以及可读取的 raw archive。日线变更会
+立即撤销旧 source certification；异步重建 Parquet 并通过 MySQL/DuckDB/文件
+哈希一致性检查后，TuShare 数据才能重新进入 production 回测和 Paper。
+
 ## 回测策略约束
 
 新回测必须提供 `projectId`。Web 页面创建或从模板克隆的项目保存在
@@ -79,7 +87,7 @@ API、Celery worker 或正式报告链路。
 
 ```bash
 # 数据库迁移状态
-web/backend/.venv/bin/python scripts/db_migrate.py status
+web/backend/.venv/bin/python scripts/db_migrate.py --status
 
 # 仓库源码/运行产物边界检查
 python3 scripts/check_repository_hygiene.py
@@ -87,14 +95,17 @@ python3 scripts/check_repository_hygiene.py
 # 重建已有回测 HTML 报告
 web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
 
-# CSI300 PIT portable manifest 验证
-web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --dry-run --validate
+# CSI300 PIT portable parser 示例验证（生产 manifest 需要离线官方附件包）
+web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
+  --manifest config/data-sources/csi300_pit_sources.example.json \
+  --dry-run --validate
 ```
 
 CSI300 官方缓存重建目前从 2017-12-08 开始，不能用当前成分替代更早的历史
 PIT 成分。来源哈希和人工校正位于
 `config/data-sources/csi300_pit_sources.json`，原始附件只存放于
-`web/runtime/source-cache/csi300-official/`。
+`web/runtime/source-cache/csi300-official/`。缺失附件时生产 manifest 校验必须
+失败，不能把 manifest 中的声明当作源文件验证结果。
 
 ## 测试
 

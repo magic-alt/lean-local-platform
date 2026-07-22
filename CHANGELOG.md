@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-22 — fail closed after the independent maturity audit：收紧 Data API、回测和 Paper 的生产数据源与 A 股 QA/PIT/reference 双阶段门禁，以 sync manifest + raw archive 建立不可由导入接口伪造的 TuShare provenance，撤销旧认证并阻止 synthetic 批次晋级；增加覆盖资金及实际行情内容的稳定 input/result digest，将历史孤儿 raw archive 可追溯隔离并增加对象完整性检查和安全预览降级；增加本地 API Token/HttpOnly Web session，限制 LEAN/Research 镜像并隔离网络、挂载与资源，将服务端口默认绑定回环地址，修复迁移/备份入口及浏览器报告、重复提交和移动端导航回归。
 - 2026-07-22 — compact and group Web forms：新增统一响应式表单栅格、分组、高级设置和操作区；桌面最多四列、平板两列、手机单列，并将运行镜像、API Key 与原始 JSON 等低频字段折叠，保持请求字段和默认值不变。
 - 2026-07-21 — make Web tables and history cleanup safer：统一全站表格多行展示、表头/行态和响应式布局，重组超宽科技日报列；取消 Dashboard 一键强制清空，新增 Backtest、Optimization、Research、Report、Paper、Task、Project 和实验批次的受保护删除入口。
 - 2026-07-21 — pin the primary Web navigation：将 Dashboard 至 Settings 主导航固定为独立全高侧栏，右侧长页面滚动时保持可见，低高度视口仅在导航内部滚动。

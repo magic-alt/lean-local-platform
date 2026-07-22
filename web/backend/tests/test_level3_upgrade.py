@@ -26,7 +26,13 @@ def test_source_gate_rejects_research_source_by_default(tmp_path, monkeypatch):
 
     assert require_source_allowed(None) == "tushare"
     assert require_source_allowed("tushare pro") == "tushare"
-    assert require_source_allowed("akshare") == "akshare"
+    try:
+        require_source_allowed("akshare")
+    except ValueError as exc:
+        assert "source_not_certified:akshare" in str(exc)
+    else:
+        raise AssertionError("supplemental sources must be research-only by default")
+    assert require_source_allowed("akshare", allow_research_source=True) == "akshare"
     assert "jqdata" not in DATA_SOURCE_PRIORITY
     jqdata_policy = resolve_effective_data_source("jqdata", start_date="2025-04-01", end_date="2026-04-01")
     assert jqdata_policy["effectiveSource"] == "jqdata"

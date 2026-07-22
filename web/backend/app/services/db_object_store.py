@@ -141,6 +141,10 @@ def latest_object(namespace: str, key: str) -> dict[str, Any] | None:
 
 def read_bytes(object_id_value: str) -> bytes:
     with db() as connection:
+        stored = connection.execute(
+            "select size, sha256 from stored_objects where id = ?",
+            (object_id_value,),
+        ).fetchone()
         chunks = connection.execute(
             """
             select data from stored_object_chunks
@@ -149,7 +153,12 @@ def read_bytes(object_id_value: str) -> bytes:
             """,
             (object_id_value,),
         ).fetchall()
-    return b"".join(bytes(row["data"]) for row in chunks)
+    if not stored:
+        raise ValueError(f"stored_object_missing:{object_id_value}")
+    payload = b"".join(bytes(row["data"]) for row in chunks)
+    if len(payload) != int(stored["size"] or 0) or hashlib.sha256(payload).hexdigest() != stored["sha256"]:
+        raise ValueError(f"stored_object_checksum_mismatch:{object_id_value}")
+    return payload
 
 
 def restore_to_path(object_id_value: str, target: Path | str) -> Path:
@@ -161,8 +170,46 @@ def restore_to_path(object_id_value: str, target: Path | str) -> Path:
 
 def delete_object(object_id_value: str) -> None:
     with db() as connection:
+        archive = connection.execute(
+            "select id from provider_raw_archives where object_id = ? limit 1",
+            (object_id_value,),
+        ).fetchone()
+        if archive:
+            raise ValueError(f"stored_object_referenced_by_provider_archive:{archive['id']}")
         connection.execute("delete from stored_object_chunks where object_id = ?", (object_id_value,))
         connection.execute("delete from stored_objects where id = ?", (object_id_value,))
+
+
+def integrity_report() -> dict[str, Any]:
+    with db() as connection:
+        orphan_archives = rows_to_dicts(
+            connection.execute(
+                """
+                select a.id, a.provider, a.dataset_key, a.object_id
+                from provider_raw_archives a
+                left join stored_objects o on o.id = a.object_id
+                where o.id is null
+                order by a.created_at desc
+                """
+            ).fetchall()
+        )
+        objects_without_chunks = rows_to_dicts(
+            connection.execute(
+                """
+                select o.id, o.namespace, o.object_key, o.size
+                from stored_objects o
+                where o.size > 0 and not exists (
+                    select 1 from stored_object_chunks c where c.object_id = o.id
+                )
+                order by o.updated_at desc
+                """
+            ).fetchall()
+        )
+    return {
+        "passed": not orphan_archives and not objects_without_chunks,
+        "orphanArchives": orphan_archives,
+        "objectsWithoutChunks": objects_without_chunks,
+    }
 
 
 def list_objects(

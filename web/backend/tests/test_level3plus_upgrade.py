@@ -23,6 +23,35 @@ def seed_level3plus_data(db_module):
     symbols = ["600519", "000001"]
     dates = ["2026-06-01", "2026-06-02"]
     with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into parquet_datasets
+                (id,dataset_key,asset_class,market,venue,resolution,data_type,adjust,source,
+                 root_path,schema_version,start_date,end_date,row_count,file_count,metadata_json,
+                 created_at,updated_at,dataset_version,environment,is_production,is_certified,
+                 certified_at,certified_by,coverage_start,coverage_end,qa_status,qa_report_id)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "dataset-tushare", "equity/china/tushare", "equity", "china", "china",
+                "daily", "trade", "raw", "tushare", "parquet/test", 1,
+                dates[0], dates[-1], 6, 1, "{}", now, now, "tushare-test-v1",
+                "production", 1, 1, now, "unit-consistency-report", dates[0], dates[-1],
+                "ok", "qa-unit",
+            ),
+        )
+        connection.execute(
+            """
+            insert into parquet_files
+                (id,dataset_id,file_path,partition_json,row_count,first_timestamp,last_timestamp,
+                 sha256,size,created_at)
+            values (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "file-tushare", "dataset-tushare", "parquet/test/part.parquet", "{}", 6,
+                dates[0], dates[-1], "a" * 64, 1, now,
+            ),
+        )
         for symbol in symbols:
             connection.execute(
                 """
@@ -84,6 +113,15 @@ def seed_level3plus_data(db_module):
                     """,
                     ("index-000300", "000300", "equity", "china", "china", trade_date, "daily", "trade", 100, 101, 99, 100, 1000, 100000, "raw", source, "batch", now),
                 )
+        connection.execute(
+            """
+            update parquet_datasets
+            set environment='production',is_production=1,is_certified=1,
+                certified_at=?,certified_by='unit-consistency-report',qa_status='ok',qa_report_id='qa-unit'
+            where id='dataset-tushare'
+            """,
+            (now,),
+        )
     return symbols
 
 

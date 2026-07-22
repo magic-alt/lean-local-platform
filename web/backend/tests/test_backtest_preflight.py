@@ -10,7 +10,7 @@ def test_preflight_repairs_symbol_and_benchmark_with_selected_source(monkeypatch
     monkeypatch.setattr(
         preflight,
         "_source",
-        lambda request, parameters: ("tushare", {"source": "tushare"}),
+        lambda request, parameters: ("tushare", {"source": "tushare", "allowResearchSource": True}),
     )
     monkeypatch.setattr(
         preflight,

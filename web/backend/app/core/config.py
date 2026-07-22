@@ -67,11 +67,49 @@ DEFAULT_DOCKER_IMAGE = os.environ.get(
     "LEAN_DOCKER_IMAGE",
     "quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823",
 )
-DEFAULT_RESEARCH_IMAGE = os.environ.get("LEAN_RESEARCH_IMAGE", "quantconnect/research:latest")
+DEFAULT_RESEARCH_IMAGE = os.environ.get(
+    "LEAN_RESEARCH_IMAGE",
+    "quantconnect/research@sha256:1548cafe8d696c1a30774413fc6f7c0d7f0205104f2f78110d9a84906ac65634",
+)
+ALLOWED_LEAN_DOCKER_IMAGES = tuple(
+    dict.fromkeys(
+        [
+            DEFAULT_DOCKER_IMAGE,
+            *[
+                item.strip()
+                for item in os.environ.get("LEAN_ALLOWED_DOCKER_IMAGES", "").split(",")
+                if item.strip()
+            ],
+        ]
+    )
+)
+ALLOWED_RESEARCH_DOCKER_IMAGES = tuple(
+    dict.fromkeys(
+        [
+            DEFAULT_RESEARCH_IMAGE,
+            *[
+                item.strip()
+                for item in os.environ.get("LEAN_ALLOWED_RESEARCH_IMAGES", "").split(",")
+                if item.strip()
+            ],
+        ]
+    )
+)
+LEAN_DOCKER_NETWORK = os.environ.get("LEAN_DOCKER_NETWORK", "none").strip() or "none"
+LEAN_DOCKER_CPUS = os.environ.get("LEAN_DOCKER_CPUS", "2").strip() or "2"
+LEAN_DOCKER_MEMORY = os.environ.get("LEAN_DOCKER_MEMORY", "4g").strip() or "4g"
+LEAN_DOCKER_PIDS_LIMIT = int(os.environ.get("LEAN_DOCKER_PIDS_LIMIT", "512"))
+LEAN_DOCKER_READ_ONLY = os.environ.get("LEAN_DOCKER_READ_ONLY", "1").lower() not in {"0", "false", "no", "off"}
+RESEARCH_DOCKER_CPUS = os.environ.get("LEAN_RESEARCH_CPUS", "2").strip() or "2"
+RESEARCH_DOCKER_MEMORY = os.environ.get("LEAN_RESEARCH_MEMORY", "4g").strip() or "4g"
+RESEARCH_DOCKER_PIDS_LIMIT = int(os.environ.get("LEAN_RESEARCH_PIDS_LIMIT", "512"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 JOB_TIMEOUT_SECONDS = int(os.environ.get("BACKTEST_JOB_TIMEOUT_SECONDS", "7200"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("BACKTEST_MAX_CONCURRENT_JOBS", "1"))
 LOG_LEVEL = os.environ.get("LEAN_WEB_LOG_LEVEL", "INFO")
+API_AUTH_REQUIRED = os.environ.get("LEAN_API_AUTH_REQUIRED", "1").lower() not in {"0", "false", "no", "off"}
+API_TOKEN = os.environ.get("LEAN_API_TOKEN", "").strip()
+BACKTEST_EXECUTION_DELEGATED = os.environ.get("LEAN_BACKTEST_EXECUTION_DELEGATED", "0").lower() in {"1", "true", "yes", "on"}
 
 CLICKHOUSE_ENABLED = os.environ.get("CLICKHOUSE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
 CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "127.0.0.1")

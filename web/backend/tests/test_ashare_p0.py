@@ -101,6 +101,61 @@ def import_sample_ashare(tmp_path, monkeypatch):
                 {"date": "2024-01-04", "open": "3518", "high": "3530", "low": "3510", "close": "3522", "volume": "1200"},
             ],
         )
+    import app.db as db_module
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into securities
+                (symbol,name,exchange,market,listed_date,delisted_date,status,is_st,created_at,updated_at)
+            values ('000000','Fixture Delisted ST','SZSE','china','2000-01-01','2020-01-01','delisted',1,'now','now')
+            on conflict(symbol) do update set status='delisted', delisted_date='2020-01-01', is_st=1
+            """
+        )
+        connection.execute(
+            "update securities set is_st=1 where symbol='600519'"
+        )
+        connection.execute(
+            "update ashare_trade_status set is_suspended=1 where symbol='600519' and trade_date='2024-01-04'"
+        )
+        connection.execute(
+            """
+            insert into corporate_actions
+                (symbol,ex_date,action_type,cash_dividend,source,batch_id,created_at)
+            values ('600519','2024-01-03','cash_dividend',1,'tushare','fixture','now')
+            on conflict(symbol,ex_date,action_type,source) do update set cash_dividend=excluded.cash_dividend
+            """
+        )
+        connection.execute(
+            """
+            insert into universe_membership
+                (universe_code,symbol,start_date,end_date,announce_date,effective_date,weight,source,batch_id)
+            values ('CSI300','600519','2024-01-01',null,'2023-12-01','2024-01-01',1,'official','fixture')
+            on conflict(universe_code,symbol,start_date) do update set source=excluded.source
+            """
+        )
+        connection.execute(
+            """
+            insert into parquet_datasets
+                (id,dataset_key,asset_class,market,venue,resolution,data_type,adjust,source,
+                 root_path,schema_version,start_date,end_date,row_count,file_count,metadata_json,
+                 created_at,updated_at,dataset_version,environment,is_production,is_certified,
+                 certified_at,certified_by,coverage_start,coverage_end,qa_status,qa_report_id)
+            values ('fixture-tushare','fixture-tushare','equity','china','china','daily','trade','raw','tushare',
+                    'parquet/fixture',1,'2024-01-02','2024-01-04',3,1,'{}','now','now',
+                    'fixture-v1','production',1,1,'now','pytest','2024-01-02','2024-01-04','ok',null)
+            on conflict(dataset_key) do update set is_production=1,is_certified=1,qa_status='ok'
+            """
+        )
+        connection.execute(
+            """
+            insert into parquet_files
+                (id,dataset_id,file_path,partition_json,row_count,first_timestamp,last_timestamp,sha256,size,created_at)
+            values ('fixture-file','fixture-tushare','parquet/fixture/year=2024/part.parquet','{}',3,
+                    '2024-01-02','2024-01-04','fixture-sha256',128,'now')
+            on conflict(id) do update set sha256=excluded.sha256
+            """
+        )
     return asset
 
 
@@ -432,7 +487,7 @@ def test_backtest_creation_without_explicit_source_requires_default_production_s
 
     monkeypatch.setattr(backtest_preflight, "_repair_symbol", unavailable)
 
-    with pytest.raises(LeanPlatformError, match="symbol_data_repair_failed:600519"):
+    with pytest.raises(ValueError, match="source_not_certified:tushare"):
         backtest_service.create_backtest_job(
             {
                 "symbol": "600519",
@@ -445,7 +500,7 @@ def test_backtest_creation_without_explicit_source_requires_default_production_s
             }
         )
 
-    assert attempts == [("600519", "tushare")]
+    assert attempts == []
 
 
 def test_backtest_creation_does_not_silently_fall_back_to_other_source(tmp_path, monkeypatch):
@@ -493,7 +548,7 @@ def test_backtest_creation_does_not_silently_fall_back_to_other_source(tmp_path,
         lambda symbol, parameters, source, role: (_ for _ in ()).throw(LeanPlatformError(f"{source} unavailable")),
     )
 
-    with pytest.raises(LeanPlatformError, match="symbol_data_repair_failed:600519:tushare unavailable"):
+    with pytest.raises(ValueError, match="source_not_certified:tushare"):
         backtest_service.create_backtest_job(
             {
                 "symbol": "600519",
@@ -698,6 +753,89 @@ def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkey
     assert "docker_image_digest" in fingerprint
     assert fingerprint["python_version"]
     assert fingerprint["requirements_hash"]
+
+
+def test_run_input_fingerprint_is_stable_across_run_ids(tmp_path, monkeypatch):
+    import_sample_ashare(tmp_path, monkeypatch)
+
+    from app.services import run_fingerprint
+
+    monkeypatch.setattr(
+        run_fingerprint,
+        "git_state",
+        lambda: {"commit": "abc123", "branch": "main", "dirty": False, "statusHash": None},
+    )
+    monkeypatch.setattr(
+        run_fingerprint,
+        "docker_image_digest",
+        lambda image: {"image": image, "digest": "quantconnect/lean@sha256:fixed"},
+    )
+    parameters = {
+        "ticker": "600519",
+        "assetClass": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": "2024-01-02",
+        "end": "2024-01-04",
+        "adjust": "raw",
+        "source": "akshare",
+        "allowResearchSource": True,
+        "initialCash": 100000,
+        "strategySnapshotDir": "/runtime/run-a/project",
+    }
+
+    first = run_fingerprint.build_run_fingerprint(
+        run_id="run-a",
+        parameters=parameters,
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+    second = run_fingerprint.build_run_fingerprint(
+        run_id="run-b",
+        parameters={**parameters, "strategySnapshotDir": "/runtime/run-b/project"},
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+    alias_parameters = {
+        key: value for key, value in parameters.items() if key != "initialCash"
+    }
+    alias_parameters["initial_cash"] = 100000
+    alias_parameters["strategySnapshotDir"] = "/runtime/run-alias/project"
+    alias = run_fingerprint.build_run_fingerprint(
+        run_id="run-alias",
+        parameters=alias_parameters,
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+    changed = run_fingerprint.build_run_fingerprint(
+        run_id="run-c",
+        parameters={**parameters, "fastPeriod": 20},
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+    changed_cash = run_fingerprint.build_run_fingerprint(
+        run_id="run-d",
+        parameters={**parameters, "initialCash": 200000},
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+    import app.db as db_module
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            update market_daily_bars set close=close+0.01
+            where symbol='600519' and source='akshare' and trade_date='2024-01-03'
+            """
+        )
+    changed_data = run_fingerprint.build_run_fingerprint(
+        run_id="run-e",
+        parameters=parameters,
+        docker_image="quantconnect/lean@sha256:fixed",
+    )
+
+    assert first["inputFingerprint"] == second["inputFingerprint"]
+    assert first["inputFingerprint"] == alias["inputFingerprint"]
+    assert first["inputFingerprint"] != changed["inputFingerprint"]
+    assert first["inputFingerprint"] != changed_cash["inputFingerprint"]
+    assert first["inputFingerprint"] != changed_data["inputFingerprint"]
 
 
 def test_git_state_dirty_ignores_untracked_runtime_artifacts(monkeypatch):

@@ -100,8 +100,17 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
         item = row_to_dict(raw) or {}
         validation = item.get("validation") or {}
         parameters = item.get("parameters") or {}
+        fingerprint = item.get("fingerprint") or {}
+        certification = fingerprint.get("datasetCertification") or {}
         snapshot = run_directory(str(item["id"]), parameters.get("strategySnapshotDir"), relative="strategy")
         if validation.get("passed") is not True or not snapshot.is_dir() or not get_result(str(item["id"])):
+            continue
+        if parameters.get("allowResearchSource") or not (
+            certification.get("isProduction")
+            and certification.get("isCertified")
+            and certification.get("environment") == "production"
+            and str(certification.get("qaStatus") or "").lower() == "ok"
+        ):
             continue
         data_validation = validation.get("data") or {}
         if data_validation.get("truncated") is True or parameters.get("allowTruncatedData"):
@@ -154,9 +163,18 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("The selected backtest does not belong to this project.")
     if source_run.get("status") != "success" or (source_run.get("validation") or {}).get("passed") is not True:
         raise ValueError("The selected backtest has not passed execution validation.")
+    source_fingerprint = source_run.get("fingerprint") or {}
+    source_certification = source_fingerprint.get("datasetCertification") or {}
+    source_parameters = dict(source_run.get("parameters") or {})
+    if source_parameters.get("allowResearchSource") or not (
+        source_certification.get("isProduction")
+        and source_certification.get("isCertified")
+        and source_certification.get("environment") == "production"
+        and str(source_certification.get("qaStatus") or "").lower() == "ok"
+    ):
+        raise ValueError("LEAN Paper requires a certified production dataset; research sources are prohibited.")
     if not get_result(source_backtest_id):
         raise ValueError("The selected backtest result ledger is unavailable.")
-    source_parameters = dict(source_run.get("parameters") or {})
     snapshot_dir = run_directory(source_backtest_id, source_parameters.get("strategySnapshotDir"), relative="strategy")
     if not snapshot_dir.is_dir():
         raise ValueError("The selected backtest strategy snapshot is unavailable.")

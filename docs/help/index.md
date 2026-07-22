@@ -52,4 +52,4 @@ LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理
 | 回测、优化和研究案例 | `GET /api/examples` |
 | Provider 与同步策略 | `GET /api/data/catalog` |
 | 服务健康 | `GET /api/health/dependencies` |
-| 数据库迁移 | `scripts/db_migrate.py status` |
+| 数据库迁移 | `scripts/db_migrate.py --status` |

@@ -1692,6 +1692,27 @@ def _sync_calendar(
     latest = None if full_refresh else _latest_raw_date(spec)
     start_date = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else "1990-01-01"
     if start_date > end_date:
+        validation = _validate_dataset_rows(spec, [])
+        _record_ingestion_manifest(
+            run_id=batch_id,
+            spec=spec,
+            scope_key="SSE",
+            request={"exchange": "SSE", "startDate": start_date, "endDate": end_date, "noOp": True},
+            rows=[],
+            validation=validation,
+            endpoint_counts={},
+            coverage_start=latest,
+            coverage_end=end_date,
+        )
+        _set_coverage_watermark(
+            spec,
+            scope_key="SSE",
+            coverage_start=latest or end_date,
+            coverage_end=end_date,
+            rows=[],
+            run_id=batch_id,
+            validation_status=str(validation["status"]),
+        )
         return 0, 0, 0
     api_before = _api_snapshot(adapter)
     rows = adapter.trade_calendar(start_date, end_date, exchange="SSE")
@@ -1817,6 +1838,9 @@ def _sync_daily(
                     ) * 10
                     _assert_disk_capacity(estimated_bytes)
                     stage_started = time.perf_counter()
+                    # Keep a lightweight raw-row index plus one deterministic,
+                    # compressed provider response. payload_json stays empty.
+                    _save_raw(spec, audit_rows, batch_id)
                     result = import_ashare_research_data(
                         symbol=symbol, provider="tushare", market="china", rows=rows,
                         source="tushare", overwrite=True, adjust="raw", outputsize="full",
@@ -1827,6 +1851,13 @@ def _sync_daily(
                         infer_suspensions_from_authoritative_absence=True,
                         bulk_write=True,
                         materialize_derived=False,
+                        provenance={
+                            "environment": "production",
+                            "syncRunId": run_id,
+                            "datasetKey": spec.key,
+                            "scopeKey": symbol,
+                            "providerEvidence": "ingestion_manifest_and_raw_archive",
+                        },
                     )
                     timings["mysqlAndDerived"] += (time.perf_counter() - stage_started) * 1000
                     inserted += int(result.get("rows") or len(rows))
@@ -3153,6 +3184,92 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
         )
 
 
+def _sync_completion_evidence(run_id: str, selected_keys: set[str]) -> dict[str, Any]:
+    specs = {spec.key: spec for spec in DATASET_REGISTRY if spec.key in selected_keys}
+    with db() as connection:
+        item_rows = connection.execute(
+            "select dataset_key,status,failed,canonical_status from data_sync_items where run_id=?",
+            (run_id,),
+        ).fetchall()
+        manifest_rows = connection.execute(
+            """
+            select dataset_key,count(*) as manifest_count,
+                   sum(response_rows) as response_rows,sum(rejected_rows) as rejected_rows,
+                   sum(case when status='success' then 0 else 1 end) as failed_manifests
+            from provider_ingestion_manifests where run_id=? group by dataset_key
+            """,
+            (run_id,),
+        ).fetchall()
+        watermark_rows = connection.execute(
+            """
+            select dataset_key,count(*) as watermark_count
+            from provider_dataset_watermarks where last_run_id=? group by dataset_key
+            """,
+            (run_id,),
+        ).fetchall()
+        archive_rows = connection.execute(
+            """
+            select a.dataset_key,count(*) as archive_count,sum(a.row_count) as archived_rows,
+                   sum(case when o.id is null then 1 else 0 end) as orphan_count
+            from provider_raw_archives a
+            left join stored_objects o on o.id=a.object_id
+            where a.run_id=? group by a.dataset_key
+            """,
+            (run_id,),
+        ).fetchall()
+    items = {str(row["dataset_key"]): dict(row) for row in item_rows}
+    manifests = {str(row["dataset_key"]): dict(row) for row in manifest_rows}
+    watermarks = {str(row["dataset_key"]): dict(row) for row in watermark_rows}
+    archives = {str(row["dataset_key"]): dict(row) for row in archive_rows}
+    evidence_items: list[dict[str, Any]] = []
+    for key in sorted(selected_keys):
+        spec = specs.get(key)
+        item = items.get(key) or {}
+        manifest = manifests.get(key) or {}
+        watermark = watermarks.get(key) or {}
+        archive = archives.get(key) or {}
+        response_rows = int(manifest.get("response_rows") or 0)
+        watermark_required = bool(spec and spec.date_field)
+        archive_required = bool(spec and spec.retain_raw and response_rows > 0)
+        issues: list[str] = []
+        if item.get("status") != "success" or item.get("canonical_status") not in {None, "ready"}:
+            issues.append("dataset_item_not_ready")
+        if int(item.get("failed") or 0) > 0:
+            issues.append("dataset_item_failed_units")
+        if int(manifest.get("manifest_count") or 0) <= 0:
+            issues.append("ingestion_manifest_missing")
+        if int(manifest.get("failed_manifests") or 0) > 0 or int(manifest.get("rejected_rows") or 0) > 0:
+            issues.append("ingestion_manifest_failed_or_rejected")
+        if watermark_required and int(watermark.get("watermark_count") or 0) <= 0:
+            issues.append("dataset_watermark_missing")
+        if archive_required and int(archive.get("archive_count") or 0) <= 0:
+            issues.append("raw_archive_missing")
+        if int(archive.get("orphan_count") or 0) > 0:
+            issues.append("raw_archive_object_missing")
+        evidence_items.append(
+            {
+                "datasetKey": key,
+                "passed": not issues,
+                "issues": issues,
+                "status": item.get("status"),
+                "canonicalStatus": item.get("canonical_status"),
+                "manifestCount": int(manifest.get("manifest_count") or 0),
+                "responseRows": response_rows,
+                "rejectedRows": int(manifest.get("rejected_rows") or 0),
+                "watermarkRequired": watermark_required,
+                "watermarkCount": int(watermark.get("watermark_count") or 0),
+                "archiveRequired": archive_required,
+                "archiveCount": int(archive.get("archive_count") or 0),
+                "archivedRows": int(archive.get("archived_rows") or 0),
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "passed": bool(evidence_items) and all(item["passed"] for item in evidence_items),
+        "items": evidence_items,
+    }
+
+
 def run_sync(
     run_id: str,
     *,
@@ -3362,7 +3479,11 @@ def run_sync(
                 )
                 summaries[spec.key] = {"error": str(exc)}
         cancelled = _cancelled(run_id, task_id)
-        degraded = any(item.get("error") or int(item.get("failed") or 0) > 0 for item in summaries.values())
+        completion_evidence = _sync_completion_evidence(run_id, selected_keys)
+        degraded = (
+            any(item.get("error") or int(item.get("failed") or 0) > 0 for item in summaries.values())
+            or not completion_evidence["passed"]
+        )
         final_status = "cancelled" if cancelled else "partial" if degraded else "success"
         canonical_status = "cancelled" if cancelled else "partial" if degraded else "ready"
         daily_summary = summaries.get("daily") or {}
@@ -3381,6 +3502,7 @@ def run_sync(
             "status": final_status, "permissions": permissions, "audit": audit,
             "datasets": summaries, "endDate": end_date, "marketDataEndDate": market_end_date, "cancelled": cancelled,
             "mode": sync_mode, "resumeBaseMode": resume_base_mode or None,
+            "completionEvidence": completion_evidence,
         }
         with db() as connection:
             if task_id:
@@ -3718,6 +3840,7 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
     symbols = [str(row["scope_key"]) for row in rows]
     completed = 0
     failures: list[dict[str, str]] = []
+    parquet_result: dict[str, Any] | None = None
 
     def persist_progress(status: str) -> None:
         payload = {
@@ -3726,6 +3849,12 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
             "completed": completed,
             "failed": len(failures),
             "failureSamples": failures[:10],
+            "parquet": {
+                "rebuiltCount": int((parquet_result or {}).get("rebuiltCount") or 0),
+                "certifiedDatasetIds": (parquet_result or {}).get("certifiedDatasetIds") or [],
+                "reportId": ((parquet_result or {}).get("consistencyReport") or {}).get("reportId"),
+                "passed": bool(((parquet_result or {}).get("consistencyReport") or {}).get("passed")),
+            },
         }
         with db() as connection:
             connection.execute(
@@ -3779,6 +3908,39 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
         completed += 1
         if completed % 25 == 0:
             persist_progress("running")
+    try:
+        from .parquet_lake import rebuild_all_market_parquet
+
+        parquet_result = rebuild_all_market_parquet(
+            asset_class="equity",
+            market="china",
+            venue="china",
+            resolution="daily",
+            data_type="trade",
+            adjust="raw",
+            sources=["tushare"],
+            include_research_sources=False,
+            continue_on_error=False,
+            persist_report=True,
+        )
+        if not (parquet_result.get("consistencyReport") or {}).get("passed"):
+            failures.append(
+                {
+                    "symbol": "*",
+                    "stage": "parquet_consistency",
+                    "error": "Parquet/MySQL/DuckDB consistency validation did not pass.",
+                }
+            )
+        if not parquet_result.get("certifiedDatasetIds"):
+            failures.append(
+                {
+                    "symbol": "*",
+                    "stage": "source_certification",
+                    "error": "No TuShare dataset was certified after consistency validation.",
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - certification is fail-closed and retryable
+        failures.append({"symbol": "*", "stage": "parquet", "error": str(exc)[:500]})
     final_status = "ready" if not failures else "partial"
     persist_progress(final_status)
     return {
@@ -3788,6 +3950,12 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
         "completed": completed,
         "failed": len(failures),
         "failureSamples": failures[:10],
+        "parquet": {
+            "rebuiltCount": int((parquet_result or {}).get("rebuiltCount") or 0),
+            "certifiedDatasetIds": (parquet_result or {}).get("certifiedDatasetIds") or [],
+            "reportId": ((parquet_result or {}).get("consistencyReport") or {}).get("reportId"),
+            "passed": bool(((parquet_result or {}).get("consistencyReport") or {}).get("passed")),
+        },
     }
 
 

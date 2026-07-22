@@ -9,6 +9,7 @@ from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..db import db, json_dump, utc_now
 from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
 from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.docker import validate_lean_docker_image
 from ..lean_engine.ids import new_run_id
 from ..repositories.backtest_repository import get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
@@ -49,7 +50,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     parameters["initial_cash"] = parameters["cash"]
     fingerprint_parameters = dict(parameters)
     fingerprint_parameters["preflight"] = preflight
-    docker_image = request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE
+    docker_image = validate_lean_docker_image(request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE)
     parameters["dockerImage"] = docker_image
     run_id = new_run_id(parameters["ticker"], parameters["start"], parameters["end"])
     run_dir = RUNS_DIR / run_id

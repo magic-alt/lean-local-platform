@@ -4,11 +4,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import hashlib
+import hmac
 import logging
+import secrets
 import uuid
 
 from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, insights, level3plus, maintenance, object_store, observability, optimization, paper, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
-from .core.config import FRONTEND_DIST
+from .core.config import API_AUTH_REQUIRED, API_TOKEN, FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .db import DatabaseUnavailableError, init_db
 from .services.projects import consolidate_automatic_copies
@@ -36,6 +39,72 @@ app.add_middleware(
     allow_headers=["*"],
 )
 logger = logging.getLogger(__name__)
+_BROWSER_SESSION_COOKIE = "lean_local_session"
+
+
+def _browser_session_token() -> str:
+    if not API_TOKEN:
+        return ""
+    return hmac.new(
+        API_TOKEN.encode("utf-8"),
+        b"lean-local-browser-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+
+
+@app.middleware("http")
+async def api_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    is_protected = path.startswith("/api/") or path in {"/openapi.json", "/docs", "/redoc"}
+    if not is_protected:
+        response = await call_next(request)
+        if (
+            API_AUTH_REQUIRED
+            and API_TOKEN
+            and request.method == "GET"
+            and str(response.headers.get("content-type") or "").startswith("text/html")
+        ):
+            # The built frontend can be served directly by FastAPI without
+            # exposing the operator bearer token to JavaScript. SameSite=Strict
+            # keeps the derived session credential out of cross-site requests.
+            response.set_cookie(
+                _BROWSER_SESSION_COOKIE,
+                _browser_session_token(),
+                httponly=True,
+                samesite="strict",
+                secure=False,
+                path="/",
+            )
+        return response
+    if (
+        not API_AUTH_REQUIRED
+        or request.method == "OPTIONS"
+        or path.startswith("/api/health")
+        or path == "/metrics"
+    ):
+        return await call_next(request)
+    if not API_TOKEN:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "API authentication is required but LEAN_API_TOKEN is not configured.",
+                "error_code": "API_AUTH_NOT_CONFIGURED",
+            },
+        )
+    authorization = request.headers.get("Authorization", "")
+    bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    supplied = bearer or request.headers.get("X-LEAN-API-Key", "")
+    browser_session = request.cookies.get(_BROWSER_SESSION_COOKIE, "")
+    bearer_valid = bool(supplied) and secrets.compare_digest(supplied, API_TOKEN)
+    session_token = _browser_session_token()
+    session_valid = bool(browser_session and session_token) and secrets.compare_digest(browser_session, session_token)
+    if not bearer_valid and not session_valid:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Valid API credentials are required.", "error_code": "UNAUTHORIZED"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

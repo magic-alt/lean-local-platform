@@ -2315,6 +2315,7 @@ export function BacktestsPage() {
             feeModel: "default",
             slippageModel: "default",
             source: defaultBacktestSource(settings.data.defaultMarket),
+            allowResearchSource: false,
             dockerImage: settings.data.dockerImage,
             parameters: templateDefaults(selectedTemplate)
           }}
@@ -2386,6 +2387,16 @@ export function BacktestsPage() {
               ) : (
                 <Input data-testid="backtest-source-input" placeholder="optional provider source" />
               )}
+            </Form.Item>
+            <Form.Item
+              className="form-field--wide"
+              name="allowResearchSource"
+              valuePropName="checked"
+              label="Research data override"
+            >
+              <Checkbox data-testid="backtest-allow-research-source">
+                Allow explicitly selected unverified/research data for this research run
+              </Checkbox>
             </Form.Item>
           </FormGrid>
           </FormSection>

@@ -105,7 +105,8 @@ async function globalSetup() {
     LEAN_DATA_DIR: e2eLeanDataDir,
     LEAN_HOST_DATA_DIR: e2eLeanDataDir,
     LEAN_HOST_PLATFORM_DIR: repoRoot,
-    LEAN_HOST_PARQUET_DIR: path.join(e2eLeanDataDir, "parquet")
+    LEAN_HOST_PARQUET_DIR: path.join(e2eLeanDataDir, "parquet"),
+    LEAN_API_AUTH_REQUIRED: "0"
   };
   const shouldStartStack = process.env.E2E_START_STACK !== "0";
   const backendMode = process.env.E2E_BACKEND_MODE || "local";
@@ -123,7 +124,8 @@ async function globalSetup() {
     LEAN_DATA_DIR: e2eLeanDataDir,
     LEAN_HOST_DATA_DIR: e2eLeanDataDir,
     LEAN_HOST_PLATFORM_DIR: repoRoot,
-    LEAN_HOST_PARQUET_DIR: path.join(e2eLeanDataDir, "parquet")
+    LEAN_HOST_PARQUET_DIR: path.join(e2eLeanDataDir, "parquet"),
+    LEAN_API_AUTH_REQUIRED: "0"
   };
   if (shouldStartStack && backendMode === "compose") {
     const composeArgs = ["compose", "--profile", "app", "up", "-d"];

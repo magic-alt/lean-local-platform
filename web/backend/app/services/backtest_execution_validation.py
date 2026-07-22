@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from datetime import datetime, timezone
@@ -35,6 +36,32 @@ def _gate(name: str, passed: bool, **details: Any) -> dict[str, Any]:
         "severity": "ok" if passed else "critical",
         "details": details,
     }
+
+
+def _canonical_result_value(value: Any, path: tuple[str, ...] = ()) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        in_state = bool(path and path[-1].lower() == "state")
+        in_closed_trades = any(part.lower() == "closedtrades" for part in path)
+        for key in sorted(value):
+            normalized = key.lower()
+            if in_state and normalized in {"starttime", "endtime", "hostname"}:
+                continue
+            if in_closed_trades and normalized == "id":
+                continue
+            result[key] = _canonical_result_value(value[key], (*path, key))
+        return result
+    if isinstance(value, list):
+        return [_canonical_result_value(item, path) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def canonical_result_sha256(payload: dict[str, Any]) -> str:
+    canonical = _canonical_result_value(payload)
+    encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _filled_events(result_path: Path, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -146,7 +173,8 @@ def audit_backtest_execution(
     preflight_validation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        raw_payload = result_path.read_bytes()
+        payload = json.loads(raw_payload)
     except (OSError, json.JSONDecodeError) as exc:
         return {
             "schemaVersion": 1,
@@ -220,6 +248,18 @@ def audit_backtest_execution(
         "ledger": ledger,
         "completedDate": completed_date,
         "expectedDataEnd": expected_end,
+        "rawResultSha256": hashlib.sha256(raw_payload).hexdigest(),
+        "canonicalResultSha256": canonical_result_sha256(payload),
+        "tolerancePolicy": {
+            "schemaVersion": 1,
+            "numericComparison": "exact_after_json_parse",
+            "excludedFields": [
+                "state.StartTime",
+                "state.EndTime",
+                "state.Hostname",
+                "totalPerformance.closedTrades[].id",
+            ],
+        },
     }
 
 

@@ -110,6 +110,8 @@ def upsert_e2e_batch() -> None:
         "passed": True,
         "severity": "ok",
         "source": "e2e",
+        "environment": "research",
+        "synthetic": True,
         "symbols": ["510300", "000300"],
         "notes": ["Synthetic deterministic E2E daily data; not production market data."],
     }
@@ -136,7 +138,12 @@ def upsert_e2e_batch() -> None:
                 "china",
                 "equity",
                 "success",
-                json_dump({"namespace": "E2E", "symbols": ["510300", "000300"]}),
+                json_dump({
+                    "namespace": "E2E",
+                    "environment": "research",
+                    "synthetic": True,
+                    "symbols": ["510300", "000300"],
+                }),
                 json_dump(qa_report),
                 None,
                 now,

@@ -7,7 +7,15 @@ from typing import Any, Callable
 
 from redis import Redis
 
-from ..core.config import DATA_DIR, DEFAULT_DOCKER_IMAGE, GRAFANA_URL, PROMETHEUS_URL, REDIS_URL, RUNS_DIR
+from ..core.config import (
+    BACKTEST_EXECUTION_DELEGATED,
+    DATA_DIR,
+    DEFAULT_DOCKER_IMAGE,
+    GRAFANA_URL,
+    PROMETHEUS_URL,
+    REDIS_URL,
+    RUNS_DIR,
+)
 from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
@@ -97,6 +105,36 @@ def check_lean_runner() -> dict[str, Any]:
     }
 
 
+def check_backtest_worker() -> dict[str, Any]:
+    from ..tasks.celery_app import celery_app
+
+    replies = celery_app.control.inspect(timeout=1.5).ping() or {}
+    workers = sorted(str(name) for name in replies if str(name).startswith("backtest@"))
+    return {
+        "service": "backtest_worker",
+        "ok": bool(workers),
+        "detail": {"mode": "delegated", "workers": workers},
+    }
+
+
+def _delegated_runner_checks(worker: dict[str, Any]) -> list[dict[str, Any]]:
+    available = bool(worker.get("ok"))
+    detail = {
+        "mode": "delegated_to_backtest_worker",
+        "localDockerSocket": False,
+        "workers": (worker.get("detail") or {}).get("workers") or [],
+    }
+    return [
+        {"service": "docker", "ok": available, "detail": detail},
+        {
+            "service": "lean_image",
+            "ok": available,
+            "detail": {**detail, "image": DEFAULT_DOCKER_IMAGE},
+        },
+        {"service": "lean_runner", "ok": available, "detail": detail},
+    ]
+
+
 def _database_objects(connection) -> set[str]:
     if database_backend() == "mysql":
         rows = connection.execute(
@@ -156,13 +194,41 @@ def check_database() -> dict[str, Any]:
                         """
                     ).fetchone()["count"]
                 )
-        core_ok = not missing and counts.get("instruments", 0) >= 0 and counts.get("market_daily_bars", 0) >= 0
+            orphan_archives = 0
+            quarantined_archive_issues = 0
+            if "stored_objects" in tables and "provider_raw_archives" in tables:
+                orphan_archives = int(
+                    connection.execute(
+                        """
+                        select count(*) as count
+                        from provider_raw_archives a
+                        left join stored_objects o on o.id = a.object_id
+                        where o.id is null
+                        """
+                    ).fetchone()["count"]
+                    or 0
+                )
+            if "provider_raw_archive_issues" in tables:
+                quarantined_archive_issues = int(
+                    connection.execute(
+                        "select count(*) as count from provider_raw_archive_issues"
+                    ).fetchone()["count"]
+                    or 0
+                )
+        core_ok = (
+            not missing
+            and counts.get("instruments", 0) >= 0
+            and counts.get("market_daily_bars", 0) >= 0
+            and orphan_archives == 0
+        )
         ok = bool(core_ok)
         detail = {
             **descriptor,
             "missingTables": missing,
             "counts": counts,
             "csi300MembershipRows": csi300_count,
+            "orphanProviderRawArchives": orphan_archives,
+            "quarantinedProviderRawArchiveIssues": quarantined_archive_issues,
         }
         return {"service": "database", "ok": ok, "detail": detail}
     except Exception as exc:
@@ -182,13 +248,30 @@ def dependency_health() -> dict[str, Any]:
         _timed("database", check_database),
         _timed("redis", check_redis),
         _timed("clickhouse", market_data.ping),
-        _timed("docker", check_docker),
-        _timed("lean_image", check_lean_image),
-        _timed("lean_data_dir", check_data_dir),
-        _timed("results_dir_writable", check_results_dir),
-        _timed("lean_runner", check_lean_runner),
     ]
-    critical = [item for item in checks if item["service"] in {"database", "redis", "docker", "lean_data_dir", "results_dir_writable", "lean_runner"}]
+    if BACKTEST_EXECUTION_DELEGATED:
+        worker = _timed("backtest_worker", check_backtest_worker)
+        checks.extend([worker, *_delegated_runner_checks(worker)])
+    else:
+        checks.extend(
+            [
+                _timed("docker", check_docker),
+                _timed("lean_image", check_lean_image),
+                _timed("lean_runner", check_lean_runner),
+            ]
+        )
+    checks.extend(
+        [
+            _timed("lean_data_dir", check_data_dir),
+            _timed("results_dir_writable", check_results_dir),
+        ]
+    )
+    critical = [
+        item
+        for item in checks
+        if item["service"]
+        in {"database", "redis", "docker", "backtest_worker", "lean_data_dir", "results_dir_writable", "lean_runner"}
+    ]
     status = "ok" if all(item["ok"] for item in critical) else "degraded"
     return {
         "status": status,

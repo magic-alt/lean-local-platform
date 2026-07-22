@@ -8,7 +8,7 @@ Tasks 展示 Celery 生命周期和日志；Monitoring 展示依赖健康、指�
 docker compose ps
 docker compose logs --tail=200 mysql redis api worker data-worker backtest-worker beat
 curl http://127.0.0.1:8000/api/health/dependencies
-web/backend/.venv/bin/python scripts/db_migrate.py status
+web/backend/.venv/bin/python scripts/db_migrate.py --status
 ```
 
 先确定问题属于浏览器、API、数据库、队列、worker、Docker 还是 Provider，不要同时重启所有组件而丢失证据。
@@ -56,7 +56,7 @@ docker compose logs --tail=200 mysql
 出现 `Unknown column 'heartbeat_at'` 等错误说明代码和数据库 migration 不一致：
 
 ```bash
-web/backend/.venv/bin/python scripts/db_migrate.py status --json
+web/backend/.venv/bin/python scripts/db_migrate.py --status --json
 ```
 
 先完成迁移再重启 API、worker 和 beat。不要手工随意增加列而绕过 migration 记录。

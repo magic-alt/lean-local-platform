@@ -62,9 +62,12 @@ def _latest_archive(dataset: str) -> tuple[list[dict[str, Any]], str | None]:
     with db() as connection:
         archive = connection.execute(
             """
-            select object_id, created_at from provider_raw_archives
-            where provider='tushare' and dataset_key=?
-            order by created_at desc limit 1
+            select a.object_id, a.created_at
+            from provider_raw_archives a
+            join stored_objects o on o.id = a.object_id
+            where a.provider='tushare' and a.dataset_key=?
+              and exists (select 1 from stored_object_chunks c where c.object_id = o.id)
+            order by a.created_at desc limit 1
             """,
             (dataset,),
         ).fetchone()
@@ -145,8 +148,13 @@ def _sql_preview(
         order_by = "trade_date desc"
         clauses.append("adjust='raw'")
         if keyword:
-            clauses.append("symbol like ?")
-            values.append(f"%{keyword.split('.')[0]}%")
+            normalized = keyword.split(".")[0].upper()
+            if normalized.isdigit() and len(normalized) == 6:
+                clauses.append("symbol = ?")
+                values.append(normalized)
+            else:
+                clauses.append("symbol like ?")
+                values.append(f"%{normalized}%")
     elif dataset == "adj_factor":
         table = "adjustment_factors"
         select = "symbol,trade_date,adj_factor,source"

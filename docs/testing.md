@@ -1,6 +1,8 @@
 # Testing
 
-Tests live under `web/backend/tests`. The frontend currently relies on TypeScript build verification.
+Backend tests live under `web/backend/tests`; browser E2E lives under
+`tests/e2e`. Unit tests default to isolated SQLite and therefore do not count as
+production-MySQL or real-LEAN acceptance evidence.
 
 ## Unit Tests
 
@@ -44,6 +46,17 @@ npm run build
 ```
 
 This runs `tsc -b` and Vite build.
+
+Focused and full browser suites run against an isolated MySQL/Redis/ClickHouse
+stack. Synthetic A-share fixtures are explicitly tagged `environment=research`
+and `synthetic=true`; they require `allowResearchSource=true` and can never be
+reported as production certification evidence.
+
+```bash
+cd web/frontend
+npm run test:e2e:smoke
+npm run test:e2e
+```
 
 Validate the in-app documentation sources, links, screenshots and generated API endpoint inventory with:
 
@@ -146,3 +159,6 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 - No formal benchmark golden files for all templates yet.
 - No full exchange-grade A-share matching acceptance test yet.
 - No resource-pressure/OOM recovery test representative of the complete Docker Desktop stack yet.
+- No accepted production-like five-job concurrency/cancellation/fault matrix yet.
+- No accepted real 21-trading-day LEAN Paper walk-forward acceptance yet.
+- The production CSI300 manifest cannot validate without the operator-retained official attachment bundle.

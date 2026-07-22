@@ -161,6 +161,7 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
             "resolution": "daily",
             "dataType": "trade",
             "providerSource": "akshare",
+            "allowResearchSource": True,
         },
     )
 
@@ -227,7 +228,8 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
 
     from app.main import app
 
-    response = TestClient(app).get(
+    client = TestClient(app)
+    blocked = client.get(
         "/api/data/query",
         params={
             "source": "database",
@@ -238,6 +240,22 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
             "startDate": "2026-06-01",
             "endDate": "2026-06-30",
             "providerSource": "auto",
+        },
+    )
+    assert blocked.status_code == 400
+
+    response = client.get(
+        "/api/data/query",
+        params={
+            "source": "database",
+            "assetClass": "equity",
+            "symbol": "SH600519",
+            "market": "china",
+            "venue": "china",
+            "startDate": "2026-06-01",
+            "endDate": "2026-06-30",
+            "providerSource": "auto",
+            "allowResearchSource": True,
         },
     )
 

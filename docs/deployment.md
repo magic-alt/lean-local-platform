@@ -2,7 +2,22 @@
 
 This project is designed for local or single-host deployment first. Distributed scheduling and broker connectivity are later-stage work.
 
-Last reviewed: 2026-07-21.
+Last reviewed: 2026-07-22.
+
+## Local API authentication
+
+The supported launcher creates a 256-bit bearer token in
+`web/runtime/secrets/api_token` with mode `0600`. The Vite development proxy
+adds the token to API requests; the token is never returned by an API or
+exposed to frontend JavaScript or local storage. When the production frontend
+is served directly by FastAPI, the HTML response establishes a derived,
+HttpOnly, SameSite=Strict browser session cookie. Direct API clients must send
+`Authorization: Bearer <token>` (or `X-LEAN-API-Key`). `/api/health` and
+`/metrics` remain unauthenticated for local health checks and Prometheus.
+
+`LEAN_API_AUTH_REQUIRED=1` is the production default. If authentication is
+enabled but `LEAN_API_TOKEN` is empty, business APIs fail closed with HTTP 503.
+Only isolated pytest runs should set `LEAN_API_AUTH_REQUIRED=0`.
 
 ## Local Development
 
@@ -93,6 +108,8 @@ LEAN_HOST_DATA_DIR
 LEAN_HOST_PLATFORM_DIR
 LEAN_PARQUET_DIR
 LEAN_DOCKER_IMAGE
+LEAN_API_AUTH_REQUIRED
+LEAN_API_TOKEN
 BACKTEST_JOB_TIMEOUT_SECONDS
 BACKTEST_MAX_CONCURRENT_JOBS
 LEAN_DB_OBJECT_STORE_ENABLED
@@ -108,6 +125,15 @@ TUSHARE_TOKEN
 password and grants that account only the privileges required for rebuildable
 market-data batches. Bulk sessions disable their own binlog; API, projects,
 backtests and paper-trading metadata continue using the normal database user.
+The same launcher creates and reuses the local API token; deleting the token
+file intentionally rotates it at the next clean start.
+
+LEAN and Research images must be referenced by immutable SHA-256 digest and
+must appear in `LEAN_ALLOWED_DOCKER_IMAGES` or
+`LEAN_ALLOWED_RESEARCH_IMAGES`. Backtest containers use no network, a
+read-only root, dropped capabilities and per-run storage. Research containers
+bind Jupyter only to `127.0.0.1`, drop capabilities, apply CPU/memory/PID
+limits, and do not mount the shared object store or a host gateway alias.
 
 High-throughput TuShare synchronization can be tuned with
 `LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
@@ -177,13 +203,20 @@ DuckDB is used only as a query engine over Parquet exports under `LEAN_PARQUET_D
 
 ## Docker Socket
 
-The `api` and `worker` services mount:
+Only the dedicated `backtest-worker` mounts:
 
 ```text
 /var/run/docker.sock:/var/run/docker.sock
 ```
 
-This lets the worker start sibling LEAN containers. Treat this as privileged access. Do not expose this deployment on an untrusted network.
+The API, default worker and data workers do not receive the Docker socket. The
+backtest worker remains privileged infrastructure and must stay loopback-only.
+The API dependency endpoint verifies the dedicated Celery backtest worker and
+reports Docker/LEAN execution as delegated; it does not require local Docker
+access inside the API container.
+Every LEAN child uses a digest allowlist, a per-run writable object directory,
+`network=none`, a read-only root filesystem, dropped capabilities, no-new-privileges,
+and bounded CPU, memory and PID settings.
 
 ## Data Directories
 
@@ -214,7 +247,7 @@ In Docker Compose, `LEAN_HOST_DATA_DIR` must point to the host path that Docker 
 Recommended logical backup:
 
 ```bash
-docker exec lean-platform-mysql-1 mysqldump -ulean -plean lean_market > lean_market.sql
+./scripts/backup_mysql.sh
 ```
 
 Restore:

@@ -152,6 +152,7 @@ class P0IntegrationAlgorithm(QCAlgorithm):
         output_callback=output_lines.append,
         algorithm_path=project_dir / "main.py",
         algorithm_class="P0IntegrationAlgorithm",
+        language="Python",
         project_dir=project_dir,
     )
 

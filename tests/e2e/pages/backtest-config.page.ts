@@ -19,6 +19,7 @@ export interface BacktestFormValues {
   slippageModel?: string;
   source?: string;
   sourceLabel?: string;
+  allowResearchSource?: boolean;
   fast?: number;
   slow?: number;
 }
@@ -54,6 +55,9 @@ export class BacktestConfigPage extends BasePage {
       } else {
         await this.fillByLabel("Data Source", values.source);
       }
+    }
+    if (values.allowResearchSource) {
+      await this.page.getByTestId("backtest-allow-research-source").check();
     }
     if (values.fast !== undefined) {
       const fast = this.page.getByLabel(/fast/i);

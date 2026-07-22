@@ -50,6 +50,10 @@ body {
   display: inline-flex;
 }
 
+.app-mobile-menu-button {
+  display: none;
+}
+
 .app-content {
   padding: 14px 16px;
 }
@@ -1012,6 +1016,14 @@ body {
 }
 
 @media (max-width: 980px) {
+  .app-sidebar {
+    display: none !important;
+  }
+
+  .app-mobile-menu-button {
+    display: inline-flex;
+  }
+
   .grid {
     grid-template-columns: repeat(2, minmax(150px, 1fr));
   }

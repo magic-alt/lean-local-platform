@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from ..core.config import PARQUET_COMPRESSION, PARQUET_DIR
 from ..db import db, json_dump, rows_to_dicts, utc_now
 from ..lean_engine.symbols import normalize_symbol
-from .source_gate import PRODUCTION_SOURCES, require_source_allowed, source_certification
+from .source_gate import PRIMARY_DATA_SOURCE, PRODUCTION_SOURCES, require_source_allowed, resolve_source_context
 
 try:  # pragma: no cover - exercised when dependency is installed.
     import duckdb
@@ -251,6 +252,144 @@ def _market_row_count(scope: dict[str, str], start_date: str | None = None, end_
     return {"rowCount": row["row_count"] if row else 0, "firstDate": row["first_date"] if row else None, "lastDate": row["last_date"] if row else None}
 
 
+def _market_source_lineage(
+    scope: dict[str, str],
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    if scope["source"] != PRIMARY_DATA_SOURCE or scope["asset_class"] != "equity":
+        return {"required": False, "passed": True, "batchCount": 0, "invalidBatches": []}
+    predicates = [
+        "m.asset_class = ?", "m.market = ?", "m.venue = ?", "m.resolution = ?",
+        "m.data_type = ?", "m.adjust = ?", "m.source = ?",
+    ]
+    params: list[Any] = [
+        scope["asset_class"], scope["market"], scope["venue"], scope["resolution"],
+        scope["data_type"], scope["adjust"], scope["source"],
+    ]
+    if start_date:
+        predicates.append("m.trade_date >= ?")
+        params.append(start_date)
+    if end_date:
+        predicates.append("m.trade_date <= ?")
+        params.append(end_date)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select m.batch_id, m.symbol, b.provider, b.status, b.config_json, b.qa_report_json,
+                   count(*) as row_count
+            from market_daily_bars m
+            left join data_import_batches b on b.id = m.batch_id
+            where {" and ".join(predicates)}
+            group by m.batch_id, m.symbol, b.provider, b.status, b.config_json, b.qa_report_json
+            order by m.batch_id, m.symbol
+            """,
+            params,
+        ).fetchall()
+    parsed_rows: list[tuple[Any, dict[str, Any], dict[str, Any]]] = []
+    sync_run_ids: set[str] = set()
+    for row in rows:
+        try:
+            qa_report = json.loads(row["qa_report_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            qa_report = {}
+        try:
+            batch_config = json.loads(row["config_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            batch_config = {}
+        parsed_rows.append((row, qa_report, batch_config))
+        provenance = batch_config.get("provenance") or {}
+        sync_run_id = str(provenance.get("syncRunId") or "")
+        if sync_run_id:
+            sync_run_ids.add(sync_run_id)
+
+    manifest_evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    archive_evidence: set[str] = set()
+    if sync_run_ids:
+        placeholders = ",".join("?" for _ in sync_run_ids)
+        with db() as connection:
+            manifest_rows = connection.execute(
+                f"""
+                select run_id, scope_key, status, response_rows, rejected_rows
+                from provider_ingestion_manifests
+                where provider=? and dataset_key='daily' and run_id in ({placeholders})
+                """,
+                [PRIMARY_DATA_SOURCE, *sorted(sync_run_ids)],
+            ).fetchall()
+            archive_rows = connection.execute(
+                f"""
+                select distinct a.run_id
+                from provider_raw_archives a
+                join stored_objects o on o.id=a.object_id
+                where a.provider=? and a.dataset_key='daily' and a.run_id in ({placeholders})
+                  and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                """,
+                [PRIMARY_DATA_SOURCE, *sorted(sync_run_ids)],
+            ).fetchall()
+        manifest_evidence = {
+            (str(item["run_id"]), str(item["scope_key"])): dict(item)
+            for item in manifest_rows
+        }
+        archive_evidence = {str(item["run_id"]) for item in archive_rows}
+
+    invalid: list[dict[str, Any]] = []
+    for row, qa_report, batch_config in parsed_rows:
+        provenance = batch_config.get("provenance") or {}
+        sync_run_id = str(provenance.get("syncRunId") or "")
+        symbol = str(row["symbol"] or "")
+        manifest = manifest_evidence.get((sync_run_id, symbol)) or {}
+        declared_environment = str(
+            provenance.get("environment")
+            or batch_config.get("environment")
+            or qa_report.get("environment")
+            or "research"
+        ).strip().lower()
+        synthetic = bool(
+            provenance.get("synthetic")
+            or batch_config.get("synthetic")
+            or qa_report.get("synthetic")
+        )
+        evidence_valid = bool(
+            sync_run_id
+            and provenance.get("providerEvidence") == "ingestion_manifest_and_raw_archive"
+            and provenance.get("datasetKey") == "daily"
+            and str(provenance.get("scopeKey") or "") == symbol
+            and str(manifest.get("status") or "").lower() == "success"
+            and int(manifest.get("response_rows") or 0) > 0
+            and int(manifest.get("rejected_rows") or 0) == 0
+            and sync_run_id in archive_evidence
+        )
+        valid = bool(
+            row["batch_id"]
+            and str(row["provider"] or "").lower() == PRIMARY_DATA_SOURCE
+            and str(row["status"] or "").lower() == "success"
+            and qa_report.get("passed") is True
+            and declared_environment == "production"
+            and not synthetic
+            and evidence_valid
+        )
+        if not valid:
+            invalid.append(
+                {
+                    "batchId": row["batch_id"],
+                    "provider": row["provider"],
+                    "status": row["status"],
+                    "qaPassed": qa_report.get("passed"),
+                    "environment": declared_environment,
+                    "synthetic": synthetic,
+                    "syncRunId": sync_run_id or None,
+                    "providerEvidenceValid": evidence_valid,
+                    "rowCount": row["row_count"],
+                }
+            )
+    return {
+        "required": True,
+        "passed": bool(rows) and not invalid,
+        "batchCount": len(rows),
+        "invalidBatches": invalid[:100],
+    }
+
+
 def _available_scopes(
     *,
     asset_class: str | None = None,
@@ -335,12 +474,18 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
     first_date = min((str(row["trade_date"]) for row in rows), default=None)
     last_date = max((str(row["trade_date"]) for row in rows), default=None)
     root_path = _logical_parquet_path(root)
-    certification = source_certification(
-        scope["source"],
-        asset_class=scope["asset_class"],
-        market=scope["market"],
-        venue=scope["venue"],
-    )
+    file_manifest = [
+        {
+            "path": _logical_parquet_path(item["path"]),
+            "rowCount": item["row_count"],
+            "sha256": item["sha256"],
+        }
+        for item in files
+    ]
+    manifest_sha256 = hashlib.sha256(
+        json_dump(file_manifest).encode("utf-8")
+    ).hexdigest()
+    dataset_version = f"{scope['source']}-{dataset_id[:12]}-{manifest_sha256[:12]}"
     with db() as connection:
         connection.execute(
             """
@@ -394,16 +539,16 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 last_date,
                 len(rows),
                 len(files),
-                certification.get("datasetVersion") or key,
-                certification.get("environment"),
-                1 if certification.get("isProduction") else 0,
-                1 if certification.get("isCertified") else 0,
-                certification.get("certifiedAt"),
-                certification.get("certifiedBy"),
+                dataset_version,
+                "research",
+                0,
+                0,
+                None,
+                None,
                 first_date,
                 last_date,
-                certification.get("qaStatus"),
-                certification.get("qaReportId"),
+                "pending",
+                None,
                 json_dump(metadata),
                 now,
                 now,
@@ -603,6 +748,7 @@ def parquet_consistency_report(
             if item["visible_path"].exists() and _sha256(item["visible_path"]) != item["sha256"]
         ]
         mysql_counts = _market_row_count(scope, dataset.get("start_date"), dataset.get("end_date"))
+        source_lineage = _market_source_lineage(scope, dataset.get("start_date"), dataset.get("end_date"))
         duckdb_counts = {"enabled": duckdb is not None, "rowCount": None, "firstDate": None, "lastDate": None, "error": None}
         if duckdb is not None and files and not missing_files:
             paths = ", ".join(_sql_string(str(item["visible_path"])) for item in resolved_files)
@@ -627,6 +773,8 @@ def parquet_consistency_report(
             issues.append("duckdb_dataset_row_count_mismatch")
         if duckdb_counts["error"]:
             issues.append("duckdb_query_failed")
+        if not source_lineage["passed"]:
+            issues.append("provider_lineage_missing_or_unverified")
         severity = "critical" if any(issue in issues for issue in {"missing_parquet_files", "parquet_sha256_mismatch", "mysql_dataset_row_count_mismatch", "duckdb_dataset_row_count_mismatch"}) else ("warning" if issues or duckdb is None else "ok")
         items.append(
             {
@@ -638,6 +786,7 @@ def parquet_consistency_report(
                 "datasetRows": dataset["row_count"],
                 "datasetFiles": dataset["file_count"],
                 "mysql": mysql_counts,
+                "sourceLineage": source_lineage,
                 "duckdb": duckdb_counts,
                 "missingFiles": missing_files,
                 "hashMismatches": hash_mismatches,
@@ -669,6 +818,48 @@ def parquet_consistency_report(
     if persist:
         report["reportId"] = _persist_consistency_report(report)
     return report
+
+
+def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]:
+    """Promote only immutable, non-empty TuShare datasets proven by a persisted QA report."""
+    report_id = report.get("reportId")
+    if not report_id or not report.get("passed"):
+        return []
+
+    certified_at = utc_now()
+    certified_ids: list[str] = []
+    with db() as connection:
+        for item in report.get("items") or []:
+            if (
+                not item.get("passed")
+                or int(item.get("datasetRows") or 0) <= 0
+                or not (item.get("sourceLineage") or {}).get("passed")
+            ):
+                continue
+            dataset_id = str(item.get("datasetId") or "")
+            dataset = connection.execute(
+                "select source from parquet_datasets where id = ?",
+                (dataset_id,),
+            ).fetchone()
+            if not dataset or str(dataset["source"]).lower() != PRIMARY_DATA_SOURCE:
+                continue
+            connection.execute(
+                """
+                update parquet_datasets
+                set environment = 'production',
+                    is_production = 1,
+                    is_certified = 1,
+                    certified_at = ?,
+                    certified_by = 'parquet-consistency-v1',
+                    qa_status = 'ok',
+                    qa_report_id = ?,
+                    updated_at = ?
+                where id = ? and source = ?
+                """,
+                (certified_at, report_id, certified_at, dataset_id, PRIMARY_DATA_SOURCE),
+            )
+            certified_ids.append(dataset_id)
+    return certified_ids
 
 
 def rebuild_all_market_parquet(
@@ -705,6 +896,7 @@ def rebuild_all_market_parquet(
             errors.append({"scope": scope, "error": str(exc)})
             if not continue_on_error:
                 raise
+    scope_sources = sorted({scope["source"] for scope in scopes})
     consistency = parquet_consistency_report(
         asset_class=asset_class,
         market=market,
@@ -712,10 +904,11 @@ def rebuild_all_market_parquet(
         resolution=resolution,
         data_type=data_type,
         adjust=adjust,
-        sources=sources,
+        sources=sources or scope_sources,
         include_research_sources=include_research_sources,
         persist=persist_report,
     )
+    certified_ids = _certify_consistent_production_datasets(consistency)
     return {
         "scopeCount": len(scopes),
         "rebuiltCount": len(rebuilt),
@@ -723,6 +916,7 @@ def rebuild_all_market_parquet(
         "rebuilt": rebuilt,
         "errors": errors,
         "consistencyReport": consistency,
+        "certifiedDatasetIds": certified_ids,
     }
 
 
@@ -773,10 +967,19 @@ def query_duckdb_bars(
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 500,
+    allow_research_source: bool = False,
 ) -> dict[str, Any]:
     if duckdb is None:
         return {"enabled": False, "source": "duckdb", "items": [], "count": 0, "error": "duckdb is not installed"}
-    provider_source = require_source_allowed(provider_source, allow_research_source=False)
+    source_context = resolve_source_context(
+        {},
+        source=provider_source,
+        allow_research_source=allow_research_source,
+        asset_class=asset_class,
+        market=market or venue or "china",
+        venue=venue or market,
+    )
+    provider_source = str(source_context["source"])
     scope = _normalize_scope(asset_class, market or venue or "china", venue, resolution, data_type, adjust, provider_source)
     dataset, files = _dataset_files(scope)
     if not dataset or not files:

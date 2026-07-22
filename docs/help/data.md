@@ -59,6 +59,16 @@ MySQL 是行情、参考数据、同步状态和质量记录的事实来源。LE
 7. 保存 manifest、请求/载荷哈希、计数、质量报告和水位。
 8. 需要时比较 MySQL、Parquet 或另一来源的行数与日期范围。
 
+生产查询不会因为 provider 名称为 `tushare` 就自动信任数据。每次 canonical
+写入都会撤销该范围的旧认证；只有批次来源、QA、MySQL/Parquet/DuckDB 行数和
+文件哈希全部通过，才会生成新的 production certification。AKShare、Baostock、
+AData、合成 fixture 等只能在显式 `allowResearchSource=true` 时用于研究。
+
+安装 2026-07-22 fail-closed migration 后，旧认证保持撤销，直到管理员执行受控的
+`full_rebuild` 同步。普通增量 no-op 不能反向证明旧 import batch；production
+回测和 Paper 会继续阻断，直至全量同步、raw archive、派生层 materialization 和
+一致性报告全部成功。
+
 规范化表已经无损保存的数据不会再次逐行序列化完整 JSON。`provider_raw_records` 只保留键、日期和哈希索引；不能无损规范化的响应按批 gzip 压缩并内容寻址归档。
 
 ## 按需下载

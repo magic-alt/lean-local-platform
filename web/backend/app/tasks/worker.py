@@ -383,7 +383,13 @@ def sync_all_data_task(task_id: str, run_id: str):
     try:
         result = data_sync.run_sync(run_id, task_id=task_id)
         run_status = str(result.get("status") or ("cancelled" if result.get("cancelled") else "success"))
-        status = "cancelled" if run_status == "cancelled" else "success"
+        status = (
+            "cancelled"
+            if run_status == "cancelled"
+            else "success"
+            if run_status == "success"
+            else "failed"
+        )
         error = "One or more datasets require retry." if run_status == "partial" else None
         update_task(task_id, status=status, artifacts_json=[], error=error, finished_at=utc_now())
         append_log(task_id, f"Data synchronization finished: {run_status}.")
@@ -565,7 +571,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
     lean_cache: dict[str, Any] = {}
     strategy_path = Path(project["project_path"]) / project["main_file"]
 
-    def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> None:
+    def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> dict[str, Any]:
         fingerprint = build_run_fingerprint(
             run_id=run_id,
             parameters=parameters,
@@ -577,6 +583,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
         validation = build_backtest_validation(parameters, fingerprint)
         if execution_validation is not None:
             validation = merge_execution_validation(validation, execution_validation)
+            fingerprint["rawResultSha256"] = execution_validation.get("rawResultSha256")
+            fingerprint["canonicalResultSha256"] = execution_validation.get("canonicalResultSha256")
+            fingerprint["resultTolerancePolicy"] = execution_validation.get("tolerancePolicy")
         experiment = build_experiment_record(
             run_id=run_id,
             parameters=parameters,
@@ -598,6 +607,7 @@ def run_backtest_task(self, task_id: str, run_id: str):
             validation=validation,
             experiment=experiment,
         )
+        return validation
 
     try:
         runner = LeanRunner(timeout_seconds=timeout_seconds)
@@ -653,7 +663,14 @@ def run_backtest_task(self, task_id: str, run_id: str):
             parameters["start"],
             parameters["end"],
         )
-        update_fingerprint()
+        pre_execution_validation = update_fingerprint()
+        if not pre_execution_validation.get("passed"):
+            failed_gates = ",".join(
+                str(gate.get("name"))
+                for gate in pre_execution_validation.get("gates") or []
+                if not gate.get("passed")
+            )
+            raise LeanPlatformError(f"pre_execution_gate_failed:{failed_gates or 'unknown'}")
         project_path = Path(project["project_path"])
         output = runner.run_backtest(
             run_id,

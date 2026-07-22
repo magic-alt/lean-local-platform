@@ -1,7 +1,11 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+
+os.environ.setdefault("LEAN_API_AUTH_REQUIRED", "0")
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]

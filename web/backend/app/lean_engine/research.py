@@ -9,8 +9,32 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..core.config import DEFAULT_RESEARCH_IMAGE, HOST_DATA_DIR, HOST_PARQUET_DIR, HOST_PLATFORM_DIR, OBJECT_STORE_DIR, PLATFORM_DIR, REPO_ROOT
+from ..core.config import (
+    ALLOWED_RESEARCH_DOCKER_IMAGES,
+    DEFAULT_RESEARCH_IMAGE,
+    HOST_DATA_DIR,
+    HOST_PARQUET_DIR,
+    HOST_PLATFORM_DIR,
+    PLATFORM_DIR,
+    REPO_ROOT,
+    RESEARCH_DOCKER_CPUS,
+    RESEARCH_DOCKER_MEMORY,
+    RESEARCH_DOCKER_PIDS_LIMIT,
+)
 from .errors import LeanPlatformError
+
+
+def validate_research_docker_image(image: str) -> str:
+    normalized = str(image or "").strip()
+    if normalized not in ALLOWED_RESEARCH_DOCKER_IMAGES:
+        raise LeanPlatformError(
+            "research_image_not_allowed: Select a digest-pinned image from the operator allowlist."
+        )
+    if "@sha256:" not in normalized:
+        raise LeanPlatformError(
+            "research_image_not_pinned: Research images must use an immutable sha256 digest."
+        )
+    return normalized
 
 def run_detached_research(
     session_id: str,
@@ -22,6 +46,7 @@ def run_detached_research(
     docker = shutil.which("docker")
     if not docker:
         raise LeanPlatformError("docker command not found.")
+    image = validate_research_docker_image(image)
     token = secrets.token_urlsafe(24)
     def host_platform_path(path: Path) -> Path:
         try:
@@ -30,28 +55,32 @@ def run_detached_research(
             return path.resolve()
 
     host_project_dir = host_platform_path(project_dir)
-    host_object_store = host_platform_path(OBJECT_STORE_DIR)
     command = [
         docker,
         "run",
         "-d",
         "--name",
         f"lean-research-{session_id}"[:60],
+        "--cpus",
+        RESEARCH_DOCKER_CPUS,
+        "--memory",
+        RESEARCH_DOCKER_MEMORY,
+        "--pids-limit",
+        str(RESEARCH_DOCKER_PIDS_LIMIT),
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
         "-p",
-        f"{port}:8888",
+        f"127.0.0.1:{port}:8888",
         "-e",
         f"JUPYTER_TOKEN={token}",
-        "-v",
-        "--add-host",
-        "host.docker.internal:host-gateway",
         "-v",
         f"{HOST_DATA_DIR}:/Lean/Data:ro",
         "-v",
         f"{HOST_PARQUET_DIR}:/Lean/Parquet:ro",
         "-v",
         f"{host_project_dir}:/Lean/Project",
-        "-v",
-        f"{host_object_store}:/Lean/Launcher/bin/Debug/storage",
         image,
     ]
     output_callback("running: " + " ".join("JUPYTER_TOKEN=<redacted>" if value.startswith("JUPYTER_TOKEN=") else value for value in command))

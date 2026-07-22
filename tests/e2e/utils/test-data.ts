@@ -39,6 +39,7 @@ export const BACKTEST_CASES = {
     benchmarkSymbol: "000300",
     source: "tushare",
     sourceLabel: "TuShare Pro",
+    allowResearchSource: true,
     fast: 20,
     slow: 50
   },

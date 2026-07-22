@@ -77,6 +77,7 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
         venue="china",
         provider_source="akshare",
         start_date="2026-01-01",
+        allow_research_source=True,
     )
 
     assert result["enabled"] is True
@@ -85,7 +86,11 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     assert result["items"][0]["timestamp"] == "2026-01-02"
     assert result["items"][0]["close"] == 101.0
 
-    consistency = parquet_lake.parquet_consistency_report(sources=["akshare"], persist=False)
+    consistency = parquet_lake.parquet_consistency_report(
+        sources=["akshare"],
+        include_research_sources=True,
+        persist=False,
+    )
     assert consistency["severity"] == "ok"
     assert consistency["datasetCount"] == 1
     assert consistency["items"][0]["mysql"]["rowCount"] == 2
@@ -132,7 +137,11 @@ def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_rep
                 ),
             )
 
-    result = parquet_lake.rebuild_all_market_parquet(asset_class="equity", market="china")
+    result = parquet_lake.rebuild_all_market_parquet(
+        asset_class="equity",
+        market="china",
+        include_research_sources=True,
+    )
 
     assert result["scopeCount"] == 2
     assert result["rebuiltCount"] == 2
@@ -148,6 +157,170 @@ def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_rep
     )
     assert research_result["scopeCount"] == 2
     assert saved[0]["severity"] == "ok"
+
+
+def test_rebuild_certifies_only_consistent_tushare_dataset(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    pytest.importorskip("duckdb")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+    from app.services.db_object_store import put_bytes
+    from app.services.source_gate import source_certification
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+    stored = put_bytes("provider-raw", "daily/evidence.json.gz", b"provider-evidence")
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into data_import_batches
+                (id, provider, market, asset_class, status, config_json, qa_report_json,
+                 started_at, finished_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "batch-tushare", "tushare", "china", "equity", "success",
+                '''{"environment":"research","synthetic":false,"provenance":{"environment":"production","syncRunId":"sync-tushare","datasetKey":"daily","scopeKey":"600519","providerEvidence":"ingestion_manifest_and_raw_archive"}}''',
+                '{"passed":true,"severity":"ok"}', "now", "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into provider_ingestion_manifests
+                (id,run_id,provider,dataset_key,scope_key,request_json,response_rows,
+                 normalized_rows,rejected_rows,payload_sha256,keys_sha256,coverage_start,
+                 coverage_end,status,validation_json,endpoint_counts_json,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "manifest-tushare", "sync-tushare", "tushare", "daily", "600519", "{}",
+                1, 1, 0, "payload", "keys", "2026-07-03", "2026-07-03", "success",
+                '{"status":"passed"}', '{"daily":1}', "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into provider_raw_archives
+                (id,provider,dataset_key,run_id,object_id,row_count,payload_sha256,
+                 archive_sha256,uncompressed_size,compressed_size,compression,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "archive-tushare", "tushare", "daily", "sync-tushare", stored["id"], 1,
+                "payload", "archive", 17, 17, "gzip", "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                 data_type, open, high, low, close, volume, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-600519-tushare", "600519", "equity", "china", "china",
+                "2026-07-03", "daily", "trade", 100.0, 102.0, 99.0, 101.0,
+                10000, "raw", "tushare", "batch-tushare", "now",
+            ),
+        )
+
+    before = parquet_lake.export_market_daily_bars(source="tushare")
+    assert before["rowCount"] == 1
+    assert source_certification("tushare")["isCertified"] is False
+
+    rebuilt = parquet_lake.rebuild_all_market_parquet(
+        asset_class="equity",
+        market="china",
+        sources=["tushare"],
+    )
+
+    assert rebuilt["consistencyReport"]["passed"] is True
+    assert rebuilt["certifiedDatasetIds"] == [before["id"]]
+    certification = source_certification("tushare")
+    assert certification["isProduction"] is True
+    assert certification["isCertified"] is True
+    assert certification["qaStatus"] == "ok"
+    assert certification["qaReportId"] == rebuilt["consistencyReport"]["reportId"]
+    assert certification["fileManifestSha256"]
+
+    from app.services.market_repository import upsert_market_daily_bars
+
+    upsert_market_daily_bars(
+        [
+            {
+                "symbol": "600519",
+                "trade_date": "2026-07-06",
+                "open": 101,
+                "high": 103,
+                "low": 100,
+                "close": 102,
+                "volume": 11000,
+            }
+        ],
+        symbol="600519",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        source="tushare",
+        batch_id="batch-tushare",
+    )
+    assert source_certification("tushare")["isCertified"] is False
+    assert source_certification("tushare")["qaStatus"] == "stale"
+
+
+def test_rebuild_never_certifies_synthetic_tushare_fixture(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    pytest.importorskip("duckdb")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+    from app.services.source_gate import source_certification
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into data_import_batches
+                (id, provider, market, asset_class, status, config_json, qa_report_json,
+                 started_at, finished_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "batch-synthetic", "tushare", "china", "equity", "success",
+                '{"environment":"research","synthetic":true}',
+                '{"passed":true,"severity":"ok","environment":"research","synthetic":true}',
+                "now", "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                 data_type, open, high, low, close, volume, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-e2e", "510300", "equity", "china", "china", "2024-01-02",
+                "daily", "trade", 3.8, 3.9, 3.7, 3.85, 10000, "raw", "tushare",
+                "batch-synthetic", "now",
+            ),
+        )
+
+    rebuilt = parquet_lake.rebuild_all_market_parquet(
+        asset_class="equity",
+        market="china",
+        sources=["tushare"],
+    )
+
+    assert rebuilt["consistencyReport"]["passed"] is False
+    assert rebuilt["certifiedDatasetIds"] == []
+    assert source_certification("tushare")["isCertified"] is False
+    lineage = rebuilt["consistencyReport"]["items"][0]["sourceLineage"]
+    assert lineage["invalidBatches"][0]["synthetic"] is True
 
 
 def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):
@@ -196,6 +369,18 @@ def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):
         "/api/data/parquet/export",
         json={"assetClass": "equity", "market": "china", "venue": "china", "providerSource": "akshare"},
     )
+    assert exported.status_code == 400
+
+    exported = client.post(
+        "/api/data/parquet/export",
+        json={
+            "assetClass": "equity",
+            "market": "china",
+            "venue": "china",
+            "providerSource": "akshare",
+            "allowResearchSource": True,
+        },
+    )
     assert exported.status_code == 200
     assert exported.json()["rowCount"] == 1
 
@@ -207,8 +392,9 @@ def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):
             "symbol": "000001",
             "market": "china",
             "venue": "china",
-            "providerSource": "akshare",
-        },
+                "providerSource": "akshare",
+                "allowResearchSource": True,
+            },
     )
     assert queried.status_code == 200
     payload = queried.json()
@@ -263,10 +449,19 @@ def test_duckdb_query_remaps_host_parquet_path_to_visible_parquet_dir(tmp_path, 
             relative = row["file_path"].removeprefix("parquet/")
             connection.execute("update parquet_files set file_path = ? where id = ?", (f"/host/parquet/{relative}", row["id"]))
 
-    result = parquet_lake.query_duckdb_bars(symbol="600519", provider_source="akshare", market="china")
+    result = parquet_lake.query_duckdb_bars(
+        symbol="600519",
+        provider_source="akshare",
+        market="china",
+        allow_research_source=True,
+    )
     assert result["count"] == 1
     assert result["items"][0]["close"] == 101.0
 
-    consistency = parquet_lake.parquet_consistency_report(sources=["akshare"], persist=False)
+    consistency = parquet_lake.parquet_consistency_report(
+        sources=["akshare"],
+        include_research_sources=True,
+        persist=False,
+    )
     assert consistency["severity"] == "ok"
     assert consistency["items"][0]["resolvedFiles"][0]["visiblePath"].startswith(str(visible_root))

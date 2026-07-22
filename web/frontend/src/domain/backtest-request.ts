@@ -41,6 +41,7 @@ export interface BacktestRequestPayload {
   projectId: string;
   benchmarkSymbol?: string;
   source?: string;
+  allowResearchSource?: boolean;
   parameters: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -61,6 +62,7 @@ export function buildBacktestRequest(
   const slippageModel = values.slippageModel ?? "default";
   const benchmarkSymbol = values.benchmarkSymbol;
   const source = values.source;
+  const allowResearchSource = values.allowResearchSource === true;
   const projectId = context.projectId ?? values.projectId;
   if (!projectId) {
     throw new Error("Project strategy is required");
@@ -74,12 +76,14 @@ export function buildBacktestRequest(
     resolution: context.resolution ?? values.resolution,
     dataType: context.dataType ?? values.dataType,
     projectId,
+    allowResearchSource,
     parameters: {
       ...(values.parameters ?? {}),
       benchmarkSymbol,
       feeModel,
       slippageModel,
       source,
+      allowResearchSource,
       ...marketCostParameters(market, feeModel, slippageModel)
     }
   } as BacktestRequestPayload;

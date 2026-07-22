@@ -9,7 +9,7 @@ services:
     logging: *bounded-logging
     image: redis:7-alpine
     ports:
-      - "${LEAN_REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${LEAN_REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -36,7 +36,7 @@ services:
       - --binlog-row-image=MINIMAL
       - --max-allowed-packet=256M
     ports:
-      - "${LEAN_MYSQL_PORT:-3306}:3306"
+      - "127.0.0.1:${LEAN_MYSQL_PORT:-3306}:3306"
     volumes:
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql
     healthcheck:
@@ -56,8 +56,8 @@ services:
       CLICKHOUSE_PASSWORD: lean
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "${LEAN_CLICKHOUSE_HTTP_PORT:-8123}:8123"
-      - "${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+      - "127.0.0.1:${LEAN_CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "127.0.0.1:${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
 
@@ -65,7 +65,7 @@ services:
     logging: *bounded-logging
     image: prom/prometheus:v2.55.1
     ports:
-      - "${LEAN_PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${LEAN_PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -76,7 +76,7 @@ services:
     logging: *bounded-logging
     image: grafana/grafana:11.4.0
     ports:
-      - "${LEAN_GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${LEAN_GRAFANA_PORT:-3000}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
@@ -97,9 +97,12 @@ services:
       dockerfile: web/backend/Dockerfile
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "${LEAN_API_PORT:-8000}:8000"
+      - "127.0.0.1:${LEAN_API_PORT:-8000}:8000"
     environment:
       REDIS_URL: redis://redis:6379/0
+      LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
+      LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
+      LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
@@ -109,7 +112,7 @@ services:
       CLICKHOUSE_PASSWORD: lean
       CLICKHOUSE_DATABASE: lean_market
       PROMETHEUS_URL: http://127.0.0.1:9090
-      GRAFANA_URL: http://127.0.0.1:3000
+      GRAFANA_URL: http://127.0.0.1:${LEAN_GRAFANA_PORT:-3000}
       LEAN_DATA_DIR: /workspace/Data
       LEAN_PARQUET_DIR: /workspace/parquet
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
@@ -139,7 +142,6 @@ services:
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
         condition: service_healthy
@@ -209,7 +211,6 @@ services:
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
         condition: service_healthy
@@ -232,6 +233,12 @@ services:
     extends:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
+    volumes:
+      - .:/workspace
+      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
   beat:
     logging: *bounded-logging

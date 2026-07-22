@@ -23,13 +23,17 @@ test.describe("08 history and report export", () => {
         created_at: "2026-07-18T00:00:00+00:00"
       }])
     }));
-    await context.route("**/api/reports/backtest%3Apreview-run/export?format=html", (route) => route.fulfill({
+    await context.route((url) =>
+      decodeURIComponent(url.pathname) === "/api/reports/backtest:preview-run/export" && url.searchParams.get("format") === "html",
+    (route) => route.fulfill({
       status: 200,
       contentType: "text/html",
       headers: { "Content-Disposition": 'inline; filename="backtest-report-preview-run.html"' },
       body: "<html><body><h1>Inline HTML preview</h1></body></html>"
     }));
-    await context.route("**/api/reports/backtest%3Apreview-run/export?format=markdown", (route) => route.fulfill({
+    await context.route((url) =>
+      decodeURIComponent(url.pathname) === "/api/reports/backtest:preview-run/export" && url.searchParams.get("format") === "markdown",
+    (route) => route.fulfill({
       status: 200,
       contentType: "text/plain",
       headers: { "Content-Disposition": 'inline; filename="backtest-report-preview-run.md"' },

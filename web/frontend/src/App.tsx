@@ -1,4 +1,4 @@
-import { Button, Layout, Menu, Result, Space, Tag } from "antd";
+import { Button, Drawer, Layout, Menu, Result, Space, Tag } from "antd";
 import {
   AppstoreOutlined,
   DashboardOutlined,
@@ -11,10 +11,11 @@ import {
   PlayCircleOutlined,
   SettingOutlined,
   SlidersOutlined,
-  UnorderedListOutlined
+  UnorderedListOutlined,
+  MenuOutlined
 } from "@ant-design/icons";
 import { HashRouter, Link, Navigate, Route, Routes } from "react-router-dom";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   BacktestsPage,
@@ -36,6 +37,7 @@ import {
 const { Content, Header, Sider } = Layout;
 
 function AppShell() {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuItems = useMemo(() => [
     { key: "/", icon: <AppstoreOutlined />, label: <Link to="/">Dashboard</Link> },
     { key: "/projects", icon: <FolderOpenOutlined />, label: <Link to="/projects">Projects</Link> },
@@ -55,7 +57,18 @@ function AppShell() {
     <Layout className="app-layout">
       <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
       <Layout>
-        <Header className="app-header"><Space className="app-header__content"><strong>LEAN Local Workbench</strong><span className="app-header__badges"><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></span></Space></Header>
+        <Header className="app-header">
+          <Space className="app-header__content">
+            <Button
+              className="app-mobile-menu-button"
+              aria-label="Open navigation"
+              icon={<MenuOutlined />}
+              onClick={() => setMobileNavigationOpen(true)}
+            />
+            <strong>LEAN Local Workbench</strong>
+            <span className="app-header__badges"><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></span>
+          </Space>
+        </Header>
         <Content className="app-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -89,6 +102,15 @@ function AppShell() {
           </Routes>
         </Content>
       </Layout>
+      <Drawer
+        className="app-mobile-navigation"
+        title="LEAN Local"
+        placement="left"
+        open={mobileNavigationOpen}
+        onClose={() => setMobileNavigationOpen(false)}
+      >
+        <Menu mode="inline" items={menuItems} onClick={() => setMobileNavigationOpen(false)} />
+      </Drawer>
     </Layout>
   );
 }

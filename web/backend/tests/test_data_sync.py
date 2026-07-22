@@ -872,7 +872,7 @@ def test_stk_limit_increment_fetches_once_per_trade_date(tmp_path, monkeypatch):
 
 def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
-    from app.services import data, data_sync, lean_cache, market_data
+    from app.services import data, data_sync, lean_cache, market_data, parquet_lake
 
     run = data_sync.create_sync_run(requested=["daily"])
     spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
@@ -897,12 +897,22 @@ def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatc
     monkeypatch.setattr(market_data, "mirror_rows", lambda metadata, rows: {"enabled": True, "inserted": 1})
     assets = []
     monkeypatch.setattr(data, "record_data_asset", lambda metadata: assets.append(metadata) or metadata)
+    monkeypatch.setattr(
+        parquet_lake,
+        "rebuild_all_market_parquet",
+        lambda **kwargs: {
+            "rebuiltCount": 1,
+            "certifiedDatasetIds": ["dataset-tushare"],
+            "consistencyReport": {"passed": True, "reportId": "qa-parquet"},
+        },
+    )
 
     result = data_sync.materialize_daily_run(run["id"])
 
     assert result["status"] == "ready"
     assert result["completed"] == 1
     assert assets[0]["clickhouse"]["inserted"] == 1
+    assert result["parquet"]["passed"] is True
     assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "ready"
 
 
@@ -1284,6 +1294,23 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert _broker_ready_contains_sync_run(FakeRedis(), "run-123") is True
     assert _broker_ready_contains_sync_run(FakeRedis(), "run-unacked") is False
     assert _broker_unacked_sync_tags(FakeRedis(), "run-unacked") == ["delivery-run-unacked"]
+
+
+def test_partial_data_sync_never_marks_outer_task_success(monkeypatch):
+    from app.tasks import worker
+
+    updates = []
+    monkeypatch.setattr(worker, "get_task", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(worker, "update_task", lambda task_id, **values: updates.append(values))
+    monkeypatch.setattr(worker, "append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, "_record_task_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.data_sync, "run_sync", lambda run_id, task_id: {"status": "partial"})
+
+    result = worker.sync_all_data_task.run("task-1", "run-1")
+
+    assert result["status"] == "partial"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["error"] == "One or more datasets require retry."
 
 
 def test_transient_provider_failures_are_retried(monkeypatch):

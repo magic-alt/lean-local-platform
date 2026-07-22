@@ -152,7 +152,11 @@ def ashare_coverage(
             """
         ).fetchall()
     items = [*symbol_items, benchmark_item]
-    severity = "critical" if any(item["severity"] == "critical" for item in items) else ("warning" if reference.get("warnings") else "ok")
+    severity = (
+        "critical"
+        if any(item["severity"] == "critical" for item in items) or reference.get("severity") == "critical"
+        else ("warning" if reference.get("warnings") else "ok")
+    )
     return {
         "source": provider_source,
         "sourcePolicy": source_policy,
@@ -164,5 +168,8 @@ def ashare_coverage(
         "severity": severity,
         "passed": severity == "ok",
         "warnings": reference.get("warnings") or [],
-        "issues": [issue for item in items for issue in item.get("issues", [])],
+        "issues": [
+            *[issue for item in items for issue in item.get("issues", [])],
+            *(reference.get("issues") or []),
+        ],
     }

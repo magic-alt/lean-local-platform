@@ -281,6 +281,19 @@ def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = Tru
                 report_id = quality["blockingReports"][0].get("id") if quality["blockingReports"] else None
                 detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
                 raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
+        if not bool(context.get("allowResearchSource")):
+            from .data_coverage import ashare_coverage
+
+            coverage = ashare_coverage(
+                symbols=[target],
+                benchmark=benchmark,
+                start_date=parameters["start"],
+                end_date=parameters["end"],
+                source=source,
+            )
+            if not coverage.get("passed"):
+                issues = ",".join(str(item) for item in coverage.get("issues") or []) or "unknown"
+                raise LeanPlatformError(f"ashare_reference_gate_failed:{issues}")
     report.update(
         {
             "effectiveSource": source,

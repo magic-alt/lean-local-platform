@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from typing import Any
 
-from ..db import db, row_to_dict, utc_now
+from ..db import db, row_to_dict
 
 
 PRIMARY_DATA_SOURCE = "tushare"
@@ -40,8 +42,15 @@ BACKUP_DATA_SOURCE_PRIORITY = [
 ]
 BACKUP_DATA_SOURCES = set(BACKUP_DATA_SOURCE_PRIORITY)
 DEFAULT_PRODUCTION_SOURCE = PRIMARY_DATA_SOURCE
-PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE, *SECONDARY_DATA_SOURCES}
-RESEARCH_SOURCES = {"test", "unit", "manual", *OPTIONAL_CONNECTOR_DATA_SOURCES, *COMMERCIAL_DATA_SOURCES}
+PRODUCTION_SOURCES = {PRIMARY_DATA_SOURCE}
+RESEARCH_SOURCES = {
+    "test",
+    "unit",
+    "manual",
+    *SECONDARY_DATA_SOURCES,
+    *OPTIONAL_CONNECTOR_DATA_SOURCES,
+    *COMMERCIAL_DATA_SOURCES,
+}
 DATA_SOURCE_PRIORITY = [PRIMARY_DATA_SOURCE, *FREE_SUPPLEMENTAL_DATA_SOURCE_PRIORITY]
 JQDATA_ENTITLEMENT_START = os.environ.get("JQDATA_DATA_RANGE_START", "2025-03-29")
 JQDATA_ENTITLEMENT_END = os.environ.get("JQDATA_DATA_RANGE_END", "2026-04-05")
@@ -199,16 +208,40 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
     if item:
         dataset_id = item.get("id")
         dataset_version = item.get("dataset_version") or item.get("dataset_key")
-        if item.get("is_certified") and dataset_id:
-            dataset_version = f"{normalized}-{str(dataset_id)[:12]}"
+        with db() as connection:
+            file_rows = connection.execute(
+                "select file_path, row_count, sha256 from parquet_files where dataset_id = ? order by file_path",
+                (dataset_id,),
+            ).fetchall()
+        files = [dict(file_row) for file_row in file_rows]
+        file_manifest_sha256 = (
+            hashlib.sha256(
+                json.dumps(files, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+            if files
+            else None
+        )
+        qa_status = str(item.get("qa_status") or "").strip().lower()
+        certification_valid = bool(
+            item.get("is_production")
+            and item.get("is_certified")
+            and str(item.get("environment") or "").strip().lower() == "production"
+            and qa_status == "ok"
+            and dataset_version
+            and file_manifest_sha256
+        )
+        if certification_valid and dataset_id:
+            dataset_version = f"{normalized}-{str(dataset_id)[:12]}-{file_manifest_sha256[:12]}"
         return {
             "source": normalized,
             "sourceRole": source_role(normalized),
             "sourcePriority": DATA_SOURCE_PRIORITY.index(normalized) + 1 if normalized in DATA_SOURCE_PRIORITY else None,
             "datasetVersion": dataset_version,
             "environment": item.get("environment") or ("production" if normalized in PRODUCTION_SOURCES else "research"),
-            "isProduction": bool(item.get("is_production")),
-            "isCertified": bool(item.get("is_certified")),
+            "isProduction": bool(item.get("is_production")) and certification_valid,
+            "isCertified": certification_valid,
+            "certificationValid": certification_valid,
+            "certificationError": None if certification_valid else "persisted_certification_incomplete",
             "certifiedAt": item.get("certified_at"),
             "certifiedBy": item.get("certified_by"),
             "coverageStart": item.get("coverage_start") or item.get("start_date"),
@@ -216,24 +249,60 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             "qaStatus": item.get("qa_status"),
             "qaReportId": item.get("qa_report_id"),
             "datasetId": dataset_id,
+            "fileCount": len(files),
+            "fileManifestSha256": file_manifest_sha256,
         }
-    production = normalized in PRODUCTION_SOURCES
     return {
         "source": normalized,
         "sourceRole": source_role(normalized),
         "sourcePriority": DATA_SOURCE_PRIORITY.index(normalized) + 1 if normalized in DATA_SOURCE_PRIORITY else None,
-        "datasetVersion": normalized,
-        "environment": "production" if production else "research",
-        "isProduction": production,
-        "isCertified": production,
-        "certifiedAt": utc_now() if production else None,
-        "certifiedBy": "system-default" if production else None,
+        "datasetVersion": None,
+        "environment": "research",
+        "isProduction": False,
+        "isCertified": False,
+        "certificationValid": False,
+        "certificationError": "persisted_certification_missing",
+        "certifiedAt": None,
+        "certifiedBy": None,
         "coverageStart": None,
         "coverageEnd": None,
-        "qaStatus": "ok" if production else "research",
+        "qaStatus": "unverified",
         "qaReportId": None,
         "datasetId": None,
+        "fileCount": 0,
+        "fileManifestSha256": None,
     }
+
+
+def invalidate_source_certification(
+    source: str | None,
+    *,
+    asset_class: str,
+    market: str,
+    venue: str | None,
+    connection: Any | None = None,
+) -> None:
+    """Revoke derived certification whenever canonical rows in its scope change."""
+    normalized = normalize_source(source)
+    if normalized not in PRODUCTION_SOURCES:
+        return
+    scope_venue = (venue or market).lower()
+    parameters = (normalized, asset_class.lower(), market.lower(), scope_venue, scope_venue)
+    sql = """
+        update parquet_datasets
+        set environment='research', is_production=0, is_certified=0,
+            certified_at=null, certified_by=null, qa_status='stale', qa_report_id=null
+        where source=? and asset_class=? and market=? and coalesce(venue,?)=?
+          and (is_production=1 or is_certified=1)
+    """
+    if connection is not None:
+        connection.execute(sql, parameters)
+        return
+    with db() as owned_connection:
+        owned_connection.execute(
+            sql,
+            parameters,
+        )
 
 
 def resolve_source_context(
@@ -254,6 +323,14 @@ def resolve_source_context(
     )
     normalized = require_source_allowed(str(requested) if requested else None, allow_research_source=allow)
     certification = source_certification(normalized, asset_class=asset_class, market=market, venue=venue)
+    if not allow and not (
+        certification.get("isProduction")
+        and certification.get("isCertified")
+        and certification.get("environment") == "production"
+        and str(certification.get("qaStatus") or "").lower() == "ok"
+    ):
+        reason = certification.get("certificationError") or certification.get("qaStatus") or "unverified"
+        raise ValueError(f"source_not_certified:{normalized}:{reason}")
     return {
         **certification,
         "allowResearchSource": allow,

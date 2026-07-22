@@ -34,6 +34,11 @@ Settings 更新只接受白名单字段，未知键会被忽略。它不会保�
 | `LEAN_HOST_DATA_DIR` | Docker 可挂载的宿主机数据路径 |
 | `LEAN_PARQUET_DIR` | Parquet 派生数据目录 |
 | `LEAN_DOCKER_IMAGE` | 默认 LEAN 镜像 |
+| `LEAN_ALLOWED_DOCKER_IMAGES` | 额外允许的、以 digest 固定的 LEAN 镜像 |
+| `LEAN_RESEARCH_IMAGE` | 默认 Research 镜像，必须以 digest 固定 |
+| `LEAN_ALLOWED_RESEARCH_IMAGES` | 额外允许的 Research 镜像 |
+| `LEAN_API_AUTH_REQUIRED` | API Bearer Token 门禁；正式运行默认开启 |
+| `LEAN_API_TOKEN` | API Token；启动脚本默认生成到 `web/runtime/secrets/api_token` |
 | `BACKTEST_MAX_CONCURRENT_JOBS` | 数据库调度租约上限 |
 | `BACKTEST_JOB_TIMEOUT_SECONDS` | LEAN 任务超时 |
 | `TUSHARE_TOKEN` | TuShare Pro Token |
@@ -94,7 +99,7 @@ Docker volumes             MySQL、Redis、ClickHouse 等持久卷
 
 - 普通重启：`./scripts/start_web_single_instance.sh`
 - 依赖、Dockerfile 或前端构建输入改变后：增加 `--build`
-- 迁移状态：`web/backend/.venv/bin/python scripts/db_migrate.py status`
+- 迁移状态：`web/backend/.venv/bin/python scripts/db_migrate.py --status`
 - 仓库卫生：`python3 scripts/check_repository_hygiene.py`
 
 数据库备份、Docker Desktop 内存、端口和安全配置见 [Deployment](../deployment.md)。

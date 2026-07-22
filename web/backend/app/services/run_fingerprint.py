@@ -18,8 +18,36 @@ from .source_gate import DEFAULT_PRODUCTION_SOURCE, source_certification
 
 
 def _json_hash(value: Any) -> str:
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+_NON_IDENTITY_PARAMETER_KEYS = {
+    "dockerImage",
+    "preflight",
+    "strategySnapshotDir",
+    "strategySnapshotMainFile",
+    "strategySnapshotAlgorithmClass",
+    "strategySnapshotLanguage",
+}
+
+
+def canonical_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Return strategy inputs without run-local paths or duplicated operational metadata."""
+    result = {
+        key: value
+        for key, value in parameters.items()
+        if key not in _NON_IDENTITY_PARAMETER_KEYS
+    }
+    if "initial_cash" in result and "initialCash" not in result:
+        result["initialCash"] = result.pop("initial_cash")
+    return result
 
 
 def _file_hash(path: Path | str | None) -> str | None:
@@ -171,6 +199,33 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     scope["end"],
                 ),
             ).fetchone()
+            bar_content_rows = rows_to_dicts(
+                connection.execute(
+                    f"""
+                    select symbol, trade_date, open, high, low, close, settle, volume, amount,
+                           turnover_rate, open_interest, prev_close, pct_change, adj_factor,
+                           resolution, data_type, adjust, source
+                    from market_daily_bars
+                    where symbol = ? and asset_class = ? and market = ? and venue = ?
+                      and resolution = ? and data_type = ? and adjust = ?
+                      {source_clause}
+                      and trade_date between ? and ?
+                    order by trade_date, source
+                    """,
+                    (
+                        symbol,
+                        str(scope["assetClass"]).lower(),
+                        str(scope["market"]).lower(),
+                        str(scope["venue"]).lower(),
+                        str(scope["resolution"]).lower(),
+                        str(scope["dataType"]).lower(),
+                        scope["adjust"],
+                        *source_params,
+                        scope["start"],
+                        scope["end"],
+                    ),
+                ).fetchall()
+            )
             trade_status_row = connection.execute(
                 """
                 select count(distinct trade_date) as row_count,
@@ -181,6 +236,18 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 """,
                 (symbol, scope["start"], scope["end"]),
             ).fetchone()
+            trade_status_content_rows = rows_to_dicts(
+                connection.execute(
+                    """
+                    select symbol, trade_date, is_tradeable, is_suspended, can_buy, can_sell,
+                           limit_up, limit_down, status, reason, source
+                    from market_trade_status
+                    where symbol = ? and trade_date between ? and ?
+                    order by trade_date, source
+                    """,
+                    (symbol, scope["start"], scope["end"]),
+                ).fetchall()
+            )
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
             if benchmark_symbol:
                 benchmark_row = connection.execute(
@@ -208,6 +275,34 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     ),
                 ).fetchone()
                 benchmark = {"symbol": benchmark_symbol, **(dict(benchmark_row) if benchmark_row else {})}
+                benchmark_content_rows = rows_to_dicts(
+                    connection.execute(
+                        f"""
+                        select symbol, trade_date, open, high, low, close, settle, volume, amount,
+                               turnover_rate, open_interest, prev_close, pct_change, adj_factor,
+                               resolution, data_type, adjust, source
+                        from market_daily_bars
+                        where symbol = ? and asset_class = ? and market = ? and venue = ?
+                          and resolution = ? and data_type = ? and adjust = ?
+                          {source_clause}
+                          and trade_date between ? and ?
+                        order by trade_date, source
+                        """,
+                        (
+                            benchmark_symbol,
+                            str(scope["assetClass"]).lower(),
+                            str(scope["market"]).lower(),
+                            str(scope["venue"]).lower(),
+                            str(scope["resolution"]).lower(),
+                            str(scope["dataType"]).lower(),
+                            scope["adjust"],
+                            *source_params,
+                            scope["start"],
+                            scope["end"],
+                        ),
+                    ).fetchall()
+                )
+                benchmark["content_sha256"] = _json_hash(benchmark_content_rows)
             parquet_files = rows_to_dicts(
                 connection.execute(
                     f"""
@@ -231,7 +326,11 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                 ).fetchall()
             )
         rows = [dict(data_row)] if data_row else []
+        if rows:
+            rows[0]["content_sha256"] = _json_hash(bar_content_rows)
         trade_status = dict(trade_status_row) if trade_status_row else {}
+        if trade_status:
+            trade_status["content_sha256"] = _json_hash(trade_status_content_rows)
     return {
         "scope": scope,
         "marketDailyBars": rows[0] if rows else {},
@@ -331,24 +430,80 @@ def build_run_fingerprint(
     market_daily = data.get("marketDailyBars") or {}
     trade_status = data.get("tradeStatus") or {}
     benchmark = data.get("benchmark") or {}
-    return {
+    canonical_params = canonical_parameters(parameters)
+    strategy_sha256 = _file_hash(strategy_path)
+    requirements_sha256 = _requirements_hash()
+    identity_payload = {
         "schemaVersion": 1,
+        "parameters": canonical_params,
+        "strategyFileSha256": strategy_sha256,
+        "gitCommit": git.get("commit"),
+        "gitStatusHash": git.get("statusHash"),
+        "requirementsSha256": requirements_sha256,
+        "data": {
+            "scope": data.get("scope") or {},
+            "marketDailyBars": {
+                key: market_daily.get(key)
+                for key in ("row_count", "first_date", "last_date", "content_sha256")
+            },
+            "tradeStatus": {
+                key: trade_status.get(key)
+                for key in ("row_count", "first_date", "last_date", "content_sha256")
+            },
+            "benchmark": {
+                key: benchmark.get(key)
+                for key in ("symbol", "row_count", "first_date", "last_date", "content_sha256")
+            },
+            "parquetFiles": [
+                {
+                    key: item.get(key)
+                    for key in ("dataset_id", "row_count", "sha256", "first_timestamp", "last_timestamp")
+                }
+                for item in data.get("parquetFiles") or []
+            ],
+        },
+        "datasetCertification": {
+            key: certification.get(key)
+            for key in (
+                "source",
+                "datasetVersion",
+                "datasetId",
+                "fileManifestSha256",
+                "qaStatus",
+                "isProduction",
+                "isCertified",
+            )
+        },
+        "leanCache": {
+            "dailySha256": daily_cache.get("sha256"),
+            "factorSha256": factor_cache.get("sha256"),
+        },
+        "dockerImage": docker.get("image"),
+        "dockerImageDigest": docker.get("digest"),
+    }
+    input_fingerprint = _json_hash(identity_payload)
+    return {
+        "schemaVersion": 2,
         "runId": run_id,
         "createdAt": created_at,
         "run_start_time": created_at,
         "timezone": os.environ.get("TZ") or time.tzname[0],
         "python_version": sys.version,
-        "requirements_hash": _requirements_hash(),
+        "requirements_hash": requirements_sha256,
         "git": git,
         "git_commit": git.get("commit"),
         "git_branch": git.get("branch"),
         "git_dirty": git.get("dirty"),
         "git_status_hash": git.get("statusHash"),
-        "parametersHash": _json_hash(parameters),
-        "parameters_sha256": _json_hash(parameters),
+        "parametersHash": _json_hash(canonical_params),
+        "parameters_sha256": _json_hash(canonical_params),
         "parameters": parameters,
-        "strategyFileHash": _file_hash(strategy_path),
-        "strategy_file_sha256": _file_hash(strategy_path),
+        "canonicalParameters": canonical_params,
+        "inputFingerprint": input_fingerprint,
+        "input_fingerprint": input_fingerprint,
+        "inputIdentity": identity_payload,
+        "strategyFileHash": strategy_sha256,
+        "strategy_file_sha256": strategy_sha256,
         "configFileHash": _file_hash(config_path),
         "config_file_sha256": _file_hash(config_path),
         "data": data,

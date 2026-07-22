@@ -18,12 +18,20 @@ from app.migrations.runner import migration_status, verify_migrations  # noqa: E
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage local platform database migrations.")
-    group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("command", nargs="?", choices=("status", "apply", "verify"))
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--status", action="store_true")
     group.add_argument("--apply", action="store_true")
     group.add_argument("--verify", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    selected = [name for name in ("status", "apply", "verify") if getattr(args, name)]
+    if args.command and selected:
+        parser.error("Use either a positional command or a --flag, not both.")
+    if not args.command and not selected:
+        parser.error("one of status/apply/verify is required")
+    if args.command:
+        setattr(args, args.command, True)
 
     try:
         if args.apply:

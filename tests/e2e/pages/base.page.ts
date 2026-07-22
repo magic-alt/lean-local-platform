@@ -18,7 +18,13 @@ export class BasePage {
   }
 
   async selectByTestId(testId: string, value: string) {
-    await this.page.getByTestId(testId).click();
+    const control = this.page.getByTestId(testId);
+    const selected = control.locator(".ant-select-selection-item").first();
+    if (await selected.count()) {
+      const selectedText = (await selected.textContent() || "").trim();
+      if (selectedText.localeCompare(value, undefined, { sensitivity: "accent" }) === 0) return;
+    }
+    await control.click();
     await this.selectOpenOption(value);
   }
 

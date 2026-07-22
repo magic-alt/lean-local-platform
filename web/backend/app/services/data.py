@@ -511,23 +511,31 @@ def import_ashare_research_data(
     infer_suspensions_from_authoritative_absence: bool = False,
     bulk_write: bool = False,
     materialize_derived: bool = True,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    batch_config = {
+        "symbol": symbol,
+        "provider": provider,
+        "market": market,
+        "venue": venue,
+        "resolution": resolution,
+        "dataType": data_type,
+        "startDate": start_date,
+        "endDate": end_date,
+        "adjust": adjust or "raw",
+        "overwrite": overwrite,
+        # A provider label is not evidence. Direct imports remain research
+        # unless the governed sync pipeline supplies verifiable provenance.
+        "environment": "research",
+        "synthetic": False,
+    }
+    if provenance:
+        batch_config["provenance"] = dict(provenance)
     batch = create_import_batch(
         provider,
         market,
         asset_class,
-        {
-            "symbol": symbol,
-            "provider": provider,
-            "market": market,
-            "venue": venue,
-            "resolution": resolution,
-            "dataType": data_type,
-            "startDate": start_date,
-            "endDate": end_date,
-            "adjust": adjust or "raw",
-            "overwrite": overwrite,
-        },
+        batch_config,
     )
     batch_id = batch["id"]
     qa_report: dict[str, Any] | None = None

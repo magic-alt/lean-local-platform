@@ -15,6 +15,7 @@ ALLOW_ACTIVE_SYNC_RECREATE="${LEAN_ALLOW_ACTIVE_SYNC_RECREATE:-0}"
 ALLOW_ACTIVE_SYNC_SHUTDOWN="${LEAN_ALLOW_ACTIVE_SYNC_SHUTDOWN:-0}"
 RUNTIME_SECRETS_DIR="${LEAN_RUNTIME_SECRETS_DIR:-${ROOT_DIR}/web/runtime/secrets}"
 MYSQL_LOADER_PASSWORD_FILE="${LEAN_MYSQL_LOADER_PASSWORD_FILE:-${RUNTIME_SECRETS_DIR}/mysql_loader_password}"
+API_TOKEN_FILE="${LEAN_API_TOKEN_FILE:-${RUNTIME_SECRETS_DIR}/api_token}"
 
 LEAN_WEB_HOST="${LEAN_WEB_HOST:-127.0.0.1}"
 VITE_HOST="${VITE_HOST:-127.0.0.1}"
@@ -140,11 +141,35 @@ initialize_mysql_loader_password() {
   export LEAN_MYSQL_LOADER_PASSWORD
 }
 
+initialize_api_token() {
+  local generated=""
+  if [[ -n "${LEAN_API_TOKEN:-}" ]]; then
+    export LEAN_API_TOKEN
+    return 0
+  fi
+  if [[ -f "${API_TOKEN_FILE}" ]]; then
+    IFS= read -r LEAN_API_TOKEN <"${API_TOKEN_FILE}" || true
+  fi
+  if [[ -z "${LEAN_API_TOKEN:-}" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      generated="$(openssl rand -hex 32)"
+    else
+      generated="api-$(date +%s)-${RANDOM}${RANDOM}${RANDOM}"
+    fi
+    LEAN_API_TOKEN="${generated}"
+  fi
+  if [[ ! -s "${API_TOKEN_FILE}" ]]; then
+    (umask 077 && mkdir -p "${RUNTIME_SECRETS_DIR}" && printf '%s\n' "${LEAN_API_TOKEN}" >"${API_TOKEN_FILE}")
+  fi
+  chmod 600 "${API_TOKEN_FILE}" 2>/dev/null || true
+  export LEAN_API_TOKEN
+}
+
 data_sync_is_active() {
   local payload=""
   local active_count=""
   if command -v curl >/dev/null 2>&1; then
-    payload="$(curl -fsS --max-time 3 "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/data/catalog" 2>/dev/null || true)"
+    payload="$(curl -fsS --max-time 3 -H "Authorization: Bearer ${LEAN_API_TOKEN:-}" "http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}/api/data/catalog" 2>/dev/null || true)"
     if grep -Eq '"activeRun"[[:space:]]*:[[:space:]]*\{' <<<"${payload}"; then
       return 0
     fi
@@ -392,6 +417,7 @@ start_backend() {
   (
     cd "${BACKEND_DIR}"
     LEAN_DATABASE_URL="${LEAN_DATABASE_URL}" \
+      LEAN_API_AUTH_REQUIRED=1 LEAN_API_TOKEN="${LEAN_API_TOKEN}" \
       ./.venv/bin/python -m uvicorn app.main:app --host "${LEAN_WEB_HOST}" --port "${LEAN_WEB_PORT}"
   ) >"${BACKEND_LOG}" 2>&1 &
   BACKEND_PID=$!
@@ -464,6 +490,7 @@ start_frontend() {
   (
     cd "${FRONTEND_DIR}"
     VITE_API_PROXY_TARGET="http://${LEAN_WEB_HOST}:${LEAN_WEB_PORT}" \
+      VITE_API_TOKEN="${LEAN_API_TOKEN}" \
       npm run dev -- --host "${VITE_HOST}" --port "${VITE_PORT}"
   ) >"${FRONTEND_LOG}" 2>&1 &
   FRONTEND_PID=$!
@@ -527,6 +554,7 @@ main() {
   parse_args "$@"
   acquire_single_instance_lock
   initialize_mysql_loader_password
+  initialize_api_token
 
   cleanup_previous_instances
   resolve_ports

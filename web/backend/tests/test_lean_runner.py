@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.lean import base_config, docker_command
+from app.core.config import DEFAULT_DOCKER_IMAGE
 from app.runners.lean_runner import LeanRunner
 
 
@@ -40,7 +41,7 @@ def test_docker_command_uses_argument_list_and_expected_mounts(tmp_path, monkeyp
     command = docker_command(
         config_path,
         results_dir,
-        image="quantconnect/lean:test",
+        image=DEFAULT_DOCKER_IMAGE,
         project_dir=project_dir,
         support_dir=support_dir,
     )
@@ -48,7 +49,11 @@ def test_docker_command_uses_argument_list_and_expected_mounts(tmp_path, monkeyp
     assert command[0] == "/usr/bin/docker"
     assert "run" in command
     assert "--rm" in command
-    assert "quantconnect/lean:test" in command
+    assert DEFAULT_DOCKER_IMAGE in command
+    assert "--network" in command and "none" in command
+    assert "--read-only" in command
+    assert "--cap-drop" in command and "ALL" in command
+    assert "no-new-privileges:true" in command
     assert any(str(config_path) in item for item in command)
     assert f"{support_dir}:/Lean/Run:ro" in command
     assert all(";" not in item for item in command)
@@ -78,7 +83,7 @@ def test_docker_command_maps_container_paths_to_host_paths(tmp_path, monkeypatch
     command = docker_command(
         config_path,
         results_dir,
-        image="quantconnect/lean:test",
+        image=DEFAULT_DOCKER_IMAGE,
         project_dir=project_dir,
         support_dir=support_dir,
     )

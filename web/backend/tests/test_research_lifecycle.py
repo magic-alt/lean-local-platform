@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
@@ -71,3 +73,24 @@ def test_research_runner_waits_for_container_port_inside_container(monkeypatch, 
     assert output["readiness_status"] == "ready"
     assert output["url"] == "http://127.0.0.1:8892/?token=unit-token"
     assert any("exec" in command for command in calls)
+    run_command = calls[0]
+    assert "127.0.0.1:8892:8888" in run_command
+    assert "--cap-drop" in run_command
+    assert "no-new-privileges:true" in run_command
+    assert "host.docker.internal:host-gateway" not in run_command
+    assert all("/Lean/Launcher/bin/Debug/storage" not in value for value in run_command)
+
+
+def test_research_runner_rejects_unpinned_image(monkeypatch, tmp_path):
+    from app.lean_engine import research
+    from app.lean_engine.errors import LeanPlatformError
+
+    monkeypatch.setattr(research.shutil, "which", lambda name: "/usr/bin/docker")
+    with pytest.raises(LeanPlatformError, match="research_image_not_allowed"):
+        research.run_detached_research(
+            "session-1",
+            tmp_path,
+            8892,
+            lambda line: None,
+            image="attacker/research:latest",
+        )

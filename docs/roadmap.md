@@ -1,10 +1,13 @@
 # Roadmap
 
-Last reviewed: 2026-07-21. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md) and [history index](history/README.md).
+Last reviewed: 2026-07-22. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
-Status: implemented; Docker/LEAN integration remains an opt-in release acceptance test.
+Status: remediation candidate, not passed. The 2026-07-22 independent audit
+reported `LEVEL3_FAIL`. Source/QA/reference gates, canonical fingerprints,
+archive integrity and container admission have since been hardened, but a new
+independent production-like re-audit is required before changing this status.
 
 Implemented:
 
@@ -22,7 +25,9 @@ Remaining acceptance work:
 
 ## Level 4: Data, Experiments and Reproducibility
 
-Status: main workflows implemented; cross-asset breadth is partial.
+Status: failed in the 2026-07-22 independent audit. The workflows exist, but
+complete rolling/walk-forward/dynamic-PIT execution evidence, portable CSI300
+source evidence and production-scale consistency acceptance remain incomplete.
 
 Implemented:
 
@@ -48,7 +53,10 @@ Remaining work:
 
 ## Level 5: Paper and Operational Safety
 
-Status: controlled Paper Replay is implemented; unattended production operation remains partial.
+Status: replay blocked and operationally not ready. `signal_simulation`
+acceptance is not evidence for a real 21-day LEAN walk-forward. Unattended
+operation, notification/escalation and full failure-recovery acceptance remain
+required.
 
 Implemented:
 
@@ -68,17 +76,17 @@ Remaining work:
 
 ### P0: Trust and data coverage
 
-1. Fill and verify CSI300 2005-2017 official PIT membership; never substitute current constituents.
-2. Make per-universe PIT coverage visible before batch expansion.
-3. Extend explicit adjustment and benchmark contracts to every supported asset class.
-4. Keep production dataset permissions, coverage, quarantines and validation results observable.
+1. Re-run the independent Source/QA/reference gate matrix against certified production data.
+2. Retain or make fetchable the immutable official CSI300 source bundle; fill and verify 2005-2017 PIT membership without current-constituent substitution.
+3. Prove canonical fingerprint/result digest repeatability with release golden runs.
+4. Reconcile all archive references and complete ten-dataset manifest/watermark/archive evidence.
 
 ### P1: Stability and operation
 
-1. Run scheduled MySQL backup/restore and stored-object recovery drills.
-2. Add resource-pressure alerts and validate MySQL OOM recovery under Docker memory limits.
-3. Complete unattended Paper daily-chain acceptance and notification delivery.
-4. Add browser E2E coverage for Data Preview, batch workflows, reports and Docs.
+1. Run scheduled production-scale MySQL backup/restore and stored-object recovery drills.
+2. Complete five-job concurrency, phase cancellation and Redis/MySQL/worker fault injection.
+3. Complete a real 21-day LEAN Paper chain with interruption/idempotency evidence.
+4. Add notification/escalation, resource-pressure alerts and an operational runbook.
 
 ### P2: Research productivity
 

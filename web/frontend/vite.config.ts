@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8000";
+const apiToken = process.env.VITE_API_TOKEN || "";
+const proxyHeaders = apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined;
 
 export default defineConfig({
   plugins: [react()],
@@ -40,15 +42,18 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: apiProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        headers: proxyHeaders
       },
       "/openapi.json": {
         target: apiProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        headers: proxyHeaders
       },
       "/docs": {
         target: apiProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        headers: proxyHeaders
       }
     }
   }

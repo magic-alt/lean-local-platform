@@ -1,6 +1,6 @@
 # Data Sources and Governance
 
-Last reviewed: 2026-07-21.
+Last reviewed: 2026-07-22.
 
 LEAN is the execution engine; this repository remains responsible for provider
 access, licensing, normalization, quality checks and local storage. Downloaded
@@ -11,9 +11,9 @@ to Git.
 
 | Provider | Role | Persistence policy |
 | --- | --- | --- |
-| TuShare Pro | Primary China market build and incremental sync | Canonical MySQL tables plus compressed batch archive metadata |
-| AKShare | Public reference, selected China/Hong Kong fallback and preview support | Canonical rows with explicit source and certification |
-| JQData / RQData | Licensed research and PIT coverage where configured | Imported only with local credentials and entitlement checks |
+| TuShare Pro | Only eligible China production provider; eligibility still requires persisted certification | Canonical MySQL, verified batch lineage, compressed archives and certified Parquet evidence |
+| AKShare | Public reference, selected China/Hong Kong fallback and preview support | Research/reference rows only; explicit `allowResearchSource=true` required |
+| JQData / RQData | Licensed research and PIT coverage where configured | Research rows only; imported with local credentials and entitlement checks |
 | TQSDK | Futures contract and market-data workflows | Imported on demand with provider attribution |
 | CSV | User-supplied portable import | Validated against the downloadable templates before canonical write |
 | Binance and other public adapters | Non-China research workflows | Subject to current availability, rate limits and source certification |
@@ -81,6 +81,10 @@ For production research, verify:
 
 The platform must not substitute current constituents for missing historical
 PIT membership or silently mix providers with different adjustment semantics.
+Provider name is never sufficient certification. Any canonical write revokes
+the affected derived certification; promotion requires a successful TuShare
+batch lineage plus a persisted MySQL/Parquet/DuckDB/file-hash consistency
+report. Synthetic and `environment=research` batches cannot be promoted.
 
 ## Portable CSI300 evidence
 
@@ -89,8 +93,15 @@ source hashes, coverage boundary and manual events. Referenced XLS/PDF files are
 resolved below `web/runtime/source-cache/csi300-official/` or an explicit
 `--cache-dir`; the manifest itself is machine-independent.
 
+The production manifest references an operator-retained offline official-source
+bundle and intentionally fails validation if an attachment is absent or its
+hash differs. To test the portable parser without that bundle, use the tracked
+example manifest:
+
 ```bash
-web/backend/.venv/bin/python scripts/import_csi300_pit_public.py --dry-run --validate
+web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
+  --manifest config/data-sources/csi300_pit_sources.example.json \
+  --dry-run --validate
 ```
 
 The current verified official-cache reconstruction starts at 2017-12-08. The

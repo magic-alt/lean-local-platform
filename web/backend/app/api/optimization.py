@@ -10,6 +10,7 @@ from ..core.errors import NotFoundError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.config import validate_backtest_parameters
 from ..lean_engine.errors import LeanPlatformError
+from ..lean_engine.docker import validate_lean_docker_image
 from ..services.optimization import normalize_parameter_grid
 from ..services.history_resources import delete_optimization
 from ..services.projects import get_project
@@ -73,6 +74,7 @@ def create_optimization(request: OptimizationRequest):
             "cash": request.cash,
             **base_parameters,
         })
+        docker_image = validate_lean_docker_image(request.dockerImage)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -85,7 +87,7 @@ def create_optimization(request: OptimizationRequest):
         "parameterGrid": parameter_grid,
         "parameterSchema": template.get("parameters") if template else [],
         "maxCandidates": request.maxCandidates,
-        "dockerImage": request.dockerImage,
+        "dockerImage": docker_image,
     }
     task = create_task("optimization", f"Optimize {base['ticker']}", parameters, request.projectId, optimization_id)
     with db() as connection:

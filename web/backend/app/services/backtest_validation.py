@@ -123,6 +123,7 @@ def build_backtest_validation(
     parameters: dict[str, Any],
     fingerprint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    allow_research_source = bool(parameters.get("allowResearchSource"))
     symbol = str(parameters.get("ticker") or parameters.get("symbol") or "").upper()
     start = str(parameters.get("start") or "")
     end = str(parameters.get("end") or "")
@@ -154,6 +155,27 @@ def build_backtest_validation(
         "passed": True,
         "severity": "ok",
     }
+    certification = (fingerprint or {}).get("datasetCertification") or {}
+    source_gate = _gate(
+        "production_source_certification",
+        allow_research_source
+        or bool(
+            certification.get("isProduction")
+            and certification.get("isCertified")
+            and certification.get("environment") == "production"
+            and str(certification.get("qaStatus") or "").lower() == "ok"
+        ),
+        details={
+            "source": certification.get("source"),
+            "datasetId": certification.get("datasetId"),
+            "datasetVersion": certification.get("datasetVersion"),
+            "fileManifestSha256": certification.get("fileManifestSha256"),
+            "qaStatus": certification.get("qaStatus"),
+            "isProduction": certification.get("isProduction"),
+            "isCertified": certification.get("isCertified"),
+            "researchOnly": allow_research_source,
+        },
+    )
     if _is_hongkong_equity(parameters):
         coverage = market_data_coverage(
             symbol,
@@ -171,6 +193,7 @@ def build_backtest_validation(
         end_coverage = end_coverage_status("hongkong", end, coverage.get("last_date"))
         benchmark_end_coverage = end_coverage_status("hongkong", end, benchmark.get("lastDate"))
         gates = [
+            source_gate,
             _gate("hongkong_data_coverage", _int_value(coverage.get("bar_count")) > 0, details=coverage),
             _gate("hongkong_end_date_coverage", bool(end_coverage.get("passed")), details=end_coverage),
             _gate("benchmark_data", bool(benchmark.get("passed")), details=benchmark),
@@ -219,6 +242,7 @@ def build_backtest_validation(
     benchmark_end_coverage = end_coverage_status("china", end, benchmark.get("lastDate"))
     batch_passed = batch.get("status") == "success" and bool(qa_report.get("passed"))
     gates = [
+        source_gate,
         _gate("ashare_data_coverage", coverage_passed, details=coverage),
         _gate("ashare_trade_status", status_count >= bar_count > 0, details=coverage),
         _gate("ashare_end_date_coverage", bool(end_coverage.get("passed")), details=end_coverage),
@@ -234,6 +258,15 @@ def build_backtest_validation(
         ),
         _gate("benchmark_data", bool(benchmark.get("passed")), details=benchmark),
         _gate("benchmark_end_date_coverage", bool(benchmark_end_coverage.get("passed")), details=benchmark_end_coverage),
+        _gate(
+            "ashare_reference_coverage",
+            allow_research_source or bool(coverage_summary.get("reference", {}).get("passed")),
+            details={
+                **(coverage_summary.get("reference") or {}),
+                "enforced": not allow_research_source,
+                "researchOnly": allow_research_source,
+            },
+        ),
         *[
             _gate(
                 "ashare_multisource_quality",
