@@ -106,11 +106,22 @@ Docker volumes             MySQL、Redis、ClickHouse 等持久卷
 - 迁移状态：`web/backend/.venv/bin/python scripts/db_migrate.py --status`
 - 仓库卫生：`python3 scripts/check_repository_hygiene.py`
 
+## 告警与自动 Paper
+
+- `LEAN_PAPER_WALKFORWARD_HOUR` / `LEAN_PAPER_WALKFORWARD_MINUTE`：Paper 自动逐日调度时间。
+- `LEAN_ALERT_WEBHOOK_URL`：可选运维告警 Webhook；未配置时告警仍会持久化，但不会外发。
+- `LEAN_ALERT_WEBHOOK_BEARER_TOKEN`：Webhook Bearer 凭据，只能保存在本地环境或秘密管理器。
+- `LEAN_ALERT_MIN_SEVERITY`：外发最低等级，默认 `critical`。
+- `LEAN_ALERT_ESCALATE_AFTER`：相同 Paper 调度警告累计到该次数后升级为 Critical，默认 `3`。
+- `LEAN_ALERT_COOLDOWN_SECONDS`：成功外发后的去重冷却时间，默认 `900` 秒。
+
+投递状态、尝试次数和错误可通过 `/api/alert-events` 查看。Webhook URL 的查询参数不会写入投递审计记录。
+
 数据库备份、Docker Desktop 内存、端口和安全配置见 [Deployment](../deployment.md)。
 
 ## 安全
 
-- 当前个人平台 API 默认无认证，不要暴露到不可信网络。
+- API 默认启用本地 Bearer Token，Compose 端口默认只绑定 `127.0.0.1`；仍不得暴露到不可信网络。
 - Docker socket 等同主机高权限访问。
 - 不提交 `.env`、Token、数据库密码、下载市场数据和运行产物。
 - 生产化前应增加网络边界、认证、secrets、备份演练和镜像 digest 固定。

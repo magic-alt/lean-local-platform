@@ -7,7 +7,7 @@ x-logging: &bounded-logging
 services:
   redis:
     logging: *bounded-logging
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:
       - "127.0.0.1:${LEAN_REDIS_PORT:-6379}:6379"
     volumes:
@@ -20,7 +20,7 @@ services:
 
   mysql:
     logging: *bounded-logging
-    image: mysql:8.4
+    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: lean-root
@@ -49,7 +49,7 @@ services:
 
   clickhouse:
     logging: *bounded-logging
-    image: clickhouse/clickhouse-server:24.12-alpine
+    image: clickhouse/clickhouse-server:24.12-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
     environment:
       CLICKHOUSE_DB: lean_market
       CLICKHOUSE_USER: lean
@@ -63,7 +63,7 @@ services:
 
   prometheus:
     logging: *bounded-logging
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     ports:
       - "127.0.0.1:${LEAN_PROMETHEUS_PORT:-9090}:9090"
     volumes:
@@ -74,13 +74,13 @@ services:
 
   grafana:
     logging: *bounded-logging
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
     ports:
       - "127.0.0.1:${LEAN_GRAFANA_PORT:-3000}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource 4.20.0
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -135,6 +135,12 @@ services:
       LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}
       LEAN_PAPER_WALKFORWARD_HOUR: ${LEAN_PAPER_WALKFORWARD_HOUR:-18}
       LEAN_PAPER_WALKFORWARD_MINUTE: ${LEAN_PAPER_WALKFORWARD_MINUTE:-45}
+      LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
+      LEAN_ALERT_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_WEBHOOK_BEARER_TOKEN:-}
+      LEAN_ALERT_MIN_SEVERITY: ${LEAN_ALERT_MIN_SEVERITY:-critical}
+      LEAN_ALERT_ESCALATE_AFTER: ${LEAN_ALERT_ESCALATE_AFTER:-3}
+      LEAN_ALERT_COOLDOWN_SECONDS: ${LEAN_ALERT_COOLDOWN_SECONDS:-900}
+      LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS: ${LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}
       LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
       LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
     volumes:
@@ -179,6 +185,12 @@ services:
       LEAN_DAILY_SYNC_BATCH_UNITS: ${LEAN_DAILY_SYNC_BATCH_UNITS:-64}
       LEAN_DAILY_SYNC_CHUNK_ROWS: ${LEAN_DAILY_SYNC_CHUNK_ROWS:-500000}
       LEAN_RAW_ARCHIVE_GZIP_LEVEL: ${LEAN_RAW_ARCHIVE_GZIP_LEVEL:-1}
+      LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
+      LEAN_ALERT_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_WEBHOOK_BEARER_TOKEN:-}
+      LEAN_ALERT_MIN_SEVERITY: ${LEAN_ALERT_MIN_SEVERITY:-critical}
+      LEAN_ALERT_ESCALATE_AFTER: ${LEAN_ALERT_ESCALATE_AFTER:-3}
+      LEAN_ALERT_COOLDOWN_SECONDS: ${LEAN_ALERT_COOLDOWN_SECONDS:-900}
+      LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS: ${LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
       CLICKHOUSE_HOST: clickhouse

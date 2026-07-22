@@ -121,6 +121,37 @@ LEAN_MYSQL_REDO_LOG_CAPACITY
 TUSHARE_TOKEN
 ```
 
+### Operational alert delivery
+
+Set `LEAN_ALERT_WEBHOOK_URL` to deliver operational alerts to an
+operator-owned HTTPS endpoint. `LEAN_ALERT_WEBHOOK_BEARER_TOKEN` is optional
+and must remain in `.env` or a runtime secret manager. Delivery attempts and
+outcomes are persisted in `alert_deliveries`; query strings are removed from
+stored endpoint metadata.
+
+By default only `critical` events are delivered. Repeated Paper scheduling
+warnings escalate after three occurrences, successful delivery starts a
+15-minute cooldown, and a failed delivery remains visible through
+`GET /api/alert-events` without changing the underlying task result. Configure
+these controls with:
+
+```text
+LEAN_ALERT_MIN_SEVERITY
+LEAN_ALERT_ESCALATE_AFTER
+LEAN_ALERT_COOLDOWN_SECONDS
+LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS
+```
+
+### Supply-chain pinning
+
+Runtime service images and the backend Python base image are referenced by
+immutable RepoDigest, and the Grafana ClickHouse plugin uses an explicit
+version. Upgrades must update the human-readable version note, digest and
+`CHANGELOG.md` together, then run `docker compose config -q`, rebuild the
+backend image and execute the protected integration lanes. A digest pin proves
+which bytes are selected; SBOM generation, signature verification and the
+Python hash lock remain separate release gates.
+
 `scripts/start_web_single_instance.sh` generates a runtime-only MySQL loader
 password and grants that account only the privileges required for rebuildable
 market-data batches. Bulk sessions disable their own binlog; API, projects,

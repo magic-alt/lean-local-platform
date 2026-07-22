@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -228,6 +229,11 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+
+    if args.alert_webhook:
+        os.environ["LEAN_ALERT_WEBHOOK_URL"] = str(args.alert_webhook)
+    if args.alert_email:
+        parser.error("--alert-email is not implemented; configure --alert-webhook instead")
 
     symbols = _csv(args.symbols) if args.symbols else []
     if args.universe_code:

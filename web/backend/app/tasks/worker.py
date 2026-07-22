@@ -42,10 +42,18 @@ from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import paper as paper_service
 from ..services import data_sync
+from ..services.alerts import emit_alert
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_operational_alert(event_type: str, **kwargs: Any) -> None:
+    try:
+        emit_alert(event_type, **kwargs)
+    except Exception:
+        logger.exception("Failed to persist or dispatch operational alert %s", event_type)
 
 
 def _record_task_metric(kind: str, status: str) -> None:
@@ -81,6 +89,16 @@ def generate_ashare_tech_report_task(self, task_id: str, report_id: str):
     except Exception as exc:
         ashare_tech_insights.fail_report(report_id, str(exc))
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _emit_operational_alert(
+            "scheduled_report_failed",
+            severity="critical",
+            title="Scheduled A-share report failed",
+            message=str(exc),
+            source="ashare_tech_scheduler",
+            related_id=report_id,
+            details={"reportId": report_id, "taskId": task_id, "error": str(exc)},
+            dedupe_key=f"scheduled_report_failed:{report_id}",
+        )
         _record_task_metric("ashare_tech_report", "failed")
         raise
 
@@ -114,7 +132,23 @@ def finalize_paper_walkforward_task(paper_run_id: str):
 
 @celery_app.task(name="lean_web.fail_paper_walkforward")
 def fail_paper_walkforward_task(request, exc, traceback, paper_run_id: str):  # pragma: no cover - Celery errback
-    return paper_service.fail_walkforward_run(paper_run_id, str(exc))
+    failed = paper_service.fail_walkforward_run(paper_run_id, str(exc))
+    _emit_operational_alert(
+        "paper_walkforward_failed",
+        severity="critical",
+        title="Paper walk-forward failed",
+        message=str(exc),
+        source="paper_scheduler",
+        related_id=str(failed.get("session_id") or paper_run_id),
+        details={
+            "paperRunId": paper_run_id,
+            "sessionId": failed.get("session_id"),
+            "tradeDate": failed.get("trade_date"),
+            "error": str(exc),
+        },
+        dedupe_key=f"paper_walkforward_failed:{paper_run_id}",
+    )
+    return failed
 
 
 @celery_app.task(name="lean_web.schedule_paper_walkforward", bind=True, max_retries=2)
@@ -153,6 +187,16 @@ def schedule_paper_walkforward_task(self):
             scheduled.append(paper_run["id"])
         except Exception as exc:
             paper_service.record_session_warning(session["id"], "paper_schedule_waiting", str(exc))
+            _emit_operational_alert(
+                "paper_schedule_failed",
+                severity="warning",
+                title="Paper automatic scheduling is waiting",
+                message=str(exc),
+                source="paper_scheduler",
+                related_id=str(session["id"]),
+                details={"sessionId": session["id"], "tradeDate": next_date, "error": str(exc)},
+                dedupe_key=f"paper_schedule_failed:{session['id']}",
+            )
             retry_errors.append(str(exc))
             continue
     if retry_errors:
@@ -398,6 +442,16 @@ def sync_all_data_task(task_id: str, run_id: str):
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _emit_operational_alert(
+            "data_sync_failed",
+            severity="critical",
+            title="Governed data synchronization failed",
+            message=str(exc),
+            source="data_sync",
+            related_id=run_id,
+            details={"runId": run_id, "taskId": task_id, "error": str(exc)},
+            dedupe_key=f"data_sync_failed:{run_id}",
+        )
         _record_task_metric("data_sync", "failed")
         raise
 

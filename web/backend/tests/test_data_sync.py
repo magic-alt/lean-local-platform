@@ -1479,6 +1479,31 @@ def test_partial_data_sync_never_marks_outer_task_success(monkeypatch):
     assert updates[-1]["error"] == "One or more datasets require retry."
 
 
+def test_failed_data_sync_emits_critical_operational_alert(monkeypatch):
+    from app.tasks import worker
+
+    updates = []
+    alerts = []
+    monkeypatch.setattr(worker, "get_task", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(worker, "update_task", lambda task_id, **values: updates.append(values))
+    monkeypatch.setattr(worker, "append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, "_record_task_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker.data_sync,
+        "run_sync",
+        lambda run_id, task_id: (_ for _ in ()).throw(RuntimeError("provider schema changed")),
+    )
+    monkeypatch.setattr(worker, "_emit_operational_alert", lambda event_type, **kwargs: alerts.append((event_type, kwargs)))
+
+    with pytest.raises(RuntimeError, match="provider schema changed"):
+        worker.sync_all_data_task.run("task-1", "run-1")
+
+    assert updates[-1]["status"] == "failed"
+    assert alerts[0][0] == "data_sync_failed"
+    assert alerts[0][1]["severity"] == "critical"
+    assert alerts[0][1]["related_id"] == "run-1"
+
+
 def test_transient_provider_failures_are_retried(monkeypatch):
     from app.services import data_sync
 

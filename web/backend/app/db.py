@@ -1059,6 +1059,23 @@ def init_db() -> None:
                 unique(dedupe_key, status)
             );
 
+            create table if not exists alert_deliveries (
+                id text primary key,
+                alert_id text not null,
+                channel text not null,
+                status text not null,
+                attempt_count integer not null default 0,
+                last_attempt_at text,
+                last_success_at text,
+                next_retry_at text,
+                last_error text,
+                response_code integer,
+                metadata_json text not null,
+                created_at text not null,
+                updated_at text not null,
+                unique(alert_id, channel)
+            );
+
             create table if not exists index_source_artifacts (
                 id text primary key,
                 index_code text not null,
@@ -1759,6 +1776,10 @@ def init_db() -> None:
                 on pipeline_steps(run_id, step_name);
             create index if not exists idx_alert_events_status
                 on alert_events(status, event_type, last_seen_at);
+            create index if not exists idx_alert_deliveries_status
+                on alert_deliveries(status, updated_at);
+            create index if not exists idx_alert_deliveries_alert
+                on alert_deliveries(alert_id, channel);
             create index if not exists idx_index_events_asof
                 on index_membership_events(index_code, effective_date, announce_date, symbol);
             create index if not exists idx_index_artifacts_code

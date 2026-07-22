@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 2026-07-23 — pin platform container inputs：将 Python、MySQL、Redis、ClickHouse、Prometheus 和 Grafana 固定到已核验 RepoDigest，并固定 Grafana ClickHouse 插件版本，避免 tag 或插件 latest 在重建时静默漂移。
+- 2026-07-23 — persist and dispatch operational alerts：增加 Webhook 告警投递、投递结果与尝试次数持久化、敏感查询参数脱敏、冷却去重和重复 Paper 调度失败自动升级；真实 LEAN Paper、受治理数据同步和自动报告失败现在会产生 Critical 运维告警。
 - 2026-07-22 — accelerate governed TuShare rebuilds：将 daily、adj_factor、suspend_d、stk_limit 全量历史改为受限并发、多股票批量提交和仅差异 canonical 写入，daily 扩大安全请求窗口并将 raw archive 改为低 CPU 规范化压缩；补齐 index_daily 分窗以及指数、期货、期权全市场/交易所抓取，并增加 TuShare CSI300 历史权重影子 universe 校验工具。
 - 2026-07-22 — fail closed after the independent maturity audit：收紧 Data API、回测和 Paper 的生产数据源与 A 股 QA/PIT/reference 双阶段门禁，以 sync manifest + raw archive 建立不可由导入接口伪造的 TuShare provenance，撤销旧认证并阻止 synthetic 批次晋级；增加覆盖资金及实际行情内容的稳定 input/result digest，将历史孤儿 raw archive 可追溯隔离并增加对象完整性检查和安全预览降级；增加本地 API Token/HttpOnly Web session，限制 LEAN/Research 镜像并隔离网络、挂载与资源，将服务端口默认绑定回环地址，修复迁移/备份入口及浏览器报告、重复提交和移动端导航回归。
 - 2026-07-22 — compact and group Web forms：新增统一响应式表单栅格、分组、高级设置和操作区；桌面最多四列、平板两列、手机单列，并将运行镜像、API Key 与原始 JSON 等低频字段折叠，保持请求字段和默认值不变。

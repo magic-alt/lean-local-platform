@@ -1,6 +1,6 @@
 # Roadmap
 
-Last reviewed: 2026-07-22. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), and the [history index](history/README.md).
+Last reviewed: 2026-07-23. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
@@ -64,10 +64,13 @@ Implemented:
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
 - A-share T+1, suspension, limit, lot, fee, slippage and portfolio constraints.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.
+- Persistent operational alerts with Webhook delivery, delivery audit records,
+  cooldown deduplication and repeated Paper scheduling failure escalation.
+- Digest-pinned runtime/base images and a version-pinned Grafana datasource plugin.
 
 Remaining work:
 
-- Unattended daily orchestration with notification/escalation and multi-day acceptance evidence.
+- Complete unattended daily orchestration and multi-day notification/escalation acceptance evidence.
 - Broker integration, reconciliation and secrets hardening before any live trading.
 - Industry/capacity risk limits, circuit breakers and cross-asset paper acceptance.
 - Restore drills, resource budgets and alert thresholds for MySQL, Redis and Docker.
