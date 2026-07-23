@@ -27,5 +27,6 @@
   {"slug":"history-platform-audit-2026-07","source":"history/platform-audit-2026-07.md","group":"reference","category":"history","order":400,"summary":"2026 年 7 月平台审计历史快照。","status":"historical"},
   {"slug":"history-2026-07-platform-fixes","source":"history/2026-07-platform-fixes.md","group":"reference","category":"history","order":410,"summary":"2026 年 7 月数据、预览、启动和数据库问题修复记录。","status":"historical"},
   {"slug":"history-independent-audit-2026-07-22","source":"history/independent-audit-2026-07-22.md","group":"reference","category":"history","order":420,"summary":"2026-07-22 独立成熟度审计失败结论、修复范围和未关闭证据。","status":"historical"},
-  {"slug":"history-independent-audit-remediation-2026-07-23","source":"history/independent-audit-remediation-2026-07-23.md","group":"reference","category":"history","order":430,"summary":"AUD-001 至 AUD-019 的当前整改状态、证据和待复验项。","status":"historical"}
+  {"slug":"history-independent-audit-remediation-2026-07-23","source":"history/independent-audit-remediation-2026-07-23.md","group":"reference","category":"history","order":430,"summary":"AUD-001 至 AUD-019 的当前整改状态、证据和待复验项。","status":"historical"},
+  {"slug":"history-independent-audit-2026-07-24","source":"history/independent-audit-2026-07-24.md","group":"reference","category":"history","order":440,"summary":"2026-07-24 复审状态：更新当前Level 3评级、评分与未关闭缺口。","status":"historical"}
 ]

@@ -8,6 +8,12 @@
 - [2026-07 平台能力复审](platform-audit-2026-07.md) 保存 2026-07-04 起的 P0/P1/P2 问题、当时数据量和验收证据；其中旧路径与命令按历史原文保留。
 - [2026-07-22 独立成熟度审计与修复状态](independent-audit-2026-07-22.md) 保留 26/100、Level 3/4 失败与 Level 5 阻塞结论，并记录后续修复和仍未关闭的验收缺口。
 - [2026-07-23 独立审计整改追踪](independent-audit-remediation-2026-07-23.md) 将 AUD-001 至 AUD-019 映射到当前实现、回归证据和待复验项，不覆盖原始失败结论。
+- [2026-07-24 独立复审更新](independent-audit-2026-07-24.md) 记录基于 production-like 重跑的最新等级与评分：
+  - `LEVEL3_PASS` / `LEVEL3_PLUS_PASS`
+  - `LEVEL4_FAIL`
+  - `LEVEL5_REPLAY_BLOCKED`
+  - `LEVEL5_OPERATIONAL_NOT_READY`
+  - `LIVE_NOT_READY`
 
 ## 维护规则
 

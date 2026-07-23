@@ -22,6 +22,48 @@ from app.services.instrument_identity import identifier_coverage  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE, resolve_source_context  # noqa: E402
 
 
+_PYTHON_IMPORT_CHECKS = ("pymysql", "fastapi")
+
+
+def _pick_python() -> list[str]:
+    candidates = [
+        BACKEND / ".venv/bin/python3.14",
+        BACKEND / ".venv/bin/python3",
+        BACKEND / ".venv/bin/python",
+        Path("/usr/local/bin/python3"),
+        Path("/usr/bin/python3"),
+        Path("/opt/homebrew/bin/python3"),
+        Path(sys.executable),
+    ]
+
+    def _usable(candidate: Path) -> bool:
+        if not candidate.exists():
+            return False
+        try:
+            check = subprocess.run(
+                [str(candidate), "-c", "import pymysql,fastapi; print('ok')"],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            return check.returncode == 0
+        except Exception:
+            return False
+
+    for candidate in candidates:
+        if _usable(candidate):
+            return [str(candidate)]
+
+    # fallback to previous default for compatibility, caller will surface errors
+    return [str(BACKEND / ".venv/bin/python")]
+
+
+def _backend_python() -> list[str]:
+    return _pick_python()
+
+
 def _csv(value: str) -> list[str]:
     return [item.strip().zfill(6)[-6:] for item in value.split(",") if item.strip()]
 
@@ -181,7 +223,8 @@ def main() -> int:
         errors.append("docker_compose_config_failed")
 
     init_db()
-    migrations = _run([str(BACKEND / ".venv/bin/python"), str(ROOT / "scripts/db_migrate.py"), "--verify", "--json"], timeout=120)
+    py = _backend_python()
+    migrations = _run([*py, str(ROOT / "scripts/db_migrate.py"), "--verify", "--json"], timeout=120)
     checks.append({"name": "migrations", "status": "ok" if migrations["returnCode"] == 0 else "critical", "evidence": migrations.get("json") or migrations})
     if migrations["returnCode"] != 0:
         errors.append("migrations_failed")
@@ -212,7 +255,7 @@ def main() -> int:
 
     daily = _run(
         [
-            str(BACKEND / ".venv/bin/python"),
+            *_backend_python(),
             str(ROOT / "scripts/run_daily_shadow_pipeline.py"),
             "--symbols",
             ",".join(symbols),
@@ -243,7 +286,7 @@ def main() -> int:
 
     constraints = _run(
         [
-            str(BACKEND / ".venv/bin/python"),
+            *_backend_python(),
             str(ROOT / "scripts/run_paper_constraints_acceptance.py"),
             "--symbols",
             ",".join(symbols),

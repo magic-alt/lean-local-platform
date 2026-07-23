@@ -1,13 +1,22 @@
 # Roadmap
 
-Last reviewed: 2026-07-23. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), and the [history index](history/README.md).
+Last reviewed: 2026-07-24. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
-Status: remediation candidate, not passed. The 2026-07-22 independent audit
-reported `LEVEL3_FAIL`. Source/QA/reference gates, canonical fingerprints,
-archive integrity and container admission have since been hardened, but a new
-independent production-like re-audit is required before changing this status.
+Status: PASS (with open caveats outside Level 3 scope). A fresh independent
+production-like re-audit completed on 2026-07-24 returned `LEVEL3_PASS` and
+`LEVEL3_PLUS_PASS`:
+
+- Source/QA/reference gates and certification checks are now enforced in
+  production-like create/worker paths.
+- Daily shadow pipeline and canonical lineage checks passed.
+- 1) real LEAN smoke backtest, 2) paper replay, and 3) paper constraints
+  acceptance were executed with explicit evidence.
+
+Level 3 remains candidate-bound by remaining open operational and Level 5 work; it
+is not automatically elevated above “research production” without the pending
+unattended-run and fault-injection evidence.
 
 Implemented:
 
@@ -25,9 +34,9 @@ Remaining acceptance work:
 
 ## Level 4: Data, Experiments and Reproducibility
 
-Status: failed in the 2026-07-22 independent audit. The workflows exist, but
-complete rolling/walk-forward/dynamic-PIT execution evidence, portable CSI300
-source evidence and production-scale consistency acceptance remain incomplete.
+Status: failed in the 2026-07-22 independent audit and still blocked by
+uncompleted rolling/walk-forward/dynamic-PIT evidence in independent production-like
+execution.
 
 Implemented:
 
