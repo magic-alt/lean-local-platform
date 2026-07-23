@@ -34,9 +34,12 @@ Remaining acceptance work:
 
 ## Level 4: Data, Experiments and Reproducibility
 
-Status: failed in the 2026-07-22 independent audit and still blocked by
-uncompleted rolling/walk-forward/dynamic-PIT evidence in independent production-like
-execution.
+Status: blocked (re-audit evidence still pending). Level 4 scripted closure path now
+exists via:
+
+- `web/backend/.venv/bin/python scripts/run_level4_audit.py`
+
+Use `--cases rolling,walk_forward,dynamic_pit` for rolling / walk-forward / dynamic PIT in one pass.
 
 Implemented:
 
@@ -60,12 +63,35 @@ Remaining work:
 - Full historical PIT coverage for every offered universe, especially CSI300 before 2017-12-08.
 - Scheduled incremental Parquet/ClickHouse maintenance with visible independent watermarks.
 
+### Current verification path
+
+- Run:
+
+  `web/backend/.venv/bin/python scripts/run_level4_audit.py --cases rolling,walk_forward,dynamic_pit --project-id <project-id> --execute --base-url <api-url>`
+
+- Evidence output:
+
+  `web/runtime/audit/level4-*.json`
+
 ## Level 5: Paper and Operational Safety
 
 Status: replay blocked and operationally not ready. `signal_simulation`
 acceptance is not evidence for a real 21-day LEAN walk-forward. Unattended
 operation, notification/escalation and full failure-recovery acceptance remain
 required.
+
+Current verification path is implemented in:
+
+- `web/backend/.venv/bin/python scripts/run_level5_audit.py --project-id <project-id>`
+
+  Add `--with-fault` to include the service-restart matrix, and `--constraints`
+  for policy-reject evidence.
+
+可以省略 `--source-backtest-id`，脚本会自动从 `/api/paper/candidates` 选择该项目的首个可信 backtest 作为 source；若存在跨版本/多结果场景，建议显式传入期望的
+`--source-backtest-id <backtest-id>` 锁定复现目标。
+
+The script performs 21-day LEAN Paper, duplicate-call idempotency, optional
+service-fault matrix and constraint coverage checks.
 
 Implemented:
 

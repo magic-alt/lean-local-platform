@@ -38,6 +38,15 @@ LIVE_NOT_READY
 
 - `paper_replay` 与纸面约束场景在本次采样内未出现错误。
 
+### 2026-07-24 本轮补齐情况（用于复验前置）
+
+- 新增/修复了用于独立复审的脚本化入口：
+  - `scripts/run_level4_audit.py`：补齐 `rolling / walk_forward / dynamic_pit` 的可复验证据采集（可预览/执行模式、CSV 导出检查、失败收敛）。
+  - `scripts/run_level5_audit.py`：封装 21 日 LEAN Paper 会话、可选故障重放矩阵、重复 `run-day` 幂等性、拒单与拒因要求。
+  - `scripts/run_lean_paper_walkforward_acceptance.py`：作为底层执行器，新增断点恢复与重复执行稳定性判断。
+- 已修正 Level 5 复验入口的故障矩阵语义：仅在显式 `--with-fault` 时才执行 `--fault-scenarios`。
+- 因环境/维护窗口限制，上述脚本在本快照内尚未形成“完整通过”证据写入；故最终结论保持 Level 4/5 为 FAIL。
+
 ## 评分与等级
 
 将审计结论按既有成熟度权重进行“可复核范围内”重算：
@@ -51,6 +60,14 @@ LIVE_NOT_READY
 2. Level 4（rolling/walk-forward/动态 PIT 扩张）与部分实验批次的完整证据仍未形成。
 3. Level 5 replay（真实连续 21 日 LEAN walk-forward、故障重放幂等、多日补跑/升级）仍不完整。
 4. 运维与无人值守相关（故障注入全量矩阵、生产规模 DR、凭据轮换与运行边界）未完成。
+
+### 复核复现入口（新增）
+
+- `scripts/run_level4_audit.py`：支持 rolling / walk-forward / dynamic PIT 的预览、执行、CSV 检查与证据落盘。
+- `scripts/run_level5_audit.py`：支持 21 天 LEAN Paper、可选 fault 场景重放、重复调用幂等、约束闭环。
+- `scripts/run_lean_paper_walkforward_acceptance.py`：单次会话 21+ 交易日执行器，含 `--dry-run`、fault 注入、report/订单/日报一致性检查。
+
+> 说明：该阶段脚本已就绪，但本快照仍未形成完整通过证据，不影响该快照的 `07-24` 结论。
 
 ## 仍然保留的高优先验缺口
 

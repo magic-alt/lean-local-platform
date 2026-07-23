@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-24 — add reproducible Level 4/5 re-audit runners for rolling, walk-forward, dynamic PIT and 21-day LEAN Paper evidence; make the Level 5 fault matrix opt-in and document the evidence-producing verification paths.
 - 2026-07-24 — document independent re-audit 2026-07-24 and update roadmap/history index wiring; extend level-3 shadow runner python/bootstrap fallback for constrained environments.
 - 2026-07-23 — fix independent audit scripts: `run_level3_shadow_audit.py` 现在兼容 docker compose 插件差异（`docker compose` / `docker-compose`），`run_paper_constraints_acceptance.py` 修复单符号输入导致的拒单场景误判，确保 `max_positions` 与 `not_in_watchlist` 能稳定得到对应拒单原因。
 - 2026-07-23 — add evidence-driven operational acceptances：增加可恢复的真实 21 交易日 LEAN Paper 验收、活动任务安全门禁下的 Redis/MySQL/worker 重启矩阵、带 SHA-256 校验且禁止覆盖正式库的隔离恢复入口、镜像 CycloneDX SBOM 生成与供应链固定检查；实际导入 2005–2026 TuShare CSI300 影子 PIT，并继续禁止其冒充官方 CSI300。

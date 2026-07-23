@@ -92,19 +92,94 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 ```
 
 Real Paper and bounded local-service recovery acceptances are explicit,
-resumable and refuse unsafe shortcuts:
+resumable and refuse unsafe shortcuts.
+
+### Level 4 / Level 5 Audit Commands
+
+Use the dedicated acceptance scripts before each review cycle:
+
+```bash
+# 1) Level 4: rolling-window + walk-forward + dynamic PIT evidence
+cd web/backend
+.venv/bin/python scripts/run_level4_audit.py \
+  --project-id PROJECT_ID \
+  --base-url http://127.0.0.1:8003 \
+  --cases rolling,walk_forward,dynamic_pit \
+  --execute \
+  --require-csv \
+  --timeout 1800 \
+  --poll-seconds 2 \
+  --evidence-out web/runtime/audit/level4-reproducibility.json
+
+# Or preview-only to validate expansion, limits and scheduling preconditions
+.venv/bin/python scripts/run_level4_audit.py \
+  --project-id PROJECT_ID \
+  --base-url http://127.0.0.1:8003 \
+  --cases rolling \
+  --preview-only \
+  --evidence-out web/runtime/audit/level4-rolling-preview.json
+```
+
+```bash
+# 2) Level 5: 21-day real LEAN Paper chain + optional fault matrix
+cd web/backend
+.venv/bin/python scripts/run_level5_audit.py \
+  --project-id PROJECT_ID \
+  --start-date 2023-07-03 \
+  --days 21 \
+  --with-fault \
+  --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
+  --constraints \
+  --evidence-dir web/runtime/audit \
+  --api-url http://127.0.0.1:8003
+
+# If you already know the trusted source id, keep explicit linkage:
+.venv/bin/python scripts/run_level5_audit.py \
+  --project-id PROJECT_ID \
+  --source-backtest-id BACKTEST_ID \
+  --start-date 2023-07-03 \
+  --days 21 \
+  --with-fault \
+  --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
+  --constraints \
+  --evidence-dir web/runtime/audit \
+  --api-url http://127.0.0.1:8003
+```
+
+`run_level5_audit.py` is a wrapper around
+`run_lean_paper_walkforward_acceptance.py` that captures per-session evidence for:
+
+- full 21+ day LEAN walk-forward completion
+- duplicate-call idempotency (`run-day` re-issue must block)
+- fills + policy rejects + reject reason presence
+- restart recovery points at selected fault phases
+- constraints/reject coverage
+
+For one-shot dry-run before execution:
 
 ```bash
 web/backend/.venv/bin/python scripts/run_lean_paper_walkforward_acceptance.py \
+  --project-id PROJECT_ID \
+  --start-date 2023-07-03 --days 21 \
+  --evidence-out web/runtime/audit/paper-21-day.json \
+  --dry-run
+
+# 或者显式指定已验证 source backtest：
+web/backend/.venv/bin/python scripts/run_lean_paper_walkforward_acceptance.py \
   --project-id PROJECT_ID --source-backtest-id BACKTEST_ID \
   --start-date 2023-07-03 --days 21 \
-  --evidence-out web/runtime/audit/paper-21-day.json
+  --evidence-out web/runtime/audit/paper-21-day.json \
+  --dry-run
 
-# Refuses to run while data sync, backtests, or Paper days are active.
+# Legacy bounded restart matrix is still kept as a lower-level smoke:
 web/backend/.venv/bin/python scripts/run_service_restart_fault_acceptance.py \
   --services worker,redis,mysql --confirm RESTART_LOCAL_SERVICES \
   --output web/runtime/audit/service-restart-matrix.json
 ```
+
+The wrapper supports `--with-fault` and `--constraints`; both are required
+for full Level 5 replay re-evaluation in the current audit process. When
+`--with-fault` is omitted, fault scenarios are intentionally skipped.
 
 The Paper command distinguishes a successful 21-day cumulative LEAN chain
 from the stricter Level 5 replay gate. Level 5 also requires at least one fill
