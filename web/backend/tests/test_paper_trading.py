@@ -3,6 +3,14 @@ import sys
 import pytest
 
 
+def test_lean_order_status_is_normalized_for_paper_reports():
+    from app.services.paper import _paper_order_status
+
+    assert _paper_order_status(3) == "filled"
+    assert _paper_order_status("2") == "partially_filled"
+    assert _paper_order_status("Filled") == "filled"
+
+
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
     import app.domain.assets as assets_module

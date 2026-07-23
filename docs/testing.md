@@ -91,6 +91,35 @@ cd web/backend
 RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_lean_integration.py
 ```
 
+Real Paper and bounded local-service recovery acceptances are explicit,
+resumable and refuse unsafe shortcuts:
+
+```bash
+web/backend/.venv/bin/python scripts/run_lean_paper_walkforward_acceptance.py \
+  --project-id PROJECT_ID --source-backtest-id BACKTEST_ID \
+  --start-date 2023-07-03 --days 21 \
+  --evidence-out web/runtime/audit/paper-21-day.json
+
+# Refuses to run while data sync, backtests, or Paper days are active.
+web/backend/.venv/bin/python scripts/run_service_restart_fault_acceptance.py \
+  --services worker,redis,mysql --confirm RESTART_LOCAL_SERVICES \
+  --output web/runtime/audit/service-restart-matrix.json
+```
+
+The Paper command distinguishes a successful 21-day cumulative LEAN chain
+from the stricter Level 5 replay gate. Level 5 also requires at least one fill
+and one policy-rejected order with a reason in the same session; a run without
+that rejection is reported as `partial`, not promoted to PASS.
+
+Generate runtime-image CycloneDX evidence and verify immutable dependency
+inputs with:
+
+```bash
+scripts/generate_container_sbom.sh web/runtime/audit/sbom
+web/backend/.venv/bin/python scripts/check_supply_chain.py \
+  --output web/runtime/audit/supply-chain.json
+```
+
 ## Standard Backtest Problems
 
 ### 1. Buy and Hold
@@ -160,5 +189,11 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 - No full exchange-grade A-share matching acceptance test yet.
 - No resource-pressure/OOM recovery test representative of the complete Docker Desktop stack yet.
 - No accepted production-like five-job concurrency/cancellation/fault matrix yet.
-- No accepted real 21-trading-day LEAN Paper walk-forward acceptance yet.
+- A real 21-trading-day LEAN Paper acceptance is available, but it cannot
+  close Level 5 unless the same session contains a filled and a policy-rejected
+  order.
 - The production CSI300 manifest cannot validate without the operator-retained official attachment bundle.
+- Disk exhaustion/OOM and production-scale restore remain isolated-environment
+  gates; they must never be injected into the formal workstation data volume.
+- SBOM generation exists, but Python transitive hash locking, vulnerability
+  policy and trusted image signature verification remain release gates.

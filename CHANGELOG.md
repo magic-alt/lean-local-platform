@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-23 — add evidence-driven operational acceptances：增加可恢复的真实 21 交易日 LEAN Paper 验收、活动任务安全门禁下的 Redis/MySQL/worker 重启矩阵、带 SHA-256 校验且禁止覆盖正式库的隔离恢复入口、镜像 CycloneDX SBOM 生成与供应链固定检查；实际导入 2005–2026 TuShare CSI300 影子 PIT，并继续禁止其冒充官方 CSI300。
 - 2026-07-23 — close governed rebuild and reproducibility gaps：完成十数据集 full rebuild、raw archive、Parquet/DuckDB/ClickHouse 对账与 TuShare production recertification；将 CSI300 index daily 规范化为 index canonical，并修复 fingerprint 慢查询、终态 scheduler lease、Paper replay 重复 reference scan 和 run-local snapshot 路径导致的 canonical result digest 漂移。
 - 2026-07-23 — revalidate Level 3 production path：重新执行受治理双标的 A 股 shadow、真实 LEAN integration、两次 deterministic golden backtest、Paper 约束、十数据集 Preview、后端全量测试、前端 build/E2E、migration、文档与仓库卫生检查；保留真实 21 日 LEAN Paper、故障矩阵、DR 和安全边界为未关闭项。
 - 2026-07-23 — bound governed materialization resources：将 Parquet 年度切分改为单次线性 partition，并增大年度 part 以减少 Docker Desktop 文件共享事件；限制 Polars 并行线程和 data-demand worker CPU，避免全量派生期间挤占 MySQL、API 与 Docker 控制面。

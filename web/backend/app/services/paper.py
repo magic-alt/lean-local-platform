@@ -256,7 +256,10 @@ def list_orders(session_id: str) -> list[dict[str, Any]]:
             "select * from paper_orders where session_id = ? order by trade_date asc, created_at asc",
             (session_id,),
         ).fetchall()
-    return rows_to_dicts(rows)
+    items = rows_to_dicts(rows)
+    for item in items:
+        item["status"] = _paper_order_status(item.get("status"))
+    return items
 
 
 def list_positions(session_id: str) -> list[dict[str, Any]]:
@@ -490,6 +493,20 @@ def _order_event_key(order: dict[str, Any]) -> str:
         "status": str(order.get("status") or "").lower(),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _paper_order_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return {
+        "0": "new",
+        "1": "submitted",
+        "2": "partially_filled",
+        "3": "filled",
+        "5": "cancelled",
+        "6": "invalid",
+        "7": "cancel_pending",
+        "8": "update_submitted",
+    }.get(normalized, normalized or "filled")
 
 
 def _order_trade_date(order: dict[str, Any]) -> str:
@@ -742,7 +759,7 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                     quantity,
                     price,
                     price,
-                    order.get("status") or "filled",
+                    _paper_order_status(order.get("status")),
                     order.get("tag"),
                     now,
                     str(order.get("time") or now),

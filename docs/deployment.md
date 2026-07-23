@@ -156,6 +156,20 @@ backend image and execute the protected integration lanes. A digest pin proves
 which bytes are selected; SBOM generation, signature verification and the
 Python hash lock remain separate release gates.
 
+Generate CycloneDX documents for every local Compose image and a checksum
+manifest with:
+
+```bash
+scripts/generate_container_sbom.sh web/runtime/audit/sbom
+web/backend/.venv/bin/python scripts/check_supply_chain.py \
+  --output web/runtime/audit/supply-chain.json
+```
+
+The checker intentionally fails while direct Python dependencies use version
+ranges or any runtime image is mutable. SBOM generation does not prove that an
+image is trusted; publisher/release signature verification and an approved
+vulnerability policy remain mandatory independent gates.
+
 `scripts/start_web_single_instance.sh` generates a runtime-only MySQL loader
 password and grants that account only the privileges required for rebuildable
 market-data batches. Bulk sessions disable their own binlog; API, projects,
@@ -255,6 +269,14 @@ Every LEAN child uses a digest allowlist, a per-run writable object directory,
 `network=none`, a read-only root filesystem, dropped capabilities, no-new-privileges,
 and bounded CPU, memory and PID settings.
 
+This is not a multi-tenant security boundary. A process that compromises the
+backtest worker can control the host Docker daemon through the raw socket.
+Production or untrusted-strategy operation therefore remains prohibited until
+the worker is replaced by a narrow, separately authenticated runner on a
+dedicated/rootless daemon (or an authorization layer that also constrains bind
+mount sources). A generic socket proxy that still permits arbitrary container
+creation and bind mounts is not sufficient evidence.
+
 ## Data Directories
 
 ```text
@@ -287,11 +309,20 @@ Recommended logical backup:
 ./scripts/backup_mysql.sh
 ```
 
-Restore:
+Restore only into an isolated database:
 
 ```bash
-docker exec -i lean-platform-mysql-1 mysql -ulean -plean lean_market < lean_market.sql
+scripts/restore_mysql.sh \
+  --backup web/runtime/backups/lean_market-TIMESTAMP.sql \
+  --target-database lean_restore_dr01 \
+  --confirm RESTORE_ISOLATED_DATABASE
 ```
+
+The restore command verifies the adjacent SHA-256 file and refuses
+`lean_market` or any target not prefixed `lean_restore_`. This safe entrypoint
+is not itself production-scale DR evidence: RPO/RTO, encrypted off-host
+retention, full-size restore timing and object/Parquet recovery must be
+measured in a dedicated environment.
 
 Also back up:
 

@@ -1,6 +1,6 @@
 # Data Sources and Governance
 
-Last reviewed: 2026-07-22.
+Last reviewed: 2026-07-23.
 
 LEAN is the execution engine; this repository remains responsible for provider
 access, licensing, normalization, quality checks and local storage. Downloaded
@@ -132,3 +132,11 @@ canonical weights and no-lookahead snapshot intervals only when `--dry-run` is
 removed. Incomplete snapshots remain visible in the report and are never
 filled with current constituents. Promotion remains blocked until the shadow
 series is reconciled against the official announcement bundle.
+
+The 2026-07-23 governed run fetched 76,498 TuShare rows, accepted 254 complete
+monthly snapshots (76,200 no-lookahead membership intervals) covering
+2005-04-29 through 2026-06-30, and quarantined the incomplete 298-member
+snapshot dated 2009-12-31. This closes the TuShare shadow coverage gap only.
+`CSI300` production PIT remains unavailable before the verified official
+2017-12-08 boundary; `CSI300_TUSHARE` is never considered an official-source
+replacement.
