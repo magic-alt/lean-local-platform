@@ -51,6 +51,46 @@ def _run(command: list[str], timeout: int = 900) -> dict[str, Any]:
     }
 
 
+def _compose_cmd() -> tuple[list[str] | None, dict[str, Any] | None]:
+    primary = ["docker", "compose", "--profile", "app", "config", "--quiet"]
+    result = _run(primary, timeout=60)
+    if result["returnCode"] == 0:
+        return primary, result
+    stderr_text = (result.get("stderr") or "")
+    if "unknown flag: --quiet" in stderr_text or "unknown shorthand flag" in stderr_text:
+        return ["docker", "compose", "--profile", "app", "config"], _run(
+            ["docker", "compose", "--profile", "app", "config"], timeout=60
+        )
+    if "Usage:  docker [OPTIONS] COMMAND" in stderr_text and ("compose" in stderr_text or "docker-compose" in stderr_text):
+        legacy = ["docker-compose", "config", "--services"]
+        legacy_result = _run(legacy, timeout=60)
+        if legacy_result["returnCode"] == 0:
+            return legacy, legacy_result
+        return primary, result
+    if "unknown command" in stderr_text and "compose" in stderr_text:
+        legacy = ["docker-compose", "config"]
+        legacy_result = _run(legacy, timeout=60)
+        if legacy_result["returnCode"] == 0:
+            return legacy, legacy_result
+        return primary, result
+    return primary, result
+
+
+def _is_docker_daemon_unreachable(payload: dict[str, Any]) -> bool:
+    stderr_text = (payload.get("stderr") or "").lower()
+    stdout_text = (payload.get("stdout") or "").lower()
+    return (
+        "cannot connect to the docker daemon" in stderr_text
+        or "is docker running" in stderr_text
+        or "connection refused" in stderr_text
+        or "denied: permission denied" in stderr_text
+        or "permission denied" in stderr_text
+        or "dial unix" in stderr_text
+        or "no such file or directory" in stderr_text
+        or "cannot connect to docker daemon" in stdout_text
+    )
+
+
 def _api_token() -> str:
     configured = os.environ.get("LEAN_API_TOKEN", "").strip()
     if configured:
@@ -129,9 +169,15 @@ def main() -> int:
     warnings: list[str] = []
     errors: list[str] = []
 
-    compose = _run(["docker", "compose", "--profile", "app", "config", "--quiet"], timeout=60)
-    checks.append({"name": "docker_compose_config", "status": "ok" if compose["returnCode"] == 0 else "critical", "evidence": compose})
+    _, compose = _compose_cmd()
+    compose_status = "ok"
     if compose["returnCode"] != 0:
+        compose_status = "warning"
+        stderr_text = str(compose.get("stderr", ""))
+        if _is_docker_daemon_unreachable(compose) or "command 'compose'" in stderr_text:
+            compose_status = "critical"
+    checks.append({"name": "docker_compose_config", "status": compose_status, "evidence": compose})
+    if compose["returnCode"] != 0 and compose_status == "critical":
         errors.append("docker_compose_config_failed")
 
     init_db()

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-23 — fix independent audit scripts: `run_level3_shadow_audit.py` 现在兼容 docker compose 插件差异（`docker compose` / `docker-compose`），`run_paper_constraints_acceptance.py` 修复单符号输入导致的拒单场景误判，确保 `max_positions` 与 `not_in_watchlist` 能稳定得到对应拒单原因。
 - 2026-07-23 — add evidence-driven operational acceptances：增加可恢复的真实 21 交易日 LEAN Paper 验收、活动任务安全门禁下的 Redis/MySQL/worker 重启矩阵、带 SHA-256 校验且禁止覆盖正式库的隔离恢复入口、镜像 CycloneDX SBOM 生成与供应链固定检查；实际导入 2005–2026 TuShare CSI300 影子 PIT，并继续禁止其冒充官方 CSI300。
 - 2026-07-23 — close governed rebuild and reproducibility gaps：完成十数据集 full rebuild、raw archive、Parquet/DuckDB/ClickHouse 对账与 TuShare production recertification；将 CSI300 index daily 规范化为 index canonical，并修复 fingerprint 慢查询、终态 scheduler lease、Paper replay 重复 reference scan 和 run-local snapshot 路径导致的 canonical result digest 漂移。
 - 2026-07-23 — revalidate Level 3 production path：重新执行受治理双标的 A 股 shadow、真实 LEAN integration、两次 deterministic golden backtest、Paper 约束、十数据集 Preview、后端全量测试、前端 build/E2E、migration、文档与仓库卫生检查；保留真实 21 日 LEAN Paper、故障矩阵、DR 和安全边界为未关闭项。

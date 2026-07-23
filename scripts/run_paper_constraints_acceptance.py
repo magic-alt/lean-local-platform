@@ -44,6 +44,46 @@ def _trade_pair(symbols: list[str], start: str, end: str, source: str) -> tuple[
     return dates[0], dates[1]
 
 
+def _find_fallback_symbol(
+    exclude_symbol: str,
+    source: str,
+    trade_date: str,
+    *,
+    fallback: list[str] | None = None,
+) -> str | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select symbol
+            from ashare_daily_bars
+            where trade_date = ? and source = ? and symbol != ?
+            order by symbol asc
+            limit 1
+            """,
+            (trade_date, source, exclude_symbol),
+        ).fetchone()
+    if row and row["symbol"]:
+        return str(row["symbol"]).zfill(6)[-6:]
+    candidates = fallback or ["600519", "000001", "300750"]
+    for candidate in candidates:
+        candidate = str(candidate).strip().zfill(6)[-6:]
+        if not candidate or candidate == exclude_symbol:
+            continue
+        with db() as connection:
+            exists = connection.execute(
+                """
+                select 1
+                from ashare_daily_bars
+                where symbol = ? and source = ? and trade_date = ?
+                limit 1
+                """,
+                (candidate, source, trade_date),
+            ).fetchone()
+        if exists:
+            return candidate
+    return None
+
+
 def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | None:
     with db() as connection:
         row = connection.execute(
@@ -96,7 +136,21 @@ def _run_single_reason(
 ) -> dict[str, Any]:
     signal_date, execution_date = _trade_pair(symbols, start, end, source)
     primary = symbols[0]
-    secondary = symbols[1] if len(symbols) > 1 else symbols[0]
+    secondary = symbols[1] if len(symbols) > 1 else _find_fallback_symbol(
+        primary,
+        source,
+        execution_date,
+        fallback=symbols,
+    )
+    if secondary is None:
+        secondary = _find_fallback_symbol(
+            primary,
+            source,
+            execution_date,
+            fallback=["600519", "000001", "300750"],
+        )
+        if secondary is None:
+            secondary = primary
     params: dict[str, Any] = {
         "symbol": primary,
         "symbols": symbols,
@@ -126,6 +180,7 @@ def _run_single_reason(
         params["maxPositions"] = 1
         params["cash"] = 5000000
         params["maxPositionWeight"] = 0.4
+        params["symbols"] = [primary, secondary]
     elif reason == "st_blocked":
         signal_symbol = primary
         with db() as connection:
