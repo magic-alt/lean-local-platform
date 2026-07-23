@@ -36,6 +36,28 @@ def test_trade_calendar_preview_filters_and_pages_canonical_rows():
     assert result["items"][0]["trade_date"] == "2026-07-20"
 
 
+def test_symbol_preview_uses_normalized_exact_match():
+    init_db()
+    with db() as connection:
+        connection.executemany(
+            """
+            insert into adjustment_factors (symbol,trade_date,adj_factor,source,batch_id)
+            values (?, '2026-07-17', 1.0, 'tushare', 'test')
+            """,
+            [("600519",), ("1600519",)],
+        )
+
+    response = TestClient(app).get(
+        "/api/data/dataset-preview/adj_factor",
+        params={"keyword": "SH600519", "limit": 20},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["count"] == 1
+    assert result["items"][0]["symbol"] == "600519"
+
+
 def test_index_archive_preview_reads_compressed_batch_without_row_json():
     init_db()
     payload = gzip.compress(json.dumps([

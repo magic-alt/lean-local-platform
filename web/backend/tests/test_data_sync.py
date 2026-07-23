@@ -180,6 +180,104 @@ def test_daily_sync_scope_excludes_b_shares(tmp_path, monkeypatch):
     assert [row["symbol"] for row in _listed_securities()] == ["600000", "920001"]
 
 
+def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.ashare_repository import upsert_daily_bars
+    from app.services.data import _reconcile_ashare_daily_snapshot
+
+    rows = [
+        {
+            "symbol": "600519",
+            "trade_date": trade_date,
+            "open": close - 1,
+            "high": close + 1,
+            "low": close - 2,
+            "close": close,
+            "volume": 1000,
+        }
+        for trade_date, close in (("2020-07-21", 100.0), ("2026-07-22", 101.0))
+    ]
+    upsert_daily_bars(rows, source="tushare", batch_id="old", adjust="raw", bulk=True)
+
+    deleted = _reconcile_ashare_daily_snapshot(
+        [
+            {
+                "symbol": "600519",
+                "snapshot_start": "2026-07-21",
+                "snapshot_end": "2026-07-22",
+            }
+        ],
+        {"600519": [{**rows[1], "source": "tushare", "adjust": "raw"}]},
+    )
+
+    with db() as connection:
+        ashare = connection.execute(
+            "select trade_date from ashare_daily_bars where symbol='600519' and source='tushare'"
+        ).fetchall()
+        market = connection.execute(
+            "select trade_date from market_daily_bars where symbol='600519' and source='tushare'"
+        ).fetchall()
+    assert deleted == 2
+    assert [row["trade_date"] for row in ashare] == ["2026-07-22"]
+    assert [row["trade_date"] for row in market] == ["2026-07-22"]
+
+
+def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services import data_sync
+    from app.services.ashare_repository import upsert_daily_bars
+
+    run = data_sync.create_sync_run(requested=["daily"], mode="full_rebuild")
+    upsert_daily_bars(
+        [
+            {
+                "symbol": "000300",
+                "trade_date": "2026-07-22",
+                "open": 100,
+                "high": 101,
+                "low": 99,
+                "close": 100,
+                "volume": 1000,
+            }
+        ],
+        source="tushare",
+        batch_id="legacy-index",
+        adjust="raw",
+        bulk=True,
+    )
+    with db() as connection:
+        connection.execute(
+            """
+            insert into provider_ingestion_manifests
+                (id,run_id,provider,dataset_key,scope_key,request_json,response_rows,
+                 normalized_rows,rejected_rows,payload_sha256,keys_sha256,status,
+                 validation_json,endpoint_counts_json,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "manifest-600519", run["id"], "tushare", "daily", "600519", "{}",
+                0, 0, 0, "payload", "keys", "success", "{}", "{}", "now",
+            ),
+        )
+
+    deleted = data_sync._reconcile_daily_manifest_scope(run["id"])
+
+    with db() as connection:
+        ashare_count = connection.execute(
+            "select count(*) as count from ashare_daily_bars where symbol='000300' and source='tushare'"
+        ).fetchone()["count"]
+        market_count = connection.execute(
+            "select count(*) as count from market_daily_bars where symbol='000300' and source='tushare'"
+        ).fetchone()["count"]
+    assert deleted == 2
+    assert ashare_count == 0
+    assert market_count == 0
+
+
 def test_latest_open_trade_date_avoids_weekend_fanout(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db
@@ -995,7 +1093,11 @@ def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatc
         "query_database_bars",
         lambda **kwargs: {"items": [{"timestamp": "2026-07-17", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1}]},
     )
-    monkeypatch.setattr(market_data, "mirror_rows", lambda metadata, rows: {"enabled": True, "inserted": 1})
+    monkeypatch.setattr(
+        market_data,
+        "mirror_rows_batch",
+        lambda entries: [{"enabled": True, "inserted": len(rows)} for _metadata, rows in entries],
+    )
     assets = []
     monkeypatch.setattr(data, "record_data_asset", lambda metadata: assets.append(metadata) or metadata)
     monkeypatch.setattr(
@@ -1015,6 +1117,77 @@ def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatc
     assert assets[0]["clickhouse"]["inserted"] == 1
     assert result["parquet"]["passed"] is True
     assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "ready"
+
+
+def test_daily_derivatives_resume_from_persisted_checkpoint(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, json_dump
+    from app.services import data, data_sync, lean_cache, market_data, parquet_lake
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
+    for symbol in ("000001", "000002"):
+        row = {"ts_code": f"{symbol}.SZ", "trade_date": "20260717", "close": 10}
+        data_sync._record_ingestion_manifest(
+            run_id=run["id"],
+            spec=spec,
+            scope_key=symbol,
+            request={"startDate": "2026-07-17", "endDate": "2026-07-17"},
+            rows=[row],
+            validation=data_sync._validate_dataset_rows(spec, [row]),
+            endpoint_counts={"daily": 1},
+            coverage_start="2026-07-17",
+            coverage_end="2026-07-17",
+        )
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set derived_status_json=? where id=?",
+            (
+                json_dump(
+                    {
+                        "status": "running",
+                        "total": 2,
+                        "completed": 1,
+                        "failed": 0,
+                        "failureSamples": [],
+                    }
+                ),
+                run["id"],
+            ),
+        )
+
+    rebuilt: list[str] = []
+    monkeypatch.setattr(
+        lean_cache,
+        "rebuild_ashare_lean_cache_from_db",
+        lambda symbol, **kwargs: rebuilt.append(symbol) or {"symbol": symbol, "rows": 1},
+    )
+    monkeypatch.setattr(
+        market_data,
+        "query_database_bars",
+        lambda **kwargs: {"items": [{"timestamp": "2026-07-17", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1}]},
+    )
+    monkeypatch.setattr(
+        market_data,
+        "mirror_rows_batch",
+        lambda entries: [{"enabled": True, "inserted": len(rows)} for _metadata, rows in entries],
+    )
+    monkeypatch.setattr(data, "record_data_asset", lambda metadata: metadata)
+    monkeypatch.setattr(
+        parquet_lake,
+        "rebuild_all_market_parquet",
+        lambda **kwargs: {
+            "rebuiltCount": 1,
+            "certifiedDatasetIds": ["dataset-tushare"],
+            "consistencyReport": {"passed": True, "reportId": "qa-parquet"},
+        },
+    )
+
+    result = data_sync.materialize_daily_run(run["id"])
+
+    assert rebuilt == ["000002"]
+    assert result["status"] == "ready"
+    assert result["completed"] == 2
 
 
 def test_on_demand_download_requires_selected_safe_storage_and_writes_jsonl(tmp_path, monkeypatch):
@@ -1243,6 +1416,55 @@ def test_complete_index_daily_query_splits_provider_capped_history():
     assert len(rows) == len(calls)
 
 
+def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "index_daily")
+    data_sync._normalize_optional(
+        spec,
+        [
+            {
+                "ts_code": "000300.SH",
+                "trade_date": "20230703",
+                "open": 3844.22,
+                "high": 3893.36,
+                "low": 3835.95,
+                "close": 3892.88,
+                "pre_close": 3842.45,
+                "pct_chg": 1.3124,
+                "vol": 123.5,
+                "amount": 456.75,
+            },
+            {
+                "ts_code": "000300.SH",
+                "trade_date": "20030909",
+                "open": None,
+                "high": None,
+                "low": None,
+                "close": 1172.051,
+                "vol": 0,
+                "amount": 0,
+            },
+        ],
+        "governed-index-run",
+        bulk=True,
+    )
+
+    with db() as connection:
+        rows = connection.execute(
+            "select trade_date,open,high,low,close,volume,amount,source,batch_id "
+            "from market_daily_bars where symbol='000300' and asset_class='index' order by trade_date"
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["open"] == rows[0]["close"] == 1172.051
+    assert rows[1]["volume"] == 12350
+    assert rows[1]["amount"] == 456750
+    assert rows[1]["source"] == "tushare"
+    assert rows[1]["batch_id"] == "governed-index-run"
+
+
 def test_daily_catalog_coverage_uses_normalized_table(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, utc_now
@@ -1427,6 +1649,8 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     from app.tasks.worker import (
         _broker_contains_sync_run,
         _broker_ready_contains_sync_run,
+        _broker_ready_contains_materialization,
+        _broker_unacked_materialization_tags,
         _broker_unacked_sync_tags,
         sync_all_data_task,
     )
@@ -1441,17 +1665,26 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert routes["lean_web.optimize"]["queue"] == "backtest"
     assert sync_all_data_task.acks_late is True
     assert sync_all_data_task.reject_on_worker_lost is True
+    assert celery_app.conf.broker_transport_options["visibility_timeout"] == 43_200
 
     class FakeRedis:
         def lrange(self, queue, start, end):
-            return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-123"}}'] if queue == "data-bulk" else []
+            if queue == "data-bulk":
+                return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-123"}}']
+            if queue == "data-demand":
+                return [b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived"}}']
+            return []
 
         def hvals(self, key):
-            return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}']
+            return [
+                b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}',
+                b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived-unacked"}}',
+            ]
 
         def hgetall(self, key):
             return {
-                b"delivery-run-unacked": b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}'
+                b"delivery-run-unacked": b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}',
+                b"delivery-derived-unacked": b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived-unacked"}}',
             }
 
     assert _broker_contains_sync_run(FakeRedis(), "run-123") is True
@@ -1460,6 +1693,131 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert _broker_ready_contains_sync_run(FakeRedis(), "run-123") is True
     assert _broker_ready_contains_sync_run(FakeRedis(), "run-unacked") is False
     assert _broker_unacked_sync_tags(FakeRedis(), "run-unacked") == ["delivery-run-unacked"]
+    assert _broker_ready_contains_materialization(FakeRedis(), "run-derived") is True
+    assert _broker_ready_contains_materialization(FakeRedis(), "run-derived-unacked") is False
+    assert _broker_unacked_materialization_tags(FakeRedis(), "run-derived-unacked") == ["delivery-derived-unacked"]
+
+
+def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import redis
+
+    from app.db import db, json_dump
+    from app.services import data_sync
+    from app.tasks import worker
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    payload = {
+        "status": "running",
+        "total": 2,
+        "completed": 1,
+        "failed": 0,
+        "heartbeatAt": "2000-01-01T00:00:00+00:00",
+    }
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set status='success',canonical_status='ready',finished_at=?,derived_status_json=? where id=?",
+            ("2000-01-01T00:00:00+00:00", json_dump(payload), run["id"]),
+        )
+
+    removed: list[tuple[str, ...]] = []
+
+    class FakeRedis:
+        def ping(self):
+            return True
+
+        def lrange(self, queue, start, end):
+            return []
+
+        def hvals(self, key):
+            return []
+
+        def hgetall(self, key):
+            return {
+                b"delivery-derived": (
+                    b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"'
+                    + run["id"].encode("utf-8")
+                    + b'"}}'
+                )
+            }
+
+        def hdel(self, key, *tags):
+            removed.append((key, *tags))
+
+        def zrem(self, key, *tags):
+            removed.append((key, *tags))
+
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *args, **kwargs: FakeRedis()))
+    monkeypatch.setattr(worker, "_materialization_lease_active", lambda run_id: False)
+    queued: list[tuple[list[str], str]] = []
+    monkeypatch.setattr(
+        worker.materialize_sync_data_task,
+        "apply_async",
+        lambda *, args, queue: queued.append((args, queue)),
+    )
+
+    result = worker.recover_data_sync_task.run()
+
+    assert result["recoveredDerived"] == [run["id"]]
+    assert queued == [([run["id"]], "data-demand")]
+    assert removed == [
+        ("unacked", "delivery-derived"),
+        ("unacked_index", "delivery-derived"),
+    ]
+    assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "queued"
+    assert data_sync.sync_run(run["id"])["derivedStatus"]["recoveryReason"] == "stale_derived_heartbeat"
+
+
+def test_recovery_preserves_stale_derived_materialization_with_live_lease(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import redis
+
+    from app.db import db, json_dump
+    from app.services import data_sync
+    from app.tasks import worker
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    payload = {
+        "status": "running",
+        "total": 2,
+        "completed": 1,
+        "failed": 0,
+        "heartbeatAt": "2000-01-01T00:00:00+00:00",
+    }
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set status='success',canonical_status='ready',finished_at=?,derived_status_json=? where id=?",
+            ("2000-01-01T00:00:00+00:00", json_dump(payload), run["id"]),
+        )
+
+    class FakeRedis:
+        def ping(self):
+            return True
+
+        def lrange(self, queue, start, end):
+            return []
+
+        def hvals(self, key):
+            return []
+
+        def hgetall(self, key):
+            return {}
+
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *args, **kwargs: FakeRedis()))
+    monkeypatch.setattr(worker, "_materialization_lease_active", lambda run_id: True)
+    queued = []
+    monkeypatch.setattr(
+        worker.materialize_sync_data_task,
+        "apply_async",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    result = worker.recover_data_sync_task.run()
+
+    assert result["recoveredDerived"] == []
+    assert result["preservedDerived"] == [run["id"]]
+    assert queued == []
+    assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "running"
 
 
 def test_partial_data_sync_never_marks_outer_task_success(monkeypatch):

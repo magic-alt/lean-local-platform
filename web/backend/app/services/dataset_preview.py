@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Any
 
 from ..db import db, rows_to_dicts
+from ..lean_engine.symbols import normalize_symbol
 from .db_object_store import read_bytes
 
 
@@ -148,7 +149,7 @@ def _sql_preview(
         order_by = "trade_date desc"
         clauses.append("adjust='raw'")
         if keyword:
-            normalized = keyword.split(".")[0].upper()
+            normalized = normalize_symbol(keyword, "china")
             if normalized.isdigit() and len(normalized) == 6:
                 clauses.append("symbol = ?")
                 values.append(normalized)
@@ -161,8 +162,9 @@ def _sql_preview(
         date_column = "trade_date"
         order_by = "trade_date desc"
         if keyword:
-            clauses.append("symbol like ?")
-            values.append(f"%{keyword.split('.')[0]}%")
+            normalized = normalize_symbol(keyword, "china")
+            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     elif dataset == "suspend_d":
         table = "ashare_trade_status"
         select = "symbol,trade_date,is_suspended,can_buy,can_sell,source"
@@ -170,8 +172,9 @@ def _sql_preview(
         order_by = "trade_date desc"
         clauses.append("source='tushare:suspend_d'")
         if keyword:
-            clauses.append("symbol like ?")
-            values.append(f"%{keyword.split('.')[0]}%")
+            normalized = normalize_symbol(keyword, "china")
+            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     elif dataset == "stk_limit":
         table = "ashare_trade_status"
         select = "symbol,trade_date,limit_up,limit_down,can_buy,can_sell,is_st,source"
@@ -179,8 +182,9 @@ def _sql_preview(
         order_by = "trade_date desc"
         clauses.append("source='tushare:stk_limit'")
         if keyword:
-            clauses.append("symbol like ?")
-            values.append(f"%{keyword.split('.')[0]}%")
+            normalized = normalize_symbol(keyword, "china")
+            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     else:  # pragma: no cover - guarded by caller
         return [], 0
     if start_date and date_column:

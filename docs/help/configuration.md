@@ -33,12 +33,16 @@ Settings 更新只接受白名单字段，未知键会被忽略。它不会保�
 | `LEAN_DATA_DIR` | LEAN 行情缓存根目录 |
 | `LEAN_HOST_DATA_DIR` | Docker 可挂载的宿主机数据路径 |
 | `LEAN_PARQUET_DIR` | Parquet 派生数据目录 |
+| `LEAN_PARQUET_MAX_THREADS` | Parquet/Polars 最大并行线程，默认 `4` |
+| `LEAN_PARQUET_PARTITION_ROWS` | 每个年度 Parquet part 的目标行数，默认 `100000` |
+| `LEAN_DATA_DEMAND_WORKER_CPUS` | data-demand worker 的 Docker CPU 上限，默认 `4.0` |
 | `LEAN_DOCKER_IMAGE` | 默认 LEAN 镜像 |
 | `LEAN_ALLOWED_DOCKER_IMAGES` | 额外允许的、以 digest 固定的 LEAN 镜像 |
 | `LEAN_RESEARCH_IMAGE` | 默认 Research 镜像，必须以 digest 固定 |
 | `LEAN_ALLOWED_RESEARCH_IMAGES` | 额外允许的 Research 镜像 |
 | `LEAN_API_AUTH_REQUIRED` | API Bearer Token 门禁；正式运行默认开启 |
 | `LEAN_API_TOKEN` | API Token；启动脚本默认生成到 `web/runtime/secrets/api_token` |
+| `LEAN_API_TOKEN_FILE` | API Token 文件；用于 Docker/主机重启后恢复认证，默认 `web/runtime/secrets/api_token` |
 | `BACKTEST_MAX_CONCURRENT_JOBS` | 数据库调度租约上限 |
 | `BACKTEST_JOB_TIMEOUT_SECONDS` | LEAN 任务超时 |
 | `TUSHARE_TOKEN` | TuShare Pro Token |

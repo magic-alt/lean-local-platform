@@ -51,6 +51,7 @@ REPORTS_DIR = RUNTIME_DIR / "reports"
 PARQUET_DIR = Path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "parquet")).expanduser()
 HOST_PARQUET_DIR = Path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).expanduser().resolve()
 PARQUET_COMPRESSION = os.environ.get("LEAN_PARQUET_COMPRESSION", "zstd")
+PARQUET_PARTITION_ROWS = max(50_000, int(os.environ.get("LEAN_PARQUET_PARTITION_ROWS", "100000")))
 MYSQL_HOST = os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.environ.get("LEAN_MYSQL_PORT", "3306"))
 MYSQL_DATABASE = os.environ.get("LEAN_MYSQL_DATABASE", "lean_market")
@@ -108,7 +109,14 @@ JOB_TIMEOUT_SECONDS = int(os.environ.get("BACKTEST_JOB_TIMEOUT_SECONDS", "7200")
 MAX_CONCURRENT_JOBS = int(os.environ.get("BACKTEST_MAX_CONCURRENT_JOBS", "1"))
 LOG_LEVEL = os.environ.get("LEAN_WEB_LOG_LEVEL", "INFO")
 API_AUTH_REQUIRED = os.environ.get("LEAN_API_AUTH_REQUIRED", "1").lower() not in {"0", "false", "no", "off"}
-API_TOKEN = os.environ.get("LEAN_API_TOKEN", "").strip()
+API_TOKEN_FILE = Path(
+    os.environ.get("LEAN_API_TOKEN_FILE", RUNTIME_DIR / "secrets" / "api_token")
+).expanduser()
+try:
+    _api_token_from_file = API_TOKEN_FILE.read_text(encoding="utf-8").strip()
+except OSError:
+    _api_token_from_file = ""
+API_TOKEN = os.environ.get("LEAN_API_TOKEN", "").strip() or _api_token_from_file
 BACKTEST_EXECUTION_DELEGATED = os.environ.get("LEAN_BACKTEST_EXECUTION_DELEGATED", "0").lower() in {"1", "true", "yes", "on"}
 
 CLICKHOUSE_ENABLED = os.environ.get("CLICKHOUSE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}

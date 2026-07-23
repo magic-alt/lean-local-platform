@@ -43,11 +43,17 @@ def _canonical_result_value(value: Any, path: tuple[str, ...] = ()) -> Any:
         result: dict[str, Any] = {}
         in_state = bool(path and path[-1].lower() == "state")
         in_closed_trades = any(part.lower() == "closedtrades" for part in path)
+        in_algorithm_parameters = tuple(part.lower() for part in path[-2:]) == (
+            "algorithmconfiguration",
+            "parameters",
+        )
         for key in sorted(value):
             normalized = key.lower()
             if in_state and normalized in {"starttime", "endtime", "hostname"}:
                 continue
             if in_closed_trades and normalized == "id":
+                continue
+            if in_algorithm_parameters and normalized == "strategysnapshotdir":
                 continue
             result[key] = _canonical_result_value(value[key], (*path, key))
         return result
@@ -240,7 +246,7 @@ def audit_backtest_execution(
         )
     passed = all(gate["passed"] for gate in gates)
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": utc_now(),
         "passed": passed,
         "severity": "ok" if passed else "critical",
@@ -251,12 +257,13 @@ def audit_backtest_execution(
         "rawResultSha256": hashlib.sha256(raw_payload).hexdigest(),
         "canonicalResultSha256": canonical_result_sha256(payload),
         "tolerancePolicy": {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "numericComparison": "exact_after_json_parse",
             "excludedFields": [
                 "state.StartTime",
                 "state.EndTime",
                 "state.Hostname",
+                "algorithmConfiguration.parameters.strategySnapshotDir",
                 "totalPerformance.closedTrades[].id",
             ],
         },

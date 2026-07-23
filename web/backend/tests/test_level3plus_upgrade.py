@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sys
 
 from fastapi.testclient import TestClient
@@ -121,6 +123,20 @@ def seed_level3plus_data(db_module):
             where id='dataset-tushare'
             """,
             (now,),
+        )
+        file_manifest = [
+            {
+                "path": "parquet/test/part.parquet",
+                "rowCount": 6,
+                "sha256": "a" * 64,
+            }
+        ]
+        manifest_sha256 = hashlib.sha256(
+            json.dumps(file_manifest, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        connection.execute(
+            "update parquet_datasets set dataset_version=? where id='dataset-tushare'",
+            (f"tushare-{'dataset-tushare'[:12]}-{manifest_sha256[:12]}",),
         )
     return symbols
 

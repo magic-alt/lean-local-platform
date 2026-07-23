@@ -26,7 +26,7 @@ from app.services.ashare_multisource import compare_ashare_daily_sources_batch  
 from app.services.data_coverage import ashare_coverage, benchmark_coverage  # noqa: E402
 from app.services.db_object_store import put_bytes  # noqa: E402
 from app.services.lean_cache import ensure_ashare_lean_cache  # noqa: E402
-from app.services.parquet_lake import parquet_consistency_report, rebuild_all_market_parquet  # noqa: E402
+from app.services.parquet_lake import parquet_consistency_report  # noqa: E402
 from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
 from app.services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, resolve_effective_data_source, resolve_source_context, source_priority_for_window  # noqa: E402
@@ -36,16 +36,36 @@ from app.services.universe_certification import certified_symbols, get_certified
 ACCEPTED_LEVEL3_WARNINGS = {"multi_source_qa_warning"}
 
 
+def _api_token() -> str:
+    configured = os.environ.get("LEAN_API_TOKEN", "").strip()
+    if configured:
+        return configured
+    token_path = Path(
+        os.environ.get(
+            "LEAN_API_TOKEN_FILE",
+            str(ROOT / "web" / "runtime" / "secrets" / "api_token"),
+        )
+    )
+    try:
+        return token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def _csv(value: str) -> list[str]:
     return [item.strip().zfill(6)[-6:] for item in value.split(",") if item.strip()]
 
 
 def _api(base_url: str, method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 300) -> tuple[int, Any]:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"}
+    token = _api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         base_url.rstrip("/") + path,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method=method,
     )
     try:
@@ -125,8 +145,18 @@ def _environment(api_url: str) -> tuple[list[dict[str, Any]], list[str], list[st
     return steps, warnings, errors
 
 
-def _backtest_smoke(api_url: str, symbol: str, benchmark: str, source: str, start: str, end: str, execution_policy: str) -> dict[str, Any]:
+def _backtest_smoke(
+    api_url: str,
+    project_id: str,
+    symbol: str,
+    benchmark: str,
+    source: str,
+    start: str,
+    end: str,
+    execution_policy: str,
+) -> dict[str, Any]:
     payload = {
+        "projectId": project_id,
         "symbol": symbol,
         "assetClass": "equity",
         "market": "china",
@@ -208,6 +238,7 @@ def _paper_replay(api_url: str, symbols: list[str], benchmark: str, source: str,
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Level 3 A-share daily shadow pipeline.")
     parser.add_argument("--symbols")
+    parser.add_argument("--project-id", help="Existing governed project used for the real LEAN smoke run.")
     parser.add_argument("--universe-code")
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
@@ -248,6 +279,8 @@ def main() -> int:
         payload = {"status": "planned", "symbols": symbols, "universeCode": args.universe_code, "benchmark": args.benchmark, "source": effective_source, "requestedSource": args.source, "sourcePolicy": source_policy, "startDate": start_date, "endDate": end_date}
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
+    if not args.project_id:
+        parser.error("--project-id is required unless --dry-run is used")
     if not symbols:
         payload = {"status": "failed", "severity": "critical", "errors": ["symbols_missing"], "level3Decision": "LEVEL3_FAIL"}
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -358,10 +391,31 @@ def main() -> int:
     errors.extend(error for error in qa_errors if error not in errors)
 
     started = time.perf_counter()
-    parquet = rebuild_all_market_parquet(asset_class="equity", market="china", venue="china", resolution="daily", data_type="trade", adjust="raw", sources=[effective_source], continue_on_error=True, persist_report=True)
-    parquet_status = parquet["consistencyReport"]["severity"]
-    add_step("parquet_consistency", parquet_status, {"rebuiltCount": parquet["rebuiltCount"], "errorCount": parquet["errorCount"], "reportId": parquet["consistencyReport"].get("reportId")}, step_errors=["parquet_consistency_failed"] if parquet_status != "ok" or parquet["errorCount"] else [], started=started)
-    if parquet_status != "ok" or parquet["errorCount"]:
+    parquet = parquet_consistency_report(
+        asset_class="equity",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        adjust="raw",
+        sources=[effective_source],
+        persist=True,
+    )
+    parquet_status = parquet["severity"]
+    add_step(
+        "parquet_consistency",
+        parquet_status,
+        {
+            "datasetCount": parquet["datasetCount"],
+            "criticalCount": parquet["criticalCount"],
+            "warningCount": parquet["warningCount"],
+            "reportId": parquet.get("reportId"),
+            "issues": parquet.get("issues") or [],
+        },
+        step_errors=["parquet_consistency_failed"] if parquet_status != "ok" else [],
+        started=started,
+    )
+    if parquet_status != "ok":
         errors.append("parquet_consistency_failed")
 
     started = time.perf_counter()
@@ -375,7 +429,16 @@ def main() -> int:
     add_step("lean_cache_check", "ok" if not cache_errors else "critical", cache_items, step_errors=cache_errors, started=started)
 
     started = time.perf_counter()
-    backtest = _backtest_smoke(args.api_url, symbols[0], args.benchmark, effective_source, start_date, end_date, args.execution_policy)
+    backtest = _backtest_smoke(
+        args.api_url,
+        args.project_id,
+        symbols[0],
+        args.benchmark,
+        effective_source,
+        start_date,
+        end_date,
+        args.execution_policy,
+    )
     backtest_details = {
         "runId": backtest.get("runId"),
         "httpStatus": backtest.get("httpStatus"),
@@ -453,7 +516,7 @@ def main() -> int:
         "requestedSource": args.source,
         "sourcePolicy": source_policy,
         "qaReports": {"batch": qa.get("reportId")},
-        "parquetReports": {"consistency": parquet["consistencyReport"].get("reportId")},
+        "parquetReports": {"consistency": parquet.get("reportId")},
         "backtestRunId": backtest.get("runId"),
         "paperSessionId": paper.get("sessionId"),
         "paperReportCount": paper.get("reports"),

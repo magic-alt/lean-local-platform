@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- 2026-07-23 — close governed rebuild and reproducibility gaps：完成十数据集 full rebuild、raw archive、Parquet/DuckDB/ClickHouse 对账与 TuShare production recertification；将 CSI300 index daily 规范化为 index canonical，并修复 fingerprint 慢查询、终态 scheduler lease、Paper replay 重复 reference scan 和 run-local snapshot 路径导致的 canonical result digest 漂移。
+- 2026-07-23 — revalidate Level 3 production path：重新执行受治理双标的 A 股 shadow、真实 LEAN integration、两次 deterministic golden backtest、Paper 约束、十数据集 Preview、后端全量测试、前端 build/E2E、migration、文档与仓库卫生检查；保留真实 21 日 LEAN Paper、故障矩阵、DR 和安全边界为未关闭项。
+- 2026-07-23 — bound governed materialization resources：将 Parquet 年度切分改为单次线性 partition，并增大年度 part 以减少 Docker Desktop 文件共享事件；限制 Polars 并行线程和 data-demand worker CPU，避免全量派生期间挤占 MySQL、API 与 Docker 控制面。
+- 2026-07-23 — authenticate audit entrypoints：Level 3 shadow 与 daily shadow 脚本自动从环境或受限 runtime secret 读取 API Token，避免认证加固后把 401 误判为平台故障，且不会将凭据写入证据。
+- 2026-07-23 — preserve governed lineage across resume：`resume_checkpoint` 保留其 `full_rebuild` 基础语义，使 Parquet 认证直接使用完整 manifest/archive 证据，避免恢复任务回退到数千万行历史 batch 聚合。
+- 2026-07-23 — bind shadow audits to project snapshots：Level 3/daily shadow 验收现在强制接收正式 `projectId`，真实 LEAN smoke 不再尝试创建无项目快照的回测。
+- 2026-07-23 — make shadow Parquet checks read-only：daily shadow 只校验已治理 Parquet，不再每次重建 1,700 万行；显式请求的数据集缺失时 consistency report 现在 fail closed。
+- 2026-07-23 — canonicalize dataset versions：Source Gate 与 Parquet writer 使用按路径排序的相同文件 manifest 结构；认证时原子刷新 `dataset_version`，持久化版本与实际文件清单不一致时认证立即失效。
+- 2026-07-23 — recover API auth without leaking secrets：API 可从 0600 runtime token 文件恢复认证；Level 3 审计仅执行 quiet Compose 校验并对兜底文本脱敏，不再把容器环境写入证据输出。
+- 2026-07-23 — reconcile governed full snapshots and stabilize derivatives：full rebuild 现在按 TuShare raw archive 的完整 symbol/date key 集合删除 canonical stale 行及孤儿标的；增加可 dry-run/apply 的受控对账工具、ClickHouse 定向替换、批量年度分区镜像、无 filesort 的主键流式 Parquet 导出，以及派生任务 advisory lock、心跳、长任务可见性和孤儿恢复保护。
 - 2026-07-23 — pin platform container inputs：将 Python、MySQL、Redis、ClickHouse、Prometheus 和 Grafana 固定到已核验 RepoDigest，并固定 Grafana ClickHouse 插件版本，避免 tag 或插件 latest 在重建时静默漂移。
 - 2026-07-23 — persist and dispatch operational alerts：增加 Webhook 告警投递、投递结果与尝试次数持久化、敏感查询参数脱敏、冷却去重和重复 Paper 调度失败自动升级；真实 LEAN Paper、受治理数据同步和自动报告失败现在会产生 Critical 运维告警。
 - 2026-07-22 — accelerate governed TuShare rebuilds：将 daily、adj_factor、suspend_d、stk_limit 全量历史改为受限并发、多股票批量提交和仅差异 canonical 写入，daily 扩大安全请求窗口并将 raw archive 改为低 CPU 规范化压缩；补齐 index_daily 分窗以及指数、期货、期权全市场/交易所抓取，并增加 TuShare CSI300 历史权重影子 universe 校验工具。

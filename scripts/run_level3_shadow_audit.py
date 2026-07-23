@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -24,6 +26,15 @@ def _csv(value: str) -> list[str]:
     return [item.strip().zfill(6)[-6:] for item in value.split(",") if item.strip()]
 
 
+_SENSITIVE_CONFIG_LINE = re.compile(
+    r"(?im)^(\s*[A-Z0-9_]*(?:TOKEN|API_KEY|PASSWORD|DATABASE_URL|REDIS_URL)[A-Z0-9_]*:\s*).*$"
+)
+
+
+def _redact_text(value: str) -> str:
+    return _SENSITIVE_CONFIG_LINE.sub(r"\1<redacted>", value)
+
+
 def _run(command: list[str], timeout: int = 900) -> dict[str, Any]:
     completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False, timeout=timeout)
     payload: Any = None
@@ -31,12 +42,39 @@ def _run(command: list[str], timeout: int = 900) -> dict[str, Any]:
         payload = json.loads(completed.stdout or "{}")
     except Exception:
         payload = None
-    return {"command": command, "returnCode": completed.returncode, "stdout": completed.stdout[-4000:], "stderr": completed.stderr[-4000:], "json": payload}
+    return {
+        "command": command,
+        "returnCode": completed.returncode,
+        "stdout": _redact_text(completed.stdout[-4000:]),
+        "stderr": _redact_text(completed.stderr[-4000:]),
+        "json": payload,
+    }
+
+
+def _api_token() -> str:
+    configured = os.environ.get("LEAN_API_TOKEN", "").strip()
+    if configured:
+        return configured
+    token_path = Path(
+        os.environ.get(
+            "LEAN_API_TOKEN_FILE",
+            str(ROOT / "web" / "runtime" / "secrets" / "api_token"),
+        )
+    )
+    try:
+        return token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _api_json(base_url: str, path: str) -> tuple[int, Any]:
     try:
-        with urllib.request.urlopen(base_url.rstrip("/") + path, timeout=20) as response:
+        headers: dict[str, str] = {}
+        token = _api_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(base_url.rstrip("/") + path, headers=headers)
+        with urllib.request.urlopen(request, timeout=20) as response:
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except Exception as exc:
         return 0, {"error": str(exc)}
@@ -67,6 +105,7 @@ def _table_counts() -> dict[str, int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a one-command Level 3 shadow audit.")
     parser.add_argument("--symbols", required=True)
+    parser.add_argument("--project-id", help="Existing governed project used for the real LEAN smoke run.")
     parser.add_argument("--benchmark", default="000300")
     parser.add_argument("--source", default=PRIMARY_DATA_SOURCE)
     parser.add_argument("--start-date", required=True)
@@ -83,12 +122,14 @@ def main() -> int:
         payload = {"status": "planned", "decision": "LEVEL3_CANDIDATE", "symbols": symbols}
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
+    if not args.project_id:
+        parser.error("--project-id is required unless --dry-run is used")
 
     checks: list[dict[str, Any]] = []
     warnings: list[str] = []
     errors: list[str] = []
 
-    compose = _run(["docker", "compose", "--profile", "app", "config"], timeout=60)
+    compose = _run(["docker", "compose", "--profile", "app", "config", "--quiet"], timeout=60)
     checks.append({"name": "docker_compose_config", "status": "ok" if compose["returnCode"] == 0 else "critical", "evidence": compose})
     if compose["returnCode"] != 0:
         errors.append("docker_compose_config_failed")
@@ -129,6 +170,8 @@ def main() -> int:
             str(ROOT / "scripts/run_daily_shadow_pipeline.py"),
             "--symbols",
             ",".join(symbols),
+            "--project-id",
+            args.project_id,
             "--benchmark",
             args.benchmark,
             "--source",

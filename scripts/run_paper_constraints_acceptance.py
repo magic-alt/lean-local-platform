@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, json_dump, row_to_dict, utc_now  # noqa: E402
-from app.services.ashare_repository import assert_benchmark_ready  # noqa: E402
+from app.services.ashare_repository import assert_benchmark_ready, reference_data_coverage  # noqa: E402
 from app.services.paper import _replay_dates, create_session, create_signal, list_orders, run_replay  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 
@@ -27,8 +27,17 @@ def _symbols(value: str) -> list[str]:
     return [item.strip().zfill(6)[-6:] for item in value.split(",") if item.strip()]
 
 
-def _trade_pair(symbols: list[str], start: str, end: str) -> tuple[str, str]:
-    probe = create_session({"symbol": symbols[0], "symbols": symbols, "assetClass": "equity", "market": "china", "cash": 100000, "source": "akshare"})
+def _trade_pair(symbols: list[str], start: str, end: str, source: str) -> tuple[str, str]:
+    probe = create_session(
+        {
+            "symbol": symbols[0],
+            "symbols": symbols,
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "source": source,
+        }
+    )
     dates = _replay_dates(probe, start, end)
     if len(dates) < 2:
         raise RuntimeError("insufficient_trading_days")
@@ -75,8 +84,17 @@ def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | 
     return row["symbol"], signal["trade_date"], row["trade_date"]
 
 
-def _run_single_reason(reason: str, symbols: list[str], benchmark: str, source: str, start: str, end: str) -> dict[str, Any]:
-    signal_date, execution_date = _trade_pair(symbols, start, end)
+def _run_single_reason(
+    reason: str,
+    symbols: list[str],
+    benchmark: str,
+    source: str,
+    start: str,
+    end: str,
+    *,
+    reference_coverage: dict[str, Any],
+) -> dict[str, Any]:
+    signal_date, execution_date = _trade_pair(symbols, start, end, source)
     primary = symbols[0]
     secondary = symbols[1] if len(symbols) > 1 else symbols[0]
     params: dict[str, Any] = {
@@ -169,7 +187,13 @@ def _run_single_reason(reason: str, symbols: list[str], benchmark: str, source: 
     else:
         create_signal(session["id"], trade_date=signal_date, side="buy", symbol=signal_symbol, target_percent=target)
     try:
-        result = run_replay(session["id"], signal_date, execution_date, auto_signal=False)
+        result = run_replay(
+            session["id"],
+            signal_date,
+            execution_date,
+            auto_signal=False,
+            reference_coverage=reference_coverage,
+        )
     finally:
         if cleanup_report_id:
             with db() as connection:
@@ -244,6 +268,7 @@ def main() -> int:
     warnings: list[str] = []
     errors: list[str] = []
     scenarios: list[dict[str, Any]] = []
+    reference_coverage = reference_data_coverage("CSI300")
     try:
         assert_benchmark_ready(args.benchmark, args.start_date, args.end_date, source=args.source)
     except Exception as exc:
@@ -254,13 +279,31 @@ def main() -> int:
     except Exception:
         pass
     try:
-        create_session({"symbol": symbols[0], "assetClass": "equity", "market": "china", "executionPolicy": "same_close"})
+        create_session(
+            {
+                "symbol": symbols[0],
+                "assetClass": "equity",
+                "market": "china",
+                "source": args.source,
+                "executionPolicy": "same_close",
+            }
+        )
         errors.append("same_close_default_not_blocked")
     except Exception:
         pass
     for reason in sorted(REQUIRED_REASONS):
         try:
-            scenarios.append(_run_single_reason(reason, symbols, args.benchmark, args.source, args.start_date, args.end_date))
+            scenarios.append(
+                _run_single_reason(
+                    reason,
+                    symbols,
+                    args.benchmark,
+                    args.source,
+                    args.start_date,
+                    args.end_date,
+                    reference_coverage=reference_coverage,
+                )
+            )
         except Exception as exc:
             errors.append(f"{reason}:{exc}")
     reject_reasons = sorted({reason for item in scenarios for reason in item.get("rejectReasons", [])})

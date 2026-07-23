@@ -27,7 +27,11 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
 
     with db_module.db() as connection:
-        for trade_date, close in (("2025-12-31", 100.0), ("2026-01-02", 101.0)):
+        for trade_date, close in (
+            ("2025-12-31", 100.0),
+            ("2026-01-02", 101.0),
+            ("2026-02-02", 102.0),
+        ):
             connection.execute(
                 """
                 insert into market_daily_bars
@@ -55,15 +59,23 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
                 ),
             )
 
-    exported = parquet_lake.export_market_daily_bars(source="akshare")
+    progress = []
+    exported = parquet_lake.export_market_daily_bars(
+        source="akshare",
+        progress_callback=progress.append,
+    )
 
-    assert exported["rowCount"] == 2
+    assert exported["rowCount"] == 3
     assert exported["fileCount"] == 2
+    assert progress[-1]["stage"] == "parquet_export"
+    assert progress[-1]["rowsProcessed"] == 3
+    assert progress[-1]["expectedRows"] == 3
     assert all(item["size"] > 0 for item in exported["files"])
 
     datasets = parquet_lake.list_datasets()
-    assert datasets[0]["row_count"] == 2
+    assert datasets[0]["row_count"] == 3
     assert datasets[0]["metadata"]["exported_from"] == "market_daily_bars"
+    assert datasets[0]["metadata"]["read_batch"] == "streaming_cursor_100000_rows"
     assert datasets[0]["root_path"].startswith("parquet/")
     with db_module.db() as connection:
         stored_files = connection.execute("select file_path from parquet_files order by file_path").fetchall()
@@ -82,7 +94,7 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
 
     assert result["enabled"] is True
     assert result["source"] == "duckdb"
-    assert result["count"] == 1
+    assert result["count"] == 2
     assert result["items"][0]["timestamp"] == "2026-01-02"
     assert result["items"][0]["close"] == 101.0
 
@@ -93,8 +105,8 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     )
     assert consistency["severity"] == "ok"
     assert consistency["datasetCount"] == 1
-    assert consistency["items"][0]["mysql"]["rowCount"] == 2
-    assert consistency["items"][0]["duckdb"]["rowCount"] == 2
+    assert consistency["items"][0]["mysql"]["rowCount"] == 3
+    assert consistency["items"][0]["duckdb"]["rowCount"] == 3
 
 
 def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_report(tmp_path, monkeypatch):
@@ -270,6 +282,87 @@ def test_rebuild_certifies_only_consistent_tushare_dataset(tmp_path, monkeypatch
     assert source_certification("tushare")["qaStatus"] == "stale"
 
 
+@pytest.mark.parametrize(
+    ("run_mode", "resume_base_mode"),
+    [("full_rebuild", None), ("resume_checkpoint", "full_rebuild")],
+)
+def test_source_lineage_uses_exact_governed_full_rebuild_evidence(
+    tmp_path, monkeypatch, run_mode, resume_base_mode
+):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import data_sync, parquet_lake
+    from app.services.db_object_store import put_bytes
+
+    run = data_sync.create_sync_run(
+        requested=["daily"],
+        mode="full_rebuild" if run_mode == "resume_checkpoint" else run_mode,
+    )
+    stored = put_bytes("provider-raw", "daily/governed.json.gz", b"governed-provider-evidence")
+    summary = {
+        "completionEvidence": {
+            "passed": True,
+            "items": [
+                {
+                    "datasetKey": "daily",
+                    "passed": True,
+                    "responseRows": 1,
+                }
+            ],
+        }
+    }
+    if resume_base_mode:
+        summary["resumeBaseMode"] = resume_base_mode
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            update data_sync_runs
+            set status='success',canonical_status='ready',mode=?,summary_json=?,finished_at=?
+            where id=?
+            """,
+            (run_mode, db_module.json_dump(summary), "2026-07-23T00:00:00+00:00", run["id"]),
+        )
+        connection.execute(
+            """
+            insert into provider_ingestion_manifests
+                (id,run_id,provider,dataset_key,scope_key,request_json,response_rows,
+                 normalized_rows,rejected_rows,payload_sha256,keys_sha256,coverage_start,
+                 coverage_end,status,validation_json,endpoint_counts_json,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "manifest-governed", run["id"], "tushare", "daily", "600519", "{}",
+                1, 1, 0, "payload", "keys", "2026-07-03", "2026-07-03", "success",
+                '{"status":"passed"}', '{"daily":1}', "now",
+            ),
+        )
+        connection.execute(
+            """
+            insert into provider_raw_archives
+                (id,provider,dataset_key,run_id,object_id,row_count,payload_sha256,
+                 archive_sha256,uncompressed_size,compressed_size,compression,created_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "archive-governed", "tushare", "daily", run["id"], stored["id"], 1,
+                "payload", "archive", 27, 27, "gzip", "now",
+            ),
+        )
+
+    lineage = parquet_lake._market_source_lineage(
+        parquet_lake._normalize_scope(source="tushare"),
+        "2026-07-03",
+        "2026-07-03",
+        expected_row_count=1,
+    )
+
+    assert lineage["passed"] is True
+    assert lineage["validationMode"] == "governed_full_rebuild"
+    assert lineage["runId"] == run["id"]
+    assert lineage["responseRows"] == 1
+    assert lineage["archivedRows"] == 1
+
+
 def test_rebuild_never_certifies_synthetic_tushare_fixture(tmp_path, monkeypatch):
     pytest.importorskip("polars")
     pytest.importorskip("duckdb")
@@ -321,6 +414,24 @@ def test_rebuild_never_certifies_synthetic_tushare_fixture(tmp_path, monkeypatch
     assert source_certification("tushare")["isCertified"] is False
     lineage = rebuilt["consistencyReport"]["items"][0]["sourceLineage"]
     assert lineage["invalidBatches"][0]["synthetic"] is True
+
+
+def test_consistency_report_fails_closed_when_requested_dataset_is_missing(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+
+    report = parquet_lake.parquet_consistency_report(
+        asset_class="equity",
+        market="china",
+        sources=["tushare"],
+        persist=False,
+    )
+
+    assert report["passed"] is False
+    assert report["severity"] == "critical"
+    assert report["datasetCount"] == 0
+    assert report["issues"] == ["parquet_dataset_missing"]
 
 
 def test_data_api_exports_parquet_and_queries_duckdb(tmp_path, monkeypatch):

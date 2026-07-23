@@ -33,6 +33,7 @@ from .ashare_repository import (
 )
 from .data import import_ashare_research_batch
 from .db_object_store import put_bytes
+from .market_repository import upsert_market_daily_bars
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
@@ -78,7 +79,7 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("express", "express", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH"}, ("ts_code", "end_date", "ann_date"), "ann_date"),
     DatasetSpec("fina_indicator", "fina_indicator", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date"), "ann_date", normalizer="financial"),
     DatasetSpec("index_basic", "index_basic", "指数", probe={"market": "SSE"}, key_fields=("ts_code",)),
-    DatasetSpec("index_daily", "index_daily", "指数", "window", probe={"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
+    DatasetSpec("index_daily", "index_daily", "指数", "window", probe={"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="index_daily"),
     DatasetSpec("index_weight", "index_weight", "指数", "window", "monthly", {"index_code": "000300.SH", "start_date": "20260101", "end_date": "20260331"}, ("index_code", "con_code", "trade_date"), "trade_date", normalizer="index_weight"),
     DatasetSpec("fund_basic", "fund_basic", "基金", probe={"market": "E"}, key_fields=("ts_code",)),
     DatasetSpec("fund_daily", "fund_daily", "基金", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
@@ -1912,10 +1913,13 @@ def _sync_daily(
                         "symbol": entry["symbol"], "rows": entry["rows"],
                         "listed_date": entry["security"].get("listed_date"),
                         "delisted_date": entry["security"].get("delisted_date"),
+                        "snapshot_start": entry["start"],
+                        "snapshot_end": entry["end"],
                     }
-                    for entry in buffered if entry["rows"]
+                    for entry in buffered if entry["rows"] or full_refresh
                 ],
                 sync_run_id=run_id,
+                reconcile_full_snapshot=full_refresh,
             )
             timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
             timings["rawArchive"] += archive_future.result()
@@ -1994,7 +1998,34 @@ def _sync_daily(
             if not _current_task(run_id, task_id):
                 break
         flush(len(pending))
+    if full_refresh and failed == 0 and not _cancelled(run_id, task_id):
+        _reconcile_daily_manifest_scope(run_id)
     return processed, inserted, updated, failed
+
+
+def _reconcile_daily_manifest_scope(run_id: str) -> int:
+    """Remove TuShare daily symbols outside the completed full-run scope."""
+    deleted = 0
+    with bulk_db() as connection:
+        manifest_predicate = """
+            not exists (
+                select 1 from provider_ingestion_manifests p
+                where p.run_id=? and p.provider='tushare' and p.dataset_key='daily'
+                  and p.status='success' and p.scope_key={table}.symbol
+            )
+        """
+        for table, source in (
+            ("ashare_trade_status", "tushare:ohlcv_inferred"),
+            ("market_trade_status", "tushare:ohlcv_inferred"),
+            ("ashare_daily_bars", "tushare"),
+            ("market_daily_bars", "tushare"),
+        ):
+            cursor = connection.execute(
+                f"delete from {table} where source=? and " + manifest_predicate.format(table=table),
+                (source, run_id),
+            )
+            deleted += max(0, int(cursor.rowcount or 0))
+    return deleted
 
 
 def _generic_params(
@@ -2061,6 +2092,50 @@ def _normalize_optional(
         return
     if spec.normalizer == "adj_factor":
         upsert_adjustment_factors(rows, source="tushare", batch_id=batch_id)
+    elif spec.normalizer == "index_daily":
+        # Keep the canonical security type as index.  LEAN's generated cache
+        # remains equity-shaped because strategy templates subscribe through
+        # AddEquity, but storage and source lineage must not disguise an index
+        # as a listed company with the same numeric code.
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            symbol = str(row.get("symbol") or row.get("ts_code") or "").split(".", 1)[0].upper()
+            close = row.get("close")
+            trade_date = row.get("trade_date") or row.get("date")
+            if not symbol or not trade_date or close in (None, ""):
+                continue
+            grouped.setdefault(symbol, []).append(
+                {
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    # TuShare's pre-launch CSI history can contain close-only
+                    # rows.  A flat OHLC bar preserves that published close
+                    # without inventing an intraday range.
+                    "open": row.get("open") if row.get("open") not in (None, "") else close,
+                    "high": row.get("high") if row.get("high") not in (None, "") else close,
+                    "low": row.get("low") if row.get("low") not in (None, "") else close,
+                    "close": close,
+                    "prev_close": row.get("pre_close") or row.get("prev_close"),
+                    "pct_change": row.get("pct_chg") or row.get("pct_change"),
+                    "volume": float(row.get("vol") or row.get("volume") or 0) * (100 if "vol" in row else 1),
+                    "amount": float(row.get("amount") or 0) * 1000,
+                    "adj_factor": 1.0,
+                }
+            )
+        for symbol, benchmark_rows in grouped.items():
+            upsert_market_daily_bars(
+                benchmark_rows,
+                symbol=symbol,
+                asset_class="index",
+                market="china",
+                venue="china",
+                source="tushare",
+                batch_id=batch_id,
+                resolution="daily",
+                data_type="trade",
+                adjust="raw",
+                bulk=bulk,
+            )
     elif spec.normalizer == "daily_basic":
         factors = []
         for row in rows:
@@ -3629,15 +3704,30 @@ def run_sync(
         daily_summary = summaries.get("daily") or {}
         should_materialize = bool(
             not cancelled
+            and final_status == "success"
+            and completion_evidence["passed"]
             and "daily" in selected_keys
             and not daily_summary.get("error")
             and int(daily_summary.get("failed") or 0) == 0
         )
-        derived_status = (
-            {"status": "queued", "total": None, "completed": 0, "failed": 0}
-            if should_materialize
-            else {"status": "not_required" if "daily" not in selected_keys else "blocked"}
-        )
+        with db() as connection:
+            existing_run = connection.execute(
+                "select derived_status_json from data_sync_runs where id=?",
+                (run_id,),
+            ).fetchone()
+        try:
+            existing_derived = json.loads((dict(existing_run) if existing_run else {}).get("derived_status_json") or "{}")
+        except (TypeError, ValueError, AttributeError):
+            existing_derived = {}
+        existing_derived_status = str(existing_derived.get("status") or "")
+        materialization_already_scheduled = existing_derived_status in {"queued", "running", "ready"}
+        enqueue_materialization = should_materialize and not materialization_already_scheduled
+        if should_materialize and materialization_already_scheduled:
+            derived_status = existing_derived
+        elif should_materialize:
+            derived_status = {"status": "queued", "total": None, "completed": 0, "failed": 0}
+        else:
+            derived_status = {"status": "not_required" if "daily" not in selected_keys else "blocked"}
         summary = {
             "status": final_status, "permissions": permissions, "audit": audit,
             "datasets": summaries, "endDate": end_date, "marketDataEndDate": market_end_date, "cancelled": cancelled,
@@ -3677,7 +3767,7 @@ def run_sync(
                         run_id,
                     ),
                 )
-        if should_materialize:
+        if enqueue_materialization:
             try:
                 from ..tasks.worker import materialize_sync_data_task
 
@@ -3963,10 +4053,38 @@ def download_on_demand_dataset(
 
 
 def materialize_daily_run(run_id: str) -> dict[str, Any]:
+    """Build derivatives once per sync run, resuming a durable symbol checkpoint."""
+    if database_backend() != "mysql":
+        return _materialize_daily_run_locked(run_id)
+
+    lock_name = f"lean:materialize:{run_id}"[:64]
+    with db() as lease_connection:
+        lock_row = lease_connection.execute(
+            "select get_lock(?, 0) as acquired",
+            (lock_name,),
+        ).fetchone()
+        if int((lock_row or {}).get("acquired") or 0) != 1:
+            with db() as connection:
+                row = connection.execute(
+                    "select derived_status_json from data_sync_runs where id=?",
+                    (run_id,),
+                ).fetchone()
+            try:
+                status = json.loads((dict(row) if row else {}).get("derived_status_json") or "{}")
+            except (TypeError, ValueError, AttributeError):
+                status = {}
+            return {"runId": run_id, "status": "already_running", "derivedStatus": status}
+        try:
+            return _materialize_daily_run_locked(run_id, lease_connection=lease_connection)
+        finally:
+            lease_connection.execute("select release_lock(?)", (lock_name,))
+
+
+def _materialize_daily_run_locked(run_id: str, *, lease_connection: Any | None = None) -> dict[str, Any]:
     """Build LEAN/object/ClickHouse derivatives after canonical MySQL commit."""
     from .data import record_data_asset
     from .lean_cache import rebuild_ashare_lean_cache_from_db
-    from .market_data import mirror_rows, query_database_bars
+    from .market_data import mirror_rows_batch, query_database_bars
 
     with db() as connection:
         rows = connection.execute(
@@ -3977,24 +4095,53 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
             """,
             (run_id,),
         ).fetchall()
+        run_row = connection.execute(
+            "select derived_status_json from data_sync_runs where id=?",
+            (run_id,),
+        ).fetchone()
     symbols = [str(row["scope_key"]) for row in rows]
-    completed = 0
-    failures: list[dict[str, str]] = []
+    try:
+        previous_status = json.loads((dict(run_row) if run_row else {}).get("derived_status_json") or "{}")
+    except (TypeError, ValueError, AttributeError):
+        previous_status = {}
+    if (
+        previous_status.get("status") == "ready"
+        and int(previous_status.get("completed") or 0) >= len(symbols)
+        and bool((previous_status.get("parquet") or {}).get("passed"))
+    ):
+        return {"runId": run_id, **previous_status}
+
+    resumable = previous_status.get("status") in {"queued", "running"}
+    completed = min(int(previous_status.get("completed") or 0), len(symbols)) if resumable else 0
+    failure_count = int(previous_status.get("failed") or 0) if resumable else 0
+    failure_samples: list[dict[str, str]] = list(previous_status.get("failureSamples") or [])[:10] if resumable else []
     parquet_result: dict[str, Any] | None = None
+    parquet_progress: dict[str, Any] | None = None
+    pending: list[tuple[dict[str, Any], list[dict[str, str]]]] = []
+    pending_rows = 0
+
+    def record_failure(*, symbol: str, stage: str, error: str) -> None:
+        nonlocal failure_count
+        failure_count += 1
+        if len(failure_samples) < 10:
+            failure_samples.append({"symbol": symbol, "stage": stage, "error": error[:500]})
 
     def persist_progress(status: str) -> None:
         payload = {
             "status": status,
             "total": len(symbols),
             "completed": completed,
-            "failed": len(failures),
-            "failureSamples": failures[:10],
+            "failed": failure_count,
+            "failureSamples": failure_samples,
+            "checkpointScope": symbols[completed - 1] if completed else None,
+            "heartbeatAt": utc_now(),
             "parquet": {
                 "rebuiltCount": int((parquet_result or {}).get("rebuiltCount") or 0),
                 "certifiedDatasetIds": (parquet_result or {}).get("certifiedDatasetIds") or [],
                 "reportId": ((parquet_result or {}).get("consistencyReport") or {}).get("reportId"),
                 "passed": bool(((parquet_result or {}).get("consistencyReport") or {}).get("passed")),
             },
+            "parquetProgress": parquet_progress,
         }
         with db() as connection:
             connection.execute(
@@ -4005,9 +4152,34 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
                 "update data_sync_items set derived_status_json=? where run_id=? and dataset_key='daily'",
                 (json_dump(payload), run_id),
             )
+        if lease_connection is not None:
+            lease_connection.execute("select 1")
+
+    def flush_pending() -> None:
+        nonlocal completed, pending, pending_rows
+        if not pending:
+            return
+        clickhouse_results = mirror_rows_batch(pending)
+        for (metadata, _bars), clickhouse in zip(pending, clickhouse_results, strict=True):
+            metadata["clickhouse"] = clickhouse
+            try:
+                record_data_asset(metadata)
+            except Exception as exc:  # noqa: BLE001 - keep the checkpoint retryable
+                record_failure(symbol=str(metadata.get("symbol") or "?"), stage="data_asset", error=str(exc))
+            if clickhouse.get("error"):
+                record_failure(
+                    symbol=str(metadata.get("symbol") or "?"),
+                    stage="clickhouse",
+                    error=str(clickhouse["error"]),
+                )
+            completed += 1
+            if completed % 25 == 0:
+                persist_progress("running")
+        pending = []
+        pending_rows = 0
 
     persist_progress("running")
-    for symbol in symbols:
+    for symbol in symbols[completed:]:
         try:
             metadata = rebuild_ashare_lean_cache_from_db(
                 symbol,
@@ -4038,18 +4210,24 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
                 provider_source="tushare",
                 limit=0,
             )["items"]
-            clickhouse = mirror_rows(metadata, bars)
-            metadata["clickhouse"] = clickhouse
-            record_data_asset(metadata)
-            if clickhouse.get("error"):
-                failures.append({"symbol": symbol, "stage": "clickhouse", "error": str(clickhouse["error"])[:500]})
+            pending.append((metadata, bars))
+            pending_rows += len(bars)
+            if len(pending) >= 100 or pending_rows >= 500_000:
+                flush_pending()
         except Exception as exc:  # noqa: BLE001 - derivatives are independently retryable
-            failures.append({"symbol": symbol, "stage": "materialize", "error": str(exc)[:500]})
-        completed += 1
-        if completed % 25 == 0:
-            persist_progress("running")
+            flush_pending()
+            record_failure(symbol=symbol, stage="materialize", error=str(exc))
+            completed += 1
+            if completed % 25 == 0:
+                persist_progress("running")
+    flush_pending()
     try:
         from .parquet_lake import rebuild_all_market_parquet
+
+        def record_parquet_progress(progress: dict[str, Any]) -> None:
+            nonlocal parquet_progress
+            parquet_progress = progress
+            persist_progress("running")
 
         parquet_result = rebuild_all_market_parquet(
             asset_class="equity",
@@ -4062,34 +4240,31 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
             include_research_sources=False,
             continue_on_error=False,
             persist_report=True,
+            progress_callback=record_parquet_progress,
         )
         if not (parquet_result.get("consistencyReport") or {}).get("passed"):
-            failures.append(
-                {
-                    "symbol": "*",
-                    "stage": "parquet_consistency",
-                    "error": "Parquet/MySQL/DuckDB consistency validation did not pass.",
-                }
+            record_failure(
+                symbol="*",
+                stage="parquet_consistency",
+                error="Parquet/MySQL/DuckDB consistency validation did not pass.",
             )
         if not parquet_result.get("certifiedDatasetIds"):
-            failures.append(
-                {
-                    "symbol": "*",
-                    "stage": "source_certification",
-                    "error": "No TuShare dataset was certified after consistency validation.",
-                }
+            record_failure(
+                symbol="*",
+                stage="source_certification",
+                error="No TuShare dataset was certified after consistency validation.",
             )
     except Exception as exc:  # noqa: BLE001 - certification is fail-closed and retryable
-        failures.append({"symbol": "*", "stage": "parquet", "error": str(exc)[:500]})
-    final_status = "ready" if not failures else "partial"
+        record_failure(symbol="*", stage="parquet", error=str(exc))
+    final_status = "ready" if failure_count == 0 else "partial"
     persist_progress(final_status)
     return {
         "runId": run_id,
         "status": final_status,
         "total": len(symbols),
         "completed": completed,
-        "failed": len(failures),
-        "failureSamples": failures[:10],
+        "failed": failure_count,
+        "failureSamples": failure_samples,
         "parquet": {
             "rebuiltCount": int((parquet_result or {}).get("rebuiltCount") or 0),
             "certifiedDatasetIds": (parquet_result or {}).get("certifiedDatasetIds") or [],

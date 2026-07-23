@@ -38,6 +38,11 @@ celery_app.conf.update(
         "lean_web.reconcile_experiment_batches": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
+    # Bulk sync/materialization tasks can legitimately run for several hours.
+    # Redis' one-hour default visibility timeout redelivers an unacknowledged
+    # acks_late task while the original worker is still processing it.
+    broker_transport_options={"visibility_timeout": 43_200},
+    result_backend_transport_options={"visibility_timeout": 43_200},
     beat_schedule={
         "recover-orphaned-data-sync": {
             "task": "lean_web.recover_data_sync",

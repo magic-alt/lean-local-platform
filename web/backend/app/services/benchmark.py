@@ -46,7 +46,7 @@ def import_benchmark_rows(
     upsert_market_daily_bars(
         normalized,
         symbol=symbol,
-        asset_class="equity",
+        asset_class="index",
         market=market,
         venue=market,
         source=source,
@@ -58,7 +58,7 @@ def import_benchmark_rows(
     cache = rebuild_ashare_lean_cache_from_db(symbol, source=source, adjust=adjust, market=market, batch_id=batch)
     cache.update(
         {
-            "asset_class": "equity",
+            "asset_class": "index",
             "venue": market,
             "resolution": "daily",
             "data_type": "trade",

@@ -11,7 +11,7 @@ from ..domain.assets import asset_request
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from ..repositories.backtest_repository import get_backtest, get_result
-from .ashare_repository import is_tradeable
+from .ashare_repository import is_tradeable, reference_data_coverage
 from .ashare_multisource import quality_gate
 from .backtest_service import create_backtest_job, mark_backtest_queued
 from .data_coverage import ashare_coverage
@@ -1437,7 +1437,13 @@ def _apply_fill(session: dict[str, Any], symbol: str, side: str, quantity: float
         connection.execute("update paper_sessions set cash = ?, updated_at = ? where id = ?", (cash, now, session["id"]))
 
 
-def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = True) -> dict[str, Any]:
+def match_daily_orders(
+    session_id: str,
+    trade_date: str,
+    auto_signal: bool = True,
+    *,
+    reference_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
@@ -1522,7 +1528,11 @@ def match_daily_orders(session_id: str, trade_date: str, auto_signal: bool = Tru
             if not _signals_for_date_symbol(session_id, date_value, symbol):
                 generate_daily_signal_for_symbol(session_id, symbol, date_value)
     snapshot = create_snapshot(session_id, date_value)
-    report = create_daily_report(session_id, date_value)
+    report = create_daily_report(
+        session_id,
+        date_value,
+        reference_coverage=reference_coverage,
+    )
     return {"date": date_value, "executionPolicy": policy, "signals": signals, "orders": orders, "snapshot": snapshot, "report": report}
 
 
@@ -1560,18 +1570,40 @@ def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> li
     return []
 
 
-def run_replay(session_id: str, start_date: str, end_date: str, auto_signal: bool = True) -> dict[str, Any]:
+def run_replay(
+    session_id: str,
+    start_date: str,
+    end_date: str,
+    auto_signal: bool = True,
+    *,
+    reference_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
     if session.get("mode") == "lean_walkforward":
         raise ValueError("LEAN Paper replay must be queued through the walk-forward runner.")
     dates = _replay_dates(session, start_date, end_date)
+    # This global governance snapshot is invariant during one replay. Computing
+    # it for every date scans the full A-share status/action/PIT tables and can
+    # turn a short acceptance replay into a multi-minute API request.
+    reference_coverage = (
+        reference_coverage
+        if reference_coverage is not None
+        else reference_data_coverage("CSI300")
+    )
     update_session_status(session_id, "running")
     days = []
     try:
         for trade_date in dates:
-            days.append(match_daily_orders(session_id, trade_date, auto_signal=auto_signal))
+            days.append(
+                match_daily_orders(
+                    session_id,
+                    trade_date,
+                    auto_signal=auto_signal,
+                    reference_coverage=reference_coverage,
+                )
+            )
     finally:
         update_session_status(session_id, "paused")
     return {
@@ -1645,7 +1677,11 @@ def _data_source_status(session: dict[str, Any], trade_date: str, benchmark_symb
         symbols.append({"symbol": symbol, "available": bar is not None, "source": (bar or {}).get("source")})
     benchmark_bar = None
     if benchmark_symbol:
-        benchmark_bar = _market_bar(benchmark_symbol, trade_date, asset_class="equity", market="china", source=source) or _ashare_bar(benchmark_symbol, trade_date, source=source)
+        benchmark_bar = (
+            _market_bar(benchmark_symbol, trade_date, asset_class="index", market="china", source=source)
+            or _market_bar(benchmark_symbol, trade_date, asset_class="equity", market="china", source=source)
+            or _ashare_bar(benchmark_symbol, trade_date, source=source)
+        )
     return {
         "symbols": symbols,
         "benchmark": {
@@ -1661,7 +1697,12 @@ def _paper_report_fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
+def create_daily_report(
+    session_id: str,
+    trade_date: str,
+    *,
+    reference_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
@@ -1711,6 +1752,7 @@ def create_daily_report(session_id: str, trade_date: str) -> dict[str, Any]:
         start_date=date_value,
         end_date=date_value,
         source=_session_parameters(session).get("source"),
+        reference=reference_coverage,
     )
     warnings = []
     if benchmark.get("symbol") and not benchmark.get("close"):
@@ -1847,7 +1889,11 @@ def create_snapshot(session_id: str, trade_date: str) -> dict[str, Any]:
     benchmark_close = None
     benchmark_return = None
     if benchmark_symbol:
-        benchmark_bar = _market_bar(benchmark_symbol, date_value, asset_class="equity", market="china", source=source) or _ashare_bar(benchmark_symbol, date_value, source=source)
+        benchmark_bar = (
+            _market_bar(benchmark_symbol, date_value, asset_class="index", market="china", source=source)
+            or _market_bar(benchmark_symbol, date_value, asset_class="equity", market="china", source=source)
+            or _ashare_bar(benchmark_symbol, date_value, source=source)
+        )
         if benchmark_bar:
             benchmark_close = float(benchmark_bar["close"])
             with db() as connection:

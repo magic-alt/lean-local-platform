@@ -125,6 +125,31 @@ def test_execution_audit_accepts_completed_cash_only_ashare_run(tmp_path):
     assert audit["ledger"]["minimumCash"] >= 0
 
 
+def test_canonical_result_digest_excludes_run_local_snapshot_directory():
+    from app.services.backtest_execution_validation import canonical_result_sha256
+
+    payload = {
+        "algorithmConfiguration": {
+            "parameters": {
+                "strategySnapshotDir": "/workspace/web/runtime/runs/run-a/strategy",
+                "strategySnapshotMainFile": "main.py",
+                "fastPeriod": "20",
+            }
+        },
+        "statistics": {"End Equity": "100000"},
+    }
+
+    same_inputs_new_run = json.loads(json.dumps(payload))
+    same_inputs_new_run["algorithmConfiguration"]["parameters"]["strategySnapshotDir"] = (
+        "/workspace/web/runtime/runs/run-b/strategy"
+    )
+    changed_parameter = json.loads(json.dumps(payload))
+    changed_parameter["algorithmConfiguration"]["parameters"]["fastPeriod"] = "30"
+
+    assert canonical_result_sha256(payload) == canonical_result_sha256(same_inputs_new_run)
+    assert canonical_result_sha256(payload) != canonical_result_sha256(changed_parameter)
+
+
 def test_execution_validation_merge_replaces_previous_execution_gates():
     from app.services.backtest_execution_validation import merge_execution_validation
 

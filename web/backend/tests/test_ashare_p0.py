@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sys
 import types
 import zipfile
@@ -155,6 +156,20 @@ def import_sample_ashare(tmp_path, monkeypatch):
                     '2024-01-02','2024-01-04','fixture-sha256',128,'now')
             on conflict(id) do update set sha256=excluded.sha256
             """
+        )
+        file_manifest = [
+            {
+                "path": "parquet/fixture/year=2024/part.parquet",
+                "rowCount": 3,
+                "sha256": "fixture-sha256",
+            }
+        ]
+        manifest_sha256 = hashlib.sha256(
+            json.dumps(file_manifest, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        connection.execute(
+            "update parquet_datasets set dataset_version=? where id='fixture-tushare'",
+            (f"tushare-{'fixture-tushare'[:12]}-{manifest_sha256[:12]}",),
         )
     return asset
 
@@ -707,7 +722,13 @@ def test_benchmark_rows_import_to_market_bars_and_lean_cache(tmp_path, monkeypat
 
     assert result["symbol"] == "000300"
     assert result["rows"] == 2
-    bars = query_database_bars(symbol="000300", venue="china", start_date="2024-01-02", end_date="2024-01-03")
+    bars = query_database_bars(
+        symbol="000300",
+        asset_class="index",
+        venue="china",
+        start_date="2024-01-02",
+        end_date="2024-01-03",
+    )
     assert bars["count"] == 2
     assert (tmp_path / "Data" / "equity" / "china" / "daily" / "000300.zip").exists()
 

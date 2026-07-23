@@ -232,9 +232,16 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                        min(trade_date) as first_date,
                        max(trade_date) as last_date
                 from market_trade_status
-                where symbol = ? and trade_date between ? and ?
+                where asset_class = ? and market = ? and symbol = ?
+                  and trade_date between ? and ?
                 """,
-                (symbol, scope["start"], scope["end"]),
+                (
+                    str(scope["assetClass"]).lower(),
+                    str(scope["market"]).lower(),
+                    symbol,
+                    scope["start"],
+                    scope["end"],
+                ),
             ).fetchone()
             trade_status_content_rows = rows_to_dicts(
                 connection.execute(
@@ -242,21 +249,28 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                     select symbol, trade_date, is_tradeable, is_suspended, can_buy, can_sell,
                            limit_up, limit_down, status, reason, source
                     from market_trade_status
-                    where symbol = ? and trade_date between ? and ?
+                    where asset_class = ? and market = ? and symbol = ?
+                      and trade_date between ? and ?
                     order by trade_date, source
                     """,
-                    (symbol, scope["start"], scope["end"]),
+                    (
+                        str(scope["assetClass"]).lower(),
+                        str(scope["market"]).lower(),
+                        symbol,
+                        scope["start"],
+                        scope["end"],
+                    ),
                 ).fetchall()
             )
             benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
             if benchmark_symbol:
                 benchmark_row = connection.execute(
                     f"""
-                    select count(*) as row_count,
+                    select count(distinct trade_date) as row_count,
                            min(trade_date) as first_date,
                            max(trade_date) as last_date
                     from market_daily_bars
-                    where symbol = ? and asset_class = ? and market = ? and venue = ?
+                    where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
                       and resolution = ? and data_type = ? and adjust = ?
                       {source_clause}
                       and trade_date between ? and ?
@@ -282,7 +296,7 @@ def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
                                turnover_rate, open_interest, prev_close, pct_change, adj_factor,
                                resolution, data_type, adjust, source
                         from market_daily_bars
-                        where symbol = ? and asset_class = ? and market = ? and venue = ?
+                        where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
                           and resolution = ? and data_type = ? and adjust = ?
                           {source_clause}
                           and trade_date between ? and ?

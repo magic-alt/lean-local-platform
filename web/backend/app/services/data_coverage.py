@@ -106,7 +106,7 @@ def benchmark_coverage(
         """
         select count(distinct trade_date) as rows, min(trade_date) as start_date, max(trade_date) as end_date
         from market_daily_bars
-        where symbol = ? and asset_class = 'equity' and market = 'china'
+        where symbol = ? and asset_class in ('index','equity') and market = 'china'
           and resolution = 'daily' and data_type = 'trade' and adjust = ? and source = ?
           and trade_date between ? and ?
         """,
@@ -134,12 +134,13 @@ def ashare_coverage(
     start_date: str,
     end_date: str,
     source: str | None = None,
+    reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
     provider_source = source_policy["effectiveSource"]
     symbol_items = [symbol_coverage(symbol, start_date=start_date, end_date=end_date, source=provider_source) for symbol in symbols]
     benchmark_item = benchmark_coverage(benchmark, start_date=start_date, end_date=end_date, source=provider_source)
-    reference = reference_data_coverage("CSI300")
+    reference = reference if reference is not None else reference_data_coverage("CSI300")
     providers = provider_availability()
     with db() as connection:
         qa_rows = connection.execute(

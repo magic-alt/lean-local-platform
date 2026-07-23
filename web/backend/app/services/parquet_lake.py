@@ -4,10 +4,10 @@ import hashlib
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from ..core.config import PARQUET_COMPRESSION, PARQUET_DIR
-from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..core.config import PARQUET_COMPRESSION, PARQUET_DIR, PARQUET_PARTITION_ROWS
+from ..db import database_backend, db, json_dump, rows_to_dicts, utc_now
 from ..lean_engine.symbols import normalize_symbol
 from .source_gate import PRIMARY_DATA_SOURCE, PRODUCTION_SOURCES, require_source_allowed, resolve_source_context
 
@@ -153,7 +153,13 @@ def _dataset_root(scope: dict[str, str]) -> Path:
     return path
 
 
-def _fetch_market_rows(scope: dict[str, str], start_date: str | None, end_date: str | None) -> list[dict[str, Any]]:
+def _iter_market_row_batches(
+    scope: dict[str, str],
+    start_date: str | None,
+    end_date: str | None,
+    *,
+    batch_size: int = 100_000,
+):
     predicates = [
         "asset_class = ?",
         "market = ?",
@@ -178,9 +184,8 @@ def _fetch_market_rows(scope: dict[str, str], start_date: str | None, end_date: 
     if end_date:
         predicates.append("trade_date <= ?")
         params.append(end_date)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
+    table = "market_daily_bars force index (primary)" if database_backend() == "mysql" else "market_daily_bars"
+    sql = f"""
             select
                 instrument_id,
                 symbol,
@@ -206,13 +211,20 @@ def _fetch_market_rows(scope: dict[str, str], start_date: str | None, end_date: 
                 source,
                 batch_id,
                 created_at
-            from market_daily_bars
+            from {table}
             where {" and ".join(predicates)}
-            order by trade_date asc, symbol asc
-            """,
-            params,
-        ).fetchall()
-    return rows_to_dicts(rows)
+            order by instrument_id asc, trade_date asc
+            """
+    with db() as connection:
+        if hasattr(connection, "iter_batches"):
+            yield from connection.iter_batches(sql, params, batch_size=batch_size)
+            return
+        cursor = connection.execute(sql, params)
+        while True:
+            rows = cursor.fetchmany(max(1, int(batch_size)))
+            if not rows:
+                break
+            yield rows_to_dicts(rows)
 
 
 def _market_row_count(scope: dict[str, str], start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
@@ -256,9 +268,97 @@ def _market_source_lineage(
     scope: dict[str, str],
     start_date: str | None = None,
     end_date: str | None = None,
+    expected_row_count: int | None = None,
 ) -> dict[str, Any]:
     if scope["source"] != PRIMARY_DATA_SOURCE or scope["asset_class"] != "equity":
         return {"required": False, "passed": True, "batchCount": 0, "invalidBatches": []}
+
+    # A governed full rebuild is the preferred lineage proof. It avoids
+    # grouping the complete canonical table by every historical import batch,
+    # which is both redundant and prohibitively expensive after years of
+    # incremental updates. Certification remains fail-closed: canonical,
+    # manifest and archived raw row counts must match exactly, every manifest
+    # must have succeeded without rejected rows, and every archive must still
+    # resolve to stored chunks.
+    if expected_row_count is not None:
+        with db() as connection:
+            governed_run = connection.execute(
+                """
+                select id,mode,summary_json from data_sync_runs
+                where provider=? and status='success' and canonical_status='ready'
+                  and mode in ('initial_full','full_rebuild','resume_checkpoint')
+                order by finished_at desc limit 1
+                """,
+                (PRIMARY_DATA_SOURCE,),
+            ).fetchone()
+            if governed_run:
+                manifest = connection.execute(
+                    """
+                    select count(*) as manifest_count,
+                           sum(response_rows) as response_rows,
+                           sum(rejected_rows) as rejected_rows,
+                           sum(case when status='success' then 0 else 1 end) as failed_manifests
+                    from provider_ingestion_manifests
+                    where run_id=? and provider=? and dataset_key='daily'
+                    """,
+                    (governed_run["id"], PRIMARY_DATA_SOURCE),
+                ).fetchone()
+                archive = connection.execute(
+                    """
+                    select count(*) as archive_count,sum(a.row_count) as archived_rows
+                    from provider_raw_archives a
+                    join stored_objects o on o.id=a.object_id
+                    where a.run_id=? and a.provider=? and a.dataset_key='daily'
+                      and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                    """,
+                    (governed_run["id"], PRIMARY_DATA_SOURCE),
+                ).fetchone()
+            else:
+                manifest = None
+                archive = None
+        governed_run = dict(governed_run) if governed_run else None
+        manifest = dict(manifest) if manifest else None
+        archive = dict(archive) if archive else None
+        if governed_run:
+            try:
+                run_summary = json.loads(governed_run["summary_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                run_summary = {}
+            daily_evidence = next(
+                (
+                    item
+                    for item in (run_summary.get("completionEvidence") or {}).get("items", [])
+                    if item.get("datasetKey") == "daily"
+                ),
+                {},
+            )
+            effective_mode = str(governed_run.get("mode") or "")
+            if effective_mode == "resume_checkpoint":
+                effective_mode = str(run_summary.get("resumeBaseMode") or run_summary.get("mode") or "")
+            response_rows = int((manifest or {}).get("response_rows") or 0)
+            archived_rows = int((archive or {}).get("archived_rows") or 0)
+            passed = bool(
+                effective_mode in {"initial_full", "full_rebuild"}
+                and daily_evidence.get("passed")
+                and int(daily_evidence.get("responseRows") or 0) == expected_row_count
+                and int((manifest or {}).get("manifest_count") or 0) > 0
+                and int((manifest or {}).get("failed_manifests") or 0) == 0
+                and int((manifest or {}).get("rejected_rows") or 0) == 0
+                and response_rows == expected_row_count
+                and int((archive or {}).get("archive_count") or 0) > 0
+                and archived_rows == expected_row_count
+            )
+            if passed:
+                return {
+                    "required": True,
+                    "passed": True,
+                    "validationMode": "governed_full_rebuild",
+                    "runId": str(governed_run["id"]),
+                    "batchCount": int((manifest or {}).get("manifest_count") or 0),
+                    "responseRows": response_rows,
+                    "archivedRows": archived_rows,
+                    "invalidBatches": [],
+                }
     predicates = [
         "m.asset_class = ?", "m.market = ?", "m.venue = ?", "m.resolution = ?",
         "m.data_type = ?", "m.adjust = ?", "m.source = ?",
@@ -343,9 +443,9 @@ def _market_source_lineage(
     with db() as connection:
         governed_run = connection.execute(
             """
-            select id,summary_json from data_sync_runs
+            select id,mode,summary_json from data_sync_runs
             where provider=? and status='success' and canonical_status='ready'
-              and mode in ('initial_full','full_rebuild')
+              and mode in ('initial_full','full_rebuild','resume_checkpoint')
             order by finished_at desc limit 1
             """,
             (PRIMARY_DATA_SOURCE,),
@@ -362,8 +462,11 @@ def _market_source_lineage(
                 ),
                 {},
             )
+            effective_mode = str(governed_run["mode"] or "")
+            if effective_mode == "resume_checkpoint":
+                effective_mode = str(run_summary.get("resumeBaseMode") or run_summary.get("mode") or "")
             candidate_run_id = str(governed_run["id"])
-            if daily_evidence.get("passed"):
+            if effective_mode in {"initial_full", "full_rebuild"} and daily_evidence.get("passed"):
                 archive = connection.execute(
                     """
                     select count(*) as count from provider_raw_archives a
@@ -515,10 +618,10 @@ def _available_scopes(
     ]
 
 
-def _write_partition(frame: Any, root: Path, year: int) -> dict[str, Any]:
+def _write_partition(frame: Any, root: Path, year: int, *, part_name: str = "part-00000") -> dict[str, Any]:
     partition_dir = root / f"year={year}"
     partition_dir.mkdir(parents=True, exist_ok=True)
-    path = partition_dir / "part-00000.parquet"
+    path = partition_dir / f"{part_name}.parquet"
     temp_path = path.with_suffix(".parquet.tmp")
     frame.write_parquet(temp_path, compression=PARQUET_COMPRESSION)
     temp_path.replace(path)
@@ -533,21 +636,28 @@ def _write_partition(frame: Any, root: Path, year: int) -> dict[str, Any]:
     }
 
 
-def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]], files: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _upsert_dataset(
+    scope: dict[str, str],
+    root: Path,
+    row_stats: dict[str, Any],
+    files: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
     now = utc_now()
     key = _dataset_key(**scope)
     dataset_id = _dataset_id(key)
-    first_date = min((str(row["trade_date"]) for row in rows), default=None)
-    last_date = max((str(row["trade_date"]) for row in rows), default=None)
+    row_count = int(row_stats.get("rowCount") or 0)
+    first_date = str(row_stats.get("firstDate")) if row_stats.get("firstDate") else None
+    last_date = str(row_stats.get("lastDate")) if row_stats.get("lastDate") else None
     root_path = _logical_parquet_path(root)
-    file_manifest = [
+    file_manifest = sorted([
         {
             "path": _logical_parquet_path(item["path"]),
             "rowCount": item["row_count"],
             "sha256": item["sha256"],
         }
         for item in files
-    ]
+    ], key=lambda item: item["path"])
     manifest_sha256 = hashlib.sha256(
         json_dump(file_manifest).encode("utf-8")
     ).hexdigest()
@@ -603,7 +713,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
                 SCHEMA_VERSION,
                 first_date,
                 last_date,
-                len(rows),
+                row_count,
                 len(files),
                 dataset_version,
                 "research",
@@ -649,7 +759,7 @@ def _upsert_dataset(scope: dict[str, str], root: Path, rows: list[dict[str, Any]
         "datasetKey": key,
         "rootPath": root_path,
         "schemaVersion": SCHEMA_VERSION,
-        "rowCount": len(rows),
+        "rowCount": row_count,
         "fileCount": len(files),
         "startDate": first_date,
         "endDate": last_date,
@@ -681,26 +791,87 @@ def export_market_daily_bars(
     source: str = "akshare",
     start_date: str | None = None,
     end_date: str | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if pl is None:
         raise RuntimeError("polars is required to export Parquet datasets.")
     scope = _normalize_scope(asset_class, market, venue, resolution, data_type, adjust, source)
-    rows = _fetch_market_rows(scope, start_date, end_date)
+    row_stats = _market_row_count(scope, start_date, end_date)
     root = _dataset_root(scope)
     root.mkdir(parents=True, exist_ok=True)
     files: list[dict[str, Any]] = []
-    if rows:
-        frame = pl.DataFrame(rows).with_columns(pl.col("trade_date").str.slice(0, 4).cast(pl.Int32).alias("year"))
-        for year in sorted(frame.get_column("year").unique().to_list()):
-            partition = frame.filter(pl.col("year") == year).drop("year")
-            files.append(_write_partition(partition, root, int(year)))
+    part_counts: dict[int, int] = {}
+    partition_buffers: dict[int, list[Any]] = {}
+    partition_buffer_rows: dict[int, int] = {}
+    partition_target_rows = PARQUET_PARTITION_ROWS
+    exported_rows = 0
+    expected_rows = int(row_stats.get("rowCount") or 0)
+
+    def flush_year(year: int) -> None:
+        frames = partition_buffers.pop(year, [])
+        partition_buffer_rows.pop(year, None)
+        if not frames:
+            return
+        partition = pl.concat(frames, rechunk=True) if len(frames) > 1 else frames[0]
+        part_index = part_counts.get(year, 0)
+        files.append(
+            _write_partition(
+                partition,
+                root,
+                year,
+                part_name=f"part-{part_index:05d}",
+            )
+        )
+        part_counts[year] = part_index + 1
+
+    for rows in _iter_market_row_batches(scope, start_date, end_date):
+        if not rows:
+            continue
+        frame = pl.DataFrame(rows).with_columns(
+            pl.col("trade_date").str.slice(0, 4).cast(pl.Int32).alias("year")
+        )
+        # partition_by performs one linear split. Filtering the full 100k-row
+        # frame once per distinct year multiplied CPU by the complete history
+        # depth and could starve the Docker control plane during a rebuild.
+        year_partitions = frame.partition_by("year", maintain_order=True)
+        for year_frame in year_partitions:
+            year_value = int(year_frame.get_column("year")[0])
+            partition = year_frame.drop("year")
+            partition_buffers.setdefault(year_value, []).append(partition)
+            partition_buffer_rows[year_value] = partition_buffer_rows.get(year_value, 0) + partition.height
+            if partition_buffer_rows[year_value] >= partition_target_rows:
+                flush_year(year_value)
+        exported_rows += len(rows)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": "parquet_export",
+                    "scope": scope,
+                    "rowsProcessed": exported_rows,
+                    "expectedRows": expected_rows,
+                    "fileCount": len(files),
+                }
+            )
+    for year in sorted(partition_buffers):
+        flush_year(year)
+    if exported_rows != expected_rows:
+        raise RuntimeError(
+            f"parquet_export_row_count_mismatch: expected={expected_rows} exported={exported_rows}"
+        )
+    expected_paths = {item["path"].resolve() for item in files}
+    for existing in root.glob("year=*/*.parquet"):
+        if existing.resolve() not in expected_paths:
+            existing.unlink()
     metadata = {
         "exported_from": "market_daily_bars",
         "compression": PARQUET_COMPRESSION,
         "requested_start_date": start_date,
         "requested_end_date": end_date,
+        "read_batch": "streaming_cursor_100000_rows",
+        "partition_write_target_rows": partition_target_rows,
+        "source_order": "instrument_id_trade_date",
     }
-    return _upsert_dataset(scope, root, rows, files, metadata)
+    return _upsert_dataset(scope, root, row_stats, files, metadata)
 
 
 def _parquet_files_for_dataset(dataset_id: str) -> list[dict[str, Any]]:
@@ -814,7 +985,12 @@ def parquet_consistency_report(
             if item["visible_path"].exists() and _sha256(item["visible_path"]) != item["sha256"]
         ]
         mysql_counts = _market_row_count(scope, dataset.get("start_date"), dataset.get("end_date"))
-        source_lineage = _market_source_lineage(scope, dataset.get("start_date"), dataset.get("end_date"))
+        source_lineage = _market_source_lineage(
+            scope,
+            dataset.get("start_date"),
+            dataset.get("end_date"),
+            expected_row_count=int(mysql_counts.get("rowCount") or 0),
+        )
         duckdb_counts = {"enabled": duckdb is not None, "rowCount": None, "firstDate": None, "lastDate": None, "error": None}
         if duckdb is not None and files and not missing_files:
             paths = ", ".join(_sql_string(str(item["visible_path"])) for item in resolved_files)
@@ -862,7 +1038,14 @@ def parquet_consistency_report(
                 ],
             }
         )
-    severity = "critical" if any(item["severity"] == "critical" for item in items) else ("warning" if any(item["severity"] == "warning" for item in items) else "ok")
+    report_issues: list[str] = []
+    if normalized_sources and not items:
+        report_issues.append("parquet_dataset_missing")
+    severity = (
+        "critical"
+        if report_issues or any(item["severity"] == "critical" for item in items)
+        else ("warning" if any(item["severity"] == "warning" for item in items) else "ok")
+    )
     report = {
         "reportType": "parquet_consistency",
         "assetClass": asset_class,
@@ -879,6 +1062,7 @@ def parquet_consistency_report(
         "datasetCount": len(items),
         "criticalCount": sum(1 for item in items if item["severity"] == "critical"),
         "warningCount": sum(1 for item in items if item["severity"] == "warning"),
+        "issues": report_issues,
         "items": items,
     }
     if persist:
@@ -909,12 +1093,29 @@ def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]
             ).fetchone()
             if not dataset or str(dataset["source"]).lower() != PRIMARY_DATA_SOURCE:
                 continue
+            file_rows = connection.execute(
+                "select file_path,row_count,sha256 from parquet_files where dataset_id=? order by file_path",
+                (dataset_id,),
+            ).fetchall()
+            file_manifest = [
+                {
+                    "path": str(file_row["file_path"]),
+                    "rowCount": int(file_row["row_count"] or 0),
+                    "sha256": str(file_row["sha256"] or ""),
+                }
+                for file_row in file_rows
+            ]
+            if not file_manifest:
+                continue
+            manifest_sha256 = hashlib.sha256(json_dump(file_manifest).encode("utf-8")).hexdigest()
+            dataset_version = f"{PRIMARY_DATA_SOURCE}-{dataset_id[:12]}-{manifest_sha256[:12]}"
             connection.execute(
                 """
                 update parquet_datasets
                 set environment = 'production',
                     is_production = 1,
                     is_certified = 1,
+                    dataset_version = ?,
                     certified_at = ?,
                     certified_by = 'parquet-consistency-v1',
                     qa_status = 'ok',
@@ -922,7 +1123,7 @@ def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]
                     updated_at = ?
                 where id = ? and source = ?
                 """,
-                (certified_at, report_id, certified_at, dataset_id, PRIMARY_DATA_SOURCE),
+                (dataset_version, certified_at, report_id, certified_at, dataset_id, PRIMARY_DATA_SOURCE),
             )
             certified_ids.append(dataset_id)
     return certified_ids
@@ -942,6 +1143,7 @@ def rebuild_all_market_parquet(
     end_date: str | None = None,
     continue_on_error: bool = True,
     persist_report: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     scopes = _available_scopes(
         asset_class=asset_class,
@@ -957,12 +1159,27 @@ def rebuild_all_market_parquet(
     errors: list[dict[str, Any]] = []
     for scope in scopes:
         try:
-            rebuilt.append(export_market_daily_bars(**scope, start_date=start_date, end_date=end_date))
+            rebuilt.append(
+                export_market_daily_bars(
+                    **scope,
+                    start_date=start_date,
+                    end_date=end_date,
+                    progress_callback=progress_callback,
+                )
+            )
         except Exception as exc:
             errors.append({"scope": scope, "error": str(exc)})
             if not continue_on_error:
                 raise
     scope_sources = sorted({scope["source"] for scope in scopes})
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "stage": "parquet_consistency",
+                "scopeCount": len(scopes),
+                "rebuiltCount": len(rebuilt),
+            }
+        )
     consistency = parquet_consistency_report(
         asset_class=asset_class,
         market=market,

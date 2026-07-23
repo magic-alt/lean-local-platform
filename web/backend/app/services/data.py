@@ -724,6 +724,9 @@ def import_ashare_research_data(
     except DataQualityError as exc:
         finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
         raise
+    except Exception as exc:
+        finish_import_batch(batch_id, "failed", qa_report={"passed": False, "items": qa_by_symbol}, error=str(exc))
+        raise
 
 
 def _daily_values_match(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
@@ -885,6 +888,7 @@ def import_ashare_research_batch(
     entries: list[dict[str, Any]],
     *,
     sync_run_id: str,
+    reconcile_full_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Validate many symbols, but write only new/corrected canonical rows."""
     if not entries:
@@ -926,9 +930,22 @@ def import_ashare_research_batch(
 
         all_rows = [row for rows in normalized_by_symbol.values() for row in rows]
         if not all_rows:
+            reconciled_rows = (
+                _reconcile_ashare_daily_snapshot(entries, normalized_by_symbol)
+                if reconcile_full_snapshot
+                else 0
+            )
             report = {"passed": True, "environment": "production", "symbols": symbols, "items": {}}
+            report["reconciledStaleRows"] = reconciled_rows
             finish_import_batch(batch_id, "success", qa_report=report)
-            return {"rows": 0, "changedRows": 0, "unchangedRows": 0, "batch_id": batch_id, "qa": report}
+            return {
+                "rows": 0,
+                "changedRows": 0,
+                "unchangedRows": 0,
+                "reconciledStaleRows": reconciled_rows,
+                "batch_id": batch_id,
+                "qa": report,
+            }
 
         calendar_start = min(row["trade_date"] for row in all_rows)
         calendar_end = max(row["trade_date"] for row in all_rows)
@@ -1019,6 +1036,12 @@ def import_ashare_research_batch(
             if verified_factors:
                 upsert_adjustment_factors(verified_factors, source="tushare", batch_id=batch_id, bulk=True)
 
+        reconciled_rows = (
+            _reconcile_ashare_daily_snapshot(entries, normalized_by_symbol)
+            if reconcile_full_snapshot
+            else 0
+        )
+
         aggregate_report = {
             "passed": all(bool(item.get("passed")) for item in qa_by_symbol.values()),
             "environment": "production",
@@ -1029,6 +1052,7 @@ def import_ashare_research_batch(
             "insertedRows": inserted_rows,
             "updatedRows": len(changed_rows) - inserted_rows,
             "unchangedRows": len(all_rows) - len(changed_rows),
+            "reconciledStaleRows": reconciled_rows,
             "items": qa_by_symbol,
         }
         finish_import_batch(batch_id, "success", qa_report=aggregate_report)
@@ -1038,15 +1062,90 @@ def import_ashare_research_batch(
             "insertedRows": inserted_rows,
             "updatedRows": len(changed_rows) - inserted_rows,
             "unchangedRows": len(all_rows) - len(changed_rows),
+            "reconciledStaleRows": reconciled_rows,
             "batch_id": batch_id,
             "qa": aggregate_report,
         }
     except DataQualityError as exc:
         finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
         raise
-    except Exception as exc:
-        finish_import_batch(batch_id, "failed", qa_report={"passed": False, "items": qa_by_symbol}, error=str(exc))
-        raise
+
+
+def _reconcile_ashare_daily_snapshot(
+    entries: list[dict[str, Any]],
+    normalized_by_symbol: dict[str, list[dict[str, Any]]],
+) -> int:
+    """Remove canonical rows absent from an authoritative full snapshot."""
+    scopes = [
+        (
+            str(entry["symbol"]),
+            str(entry.get("snapshot_start") or entry.get("listed_date") or "1990-01-01"),
+            str(entry.get("snapshot_end") or entry.get("delisted_date") or "9999-12-31"),
+        )
+        for entry in entries
+    ]
+    scopes = [item for item in scopes if item[1] <= item[2]]
+    if not scopes:
+        return 0
+    keys = [
+        (symbol, str(row["trade_date"]))
+        for symbol, rows in normalized_by_symbol.items()
+        for row in rows
+    ]
+    deleted = 0
+    with bulk_db() as connection:
+        connection.execute(
+            """
+            create temporary table if not exists tmp_full_daily_scopes (
+                symbol varchar(32) primary key,
+                start_date varchar(10) not null,
+                end_date varchar(10) not null
+            )
+            """
+        )
+        connection.execute(
+            """
+            create temporary table if not exists tmp_full_daily_keys (
+                symbol varchar(32) not null,
+                trade_date varchar(10) not null,
+                primary key(symbol,trade_date)
+            )
+            """
+        )
+        connection.execute("delete from tmp_full_daily_scopes")
+        connection.execute("delete from tmp_full_daily_keys")
+        connection.executemany(
+            "insert into tmp_full_daily_scopes(symbol,start_date,end_date) values (?,?,?)",
+            scopes,
+        )
+        if keys:
+            for offset in range(0, len(keys), 10_000):
+                connection.executemany(
+                    "insert into tmp_full_daily_keys(symbol,trade_date) values (?,?)",
+                    keys[offset : offset + 10_000],
+                )
+        predicates = """
+            exists (
+                select 1 from tmp_full_daily_scopes s
+                where s.symbol={table}.symbol
+            )
+            and not exists (
+                select 1 from tmp_full_daily_keys k
+                where k.symbol={table}.symbol and k.trade_date={table}.trade_date
+            )
+        """
+        for table, source in (
+            ("ashare_trade_status", "tushare:ohlcv_inferred"),
+            ("market_trade_status", "tushare:ohlcv_inferred"),
+            ("ashare_daily_bars", "tushare"),
+            ("market_daily_bars", "tushare"),
+        ):
+            cursor = connection.execute(
+                f"delete from {table} where source=? and " + predicates.format(table=table),
+                (source,),
+            )
+            deleted += max(0, int(cursor.rowcount or 0))
+    return deleted
 
 
 def fetch_and_import_symbol(

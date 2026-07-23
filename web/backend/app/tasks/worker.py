@@ -8,7 +8,7 @@ from .celery_app import celery_app
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from ..core.config import DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
-from ..db import DatabaseUnavailableError, db, json_dump, row_to_dict, utc_now
+from ..db import DatabaseUnavailableError, database_backend, db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.ids import new_run_id
 from ..lean_engine.reports import render_report
@@ -491,11 +491,44 @@ def _broker_ready_contains_sync_run(client: Any, run_id: str) -> bool:
 
 def _broker_unacked_sync_tags(client: Any, run_id: str) -> list[str]:
     needle = run_id.encode("utf-8")
+    task_name = b"lean_web.sync_all_data"
     return [
         tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
         for tag, message in (client.hgetall("unacked") or {}).items()
-        if needle in message
+        if needle in message and task_name in message
     ]
+
+
+def _broker_ready_contains_materialization(client: Any, run_id: str) -> bool:
+    needle = run_id.encode("utf-8")
+    task_name = b"lean_web.materialize_sync_data"
+    return any(
+        needle in message and task_name in message
+        for message in (client.lrange("data-demand", 0, -1) or [])
+    )
+
+
+def _broker_unacked_materialization_tags(client: Any, run_id: str) -> list[str]:
+    needle = run_id.encode("utf-8")
+    task_name = b"lean_web.materialize_sync_data"
+    return [
+        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
+        for tag, message in (client.hgetall("unacked") or {}).items()
+        if needle in message and task_name in message
+    ]
+
+
+def _materialization_lease_active(run_id: str) -> bool:
+    """Use the MySQL advisory lock as the source of truth for live work."""
+    if database_backend() != "mysql":
+        return False
+    lock_name = f"lean:materialize:{run_id}"[:64]
+    with db() as connection:
+        row = connection.execute(
+            "select is_used_lock(?) as owner",
+            (lock_name,),
+        ).fetchone()
+    return bool(row and row.get("owner") is not None)
 
 
 @celery_app.task(
@@ -507,7 +540,7 @@ def _broker_unacked_sync_tags(client: Any, run_id: str) -> list[str]:
     max_retries=5,
 )
 def recover_data_sync_task():
-    """Requeue database runs whose Celery message disappeared after restart."""
+    """Requeue stale canonical or derived sync work after worker loss."""
     stale_seconds = max(60, int(os.environ.get("LEAN_DATA_SYNC_STALE_SECONDS", "300")))
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
     with db() as connection:
@@ -520,8 +553,34 @@ def recover_data_sync_task():
             """,
             (cutoff,),
         ).fetchall()
-    if not rows:
-        return {"recovered": [], "preserved": []}
+        derived_rows = connection.execute(
+            """
+            select id,derived_status_json,finished_at
+            from data_sync_runs
+            where canonical_status='ready' and derived_status_json is not null
+            order by created_at
+            """
+        ).fetchall()
+    stale_derived: list[tuple[str, dict[str, Any]]] = []
+    cutoff_datetime = datetime.fromisoformat(cutoff)
+    for row in derived_rows:
+        try:
+            payload = json.loads(row["derived_status_json"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if payload.get("status") not in {"queued", "running"}:
+            continue
+        heartbeat_text = str(payload.get("heartbeatAt") or row["finished_at"] or "")
+        try:
+            heartbeat = datetime.fromisoformat(heartbeat_text.replace("Z", "+00:00"))
+            if heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        except ValueError:
+            heartbeat = datetime.min.replace(tzinfo=timezone.utc)
+        if heartbeat < cutoff_datetime:
+            stale_derived.append((str(row["id"]), payload))
+    if not rows and not stale_derived:
+        return {"recovered": [], "preserved": [], "recoveredDerived": [], "preservedDerived": []}
 
     try:
         import redis
@@ -529,7 +588,13 @@ def recover_data_sync_task():
         client = redis.Redis.from_url(celery_app.conf.broker_url, socket_connect_timeout=1, socket_timeout=2)
         client.ping()
     except Exception as exc:  # pragma: no cover - requires broker outage.
-        return {"recovered": [], "preserved": [], "error": f"broker_unavailable:{exc}"}
+        return {
+            "recovered": [],
+            "preserved": [],
+            "recoveredDerived": [],
+            "preservedDerived": [],
+            "error": f"broker_unavailable:{exc}",
+        }
 
     recovered: list[str] = []
     preserved: list[str] = []
@@ -561,7 +626,48 @@ def recover_data_sync_task():
         update_task(task_id, celery_task_id=result.id, status="queued", error=None, finished_at=None)
         append_log(task_id, "Recovered orphaned data synchronization after worker restart.")
         recovered.append(run_id)
-    return {"recovered": recovered, "preserved": preserved}
+    recovered_derived: list[str] = []
+    preserved_derived: list[str] = []
+    for run_id, payload in stale_derived:
+        if _materialization_lease_active(run_id) or _broker_ready_contains_materialization(client, run_id):
+            preserved_derived.append(run_id)
+            continue
+        orphaned_tags = _broker_unacked_materialization_tags(client, run_id)
+        if orphaned_tags:
+            client.hdel("unacked", *orphaned_tags)
+            client.zrem("unacked_index", *orphaned_tags)
+        payload["status"] = "queued"
+        payload["recoveryReason"] = "stale_derived_heartbeat"
+        payload["recoveredAt"] = utc_now()
+        with db() as connection:
+            current = connection.execute(
+                "select canonical_status,derived_status_json from data_sync_runs where id=?",
+                (run_id,),
+            ).fetchone()
+            if not current or current["canonical_status"] != "ready":
+                continue
+            try:
+                current_payload = json.loads(current["derived_status_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if current_payload.get("status") not in {"queued", "running"}:
+                continue
+            connection.execute(
+                "update data_sync_runs set derived_status_json=? where id=?",
+                (json_dump(payload), run_id),
+            )
+            connection.execute(
+                "update data_sync_items set derived_status_json=? where run_id=? and dataset_key='daily'",
+                (json_dump(payload), run_id),
+            )
+        materialize_sync_data_task.apply_async(args=[run_id], queue="data-demand")
+        recovered_derived.append(run_id)
+    return {
+        "recovered": recovered,
+        "preserved": preserved,
+        "recoveredDerived": recovered_derived,
+        "preservedDerived": preserved_derived,
+    }
 
 
 @celery_app.task(name="lean_web.run_backtest", bind=True, max_retries=None)

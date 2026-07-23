@@ -51,6 +51,38 @@ def test_scheduler_lease_enforces_max_concurrent_slots(tmp_path, monkeypatch):
     assert third["slot_index"] == 0
 
 
+def test_scheduler_lease_reclaims_terminal_backtest_holder(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services.scheduler import acquire_scheduler_lease, active_scheduler_leases
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id,task_id,name,symbol,asset_class,venue,resolution,data_type,parameters_json,
+                 status,docker_image,container_name,work_dir,results_dir,log_path,created_at)
+            values ('orphaned-run','orphaned-task','orphaned','600519','equity','china','daily',
+                    'trade','{}','running','lean:test','lean-orphaned','/tmp/run','/tmp/results',
+                    '/tmp/log',?)
+            """,
+            (db_module.utc_now(),),
+        )
+
+    first = acquire_scheduler_lease(
+        resource="backtest", holder_id="orphaned-run", limit=1, ttl_seconds=7200
+    )
+    assert first is not None
+    with db_module.db() as connection:
+        connection.execute("update backtest_runs set status='failed' where id='orphaned-run'")
+
+    replacement = acquire_scheduler_lease(
+        resource="backtest", holder_id="replacement-run", limit=1, ttl_seconds=7200
+    )
+    assert replacement is not None
+    assert [item["holder_id"] for item in active_scheduler_leases("backtest")] == ["replacement-run"]
+
+
 def test_cancel_task_revokes_optimization_and_child_backtests(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
 

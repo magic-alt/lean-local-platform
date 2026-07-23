@@ -106,7 +106,7 @@ def enabled() -> bool:
     return CLICKHOUSE_ENABLED and clickhouse_connect is not None
 
 
-def _client(database: str | None = None):
+def _client(database: str | None = None, *, timeout: int = 5):
     if clickhouse_connect is None:
         raise RuntimeError("clickhouse-connect is not installed.")
     return clickhouse_connect.get_client(
@@ -116,7 +116,7 @@ def _client(database: str | None = None):
         password=CLICKHOUSE_PASSWORD,
         database=database or CLICKHOUSE_DATABASE,
         connect_timeout=1,
-        send_receive_timeout=5,
+        send_receive_timeout=max(1, int(timeout)),
     )
 
 
@@ -152,10 +152,19 @@ def ensure_schema() -> bool:
                 date Date MATERIALIZED toDate(timestamp)
             )
             ENGINE = ReplacingMergeTree(imported_at)
-            PARTITION BY toYYYYMM(timestamp)
+            PARTITION BY toYear(timestamp)
             ORDER BY (asset_class, venue, symbol, resolution, data_type, timestamp)
             """
         )
+        partition_rows = base.query(
+            f"SELECT partition_key FROM system.tables WHERE database = {_literal(database)} "
+            f"AND name = {_literal('market_bars')}"
+        ).result_rows
+        partition_key = str(partition_rows[0][0]) if partition_rows else ""
+        if partition_key != "toYear(timestamp)":
+            raise RuntimeError(
+                "clickhouse_schema_migration_required: market_bars must use toYear(timestamp) partitioning"
+            )
         _SCHEMA_READY = True
     return True
 
@@ -204,72 +213,161 @@ def _float(row: dict[str, str], key: str) -> float:
     return float(row[key])
 
 
-def mirror_rows(metadata: dict[str, Any], rows: list[dict[str, str]]) -> dict[str, Any]:
+def mirror_rows_batch(
+    entries: list[tuple[dict[str, Any], list[dict[str, str]]]],
+) -> list[dict[str, Any]]:
+    """Mirror several assets through one ClickHouse client and insert stream."""
+    if not entries:
+        return []
     if not enabled():
-        return {"enabled": False, "inserted": 0}
-    if not rows:
-        return {"enabled": True, "inserted": 0}
+        return [{"enabled": False, "inserted": 0} for _ in entries]
     try:
         ensure_schema()
     except Exception as exc:
         set_dependency_status("clickhouse", False)
-        return {"enabled": True, "inserted": 0, "error": str(exc)}
+        return [{"enabled": True, "inserted": 0, "error": str(exc)} for _ in entries]
     imported_at = datetime.now(timezone.utc)
-    asset_class = str(metadata.get("asset_class") or metadata.get("assetClass") or "equity")
-    normalized_symbol = _normalize_query_symbol(
-        metadata["symbol"],
-        str(metadata.get("asset_class") or metadata.get("assetClass") or "equity").strip().lower(),
-        str(metadata.get("market") or "").strip().lower() or None,
-        str(metadata.get("venue") or "").strip().lower() or None,
-    )
-    symbol = normalized_symbol
-    venue = str(metadata.get("venue") or metadata.get("market") or "usa")
-    resolution = str(metadata.get("resolution") or "daily")
-    data_type = str(metadata.get("data_type") or metadata.get("dataType") or "trade")
-    source = str(metadata.get("source") or metadata.get("provider") or "unknown")
-    payload = []
-    skipped = 0
-    for row in rows:
-        try:
-            payload.append(
-                (
-                    asset_class,
-                    symbol,
-                    venue,
-                    resolution,
-                    data_type,
-                    source,
-                    _parse_timestamp(row),
-                    _float(row, "open"),
-                    _float(row, "high"),
-                    _float(row, "low"),
-                    _float(row, "close"),
-                    float(row.get("volume") or 0),
-                    imported_at,
+    payload: list[tuple[Any, ...]] = []
+    results: list[dict[str, Any]] = []
+    for metadata, rows in entries:
+        asset_class = str(metadata.get("asset_class") or metadata.get("assetClass") or "equity")
+        symbol = _normalize_query_symbol(
+            metadata["symbol"],
+            asset_class.strip().lower(),
+            str(metadata.get("market") or "").strip().lower() or None,
+            str(metadata.get("venue") or "").strip().lower() or None,
+        )
+        venue = str(metadata.get("venue") or metadata.get("market") or "usa")
+        resolution = str(metadata.get("resolution") or "daily")
+        data_type = str(metadata.get("data_type") or metadata.get("dataType") or "trade")
+        source = str(metadata.get("source") or metadata.get("provider") or "unknown")
+        inserted = 0
+        skipped = 0
+        for row in rows:
+            try:
+                payload.append(
+                    (
+                        asset_class,
+                        symbol,
+                        venue,
+                        resolution,
+                        data_type,
+                        source,
+                        _parse_timestamp(row),
+                        _float(row, "open"),
+                        _float(row, "high"),
+                        _float(row, "low"),
+                        _float(row, "close"),
+                        float(row.get("volume") or 0),
+                        imported_at,
+                    )
                 )
-            )
-        except Exception:
-            skipped += 1
+                inserted += 1
+            except Exception:
+                skipped += 1
+        results.append({"enabled": True, "inserted": inserted, "skipped": skipped, "batches": 0})
     batches = 0
     if payload:
-        client = _client()
-        # The table is partitioned monthly and ClickHouse rejects a single
-        # insert spanning more than 100 partitions. Five-year groups cap each
-        # block at 60 monthly partitions while preserving large row batches.
-        by_period: dict[int, list[tuple[Any, ...]]] = {}
-        for item in payload:
-            timestamp = item[6]
-            by_period.setdefault(timestamp.year // 5, []).append(item)
-        for period_rows in by_period.values():
-            for offset in range(0, len(period_rows), INSERT_BATCH_SIZE):
-                client.insert(
-                    "market_bars",
-                    period_rows[offset : offset + INSERT_BATCH_SIZE],
-                    column_names=BAR_COLUMNS,
+        try:
+            client = _client()
+            # Keep each insert bounded to five calendar years. The table uses
+            # yearly partitions so a full-history rebuild creates only a few
+            # hundred parts rather than one part per month per batch.
+            by_period: dict[int, list[tuple[Any, ...]]] = {}
+            for item in payload:
+                timestamp = item[6]
+                by_period.setdefault(timestamp.year // 5, []).append(item)
+            for period_rows in by_period.values():
+                for offset in range(0, len(period_rows), INSERT_BATCH_SIZE):
+                    client.insert(
+                        "market_bars",
+                        period_rows[offset : offset + INSERT_BATCH_SIZE],
+                        column_names=BAR_COLUMNS,
+                    )
+                    batches += 1
+            set_dependency_status("clickhouse", True)
+        except Exception as exc:
+            set_dependency_status("clickhouse", False)
+            return [{**result, "error": str(exc)} for result in results]
+    for result in results:
+        result["batches"] = batches
+    return results
+
+
+def mirror_rows(metadata: dict[str, Any], rows: list[dict[str, str]]) -> dict[str, Any]:
+    return mirror_rows_batch([(metadata, rows)])[0]
+
+
+def replace_china_equity_symbols_from_canonical(symbols: list[str]) -> dict[str, Any]:
+    """Replace a bounded symbol set after authoritative snapshot pruning."""
+    normalized = sorted(
+        {
+            _normalize_query_symbol(symbol, "equity", "china", "china")
+            for symbol in symbols
+            if str(symbol).strip()
+        }
+    )
+    if not normalized:
+        return {"enabled": enabled(), "symbols": [], "deleted": 0, "inserted": 0}
+    if not enabled():
+        return {"enabled": False, "symbols": normalized, "deleted": 0, "inserted": 0}
+    ensure_schema()
+    client = _client(timeout=300)
+    symbol_list = ",".join(_literal(symbol) for symbol in normalized)
+    before = int(
+        client.query(
+            f"""
+            select count(*) from {_table()} FINAL
+            where asset_class='equity' and venue='china' and resolution='daily'
+              and data_type='trade' and source='tushare' and symbol in ({symbol_list})
+            """
+        ).result_rows[0][0]
+    )
+    client.command(
+        f"""
+        alter table {_table()} delete where
+          asset_class='equity' and venue='china' and resolution='daily'
+          and data_type='trade' and source='tushare' and symbol in ({symbol_list})
+        settings mutations_sync=2
+        """
+    )
+    entries = []
+    for symbol in normalized:
+        bars = query_database_bars(
+            asset_class="equity",
+            symbol=symbol,
+            market="china",
+            venue="china",
+            resolution="daily",
+            data_type="trade",
+            provider_source="tushare",
+            limit=0,
+        )["items"]
+        if bars:
+            entries.append(
+                (
+                    {
+                        "asset_class": "equity",
+                        "symbol": symbol,
+                        "market": "china",
+                        "venue": "china",
+                        "resolution": "daily",
+                        "data_type": "trade",
+                        "source": "tushare",
+                    },
+                    bars,
                 )
-                batches += 1
-        set_dependency_status("clickhouse", True)
-    return {"enabled": True, "inserted": len(payload), "skipped": skipped, "batches": batches}
+            )
+    results = mirror_rows_batch(entries)
+    if any(result.get("error") for result in results):
+        raise RuntimeError(f"clickhouse_symbol_replace_failed:{results}")
+    inserted = sum(int(result.get("inserted") or 0) for result in results)
+    return {
+        "enabled": True,
+        "symbols": normalized,
+        "deleted": before,
+        "inserted": inserted,
+    }
 
 
 def _literal(value: str) -> str:
@@ -356,12 +454,16 @@ def query_database_bars(
     limit: int = 500,
 ) -> dict[str, Any]:
     asset_class_key = asset_class.strip().lower()
+    market_value = (market or "").strip().lower()
     venue_key = (venue or market or "").strip().lower()
-    normalized_symbol = _normalize_query_symbol(symbol, asset_class_key, None, venue_key)
+    normalized_symbol = _normalize_query_symbol(symbol, asset_class_key, market_value or None, venue_key)
     resolution_key = resolution.strip().lower()
     data_type_key = data_type.strip().lower()
     predicates = ["asset_class = ?", "symbol = ?", "resolution = ?", "data_type = ?"]
     params: list[Any] = [asset_class_key, normalized_symbol, resolution_key, data_type_key]
+    if market_value:
+        predicates.append("market = ?")
+        params.append(market_value)
     if venue_key:
         predicates.append("venue = ?")
         params.append(venue_key)

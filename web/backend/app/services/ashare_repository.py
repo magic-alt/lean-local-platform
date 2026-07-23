@@ -1315,7 +1315,7 @@ def assert_benchmark_ready(
                    min(trade_date) as first_date,
                    max(trade_date) as last_date
             from market_daily_bars
-            where symbol = ? and asset_class = ? and market = ? and venue = ?
+            where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
               and resolution = ? and data_type = ? and adjust = ?
               and trade_date between ? and ?
               {"and source = ?" if source else ""}

@@ -24,10 +24,11 @@ from .core.config import (
 
 try:  # pragma: no cover - optional unless LEAN_DATABASE_URL points at MySQL.
     import pymysql
-    from pymysql.cursors import DictCursor
+    from pymysql.cursors import DictCursor, SSDictCursor
 except Exception:  # pragma: no cover
     pymysql = None
     DictCursor = None
+    SSDictCursor = None
 
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,27 @@ class MySQLConnection:
         cursor = self._connection.cursor()
         cursor.executemany(_translate_mysql_sql(sql), parameters)
         return cursor
+
+    def iter_batches(
+        self,
+        sql: str,
+        parameters: Iterable[Any] | dict[str, Any] | None = None,
+        *,
+        batch_size: int = 100_000,
+    ) -> Iterable[list[dict[str, Any]]]:
+        """Stream large read-only result sets without buffering them in Python."""
+        if SSDictCursor is None:  # pragma: no cover - guarded by MySQL dependency.
+            raise RuntimeError("PyMySQL SSDictCursor is required for streaming queries.")
+        cursor = self._connection.cursor(SSDictCursor)
+        try:
+            cursor.execute(_translate_mysql_sql(sql), parameters)
+            while True:
+                rows = cursor.fetchmany(max(1, int(batch_size)))
+                if not rows:
+                    break
+                yield list(rows)
+        finally:
+            cursor.close()
 
     def executescript(self, script: str) -> None:
         for statement in _split_sql_script(script):

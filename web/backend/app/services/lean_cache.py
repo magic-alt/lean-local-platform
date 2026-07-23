@@ -198,17 +198,32 @@ def _rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
 def _query_full_ashare_rows(symbol: str, *, source: str, adjust: str) -> list[dict[str, Any]]:
     symbol_key_value = normalize_symbol(symbol, "china")
     with db() as connection:
+        # Certified benchmarks are canonical index rows even though LEAN reads
+        # the generated file via AddEquity. Prefer that explicit lineage over
+        # a potentially overlapping listed-security code.
         rows = connection.execute(
             """
             select trade_date, open, high, low, close, volume, adj_factor, batch_id
             from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = 'china'
+            where symbol = ? and asset_class = 'index' and market = 'china'
               and resolution = 'daily' and data_type = 'trade'
               and adjust = ? and source = ?
             order by trade_date asc
             """,
             (symbol_key_value, adjust or "raw", source),
         ).fetchall()
+        if not rows:
+            rows = connection.execute(
+                """
+                select trade_date, open, high, low, close, volume, adj_factor, batch_id
+                from market_daily_bars
+                where symbol = ? and asset_class = 'equity' and market = 'china'
+                  and resolution = 'daily' and data_type = 'trade'
+                  and adjust = ? and source = ?
+                order by trade_date asc
+                """,
+                (symbol_key_value, adjust or "raw", source),
+            ).fetchall()
         if not rows:
             rows = connection.execute(
                 """

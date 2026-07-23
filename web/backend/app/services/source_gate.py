@@ -213,15 +213,27 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
                 "select file_path, row_count, sha256 from parquet_files where dataset_id = ? order by file_path",
                 (dataset_id,),
             ).fetchall()
-        files = [dict(file_row) for file_row in file_rows]
+        files = [
+            {
+                "path": str(file_row["file_path"]),
+                "rowCount": int(file_row["row_count"] or 0),
+                "sha256": str(file_row["sha256"] or ""),
+            }
+            for file_row in file_rows
+        ]
         file_manifest_sha256 = (
             hashlib.sha256(
-                json.dumps(files, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+                json.dumps(files, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
             ).hexdigest()
             if files
             else None
         )
         qa_status = str(item.get("qa_status") or "").strip().lower()
+        expected_dataset_version = (
+            f"{normalized}-{str(dataset_id)[:12]}-{file_manifest_sha256[:12]}"
+            if dataset_id and file_manifest_sha256
+            else None
+        )
         certification_valid = bool(
             item.get("is_production")
             and item.get("is_certified")
@@ -229,9 +241,10 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             and qa_status == "ok"
             and dataset_version
             and file_manifest_sha256
+            and dataset_version == expected_dataset_version
         )
         if certification_valid and dataset_id:
-            dataset_version = f"{normalized}-{str(dataset_id)[:12]}-{file_manifest_sha256[:12]}"
+            dataset_version = expected_dataset_version
         return {
             "source": normalized,
             "sourceRole": source_role(normalized),
@@ -241,7 +254,11 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             "isProduction": bool(item.get("is_production")) and certification_valid,
             "isCertified": certification_valid,
             "certificationValid": certification_valid,
-            "certificationError": None if certification_valid else "persisted_certification_incomplete",
+            "certificationError": None if certification_valid else (
+                "dataset_version_manifest_mismatch"
+                if dataset_version and expected_dataset_version and dataset_version != expected_dataset_version
+                else "persisted_certification_incomplete"
+            ),
             "certifiedAt": item.get("certified_at"),
             "certifiedBy": item.get("certified_by"),
             "coverageStart": item.get("coverage_start") or item.get("start_date"),

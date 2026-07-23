@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -328,3 +329,118 @@ def test_clickhouse_mirror_splits_rows_into_partition_safe_five_year_blocks(monk
 
     assert result == {"enabled": True, "inserted": 3, "skipped": 0, "batches": 2}
     assert [len(item[1]) for item in inserts] == [2, 1]
+
+
+def test_clickhouse_schema_uses_year_partition(monkeypatch):
+    from app.services import market_data
+
+    commands: list[str] = []
+
+    class Client:
+        def command(self, sql):
+            commands.append(sql)
+
+        def query(self, sql):
+            class Result:
+                result_rows = [["toYear(timestamp)"]]
+
+            return Result()
+
+    monkeypatch.setattr(market_data, "_SCHEMA_READY", False)
+    monkeypatch.setattr(market_data, "enabled", lambda: True)
+    monkeypatch.setattr(market_data, "_client", lambda *args, **kwargs: Client())
+
+    assert market_data.ensure_schema() is True
+    assert "PARTITION BY toYear(timestamp)" in commands[1]
+
+
+def test_clickhouse_schema_rejects_legacy_month_partition(monkeypatch):
+    from app.services import market_data
+
+    class Client:
+        def command(self, sql):
+            return None
+
+        def query(self, sql):
+            class Result:
+                result_rows = [["toYYYYMM(timestamp)"]]
+
+            return Result()
+
+    monkeypatch.setattr(market_data, "_SCHEMA_READY", False)
+    monkeypatch.setattr(market_data, "enabled", lambda: True)
+    monkeypatch.setattr(market_data, "_client", lambda *args, **kwargs: Client())
+
+    with pytest.raises(RuntimeError, match="clickhouse_schema_migration_required"):
+        market_data.ensure_schema()
+
+
+def test_clickhouse_mirror_batches_multiple_assets_into_shared_inserts(monkeypatch):
+    from app.services import market_data
+
+    inserts = []
+
+    class Client:
+        def insert(self, table, rows, column_names):
+            inserts.append((table, list(rows), column_names))
+
+    monkeypatch.setattr(market_data, "enabled", lambda: True)
+    monkeypatch.setattr(market_data, "ensure_schema", lambda: True)
+    monkeypatch.setattr(market_data, "_client", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(market_data, "set_dependency_status", lambda *args, **kwargs: None)
+    row = {"date": "2026-07-17", "open": "1", "high": "1", "low": "1", "close": "1", "volume": "1"}
+
+    results = market_data.mirror_rows_batch(
+        [
+            ({"symbol": "600519", "market": "china", "source": "tushare"}, [row]),
+            ({"symbol": "000001", "market": "china", "source": "tushare"}, [row]),
+        ]
+    )
+
+    assert len(inserts) == 1
+    assert len(inserts[0][1]) == 2
+    assert [result["inserted"] for result in results] == [1, 1]
+    assert [result["batches"] for result in results] == [1, 1]
+
+
+def test_clickhouse_symbol_replace_deletes_then_reloads_canonical(monkeypatch):
+    from app.services import market_data
+
+    commands = []
+    mirrored = []
+
+    class Client:
+        def query(self, sql):
+            class Result:
+                result_rows = [[3]]
+
+            return Result()
+
+        def command(self, sql):
+            commands.append(sql)
+
+    monkeypatch.setattr(market_data, "enabled", lambda: True)
+    monkeypatch.setattr(market_data, "ensure_schema", lambda: True)
+    monkeypatch.setattr(market_data, "_client", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(
+        market_data,
+        "query_database_bars",
+        lambda **kwargs: {
+            "items": []
+            if kwargs["symbol"] == "000300"
+            else [{"date": "2026-07-22", "open": "1", "high": "1", "low": "1", "close": "1", "volume": "1"}]
+        },
+    )
+    monkeypatch.setattr(
+        market_data,
+        "mirror_rows_batch",
+        lambda entries: mirrored.extend(entries) or [{"inserted": len(rows)} for _, rows in entries],
+    )
+
+    result = market_data.replace_china_equity_symbols_from_canonical(["SH600519", "000300"])
+
+    assert result["deleted"] == 3
+    assert result["inserted"] == 1
+    assert result["symbols"] == ["000300", "600519"]
+    assert "mutations_sync=2" in commands[0]
+    assert [metadata["symbol"] for metadata, _ in mirrored] == ["600519"]

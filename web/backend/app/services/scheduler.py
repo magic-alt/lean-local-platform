@@ -40,6 +40,20 @@ def acquire_scheduler_lease(
     expires_at = _iso(now + timedelta(seconds=ttl))
     with db() as connection:
         connection.execute("delete from scheduler_leases where expires_at <= ?", (now_text,))
+        if resource == "backtest":
+            # A worker can be terminated after acquiring its slot but before
+            # reaching the task's finally block. Startup recovery marks that
+            # run terminal; do not make every subsequent run wait for the
+            # original multi-hour TTL.
+            connection.execute(
+                """
+                delete from scheduler_leases
+                where resource = 'backtest' and holder_id in (
+                    select id from backtest_runs
+                    where status in ('success','failed','cancelled')
+                )
+                """
+            )
         existing = connection.execute(
             """
             select * from scheduler_leases

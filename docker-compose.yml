@@ -102,6 +102,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
+      LEAN_API_TOKEN_FILE: /workspace/web/runtime/secrets/api_token
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
@@ -115,6 +116,10 @@ services:
       GRAFANA_URL: http://127.0.0.1:${LEAN_GRAFANA_PORT:-3000}
       LEAN_DATA_DIR: /workspace/Data
       LEAN_PARQUET_DIR: /workspace/parquet
+      # Keep CPU-heavy Parquet compression from starving MySQL, the API and
+      # Docker Desktop during a governed full rebuild.
+      POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
+      LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
       LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
@@ -200,6 +205,8 @@ services:
       CLICKHOUSE_DATABASE: lean_market
       LEAN_DATA_DIR: /workspace/Data
       LEAN_PARQUET_DIR: /workspace/parquet
+      POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
+      LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
       LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
@@ -246,6 +253,7 @@ services:
     extends:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_DATA_DEMAND_WORKER_CONCURRENCY:-4} --queues=data-demand --hostname=data-demand@%h
+    cpus: "${LEAN_DATA_DEMAND_WORKER_CPUS:-4.0}"
 
   backtest-worker:
     extends:
