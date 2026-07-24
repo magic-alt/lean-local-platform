@@ -47,6 +47,29 @@ services:
       start_period: 30s
     stop_grace_period: 2m
 
+  mysql-integration:
+    profiles: ["test"]
+    logging: *bounded-logging
+    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
+    environment:
+      MYSQL_ROOT_PASSWORD: integration-root-only
+      MYSQL_DATABASE: lean_integration
+      MYSQL_USER: lean_integration
+      MYSQL_PASSWORD: integration-only
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=50
+    tmpfs:
+      - /var/lib/mysql:size=1g,mode=0700
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ulean_integration", "-pintegration-only"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 10s
+
   clickhouse:
     logging: *bounded-logging
     image: clickhouse/clickhouse-server:24.12-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
@@ -301,6 +324,33 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
+
+  mysql-integration-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: python -m pytest -q -m integration_mysql
+    environment:
+      RUN_MYSQL_INTEGRATION: "1"
+      LEAN_DATABASE_URL: mysql+pymysql://lean_integration:integration-only@mysql-integration:3306/lean_integration
+      LEAN_API_AUTH_REQUIRED: "0"
+      LEAN_DATA_DIR: /tmp/lean-integration-data
+      LEAN_PARQUET_DIR: /tmp/lean-integration-parquet
+    depends_on:
+      mysql-integration:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /workspace/web/runtime:size=256m,mode=0700
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
 
 volumes:
   redis-data:

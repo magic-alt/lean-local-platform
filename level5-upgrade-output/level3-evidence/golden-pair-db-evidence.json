@@ -1,0 +1,40 @@
+{
+  "source": "current MySQL backtest_runs joined to backtest_results",
+  "note": "These are the preserved 2026-07-23 golden pair used by the 2026-07-24 re-audit; the full five-variable perturbation matrix was not rerun in this turn.",
+  "runs": [
+    {
+      "runId": "600519-20230103-20230630-20260723133141",
+      "inputFingerprint": "55b5e2195dece1773106a30f444262811544a2fa76d69744267c4f009c84c355",
+      "canonicalResultSha256": "94058dd21b78a170b18ec6bca2533751d6610a664dbd40f9185275f86d7dbc35",
+      "rawResultSha256": "fe3eaeb56f1d7fea92309a30802acc0fb035a1ee6c177c42a4664ea75c6367da",
+      "orders": 5,
+      "trades": 5,
+      "holdings": 1,
+      "netProfit": "-3.514%",
+      "totalFees": "1081.41"
+    },
+    {
+      "runId": "600519-20230103-20230630-20260723133253",
+      "inputFingerprint": "55b5e2195dece1773106a30f444262811544a2fa76d69744267c4f009c84c355",
+      "canonicalResultSha256": "94058dd21b78a170b18ec6bca2533751d6610a664dbd40f9185275f86d7dbc35",
+      "rawResultSha256": "1c429d065b01bfca6c8cb3fe6929f644402e8e02d672d168b17d3b03446c03fd",
+      "orders": 5,
+      "trades": 5,
+      "holdings": 1,
+      "netProfit": "-3.514%",
+      "totalFees": "1081.41"
+    }
+  ],
+  "equal": {
+    "inputFingerprint": true,
+    "canonicalResultSha256": true,
+    "orders": true,
+    "trades": true,
+    "holdings": true,
+    "normalizedStatistics": true
+  },
+  "different": {
+    "runId": true,
+    "rawResultSha256": true
+  }
+}

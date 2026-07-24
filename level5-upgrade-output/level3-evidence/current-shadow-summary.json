@@ -1,0 +1,31 @@
+{
+  "assessmentDate": "2026-07-24",
+  "api": "http://127.0.0.1:8000",
+  "status": "LEVEL3_PASS",
+  "level3Plus": "LEVEL3_PLUS_PASS",
+  "projectId": "audit-rev-20260723143400-20260723143400",
+  "symbol": "600519",
+  "benchmark": "000300",
+  "source": "tushare",
+  "period": {
+    "start": "2023-01-03",
+    "end": "2023-06-30",
+    "tradingDays": 118
+  },
+  "realLeanRunId": "600519-20230103-20230630-20260723230914",
+  "reportObjectId": "35688807-b714-52bd-adc1-7ec837a495ea",
+  "gates": {
+    "source": "passed",
+    "qa": "passed",
+    "benchmark": "passed",
+    "reference": "passed",
+    "parquet": "passed",
+    "realLean": "passed",
+    "reports": "passed",
+    "paperConstraintFixture": "passed"
+  },
+  "paperConstraintRejectTypes": 7,
+  "acceptedWarning": "multi-source provider warning retained",
+  "historicalGoldenEvidence": "docs/history/independent-audit-2026-07-24.md",
+  "limitation": "the complete five single-variable fingerprint perturbation matrix was not rerun in this turn"
+}

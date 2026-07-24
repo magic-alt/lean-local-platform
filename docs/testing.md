@@ -99,12 +99,12 @@ resumable and refuse unsafe shortcuts.
 Use the dedicated acceptance scripts before each review cycle:
 
 ```bash
-# 1) Level 4: rolling-window + walk-forward + dynamic PIT evidence
+# 1) Level 4: 3x3 grid + rolling-window + walk-forward + dynamic PIT evidence
 cd web/backend
 .venv/bin/python scripts/run_level4_audit.py \
   --project-id PROJECT_ID \
-  --base-url http://127.0.0.1:8003 \
-  --cases rolling,walk_forward,dynamic_pit \
+  --base-url http://127.0.0.1:8000 \
+  --cases parameter_grid,rolling,walk_forward,dynamic_pit \
   --execute \
   --require-csv \
   --timeout 1800 \
@@ -114,7 +114,7 @@ cd web/backend
 # Or preview-only to validate expansion, limits and scheduling preconditions
 .venv/bin/python scripts/run_level4_audit.py \
   --project-id PROJECT_ID \
-  --base-url http://127.0.0.1:8003 \
+  --base-url http://127.0.0.1:8000 \
   --cases rolling \
   --preview-only \
   --evidence-out web/runtime/audit/level4-rolling-preview.json
@@ -131,7 +131,7 @@ cd web/backend
   --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
   --constraints \
   --evidence-dir web/runtime/audit \
-  --api-url http://127.0.0.1:8003
+  --api-url http://127.0.0.1:8000
 
 # If you already know the trusted source id, keep explicit linkage:
 .venv/bin/python scripts/run_level5_audit.py \
@@ -143,7 +143,7 @@ cd web/backend
   --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
   --constraints \
   --evidence-dir web/runtime/audit \
-  --api-url http://127.0.0.1:8003
+  --api-url http://127.0.0.1:8000
 ```
 
 `run_level5_audit.py` is a wrapper around
@@ -272,3 +272,16 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
   gates; they must never be injected into the formal workstation data volume.
 - SBOM generation exists, but Python transitive hash locking, vulnerability
   policy and trusted image signature verification remain release gates.
+
+## Real MySQL Integration Lane
+
+SQLite remains the fast unit-test backend. MySQL migration, index, unique-key,
+transaction and named-lock behavior has a separate disposable lane:
+
+```bash
+docker compose --profile test run --build --rm mysql-integration-tests
+```
+
+The lane uses a dedicated `lean_integration` database on a tmpfs-backed MySQL
+service. Its tests refuse any other database name. It does not mount the
+production MySQL volume, repository, Docker socket, or market-data directory.

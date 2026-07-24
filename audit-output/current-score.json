@@ -1,0 +1,62 @@
+{
+  "assessedAt": "2026-07-24T07:00:00+08:00",
+  "gitCommit": "f4a130106408b810eeff6e8c104c606701fe6728",
+  "baseline": {
+    "date": "2026-07-24",
+    "score": 54,
+    "level3": "PASS",
+    "level3Plus": "PASS",
+    "level4": "FAIL",
+    "level5Replay": "BLOCKED",
+    "level5Operational": "NOT_READY",
+    "liveTrading": "NOT_READY"
+  },
+  "current": {
+    "score": 32,
+    "level3": "BLOCKED",
+    "level3Plus": "BLOCKED",
+    "level4": "FAIL",
+    "level5Replay": "FAIL",
+    "level5Operational": "NOT_READY",
+    "liveTrading": "NOT_READY"
+  },
+  "scoreBreakdown": {
+    "level3BacktestTrust": {"score": 9, "max": 15},
+    "level4Research": {"score": 2, "max": 15},
+    "realLeanPaperReplay": {"score": 5, "max": 20},
+    "ordersLedgerIdempotency": {"score": 3, "max": 15},
+    "unattendedSchedulingAlerts": {"score": 4, "max": 10},
+    "RecoveryDR": {"score": 2, "max": 10},
+    "SecurityCredentials": {"score": 4, "max": 10},
+    "SupplyChainDocsRelease": {"score": 3, "max": 5}
+  },
+  "criticalFailures": [
+    "LEVEL4_AUDIT_UNAUTHENTICATED_AND_FALSE_PASS_BUG",
+    "REAL_LEAN_PAPER_BYPASSES_CONSTRAINT_INTENT_PIPELINE",
+    "NO_SAME_SESSION_REJECTED_ORDER_IN_21_DAY_REAL_LEAN",
+    "NO_SIX_PHASE_LEDGER_RECOVERY",
+    "RAW_DOCKER_SOCKET_ON_GENERAL_BACKTEST_WORKER",
+    "DEFAULT_CREDENTIALS_NOT_ROTATED",
+    "NO_PRODUCTION_SCALE_DR",
+    "NO_COMPLETE_FAULT_MATRIX",
+    "NO_RELEASE_GATE"
+  ],
+  "highRisks": [
+    "CSI300_OFFICIAL_2005_2017_COVERAGE_GAP",
+    "PYTHON_DEPENDENCIES_NOT_HASH_LOCKED",
+    "AUDIT_EVIDENCE_ONLY_IN_TEMP_DIRECTORIES",
+    "LIVING_DOCUMENTATION_STALE"
+  ],
+  "blockedTests": [
+    "standard_level3_audit_default_port",
+    "mysql_integration_lane_missing",
+    "level4_authenticated_execution",
+    "21_day_unified_real_lean_intent_replay",
+    "six_phase_interruption",
+    "production_scale_restore",
+    "credential_rotation",
+    "container_adversarial_isolation",
+    "signature_verification"
+  ],
+  "evidenceRoot": "audit-output/"
+}

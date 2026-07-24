@@ -1,0 +1,57 @@
+{
+  "capturedAt": "2026-07-24T07:40:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "repository": {
+    "commit": "f4a130106408b810eeff6e8c104c606701fe6728",
+    "branch": "main",
+    "baselineDirtyState": "only pre-existing untracked audit-output/",
+    "finalDirtyState": "expected remediation and evidence files; see git status"
+  },
+  "host": {
+    "os": "Darwin 25.5.0 arm64",
+    "python": "3.14.5",
+    "node": "26.0.0",
+    "npm": "11.14.1",
+    "dockerServer": "29.6.2"
+  },
+  "database": {
+    "engine": "MySQL",
+    "version": "8.4.10",
+    "migrationCount": 21,
+    "unitLane": "SQLite",
+    "integrationLane": "ephemeral MySQL 8.4 tmpfs"
+  },
+  "certifiedDataset": {
+    "id": "a75936aa-7e7f-5627-8583-0cef7c6542fc",
+    "source": "tushare",
+    "version": "tushare-a75936aa-7e7-540b18f28ffe",
+    "rows": 17668931,
+    "files": 193,
+    "environment": "production",
+    "isProduction": true,
+    "isCertified": true,
+    "qaStatus": "ok",
+    "coverageStart": "1990-12-19",
+    "coverageEnd": "2026-07-22"
+  },
+  "lean": {
+    "image": "quantconnect/lean@sha256:19e3633d2da1e8b378dd6af4b999b0ca6cf0660a1bf557a0518a2e43fc270823",
+    "dockerIntegration": "passed"
+  },
+  "runtimeImages": {
+    "api": "sha256:c9cc2f83a32628ac51e094ca15ab46eaa55cf44a9c8ea25468fc099e05cdc6ce",
+    "worker": "sha256:ddb2aa1a3da3b66d0bb082492dc52cd348d213b6436fd9880950456bd773a69c",
+    "backtestWorker": "sha256:1d3cc4ffb5e9e6ea96ac4b81c706b826b73049c8e1cdbb691971aa5c026b41b7",
+    "mysql": "sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209",
+    "redis": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+    "clickhouse": "sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621",
+    "prometheus": "sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3",
+    "grafana": "sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb",
+    "finding": "locally built Compose services are effectively tagged latest; no signed release manifest"
+  },
+  "browser": {
+    "inAppBrowser": "ENVIRONMENT_BLOCKED: No browser is available",
+    "fallback": "repository Playwright Chromium against production-like Compose, no seed",
+    "result": "6 passed"
+  }
+}

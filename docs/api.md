@@ -1,8 +1,12 @@
 # API
 
-The backend is FastAPI, mounted from `web/backend/app/main.py`. All routes are local and unauthenticated in the current personal platform version.
+The backend is FastAPI, mounted from `web/backend/app/main.py`. Runtime API
+authentication is enabled by default. Direct clients must send the local Bearer
+token from `LEAN_API_TOKEN` or the 0600 runtime token file; the frontend proxy
+uses the same protected local session. Disabling authentication is permitted
+only in explicitly isolated tests.
 
-Last reviewed: 2026-07-21. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
+Last reviewed: 2026-07-24. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
 
 ## Common Behavior
 

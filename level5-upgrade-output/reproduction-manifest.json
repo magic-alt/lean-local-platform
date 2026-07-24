@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "assessmentDate": "2026-07-24",
+  "timezone": "Asia/Shanghai",
+  "baselineCommit": "f4a130106408b810eeff6e8c104c606701fe6728",
+  "evidencePriority": [
+    "current code and current production-like execution",
+    "2026-07-24 independent re-audit",
+    "2026-07-23 remediation evidence",
+    "2026-07-22 independent audit",
+    "roadmap/readme/changelog claims"
+  ],
+  "requiredArtifacts": {
+    "maturity": "maturity-score.json",
+    "defects": "open-defect-ledger.csv",
+    "historicalDelta": "historical-audit-delta.csv",
+    "level3Current": "level3-evidence/current-shadow-summary.json",
+    "level3GoldenPair": "level3-evidence/golden-pair-db-evidence.json",
+    "level4Execution": "level4-evidence/current-level4-execute.json",
+    "level4Revalidation": "level4-evidence/revalidated-summary.json",
+    "paper21Day": "paper-evidence/current-21day-gate.json",
+    "backendJUnit": "junit/backend-regression.xml",
+    "mysqlJUnit": "junit/mysql-integration.xml",
+    "realLeanJUnit": "junit/real-lean-integration.xml",
+    "playwright": "browser-e2e/playwright-results.json",
+    "supplyChain": "supply-chain/current-policy-check.json",
+    "checksums": "sha256sums.txt"
+  },
+  "productionLikeTopology": {
+    "api": "FastAPI Compose on 127.0.0.1:8000",
+    "database": "MySQL 8.4.10",
+    "queue": "Redis + Celery",
+    "engine": "digest-pinned QuantConnect LEAN Docker",
+    "browser": "Chromium Playwright against existing Compose; stack start and seed disabled"
+  },
+  "destructiveIsolation": {
+    "mysqlIntegrationProject": "lean-platform-level5-it",
+    "database": "lean_integration",
+    "storage": "tmpfs",
+    "cleanup": "temporary container/network removed; production volumes untouched"
+  },
+  "knownNonReproducibleOrBlocked": [
+    "in-app Browser unavailable",
+    "documented .venv/bin/python symlink broken in this host environment",
+    "historical long-lived evidence still originated in mutable temp paths",
+    "full Level 5 fault/DR/credential/runner/signature acceptances not executed"
+  ]
+}

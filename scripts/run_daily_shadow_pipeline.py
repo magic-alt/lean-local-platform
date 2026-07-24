@@ -256,7 +256,7 @@ def main() -> int:
     parser.add_argument("--pipeline-run-id")
     parser.add_argument("--execution-policy", default="next_open")
     parser.add_argument("--min-trading-days", type=int, default=10)
-    parser.add_argument("--api-url", default="http://127.0.0.1:8003")
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

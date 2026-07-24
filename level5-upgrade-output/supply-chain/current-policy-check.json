@@ -1,0 +1,172 @@
+{
+  "checks": [
+    {
+      "count": 6,
+      "mutable": [],
+      "name": "compose_images_digest_pinned",
+      "status": "passed"
+    },
+    {
+      "images": [
+        "python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf"
+      ],
+      "mutable": [],
+      "name": "dockerfile_base_digest_pinned",
+      "path": "web/backend/Dockerfile",
+      "status": "passed"
+    },
+    {
+      "count": 26,
+      "name": "python_direct_dependencies_exact",
+      "note": "Exact direct versions do not replace a hash-locked transitive dependency set.",
+      "status": "failed",
+      "unpinned": [
+        "celery>=5.4,<6",
+        "fastapi>=0.115,<1",
+        "httpx2>=2,<3",
+        "akshare>=1.17,<2",
+        "adata>=2.9,<3",
+        "baostock>=0.8,<1",
+        "clickhouse-connect>=0.8,<1",
+        "duckdb>=1.1,<2",
+        "efinance>=0.5,<1",
+        "finnhub-python>=2,<3",
+        "jqdatasdk>=1.9,<2",
+        "longbridge>=4.0.5,<5; platform_system != \"Linux\" or python_version >= \"3.12\"",
+        "polars>=1.0,<2",
+        "prometheus-client>=0.21,<1",
+        "pytdx>=1.72,<2",
+        "pypinyin>=0.50,<1",
+        "pypdf>=6,<7",
+        "pymysql>=1.1,<2",
+        "pytest>=8,<9",
+        "python-multipart>=0.0.20,<1",
+        "redis>=5,<6",
+        "tickflow>=0.1,<1",
+        "tushare>=1.4,<2",
+        "uvicorn[standard]>=0.34,<1",
+        "yfinance>=0.2,<1"
+      ]
+    },
+    {
+      "lockfileVersion": 3,
+      "name": "npm_lockfile_present",
+      "packageCount": 304,
+      "status": "passed"
+    },
+    {
+      "name": "grafana_plugin_version_pinned",
+      "status": "passed",
+      "value": "grafana-clickhouse-datasource 4.20.0"
+    }
+  ],
+  "failures": [
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "celery>=5.4,<6"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "fastapi>=0.115,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "httpx2>=2,<3"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "akshare>=1.17,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "adata>=2.9,<3"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "baostock>=0.8,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "clickhouse-connect>=0.8,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "duckdb>=1.1,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "efinance>=0.5,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "finnhub-python>=2,<3"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "jqdatasdk>=1.9,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "longbridge>=4.0.5,<5; platform_system != \"Linux\" or python_version >= \"3.12\""
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "polars>=1.0,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "prometheus-client>=0.21,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "pytdx>=1.72,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "pypinyin>=0.50,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "pypdf>=6,<7"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "pymysql>=1.1,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "pytest>=8,<9"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "python-multipart>=0.0.20,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "redis>=5,<6"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "tickflow>=0.1,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "tushare>=1.4,<2"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "uvicorn[standard]>=0.34,<1"
+    },
+    {
+      "check": "python_direct_dependencies_exact",
+      "value": "yfinance>=0.2,<1"
+    }
+  ],
+  "remainingReleaseGates": [
+    "python_transitive_hash_lock",
+    "sbom_vulnerability_policy",
+    "publisher_or_release_signature_verification"
+  ],
+  "schemaVersion": 1,
+  "status": "failed"
+}

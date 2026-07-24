@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { APIRequestContext, expect } from "@playwright/test";
 
-import { apiURL } from "./env";
+import { apiURL, repoRoot } from "./env";
 
 export type RunStatus = "created" | "queued" | "running" | "success" | "succeeded" | "failed" | "cancelled" | "interrupted";
 
@@ -42,14 +45,29 @@ export interface BacktestResultPayload {
   };
 }
 
+function apiHeaders(): Record<string, string> {
+  const configured = process.env.E2E_API_TOKEN?.trim();
+  const tokenFile = process.env.E2E_API_TOKEN_FILE ||
+    path.join(repoRoot, "web/runtime/secrets/api_token");
+  let token = configured || "";
+  if (!token) {
+    try {
+      token = fs.readFileSync(tokenFile, "utf-8").trim();
+    } catch {
+      // Authentication may intentionally be disabled in the isolated E2E lane.
+    }
+  }
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function apiGet<T>(request: APIRequestContext, path: string): Promise<T> {
-  const response = await request.get(`${apiURL}${path}`);
+  const response = await request.get(`${apiURL}${path}`, { headers: apiHeaders() });
   expect(response.ok(), `${path} returned ${response.status()}: ${await response.text()}`).toBeTruthy();
   return response.json() as Promise<T>;
 }
 
 export async function apiPost<T>(request: APIRequestContext, path: string, body: unknown): Promise<T> {
-  const response = await request.post(`${apiURL}${path}`, { data: body });
+  const response = await request.post(`${apiURL}${path}`, { data: body, headers: apiHeaders() });
   expect(response.ok(), `${path} returned ${response.status()}: ${await response.text()}`).toBeTruthy();
   return response.json() as Promise<T>;
 }

@@ -1,0 +1,33 @@
+2026-07-24T06:xx+08:00 git rev-parse HEAD; git branch --show-current; git status --short
+2026-07-24T06:xx+08:00 cd web/backend && .venv/bin/python -m pytest -q
+RESULT: exit 127; broken runtime symlink /usr/local/bin/python3 (ENVIRONMENT_BLOCKED)
+2026-07-24T06:xx+08:00 cd web/backend && .venv/bin/python3.14 -m pytest -q
+RESULT: 355 passed, 1 skipped
+2026-07-24T06:xx+08:00 cd web/frontend && npm run build
+RESULT: PASS
+2026-07-24T06:xx+08:00 RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python3.14 -m pytest -q tests/test_ashare_lean_integration.py
+RESULT: 1 passed
+2026-07-24T07:xx+08:00 scripts/run_level3_shadow_audit.py --base-url http://127.0.0.1:8000 [...]
+RESULT: LEVEL3_PASS; LEVEL3_PLUS_PASS; 118 real LEAN days
+2026-07-24T07:xx+08:00 scripts/run_level5_audit.py --base-url http://127.0.0.1:8000 --strict [...]
+RESULT: exit 2; 21 successful days; filled=1; rejected=0; required_reject_not_met
+2026-07-24T07:xx+08:00 docker compose -p lean-platform-level5-it --profile test run --build --rm mysql-integration-tests
+RESULT: 2 passed, 1 skipped, 357 deselected
+2026-07-24T07:14+08:00 scripts/run_level4_audit.py --execute --require-csv --timeout 3600 [...]
+RESULT: 17/17 children executed successfully; strict revalidation fails legacy train/test-only walk-forward
+2026-07-24T07:xx+08:00 PW_NO_SERVER=1 PW_BASE_PORT=8000 E2E_API_URL=http://127.0.0.1:8000 E2E_START_STACK=0 E2E_SKIP_SEED=1 npm run test:e2e:smoke
+RESULT BEFORE FIX: 5 passed, 1 failed (401 from unauthenticated helper)
+2026-07-24T07:xx+08:00 same production-like Chromium smoke after helper fix
+RESULT: 6 passed
+2026-07-24T07:xx+08:00 cd web/backend && .venv/bin/python3.14 -m pytest -q
+RESULT: 359 passed, 2 skipped; junit/backend-regression.xml
+2026-07-24T07:xx+08:00 cd web/frontend && npm run build
+RESULT: PASS; 5712 modules; large-chunk warning retained
+2026-07-24T07:xx+08:00 RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python3.14 -m pytest -q tests/test_ashare_lean_integration.py --junitxml=../../level5-upgrade-output/junit/real-lean-integration.xml
+RESULT: 1 passed
+2026-07-24T07:xx+08:00 docker compose -p lean-platform-level5-it --profile test run --build --rm -v <evidence>:/evidence mysql-integration-tests python -m pytest -q -m integration_mysql --junitxml=/evidence/mysql-integration.xml
+RESULT: 2 passed, 1 skipped, 359 deselected
+2026-07-24T07:xx+08:00 web/backend/.venv/bin/python3.14 scripts/check_supply_chain.py --output level5-upgrade-output/supply-chain/current-policy-check.json
+RESULT: exit 1; dependency hash/vulnerability/signature release gates remain failed
+2026-07-24T07:xx+08:00 check_repository_hygiene.py; check_help_docs.py; generate_help_api_reference.py --check; docker compose config -q
+RESULT: PASS; 29 help articles checked

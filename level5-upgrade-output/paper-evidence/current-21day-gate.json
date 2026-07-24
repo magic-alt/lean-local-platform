@@ -1,0 +1,169 @@
+{
+  "status": "partial",
+  "sessionId": "16fa24b2-2f85-4efa-b696-0652b0e4ef6d",
+  "sourceBacktestId": "600519-20230103-20230630-20260723151501",
+  "projectId": "audit-rev-20260723143400-20260723143400",
+  "tradeDates": [
+    "2023-07-03",
+    "2023-07-04",
+    "2023-07-05",
+    "2023-07-06",
+    "2023-07-07",
+    "2023-07-10",
+    "2023-07-11",
+    "2023-07-12",
+    "2023-07-13",
+    "2023-07-14",
+    "2023-07-17",
+    "2023-07-18",
+    "2023-07-19",
+    "2023-07-20",
+    "2023-07-21",
+    "2023-07-24",
+    "2023-07-25",
+    "2023-07-26",
+    "2023-07-27",
+    "2023-07-28",
+    "2023-07-31"
+  ],
+  "dailyRuns": [
+    {
+      "tradeDate": "2023-07-03",
+      "status": "success",
+      "id": "bb7fdc1b-b9b9-4422-aa65-3b9040fd7c8e"
+    },
+    {
+      "tradeDate": "2023-07-04",
+      "status": "success",
+      "id": "08f70402-1626-46eb-9473-b69d4e9cd257"
+    },
+    {
+      "tradeDate": "2023-07-05",
+      "status": "success",
+      "id": "cc4aaad7-e738-4ac5-a119-011cb5365886"
+    },
+    {
+      "tradeDate": "2023-07-06",
+      "status": "success",
+      "id": "f8fd2365-77b3-4b7d-970f-f41addb6ea49"
+    },
+    {
+      "tradeDate": "2023-07-07",
+      "status": "success",
+      "id": "31146a30-8541-4e94-846e-cf1e3c26a4e8"
+    },
+    {
+      "tradeDate": "2023-07-10",
+      "status": "success",
+      "id": "503735d1-0c0b-4700-8e7b-c1f49bf988f6"
+    },
+    {
+      "tradeDate": "2023-07-11",
+      "status": "success",
+      "id": "58883300-f89f-48e5-b089-081ecb34ecaa"
+    },
+    {
+      "tradeDate": "2023-07-12",
+      "status": "success",
+      "id": "da9bc0af-2e11-48c7-957c-097b85a18980"
+    },
+    {
+      "tradeDate": "2023-07-13",
+      "status": "success",
+      "id": "9072c3c9-7474-43c5-9313-1e22f15dea26"
+    },
+    {
+      "tradeDate": "2023-07-14",
+      "status": "success",
+      "id": "908b2b0b-163b-4d6d-a68d-78bd22189e52"
+    },
+    {
+      "tradeDate": "2023-07-17",
+      "status": "success",
+      "id": "6697281b-f2b9-44fb-b72c-ac9378a99433"
+    },
+    {
+      "tradeDate": "2023-07-18",
+      "status": "success",
+      "id": "82dce206-56a1-4330-a2ae-5aa19f491c26"
+    },
+    {
+      "tradeDate": "2023-07-19",
+      "status": "success",
+      "id": "a9c08593-8c68-4a1f-bdcc-153f06bc94ae"
+    },
+    {
+      "tradeDate": "2023-07-20",
+      "status": "success",
+      "id": "9a8bdec4-f59c-4bbf-b1f8-8a7e0d1842c0"
+    },
+    {
+      "tradeDate": "2023-07-21",
+      "status": "success",
+      "id": "5bd32c81-cacc-41e7-8e87-962f6808ae76"
+    },
+    {
+      "tradeDate": "2023-07-24",
+      "status": "success",
+      "id": "0ea39d39-3263-42a4-99e7-fcc3bd0064a7"
+    },
+    {
+      "tradeDate": "2023-07-25",
+      "status": "success",
+      "id": "9def92de-049a-4aa0-97eb-3ea6bfda60c6"
+    },
+    {
+      "tradeDate": "2023-07-26",
+      "status": "success",
+      "id": "5607ed14-133f-494f-960a-c23964462a40"
+    },
+    {
+      "tradeDate": "2023-07-27",
+      "status": "success",
+      "id": "0e4563e6-16cd-42af-a069-2b81b1168f28"
+    },
+    {
+      "tradeDate": "2023-07-28",
+      "status": "success",
+      "id": "aa8cfd68-7fb8-411d-b382-37253b9cef0e"
+    },
+    {
+      "tradeDate": "2023-07-31",
+      "status": "success",
+      "id": "f292162a-fc4a-4308-8c9e-8a15562f0c47"
+    }
+  ],
+  "successfulDays": 21,
+  "reportDays": 21,
+  "orders": 1,
+  "filledOrders": 1,
+  "rejectedOrders": 0,
+  "rejectReasons": [],
+  "snapshots": 21,
+  "reconciliationFailures": [],
+  "duplicateReplay": {
+    "httpStatus": 400,
+    "blocked": true,
+    "detail": "The next eligible Paper trade date is 2023-08-01.",
+    "countsStable": true,
+    "idempotentStatusSet": [
+      200,
+      400,
+      409
+    ]
+  },
+  "faultScenarios": [],
+  "faultInjections": [],
+  "walkforwardPassed": true,
+  "level5ReplayRequirementsPassed": false,
+  "remainingRequirement": "required_reject_not_met",
+  "passed": false,
+  "evidence": {
+    "requireFill": true,
+    "requireReject": true,
+    "requireRejectReason": true,
+    "minFill": 1,
+    "minReject": 1
+  },
+  "timeoutPerDay": 900
+}

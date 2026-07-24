@@ -34,12 +34,17 @@ Remaining acceptance work:
 
 ## Level 4: Data, Experiments and Reproducibility
 
-Status: blocked (re-audit evidence still pending). Level 4 scripted closure path now
-exists via:
+Status: FAIL. The 2026-07-24 production-like execution completed 17 real LEAN
+children (9 parameter-grid, 3 rolling, 4 legacy walk-forward and 1 dynamic PIT),
+but the strict validator correctly rejects the train/test-only walk-forward.
+The scripted closure path exists via:
 
 - `web/backend/.venv/bin/python scripts/run_level4_audit.py`
 
-Use `--cases rolling,walk_forward,dynamic_pit` for rolling / walk-forward / dynamic PIT in one pass.
+The default probe covers a real 3×3 parameter grid plus rolling, walk-forward,
+and dynamic PIT. Preview-only proves expansion contracts only; it is never
+Level 4 acceptance. Use `--execute --require-csv` and retain the resulting
+database rows and artifacts for an acceptance attempt.
 
 Implemented:
 
@@ -57,6 +62,10 @@ Implemented:
 
 Remaining work:
 
+- Add independent train, validation and OOS phases with parameter-selection
+  lineage and anti-leakage fingerprints.
+- Independently execute failed-child retry, cancel, refresh/restart recovery and
+  the complete Level 4 browser matrix.
 - PDF, CSV and JSON report export formats; Markdown is already implemented.
 - Richer cross-batch ranking, sensitivity heatmaps and comparison dashboards.
 - Complete ETF, convertible-bond, futures and options data-quality gates.
@@ -67,7 +76,7 @@ Remaining work:
 
 - Run:
 
-  `web/backend/.venv/bin/python scripts/run_level4_audit.py --cases rolling,walk_forward,dynamic_pit --project-id <project-id> --execute --base-url <api-url>`
+  `web/backend/.venv/bin/python scripts/run_level4_audit.py --cases parameter_grid,rolling,walk_forward,dynamic_pit --project-id <project-id> --execute --require-csv --base-url <api-url>`
 
 - Evidence output:
 
@@ -93,11 +102,12 @@ Current verification path is implemented in:
 The script performs 21-day LEAN Paper, duplicate-call idempotency, optional
 service-fault matrix and constraint coverage checks.
 
-Implemented:
+Implemented, but not yet unified into the real LEAN Paper intent path:
 
 - Paper sessions sourced from a successful, validated, frozen backtest project.
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
-- A-share T+1, suspension, limit, lot, fee, slippage and portfolio constraints.
+- A-share T+1, suspension, limit, lot, fee, slippage and portfolio constraints
+  in the separate signal-simulation acceptance path.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.
 - Persistent operational alerts with Webhook delivery, delivery audit records,
   cooldown deduplication and repeated Paper scheduling failure escalation.
@@ -105,6 +115,10 @@ Implemented:
 
 Remaining work:
 
+- Replace direct LEAN-fill finalization plus separate signal simulation with one
+  persisted intent/constraint/matching/ledger state machine.
+- Complete a compliant 21-day session with both fills and policy rejects, then
+  prove six-phase recovery without ledger drift.
 - Complete unattended daily orchestration and multi-day notification/escalation acceptance evidence.
 - Broker integration, reconciliation and secrets hardening before any live trading.
 - Industry/capacity risk limits, circuit breakers and cross-asset paper acceptance.

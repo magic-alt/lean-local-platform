@@ -1,14 +1,14 @@
 # Architecture
 
-Last reviewed: 2026-07-22.
+Last reviewed: 2026-07-24.
 
 This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
 ## Current Level
 
-The main chains are implemented, but the independent 2026-07-22 audit did not
-accept Level 3, Level 4 or Level 5. Current code is a remediation candidate,
-not a maturity pass:
+The main chains are implemented. The 2026-07-24 independent controlled re-audit
+accepted Level 3 and Level 3+, while Level 4, Level 5 Replay and Level 5
+Operational remain unaccepted. Historical 2026-07-22 failures remain preserved:
 
 - Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
 - A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.
@@ -66,7 +66,7 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0020.
+  Ordered MySQL schema migrations. The current latest migration is 0021.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.

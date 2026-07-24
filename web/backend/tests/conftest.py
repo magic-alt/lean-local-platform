@@ -17,10 +17,18 @@ if str(ROOT_DIR) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def use_sqlite_test_backend(tmp_path, monkeypatch):
+def use_sqlite_test_backend(tmp_path, monkeypatch, request):
     import app.db as db_module
+
+    if (
+        request.node.get_closest_marker("integration_mysql")
+        and os.environ.get("RUN_MYSQL_INTEGRATION") == "1"
+    ):
+        yield
+        return
 
     db_path = tmp_path / "test.sqlite3"
     monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setattr(db_module, "SQLITE_TEST_BACKEND_ENABLED", True)
+    yield

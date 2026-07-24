@@ -1,0 +1,404 @@
+{
+  "config": {
+    "argv": [
+      "/opt/homebrew/Cellar/node/26.0.0/bin/node",
+      "/Users/kaermax/lean-platform/web/frontend/node_modules/.bin/playwright",
+      "test",
+      "--project=chromium",
+      "--grep",
+      "@smoke"
+    ],
+    "configFile": "/Users/kaermax/lean-platform/web/frontend/playwright.config.ts",
+    "rootDir": "/Users/kaermax/lean-platform/tests/e2e/specs",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": "/Users/kaermax/lean-platform/tests/e2e/global-setup.ts",
+    "globalTeardown": "/Users/kaermax/lean-platform/tests/e2e/global-teardown.ts",
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/kaermax/lean-platform/tests/e2e/reports/artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/Users/kaermax/lean-platform/tests/e2e/specs",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 180000
+      },
+      {
+        "outputDir": "/Users/kaermax/lean-platform/tests/e2e/reports/artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium-1920",
+        "name": "chromium-1920",
+        "testDir": "/Users/kaermax/lean-platform/tests/e2e/specs",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 180000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "/Users/kaermax/lean-platform/tests/e2e/reports/html",
+          "open": "never"
+        }
+      ],
+      [
+        "json",
+        {
+          "outputFile": "/Users/kaermax/lean-platform/tests/e2e/reports/results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "01-smoke.spec.ts",
+      "file": "01-smoke.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "01 smoke and navigation @smoke @responsive",
+          "file": "01-smoke.spec.ts",
+          "line": 6,
+          "column": 6,
+          "specs": [
+            {
+              "title": "core pages render without white screen or severe browser errors",
+              "ok": true,
+              "tags": [
+                "smoke",
+                "responsive"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 7317,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:26:20.089Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "guarded-front-end",
+                          "contentType": "text/plain",
+                          "body": "Q29uc29sZS9wYWdlL25ldHdvcmsgZ3VhcmRzIGVuYWJsZWQu"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f4ef03261b0851aba39f-9d02c205f1d02d039c6e",
+              "file": "01-smoke.spec.ts",
+              "line": 7,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "02-system-status.spec.ts",
+      "file": "02-system-status.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "02 system status @smoke",
+          "file": "02-system-status.spec.ts",
+          "line": 6,
+          "column": 6,
+          "specs": [
+            {
+              "title": "frontend can verify API, Docker, LEAN runner, data dir, and results dir",
+              "ok": true,
+              "tags": [
+                "smoke"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 26219,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:26:27.474Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4f227f1b6eaa74e385e2-a3762449101b46757ac4",
+              "file": "02-system-status.spec.ts",
+              "line": 7,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "09-resilience.spec.ts",
+      "file": "09-resilience.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "09 frontend resilience @smoke @responsive",
+          "file": "09-resilience.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "shows friendly error when backtests API returns 500",
+              "ok": true,
+              "tags": [
+                "smoke",
+                "responsive"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 450,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:26:53.705Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "fbb45473c91ac63868e5-9affea693c54616e093a",
+              "file": "09-resilience.spec.ts",
+              "line": 8,
+              "column": 7
+            },
+            {
+              "title": "renders long running logs without white screen",
+              "ok": true,
+              "tags": [
+                "smoke",
+                "responsive"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 356,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:26:54.160Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "fbb45473c91ac63868e5-74c5ba579166b162dac8",
+              "file": "09-resilience.spec.ts",
+              "line": 22,
+              "column": 7
+            },
+            {
+              "title": "prevents duplicate submit while create backtest is pending",
+              "ok": true,
+              "tags": [
+                "smoke",
+                "responsive"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 6332,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:26:54.521Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "fbb45473c91ac63868e5-17cf0913bcf08b415b4a",
+              "file": "09-resilience.spec.ts",
+              "line": 44,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "10-docs.spec.ts",
+      "file": "10-docs.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "10 documentation center @smoke @responsive",
+          "file": "10-docs.spec.ts",
+          "line": 6,
+          "column": 6,
+          "specs": [
+            {
+              "title": "renders GFM, navigates deep links, searches and stays responsive",
+              "ok": true,
+              "tags": [
+                "smoke",
+                "responsive"
+              ],
+              "tests": [
+                {
+                  "timeout": 180000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1127,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-23T23:27:00.860Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "guarded-front-end",
+                          "contentType": "text/plain",
+                          "body": "Q29uc29sZS9wYWdlL25ldHdvcmsgZ3VhcmRzIGVuYWJsZWQu"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4069e19e5686df95175c-9164aade2596fd23bcb0",
+              "file": "10-docs.spec.ts",
+              "line": 7,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-07-23T23:26:09.074Z",
+    "duration": 52954.437,
+    "expected": 6,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

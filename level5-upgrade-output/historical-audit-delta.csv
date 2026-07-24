@@ -1,0 +1,6 @@
+audit_date,score,level3,level3_plus,level4,level5_replay,level5_operational,live,status_delta,evidence_status
+2026-07-22,26,FAIL,NOT_ASSESSED,FAIL,BLOCKED,NOT_READY,NOT_READY,original independent failure,PRESERVED
+2026-07-23,,FAIL,NOT_ASSESSED,FAIL,BLOCKED,NOT_READY,NOT_READY,remediation evidence only; no independent promotion,PRESERVED
+2026-07-24,54,PASS,PASS,FAIL,BLOCKED,NOT_READY,NOT_READY,independent controlled re-audit baseline,HISTORICAL_BASELINE
+2026-07-24-pre-fix,32,BLOCKED,BLOCKED,FAIL,FAIL,NOT_READY,NOT_READY,standard Level3 entry used wrong port; Level4 audit 401 and false-pass bug; real 21-day session had zero rejects,BASELINE_CAPTURED
+2026-07-24-post-fix,45,PASS,PASS,FAIL,FAIL,NOT_READY,NOT_READY,Level3 reproduced; MySQL lane and real Level4 batches added; Paper and Operational hard gates remain open,CURRENT_INDEPENDENT_RESULT

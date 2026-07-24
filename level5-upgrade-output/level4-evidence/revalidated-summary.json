@@ -1,0 +1,38 @@
+{
+  "sourceEvidence": "current-level4-execute.json",
+  "validatorRevision": "requires 3 rolling folds and train/validation/oos phases; reads nested dynamic PIT parameters",
+  "parameterGrid": {
+    "batchId": "2b623bbb-6dd5-4724-b8d0-c0806fc290b8",
+    "execution": "success",
+    "succeeded": 9,
+    "total": 9,
+    "validation": "passed"
+  },
+  "rolling": {
+    "batchId": "50b25d6f-b283-41b6-85ed-01ae4581d5da",
+    "execution": "success",
+    "succeeded": 3,
+    "total": 3,
+    "validation": "passed"
+  },
+  "walkForward": {
+    "batchId": "f62aa537-2c9a-4671-86ad-9dd983a17eb5",
+    "execution": "success",
+    "succeeded": 4,
+    "total": 4,
+    "validation": "failed",
+    "failures": [
+      "walk_forward_fold_phase_invalid:1:['test', 'train']",
+      "walk_forward_fold_phase_invalid:2:['test', 'train']"
+    ]
+  },
+  "dynamicPit": {
+    "batchId": "c712d0bc-364d-4885-b1ef-21177c84a444",
+    "execution": "success",
+    "succeeded": 1,
+    "total": 1,
+    "validation": "passed",
+    "note": "schedule includes future entrants outside the start-date resolved member set; retained as warnings"
+  },
+  "overall": "LEVEL4_FAIL"
+}

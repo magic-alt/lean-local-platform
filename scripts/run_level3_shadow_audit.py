@@ -193,7 +193,7 @@ def main() -> int:
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--min-trading-days", type=int, default=10)
-    parser.add_argument("--api-url", default="http://127.0.0.1:8003")
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--with-frontend", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")

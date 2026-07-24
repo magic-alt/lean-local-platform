@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-24 — harden re-audit truthfulness: add a disposable real-MySQL migration/locking/uniqueness lane and an explicitly uncertified Level 5 SLO/RPO/RTO/runbook contract; authenticate Level 4 and production-like Playwright evidence clients; fail invariant violations and legacy train/test-only walk-forward; add the missing real 3×3 grid and three-window probes; align Level 3/5 audit defaults with Compose port 8000; and correct stale API/authentication, migration and maturity documentation.
 - 2026-07-24 — add reproducible Level 4/5 re-audit runners for rolling, walk-forward, dynamic PIT and 21-day LEAN Paper evidence; make the Level 5 fault matrix opt-in and document the evidence-producing verification paths.
 - 2026-07-24 — document independent re-audit 2026-07-24 and update roadmap/history index wiring; extend level-3 shadow runner python/bootstrap fallback for constrained environments.
 - 2026-07-23 — fix independent audit scripts: `run_level3_shadow_audit.py` 现在兼容 docker compose 插件差异（`docker compose` / `docker-compose`），`run_paper_constraints_acceptance.py` 修复单符号输入导致的拒单场景误判，确保 `max_positions` 与 `not_in_watchlist` 能稳定得到对应拒单原因。

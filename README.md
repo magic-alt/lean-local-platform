@@ -139,6 +139,7 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 | [部署](docs/deployment.md) | Compose、资源、备份和故障恢复 |
 | [API](docs/api.md) | 接口、错误语义与 OpenAPI |
 | [测试](docs/testing.md) | 单元、前端和集成验收 |
+| [Level 5 运维 Runbook](docs/operations/level5-runbook.md) | SLO、RPO/RTO、Paper 日任务、告警、恢复与发布门禁 |
 | [当前 Roadmap](docs/roadmap.md) | 当前能力与后续优先级 |
 | [历史审计](docs/history/platform-audit-2026-07.md) | 2026-07 起的问题、证据和状态增量 |
 | [历史修复记录](docs/history/README.md) | 故障根因、修复和遗留风险 |

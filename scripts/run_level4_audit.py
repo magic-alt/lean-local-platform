@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -16,6 +17,31 @@ import urllib.request
 
 TERMINAL_BATCH_STATUSES = {"success", "failed", "partial", "cancelled"}
 FOLD_SEPARATORS = ("-", "_", ".")
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _api_token() -> str:
+    configured = os.environ.get("LEAN_API_TOKEN", "").strip()
+    if configured:
+        return configured
+    token_path = Path(
+        os.environ.get(
+            "LEAN_API_TOKEN_FILE",
+            str(ROOT / "web" / "runtime" / "secrets" / "api_token"),
+        )
+    )
+    try:
+        return token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _api_headers(*, json_content: bool = False) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"} if json_content else {}
+    token = _api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _safe_str(value: Any) -> str:
@@ -84,7 +110,7 @@ def _api(
     request = urllib.request.Request(
         base_url.rstrip("/") + path,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_api_headers(json_content=True),
         method=method,
     )
     try:
@@ -119,7 +145,10 @@ def _poll_batch(base_url: str, batch_id: str, *, timeout_seconds: int, poll_seco
 
 def _fetch_csv_preview(base_url: str, batch_id: str) -> dict[str, Any]:
     path = f"/api/experiment-batches/{batch_id}/export.csv"
-    request = urllib.request.Request(base_url.rstrip("/") + path)
+    request = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        headers=_api_headers(),
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         raw = response.read().decode("utf-8")
     lines = [line for line in raw.splitlines() if line.strip()]
@@ -208,7 +237,7 @@ def _validate_rolling(
             failures.append(f"rolling_fold_gap:{missing}")
 
     if len(folds) < max(1, min_folds):
-        warnings.append(f"rolling_folds_below_min:{len(folds)}:{max(1, min_folds)}")
+        failures.append(f"rolling_folds_below_min:{len(folds)}:{max(1, min_folds)}")
 
     for group_key, group_items in grouped.items():
         bucket, fold = group_key
@@ -276,7 +305,7 @@ def _validate_walk_forward(
     if missing_folds:
         failures.append(f"walk_forward_fold_gap:{missing_folds}")
     if len(folds) < max(1, min_folds):
-        warnings.append(f"walk_forward_folds_below_min:{len(folds)}:{max(1, min_folds)}")
+        failures.append(f"walk_forward_folds_below_min:{len(folds)}:{max(1, min_folds)}")
 
     summary = (config.get("trainYears"), config.get("testYears"), config.get("stepYears"))
     if not all(_to_int_or_none(value) for value in summary):
@@ -287,7 +316,7 @@ def _validate_walk_forward(
 
     for (fold, _bucket), fold_items in grouped.items():
         phases = {_safe_str(item.get("_phase")) for item in fold_items}
-        if phases != {"train", "test"}:
+        if phases != {"train", "validation", "oos"}:
             failures.append(f"walk_forward_fold_phase_invalid:{fold}:{sorted(phases)}")
             continue
 
@@ -295,21 +324,33 @@ def _validate_walk_forward(
         for item in fold_items:
             by_phase[_safe_str(item.get("_phase"))].append(item)
 
-        if len(by_phase["train"]) != 1 or len(by_phase["test"]) != 1:
-            failures.append(f"walk_forward_phase_multiplicity:{fold}:train={len(by_phase['train'])},test={len(by_phase['test'])}")
+        if any(len(by_phase[phase]) != 1 for phase in ("train", "validation", "oos")):
+            failures.append(
+                "walk_forward_phase_multiplicity:"
+                f"{fold}:train={len(by_phase['train'])},"
+                f"validation={len(by_phase['validation'])},oos={len(by_phase['oos'])}"
+            )
             continue
 
         train_start, train_end, _, _ = _window_tuple(by_phase["train"][0])
-        test_start, test_end, _, _ = _window_tuple(by_phase["test"][0])
-        if not all((train_start, train_end, test_start, test_end)):
+        validation_start, validation_end, _, _ = _window_tuple(by_phase["validation"][0])
+        oos_start, oos_end, _, _ = _window_tuple(by_phase["oos"][0])
+        if not all((train_start, train_end, validation_start, validation_end, oos_start, oos_end)):
             continue
-        if train_end >= test_start:
-            failures.append(f"walk_forward_train_test_nonsequential:{fold}:{train_start}:{train_end}:{test_start}:{test_end}")
-        if test_end < test_start:
-            failures.append(f"walk_forward_test_window_reversed:{fold}")
-
-        if train_end and test_start and test_start <= train_end:
-            warnings.append(f"walk_forward_phase_boundary_touch:{fold}:{train_end}:{test_start}")
+        if train_end >= validation_start:
+            failures.append(
+                f"walk_forward_train_validation_nonsequential:{fold}:"
+                f"{train_start}:{train_end}:{validation_start}:{validation_end}"
+            )
+        if validation_end >= oos_start:
+            failures.append(
+                f"walk_forward_validation_oos_nonsequential:{fold}:"
+                f"{validation_start}:{validation_end}:{oos_start}:{oos_end}"
+            )
+        if validation_end < validation_start:
+            failures.append(f"walk_forward_validation_window_reversed:{fold}")
+        if oos_end < oos_start:
+            failures.append(f"walk_forward_oos_window_reversed:{fold}")
 
     summary_payload = (config.get("summary") or {})
     walk_forward_summary = summary_payload.get("walkForward") if isinstance(summary_payload, dict) else None
@@ -354,13 +395,17 @@ def _validate_dynamic_pit(
     non_dict_rows = 0
     for item in items:
         params = _item_parameters(item)
-        if _safe_str(params.get("universeCode")).upper() != expected_code:
-            warnings.append(f"dynamic_universe_code_skew_item:{params.get('universeCode')}")
-        if _normalize(params.get("dynamicUniverse")) not in {"true", "1"}:
+        strategy_params = params.get("parameters")
+        strategy_params = strategy_params if isinstance(strategy_params, dict) else {}
+        universe_code = params.get("universeCode", strategy_params.get("universeCode"))
+        if _safe_str(universe_code).upper() != expected_code:
+            warnings.append(f"dynamic_universe_code_skew_item:{universe_code}")
+        dynamic_universe = params.get("dynamicUniverse", strategy_params.get("dynamicUniverse"))
+        if _normalize(dynamic_universe) not in {"true", "1"}:
             failures.append("dynamic_universe_flag_not_true")
             break
 
-        schedule = params.get("universeSchedule")
+        schedule = params.get("universeSchedule", strategy_params.get("universeSchedule"))
         if not schedule:
             missing_schedule_items += 1
             continue
@@ -448,6 +493,31 @@ def _validate_status_counts(items: list[dict[str, Any]], failures: list[str], wa
         failures.append(f"failed_items:{failed_count}")
 
 
+def _validate_parameter_grid(
+    items: list[dict[str, Any]],
+    config: dict[str, Any],
+    failures: list[str],
+    warnings: list[str],
+) -> None:
+    grid = config.get("parameterGrid") or {}
+    expected = 1
+    for values in grid.values():
+        expected *= len(values or [])
+    if expected != 9:
+        failures.append(f"parameter_grid_not_3x3:{expected}")
+    if len(items) != expected:
+        failures.append(f"parameter_grid_item_count:{len(items)}:{expected}")
+    candidates = {
+        _item_experiment_param(item, "optimizationCandidateKey")
+        for item in items
+    }
+    candidates.discard("")
+    if len(candidates) != expected:
+        failures.append(f"parameter_grid_candidate_keys:{len(candidates)}:{expected}")
+    if any(item.get("status") == "success" and not item.get("related_id") for item in items):
+        warnings.append("successful_grid_item_missing_related_run")
+
+
 def _validate_case_result(name: str, config: dict[str, Any], detail: dict[str, Any]) -> tuple[str, list[str], list[str]]:
     mode = str(config.get("mode") or "independent").strip().lower()
     warnings: list[str] = []
@@ -468,7 +538,9 @@ def _validate_case_result(name: str, config: dict[str, Any], detail: dict[str, A
     min_rolling_folds = int(config.get("minRollingFolds") or 1) if mode == "rolling" else 1
     min_walk_folds = int(config.get("minWalkForwardFolds") or 1) if mode == "walk_forward" else 1
 
-    if mode == "rolling":
+    if name == "parameter_grid":
+        _validate_parameter_grid(items, config, failures, warnings)
+    elif mode == "rolling":
         _validate_rolling(items, config, failures, warnings, min_folds=min_rolling_folds)
     elif mode == "walk_forward":
         _validate_walk_forward(items, config, failures, warnings, min_folds=min_walk_folds)
@@ -486,7 +558,7 @@ def _validate_case_result(name: str, config: dict[str, Any], detail: dict[str, A
     if count_from_preview is not None and count_from_preview != count_from_detail:
         warnings.append(f"item_count_mismatch:{count_from_preview}:{count_from_detail}")
 
-    return "passed", warnings, failures
+    return ("failed" if failures else "passed"), warnings, failures
 
 
 def _run_case(
@@ -573,6 +645,26 @@ def _run_case(
 
 def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
     return {
+        "parameter_grid": {
+            "kind": "backtest",
+            "mode": "single_symbol_grid",
+            "projectIds": [project_id],
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "venue": "china",
+            "resolution": "daily",
+            "dataType": "trade",
+            "cash": 300000,
+            "start": "2023-01-03",
+            "end": "2023-06-30",
+            "source": "tushare",
+            "maxCandidates": 9,
+            "parameterGrid": {
+                "fast": [5, 10, 15],
+                "slow": [20, 30, 40],
+            },
+        },
         "rolling": {
             "kind": "backtest",
             "mode": "rolling",
@@ -584,15 +676,18 @@ def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
             "resolution": "daily",
             "dataType": "trade",
             "cash": 300000,
-            "start": "2023-01-01",
+            "start": "2022-01-01",
             "end": "2024-12-31",
             "trainYears": 1,
             "testYears": 1,
             "stepYears": 1,
             "source": "tushare",
-            "maxCandidates": 1,
-            "parameterGrid": {},
-            "minRollingFolds": 1,
+            "maxCandidates": 9,
+            "parameterGrid": {
+                "fast": [5, 10, 15],
+                "slow": [20, 30, 40],
+            },
+            "minRollingFolds": 3,
         },
         "walk_forward": {
             "kind": "backtest",
@@ -612,7 +707,9 @@ def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
             "stepYears": 1,
             "source": "tushare",
             "maxCandidates": 1,
-            "parameterGrid": {},
+            "parameterGrid": {
+                "fast": [10],
+            },
             "minWalkForwardFolds": 2,
         },
         "dynamic_pit": {
@@ -636,7 +733,7 @@ def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Level-4 evidence probes for rolling/walk-forward/dynamic PIT")
+    parser = argparse.ArgumentParser(description="Run Level-4 evidence probes for grid/rolling/walk-forward/dynamic PIT")
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     preview_group = parser.add_mutually_exclusive_group()
@@ -649,7 +746,7 @@ def main() -> int:
     parser.add_argument("--require-csv", action="store_true", help="Fail if export.csv is missing or empty when executing")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--poll-seconds", type=float, default=2.0)
-    parser.add_argument("--cases", default="rolling,walk_forward,dynamic_pit", help="Comma-separated case names")
+    parser.add_argument("--cases", default="parameter_grid,rolling,walk_forward,dynamic_pit", help="Comma-separated case names")
     parser.add_argument("--evidence-out", help="Write full JSON evidence to this file")
     parser.add_argument("--min-rolling-folds", type=int, default=1)
     parser.add_argument("--min-walk-forward-folds", type=int, default=2)

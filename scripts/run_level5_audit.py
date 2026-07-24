@@ -255,7 +255,7 @@ def main() -> int:
     )
     parser.add_argument("--start-date", default="2026-06-01")
     parser.add_argument("--days", type=int, default=21)
-    parser.add_argument("--api-url", default="http://127.0.0.1:8003")
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--evidence-dir", default="web/runtime/audit")
     parser.add_argument("--compose-project", default="lean-platform")
 

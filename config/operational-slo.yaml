@@ -1,0 +1,91 @@
+schemaVersion: 1
+status: TARGET_NOT_YET_CERTIFIED
+scope: local-production-like-paper
+liveTrading: NOT_READY
+
+slos:
+  apiAvailability:
+    target: 99.5%
+    window: 30d
+  paperDailyCompletion:
+    target: 99.0%
+    deadline: "20:30 Asia/Shanghai on trading days"
+  paperStartLatency:
+    targetP95Seconds: 900
+  dataReadinessLatency:
+    targetP95Seconds: 1800
+  backtestStartLatency:
+    targetP95Seconds: 300
+  schedulerDelay:
+    targetP95Seconds: 120
+  criticalAlertDelivery:
+    targetP95Seconds: 60
+  backupSuccess:
+    target: 100%
+    window: 30d
+  restoreDrillSuccess:
+    target: 100%
+    cadenceDays: 90
+  reconciliationSuccess:
+    target: 100%
+  storedObjectIntegrity:
+    target: 100%
+
+dr:
+  rpoMinutes: 15
+  rtoMinutes: 240
+  fullBackupCadenceHours: 24
+  incrementalOrBinlogCadenceMinutes: 15
+  retentionDays: 30
+  restoreDrillCadenceDays: 90
+  encryptionRequired: true
+  independentStorageRequired: true
+  certificationStatus: NOT_YET_PROVEN_AT_PRODUCTION_SCALE
+
+resourceBudgets:
+  mysql:
+    memory: 4g
+    bufferPool: 1g
+  redis:
+    memory: 1g
+  api:
+    memory: 1g
+    cpus: 2
+  defaultWorker:
+    memory: 2g
+    cpus: 2
+  leanPerRun:
+    memory: 4g
+    cpus: 2
+    pids: 512
+  maxConcurrentLeanJobs: 2
+  disk:
+    warningPercent: 75
+    criticalPercent: 85
+  logs:
+    maxFile: 20m
+    maxFiles: 3
+  artifacts:
+    retentionDays: 90
+  parquet:
+    growthWarningGiBPerDay: 20
+
+releasePolicy:
+  criticalFailureBlocksRelease: true
+  required:
+    - unit
+    - frontend_build
+    - migration_verify
+    - repository_hygiene
+    - documentation_openapi
+    - mysql_integration
+    - source_qa_gate_matrix
+    - real_lean_golden
+    - level4_experiment_acceptance
+    - real_lean_paper_21_day
+    - six_phase_idempotency
+    - fault_matrix
+    - production_scale_restore
+    - credential_validation
+    - restricted_runner_isolation
+    - sbom_vulnerability_signature
