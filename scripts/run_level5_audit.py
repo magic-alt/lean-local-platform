@@ -186,6 +186,7 @@ def _run_walkforward_case(
     docker_project: str,
     api_timeout: int,
     timeout_per_day: int,
+    paper_mode: str,
 ) -> dict[str, Any]:
     cmd: list[str] = [
         sys.executable,
@@ -214,6 +215,8 @@ def _run_walkforward_case(
         docker_project,
         "--timeout-per-day",
         str(timeout_per_day),
+        "--paper-mode",
+        paper_mode,
         "--api-timeout",
         str(api_timeout),
     ]
@@ -224,6 +227,11 @@ def _run_walkforward_case(
         cmd.extend(_scenario_to_args(scenario))
 
     rc, parsed, raw = _run_command(cmd, timeout=execute_timeout)
+    if not isinstance(parsed, dict) and evidence_path.is_file():
+        try:
+            parsed = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parsed = None
     if rc != 0:
         raise RuntimeError(raw or "walk-forward acceptance failed")
     if not isinstance(parsed, dict):
@@ -258,6 +266,12 @@ def main() -> int:
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--evidence-dir", default="web/runtime/audit")
     parser.add_argument("--compose-project", default="lean-platform")
+    parser.add_argument(
+        "--paper-mode",
+        choices=("lean_walkforward_v2",),
+        default="lean_walkforward_v2",
+        help="Level 5 certification is restricted to the unified v2 Paper pipeline.",
+    )
 
     parser.add_argument(
         "--with-fault",
@@ -372,6 +386,7 @@ def main() -> int:
         "days": args.days,
         "apiUrl": args.api_url,
         "composeProject": args.compose_project,
+        "paperMode": args.paper_mode,
         "cases": {},
         "walkforwardMatrix": [],
     }
@@ -394,6 +409,7 @@ def main() -> int:
         min_reject=args.min_reject,
         timeout_per_day=args.timeout_per_day,
         api_timeout=args.api_timeout,
+        paper_mode=args.paper_mode,
     )
     summary["cases"]["walkforward_no_fault"] = no_fault_result
     summary["cases"]["walkforward_no_fault"]["matrixTag"] = "no_fault"
@@ -431,6 +447,7 @@ def main() -> int:
                     min_reject=args.min_reject,
                     timeout_per_day=args.timeout_per_day,
                     api_timeout=args.api_timeout,
+                    paper_mode=args.paper_mode,
                 )
                 case["passed"] = bool(
                     _case_status(case["result"]) == "passed"

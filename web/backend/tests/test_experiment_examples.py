@@ -107,6 +107,145 @@ def test_dynamic_universe_persists_effective_membership_schedule(tmp_path, monke
     assert selection["asOfDate"] == "2020-06-01"
 
 
+def test_walk_forward_expands_independent_validation_and_oos_with_lineage(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+    from scripts import run_level4_audit
+
+    project = create_project("walk-forward", template_key="ema_cross", market="china")
+    config = {
+        "kind": "backtest",
+        "mode": "walk_forward",
+        "projectId": project["id"],
+        "symbol": "600519",
+        "start": "2023-01-01",
+        "end": "2025-12-31",
+        "trainYears": 1,
+        "testYears": 1,
+        "stepYears": 1,
+        "parameterGrid": {"fast": [10]},
+        "minWalkForwardFolds": 2,
+    }
+
+    items, _selection = experiment_batches.expand(config)
+
+    assert len(items) == 6
+    assert [
+        (
+            item["parameters"]["parameters"]["experimentFold"],
+            item["parameters"]["parameters"]["experimentPhase"],
+            item["parameters"]["start"],
+            item["parameters"]["end"],
+        )
+        for item in items
+    ] == [
+        (1, "train", "2023-01-01", "2023-12-31"),
+        (1, "validation", "2024-01-01", "2024-06-30"),
+        (1, "oos", "2024-07-01", "2024-12-31"),
+        (2, "train", "2024-01-01", "2024-12-31"),
+        (2, "validation", "2025-01-01", "2025-06-30"),
+        (2, "oos", "2025-07-01", "2025-12-31"),
+    ]
+    fold_fingerprints = {
+        (
+            item["parameters"]["parameters"]["experimentFold"],
+            item["parameters"]["parameters"]["experimentFoldFingerprint"],
+        )
+        for item in items
+    }
+    assert len(fold_fingerprints) == 2
+    assert all(
+        len(item["parameters"]["parameters"]["experimentPhaseFingerprint"]) == 64
+        for item in items
+    )
+    assert {
+        item["parameters"]["parameters"]["experimentSelectionRole"] for item in items
+    } == {"candidate_generation", "parameter_selection", "unbiased_evaluation"}
+
+    audit_items = [
+        {
+            "id": item["key"],
+            "status": "success",
+            "projectId": item["projectId"],
+            "symbol": item["symbol"],
+            "parameters": item["parameters"],
+        }
+        for item in items
+    ]
+    status, warnings, failures = run_level4_audit._validate_case_result(
+        "walk_forward",
+        config,
+        {"status": "success", "items": audit_items},
+    )
+    assert status == "passed"
+    assert failures == []
+    assert not any("phase" in warning for warning in warnings)
+
+
+def test_batch_retry_and_restart_preserve_successful_children(tmp_path, monkeypatch):
+    db_module = configure(tmp_path, monkeypatch)
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("recovery", template_key="ema_cross", market="china")
+    batch = experiment_batches.create_batch(
+        {
+            "kind": "backtest",
+            "mode": "independent",
+            "projectId": project["id"],
+            "symbols": ["000001", "600519"],
+            "start": "2024-01-01",
+            "end": "2024-12-31",
+        }
+    )
+    first, second = batch["items"]
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            update experiment_batch_items
+            set status='success',related_id='successful-run',finished_at='now'
+            where id=?
+            """,
+            (first["id"],),
+        )
+        connection.execute(
+            """
+            update experiment_batch_items
+            set status='failed',related_id='failed-run',error='boom',finished_at='now'
+            where id=?
+            """,
+            (second["id"],),
+        )
+
+    dispatched = []
+    monkeypatch.setattr(
+        experiment_batches,
+        "_dispatch_item",
+        lambda _batch, item: dispatched.append(item["id"]),
+    )
+    retried = experiment_batches.retry_failed(batch["id"])
+
+    by_id = {item["id"]: item for item in retried["items"]}
+    assert by_id[first["id"]]["status"] == "success"
+    assert by_id[first["id"]]["related_id"] == "successful-run"
+    assert by_id[second["id"]]["status"] == "pending"
+    assert by_id[second["id"]]["related_id"] is None
+    assert dispatched == [second["id"]]
+
+    cancelled = experiment_batches.cancel(batch["id"])
+    assert cancelled["cancel_requested"] == 1
+    assert {item["status"] for item in cancelled["items"]} == {"success", "cancelled"}
+
+    dispatched.clear()
+    restarted = experiment_batches.restart_cancelled(batch["id"])
+    by_id = {item["id"]: item for item in restarted["items"]}
+    assert by_id[first["id"]]["status"] == "success"
+    assert by_id[first["id"]]["related_id"] == "successful-run"
+    assert by_id[second["id"]]["status"] == "pending"
+    assert dispatched == [second["id"]]
+
+
 def test_help_docs_search_and_path_validation():
     from app.core.errors import NotFoundError
     from app.services import help_docs

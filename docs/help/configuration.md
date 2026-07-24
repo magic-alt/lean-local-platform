@@ -113,6 +113,7 @@ Docker volumes             MySQL、Redis、ClickHouse 等持久卷
 ## 告警与自动 Paper
 
 - `LEAN_PAPER_WALKFORWARD_HOUR` / `LEAN_PAPER_WALKFORWARD_MINUTE`：Paper 自动逐日调度时间。
+- `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED`：允许创建统一 intent/constraint/matching/ledger 的整改版 LEAN Paper session；默认 `0`，完成新的 Level 5 认证前仅用于隔离验收。
 - `LEAN_ALERT_WEBHOOK_URL`：可选运维告警 Webhook；未配置时告警仍会持久化，但不会外发。
 - `LEAN_ALERT_WEBHOOK_BEARER_TOKEN`：Webhook Bearer 凭据，只能保存在本地环境或秘密管理器。
 - `LEAN_ALERT_MIN_SEVERITY`：外发最低等级，默认 `critical`。

@@ -20,6 +20,13 @@ TARGET_DIRECTORIES = (
 )
 
 HISTORY_TABLES = (
+    "paper_run_checkpoints",
+    "paper_ledger_entries",
+    "paper_order_fills",
+    "paper_order_transitions",
+    "paper_order_intents",
+    "paper_lean_order_events",
+    "paper_walkforward_runs",
     "experiment_batch_attempts",
     "experiment_batch_items",
     "experiment_batches",

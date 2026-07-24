@@ -36,7 +36,10 @@ Remaining acceptance work:
 
 Status: FAIL. The 2026-07-24 production-like execution completed 17 real LEAN
 children (9 parameter-grid, 3 rolling, 4 legacy walk-forward and 1 dynamic PIT),
-but the strict validator correctly rejects the train/test-only walk-forward.
+but the strict validator correctly rejected the then-current train/test-only
+walk-forward. The code now expands train/validation/OOS with stable lineage and
+adds failed-only retry plus cancelled-batch restart; this does not change the
+status until the production-like matrix is independently rerun.
 The scripted closure path exists via:
 
 - `web/backend/.venv/bin/python scripts/run_level4_audit.py`
@@ -57,15 +60,18 @@ Implemented:
 - Strategy template and example catalog for backtests, optimization and research.
 - Database-backed experiment batches with bounded dispatch, cancellation, failed-child retry and CSV export.
 - Multi-symbol, multi-strategy, independent matrix, parameter grid, rolling-window, dynamic PIT universe and walk-forward workflows.
+- Walk-forward train/validation/OOS isolation, validation-only parameter
+  selection, and fold/phase anti-leakage fingerprints.
+- Failed-only batch retry and cancelled-batch restart that preserve successful
+  child runs.
 - Structured HTML reports, Markdown export and archived report objects.
 - Searchable in-app documentation.
 
 Remaining work:
 
-- Add independent train, validation and OOS phases with parameter-selection
-  lineage and anti-leakage fingerprints.
-- Independently execute failed-child retry, cancel, refresh/restart recovery and
-  the complete Level 4 browser matrix.
+- Independently execute the new train/validation/OOS, failed-child retry,
+  cancel/restart recovery and complete Level 4 browser matrix against real
+  MySQL/Celery/Docker LEAN.
 - PDF, CSV and JSON report export formats; Markdown is already implemented.
 - Richer cross-batch ranking, sensitivity heatmaps and comparison dashboards.
 - Complete ETF, convertible-bond, futures and options data-quality gates.
@@ -102,12 +108,15 @@ Current verification path is implemented in:
 The script performs 21-day LEAN Paper, duplicate-call idempotency, optional
 service-fault matrix and constraint coverage checks.
 
-Implemented, but not yet unified into the real LEAN Paper intent path:
+Implemented:
 
 - Paper sessions sourced from a successful, validated, frozen backtest project.
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
-- A-share T+1, suspension, limit, lot, fee, slippage and portfolio constraints
-  in the separate signal-simulation acceptance path.
+- Feature-gated `lean_walkforward_v2` with immutable LEAN-sourced intents,
+  legal 13-state transitions, the shared A-share/portfolio constraint layer,
+  idempotent fills and ledger entries, and six digest-protected checkpoints.
+- A-share T+1, suspension, limit, lot, fee and portfolio constraints in both
+  signal simulation and the v2 LEAN intent path.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.
 - Persistent operational alerts with Webhook delivery, delivery audit records,
   cooldown deduplication and repeated Paper scheduling failure escalation.
@@ -115,10 +124,11 @@ Implemented, but not yet unified into the real LEAN Paper intent path:
 
 Remaining work:
 
-- Replace direct LEAN-fill finalization plus separate signal simulation with one
-  persisted intent/constraint/matching/ledger state machine.
-- Complete a compliant 21-day session with both fills and policy rejects, then
-  prove six-phase recovery without ledger drift.
+- Run a new compliant 21-day v2 session with both real strategy intents that
+  fill and intents that policy rejects; then prove all six recovery phases
+  against a no-fault digest without ledger drift.
+- Keep v2 disabled outside isolated remediation until that evidence passes;
+  legacy sessions remain unchanged.
 - Complete unattended daily orchestration and multi-day notification/escalation acceptance evidence.
 - Broker integration, reconciliation and secrets hardening before any live trading.
 - Industry/capacity risk limits, circuit breakers and cross-asset paper acceptance.

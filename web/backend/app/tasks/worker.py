@@ -125,7 +125,11 @@ def mark_paper_walkforward_running_task(paper_run_id: str):
     return {"paperRunId": paper_run_id, "status": "running"}
 
 
-@celery_app.task(name="lean_web.finalize_paper_walkforward")
+@celery_app.task(
+    name="lean_web.finalize_paper_walkforward",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def finalize_paper_walkforward_task(paper_run_id: str):
     return paper_service.finalize_walkforward_run(paper_run_id)
 
@@ -160,7 +164,7 @@ def schedule_paper_walkforward_task(self):
     today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     for session in paper_service.list_sessions():
         if (
-            session.get("mode") != "lean_walkforward"
+            not paper_service._is_lean_mode(session.get("mode"))
             or session.get("status") != "running"
             or not session.get("auto_advance")
         ):

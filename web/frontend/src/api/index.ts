@@ -105,6 +105,7 @@ export const api = {
     request<{ deleted: boolean; id: string }>(`/api/experiment-batches/${encodeURIComponent(id)}`, { method: "DELETE" }),
   cancelExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
+  restartExperimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}/restart`, { method: "POST" }),
   experimentBatchExportUrl: (id: string) => `/api/experiment-batches/${encodeURIComponent(id)}/export.csv`,
   helpArticles: (q?: string) => request<{ items: HelpArticleSummary[]; count: number }>(`/api/help/articles${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   helpArticle: (slug: string) => request<HelpArticle>(`/api/help/articles/${encodeURIComponent(slug)}`),

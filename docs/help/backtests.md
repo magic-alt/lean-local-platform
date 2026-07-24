@@ -76,6 +76,18 @@ curl -X POST http://127.0.0.1:8000/api/backtests/preflight \
 
 在相同项目和标的上生成多个时间窗口，观察收益、回撤、交易数和参数稳定性。窗口必须明确且不能使用未来窗口帮助过去决策。
 
+### Walk-forward
+
+`mode=walk_forward` 将每个 fold 严格拆成连续且互斥的三个阶段：
+
+- `train` 只用于候选生成；
+- `validation` 是唯一允许参与参数选择的阶段；
+- `oos` 只评价已经选定的参数，不参与选择。
+
+`testYears` 定义 validation + OOS 的总评价长度，默认各占一半；可用
+`validationMonths` 调整切分，但必须给 OOS 留出非空窗口。每个 fold 和 phase 都写入
+稳定 fingerprint，便于检查窗口边界、角色和重跑输入是否漂移。
+
 ### 动态 PIT 组合
 
 一个多资产 LEAN 运行共享资金，在每个调仓日按历史有效成分调整。它适合回答“当时可知成分组成的组合会怎样”，不能和独立单股票排名混为一谈。
@@ -107,6 +119,7 @@ curl -X POST http://127.0.0.1:8000/api/backtests/preflight \
 - 批次可能是 `success`、`partial`、`failed` 或 `cancelled`。
 - `POST /api/experiment-batches/{id}/retry-failed` 只重试失败项，不重复成功项。
 - 取消会停止活动项目并取消未派发项目。
+- `POST /api/experiment-batches/{id}/restart` 只恢复已取消批次的未完成项，保留已成功子项和原运行关联。
 - `GET /api/experiment-batches/{id}/export.csv` 导出子任务及指标。
 
 重启后协调任务从数据库恢复批次，不依赖浏览器页面保持打开。

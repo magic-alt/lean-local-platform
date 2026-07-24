@@ -82,12 +82,14 @@ def create_session(request: PaperSessionCreate):
     try:
         payload = request.model_dump()
         requested_mode = str(request.mode or "").strip().lower()
-        if requested_mode not in {"", "lean_walkforward", "signal_simulation"}:
-            raise ValueError("Paper mode must be lean_walkforward or signal_simulation.")
-        if requested_mode == "lean_walkforward" or request.sourceBacktestId or request.projectId:
+        if requested_mode not in {"", "lean_walkforward", "lean_walkforward_v2", "signal_simulation"}:
+            raise ValueError(
+                "Paper mode must be lean_walkforward, lean_walkforward_v2, or signal_simulation."
+            )
+        if requested_mode in {"lean_walkforward", "lean_walkforward_v2"} or request.sourceBacktestId or request.projectId:
             if not request.sourceBacktestId or not request.projectId:
                 raise ValueError("LEAN Paper requires both a Project and a trusted Backtest.")
-            payload["mode"] = "lean_walkforward"
+            payload["mode"] = requested_mode or "lean_walkforward"
         else:
             payload["mode"] = "signal_simulation"
         return paper_service.create_session(payload)
@@ -123,6 +125,11 @@ def detail(session_id: str):
         "positions": paper_service.list_positions(session_id),
         "snapshots": paper_service.list_snapshots(session_id),
         "runs": paper_service.list_walkforward_runs(session_id),
+        "intents": (
+            paper_service.paper_order_pipeline.list_intents(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
     }
 
 
@@ -218,7 +225,7 @@ def run_day(session_id: str, request: PaperRunDayRequest):
         session = paper_service.get_session(session_id)
         if not session:
             raise KeyError("Paper session not found.")
-        if session.get("mode") == "lean_walkforward":
+        if paper_service._is_lean_mode(session.get("mode")):
             paper_run = paper_service.create_walkforward_run(session_id, request.tradeDate)
             workflow = chain(
                 mark_paper_walkforward_running_task.si(paper_run["id"]),
@@ -238,7 +245,7 @@ def run_day(session_id: str, request: PaperRunDayRequest):
 def replay(session_id: str, request: PaperReplayRequest):
     try:
         session = paper_service.get_session(session_id)
-        if session and session.get("mode") == "lean_walkforward":
+        if session and paper_service._is_lean_mode(session.get("mode")):
             if request.startDate != request.endDate:
                 raise ValueError("LEAN Paper replay is sequential; queue one trading day at a time.")
             return run_day(session_id, PaperRunDayRequest(tradeDate=request.startDate, autoSignal=False))
@@ -254,3 +261,18 @@ def walkforward_runs(session_id: str):
     if not paper_service.get_session(session_id):
         raise HTTPException(status_code=404, detail="Paper session not found.")
     return paper_service.list_walkforward_runs(session_id)
+
+
+@router.get("/{session_id}/intents")
+def order_intents(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.paper_order_pipeline.list_intents(session_id)
+
+
+@router.get("/{session_id}/intents/{intent_id}/transitions")
+def order_intent_transitions(session_id: str, intent_id: str):
+    intent = paper_service.paper_order_pipeline.get_intent(intent_id)
+    if not intent or str(intent.get("session_id")) != session_id:
+        raise HTTPException(status_code=404, detail="Paper order intent not found.")
+    return paper_service.paper_order_pipeline.list_transitions(intent_id)

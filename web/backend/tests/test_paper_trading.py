@@ -300,6 +300,121 @@ def test_paper_multi_symbol_session_fills_then_rejects_max_positions(tmp_path, m
     assert [position["symbol"] for position in list_positions(session["id"])] == ["600519"]
 
 
+def test_paper_v2_lean_intents_share_constraints_matching_and_ledger(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    import_rows_for_symbol("600519")
+    import_rows_for_symbol("000001")
+
+    import app.db as db_module
+    from app.services import paper, paper_order_pipeline
+
+    session = paper.create_session(
+        {
+            "symbol": "600519",
+            "symbols": ["600519", "000001"],
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+            "blacklist": ["000001"],
+        }
+    )
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            update paper_sessions
+            set mode='lean_walkforward_v2',pipeline_version=2
+            where id=?
+            """,
+            (session["id"],),
+        )
+    session = paper.get_session(session["id"])
+    orders = [
+        {
+            "time": "2024-01-04T09:31:00+08:00",
+            "symbol": "600519",
+            "side": "buy",
+            "quantity": 100,
+            "price": 10.2,
+            "status": "filled",
+        },
+        {
+            "time": "2024-01-04T09:32:00+08:00",
+            "symbol": "000001",
+            "side": "buy",
+            "quantity": 100,
+            "price": 10.2,
+            "status": "filled",
+        },
+    ]
+
+    first = paper._process_v2_lean_intents(
+        session=session,
+        paper_run={"id": "paper-run-v2"},
+        child={"id": "backtest-run-v2"},
+        orders=orders,
+    )
+    second = paper._process_v2_lean_intents(
+        session=paper.get_session(session["id"]),
+        paper_run={"id": "paper-run-v2"},
+        child={"id": "backtest-run-v2"},
+        orders=orders,
+    )
+
+    assert [item["status"] for item in first["orders"]] == ["filled", "rejected"]
+    assert first["orders"][1]["reason"] == "blacklisted"
+    assert [item["id"] for item in first["orders"]] == [item["id"] for item in second["orders"]]
+    intents = paper_order_pipeline.list_intents(session["id"])
+    assert len(intents) == 2
+    states = {
+        item["symbol"]: paper_order_pipeline.current_state(item["id"])
+        for item in intents
+    }
+    assert states == {"600519": "settled", "000001": "rejected"}
+    with db_module.db() as connection:
+        fill_count = connection.execute("select count(*) as count from paper_order_fills").fetchone()["count"]
+        ledger_count = connection.execute("select count(*) as count from paper_ledger_entries").fetchone()["count"]
+        order_count = connection.execute("select count(*) as count from paper_orders").fetchone()["count"]
+        checkpoint_count = connection.execute("select count(*) as count from paper_run_checkpoints").fetchone()["count"]
+    assert fill_count == 1
+    assert ledger_count == 3
+    assert order_count == 2
+    assert checkpoint_count == 4
+
+
+def test_paper_v2_transition_graph_rejects_illegal_state_changes(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import paper_order_pipeline
+
+    intent = paper_order_pipeline.record_intent(
+        session_id="session",
+        paper_run_id="paper-run",
+        backtest_run_id="backtest-run",
+        event_key="event",
+        trade_date="2024-01-04",
+        symbol="600519",
+        side="buy",
+        quantity=100,
+        requested_price=10,
+        raw_intent={"source": "unit"},
+    )
+
+    assert len(paper_order_pipeline.ORDER_STATES) == 13
+    with pytest.raises(ValueError, match="Illegal Paper order transition"):
+        paper_order_pipeline.append_transition(
+            intent["id"],
+            "filled",
+            event_type="skip_constraints",
+            idempotency_key="illegal",
+        )
+
+
+def test_paper_v2_finalize_is_requeued_after_worker_loss():
+    from app.tasks.worker import finalize_paper_walkforward_task
+
+    assert finalize_paper_walkforward_task.acks_late is True
+    assert finalize_paper_walkforward_task.reject_on_worker_lost is True
+
+
 def test_paper_replay_auto_signal_executes_before_generating_next_signal(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows_for_symbol("600519")
@@ -639,3 +754,25 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
     assert session["parameter_hash"] == "params-v1"
     assert session["cash"] == 50000
     assert session["parameters"]["strategySnapshotDir"] == str(snapshot_dir)
+
+    import app.services.paper as paper_module
+
+    monkeypatch.setattr(paper_module, "PAPER_ORDER_PIPELINE_V2_ENABLED", True)
+    v2_session = create_session(
+        {
+            "mode": "lean_walkforward_v2",
+            "name": "MACD paper v2",
+            "projectId": "project-macd",
+            "sourceBacktestId": "trusted-run",
+            "startDate": "2026-07-14",
+            "autoAdvance": False,
+            "maxPositionWeight": 0.2,
+            "minCash": 1000,
+            "blacklist": ["000001"],
+        }
+    )
+    assert v2_session["mode"] == "lean_walkforward_v2"
+    assert v2_session["pipeline_version"] == 2
+    assert v2_session["parameters"]["maxPositionWeight"] == 0.2
+    assert v2_session["parameters"]["minCash"] == 1000
+    assert v2_session["parameters"]["blacklist"] == ["000001"]

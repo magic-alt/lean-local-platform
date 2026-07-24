@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from ..core.config import RUNS_DIR
+from ..core.config import PAPER_ORDER_PIPELINE_V2_ENABLED, RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.assets import asset_request
 from ..lean_engine.errors import LeanPlatformError
@@ -19,6 +19,7 @@ from .experiments import get_experiment_versions
 from .source_gate import apply_source_context, resolve_source_context
 from .trading_config import ashare_trading_config, hk_trading_config
 from .run_paths import run_directory
+from . import paper_order_pipeline
 
 
 def _side(value: str) -> str:
@@ -26,6 +27,10 @@ def _side(value: str) -> str:
     if side not in {"buy", "sell", "hold"}:
         raise ValueError("Signal side must be buy, sell, or hold.")
     return side
+
+
+def _is_lean_mode(value: Any) -> bool:
+    return str(value or "") in {"lean_walkforward", "lean_walkforward_v2"}
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -47,7 +52,7 @@ def _session_api_item(item: dict[str, Any]) -> dict[str, Any]:
         item["mode"] = "signal_simulation"
     item["legacy_read_only"] = bool(item.get("legacy_read_only", item["mode"] == "legacy_replay"))
     item["auto_advance"] = bool(item.get("auto_advance"))
-    if item["mode"] == "lean_walkforward":
+    if _is_lean_mode(item["mode"]):
         item["next_trade_date"] = (
             _next_trade_date(str(item["venue"]), str(item["last_processed_date"]))
             if item.get("last_processed_date")
@@ -154,6 +159,12 @@ def _next_trade_date(market: str, value: str) -> str:
 
 
 def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
+    requested_mode = str(parameters.get("mode") or "lean_walkforward")
+    if requested_mode == "lean_walkforward_v2" and not PAPER_ORDER_PIPELINE_V2_ENABLED:
+        raise ValueError(
+            "LEAN Paper v2 is disabled. Set LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1 to create v2 sessions."
+        )
+    mode = "lean_walkforward_v2" if requested_mode == "lean_walkforward_v2" else "lean_walkforward"
     project_id = str(parameters.get("projectId") or "").strip()
     source_backtest_id = str(parameters.get("sourceBacktestId") or "").strip()
     if not project_id or not source_backtest_id:
@@ -173,7 +184,8 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
         and str(source_certification.get("qaStatus") or "").lower() == "ok"
     ):
         raise ValueError("LEAN Paper requires a certified production dataset; research sources are prohibited.")
-    if not get_result(source_backtest_id):
+    source_result = get_result(source_backtest_id)
+    if not source_result:
         raise ValueError("The selected backtest result ledger is unavailable.")
     snapshot_dir = run_directory(source_backtest_id, source_parameters.get("strategySnapshotDir"), relative="strategy")
     if not snapshot_dir.is_dir():
@@ -193,6 +205,25 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     if request.asset_class != "equity" or request.venue not in {"china", "hongkong"} or request.resolution != "daily":
         raise ValueError("LEAN Paper supports China and Hong Kong daily equity projects.")
     cash = float(source_parameters.get("cash") or source_parameters.get("initialCash") or 100000)
+    source_holdings = [
+        dict(item)
+        for item in (source_result.get("holdings") or [])
+        if isinstance(item, dict)
+    ]
+    source_equity = _last_equity(source_result, cash)
+    source_market_value = sum(
+        float(
+            item.get("marketValue")
+            or item.get("market_value")
+            or (
+                float(item.get("quantity") or item.get("Quantity") or 0)
+                * float(item.get("price") or item.get("Price") or item.get("marketPrice") or 0)
+            )
+        )
+        for item in source_holdings
+    )
+    initial_cash = max(0.0, source_equity - source_market_value) if mode == "lean_walkforward_v2" else cash
+    initial_equity = source_equity if mode == "lean_walkforward_v2" else cash
     start_date = str(parameters.get("startDate") or _next_trade_date(request.venue, str(source_parameters["end"])))
     if parse_date(start_date) <= parse_date(str(source_parameters["end"])):
         raise ValueError("Paper startDate must be after the source backtest end date.")
@@ -200,6 +231,19 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     now = utc_now()
     frozen = {
         **source_parameters,
+        **{
+            key: parameters[key]
+            for key in (
+                "maxPositions",
+                "maxPositionWeight",
+                "minCash",
+                "blacklist",
+                "watchlist",
+                "observeOnlySymbols",
+                "allowStBuy",
+            )
+            if key in parameters
+        },
         "sourceBacktestId": source_backtest_id,
         "strategySnapshotDir": str(snapshot_dir),
         "strategySnapshotMainFile": source_parameters.get("strategySnapshotMainFile"),
@@ -212,8 +256,8 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
             insert into paper_sessions
                 (id, project_id, name, status, symbol, asset_class, venue, resolution, cash, equity,
                  parameters_json, created_at, updated_at, mode, legacy_read_only, source_backtest_id,
-                 strategy_version_id, parameter_hash, start_date, auto_advance)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 strategy_version_id, parameter_hash, start_date, auto_advance, pipeline_version)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -224,20 +268,57 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
                 request.asset_class,
                 request.venue,
                 request.resolution,
-                cash,
-                cash,
+                initial_cash,
+                initial_equity,
                 json_dump(frozen),
                 now,
                 now,
-                "lean_walkforward",
+                mode,
                 0,
                 source_backtest_id,
                 experiment.get("strategy_version_id"),
                 experiment.get("parameter_hash"),
                 start_date,
                 1 if parameters.get("autoAdvance", True) else 0,
+                2 if mode == "lean_walkforward_v2" else 1,
             ),
         )
+        if mode == "lean_walkforward_v2":
+            for holding in source_holdings:
+                symbol = str(holding.get("symbol") or holding.get("Symbol") or request.symbol)
+                quantity = float(holding.get("quantity") or holding.get("Quantity") or 0)
+                if quantity == 0:
+                    continue
+                average = float(
+                    holding.get("averagePrice")
+                    or holding.get("AveragePrice")
+                    or holding.get("average_price")
+                    or 0
+                )
+                market_price = float(
+                    holding.get("price")
+                    or holding.get("Price")
+                    or holding.get("marketPrice")
+                    or average
+                )
+                connection.execute(
+                    """
+                    insert into paper_positions
+                        (session_id,symbol,quantity,average_price,market_price,market_value,
+                         last_buy_date,updated_at)
+                    values (?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        session_id,
+                        symbol,
+                        quantity,
+                        average,
+                        market_price,
+                        quantity * market_price,
+                        str(source_parameters.get("end") or ""),
+                        now,
+                    ),
+                )
     return get_session(session_id) or {}
 
 
@@ -354,7 +435,7 @@ def _daily_report_api_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_session(parameters: dict[str, Any]) -> dict[str, Any]:
-    if parameters.get("sourceBacktestId") or parameters.get("mode") == "lean_walkforward":
+    if parameters.get("sourceBacktestId") or _is_lean_mode(parameters.get("mode")):
         return _create_lean_session(parameters)
     raw_symbols = parameters.get("symbols") or parameters.get("paperSymbols") or []
     if isinstance(raw_symbols, str):
@@ -528,7 +609,7 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
-    if session.get("mode") != "lean_walkforward" or session.get("legacy_read_only"):
+    if not _is_lean_mode(session.get("mode")) or session.get("legacy_read_only"):
         raise ValueError("This session is not an active LEAN Paper session.")
     if session.get("status") == "stopped":
         raise ValueError("Stopped LEAN Paper sessions cannot run.")
@@ -673,6 +754,338 @@ def _last_equity(result: dict[str, Any], fallback: float) -> float:
     return fallback
 
 
+def _lean_intent_rejection(
+    session: dict[str, Any],
+    order: dict[str, Any],
+    trade_date: str,
+) -> str | None:
+    symbol = str(order.get("symbol") or session["symbol"]).upper()
+    side = str(order.get("side") or "").lower()
+    quantity = abs(float(order.get("quantity") or 0))
+    price = float(order.get("price") or order.get("fillPrice") or 0)
+    if side not in {"buy", "sell"}:
+        return "invalid_side"
+    if quantity <= 0:
+        return "invalid_quantity"
+    if price <= 0:
+        return "invalid_price"
+    if session.get("venue") == "china":
+        gate = quality_gate(symbol, trade_date)
+        if not gate["passed"]:
+            report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
+            return f"qa_failed:{report_id}" if report_id else "qa_failed"
+        can_trade, reason = is_tradeable(symbol, trade_date, side)
+        if not can_trade:
+            return reason
+    position = _position(session["id"], symbol)
+    current_quantity = float((position or {}).get("quantity") or 0)
+    signal = {"id": "", "symbol": symbol, "target_percent": None}
+    portfolio_reason = _portfolio_constraint_rejection(
+        session,
+        signal,
+        side,
+        trade_date,
+        current_quantity,
+    )
+    if portfolio_reason:
+        return portfolio_reason
+    if side == "buy":
+        cap = _parameter_float(
+            _session_parameters(session),
+            "maxPositionWeight",
+            "max_position_weight",
+            "singleStockMaxWeight",
+        )
+        if cap is not None and float(session["equity"] or 0) > 0:
+            projected_weight = ((current_quantity + quantity) * price) / float(session["equity"])
+            if projected_weight - cap > 1e-12:
+                return "max_position_weight"
+        fee = _fee(quantity, price, side, session)
+        min_cash = _parameter_float(
+            _session_parameters(session),
+            "minCash",
+            "min_cash",
+            "cashFloor",
+        ) or 0.0
+        if float(session["cash"]) - quantity * price - fee < min_cash:
+            return "cash_floor" if min_cash else "insufficient_cash"
+    else:
+        if quantity - current_quantity > 1e-12:
+            return "insufficient_position"
+        if session.get("venue") == "china" and (position or {}).get("last_buy_date") == trade_date:
+            return "t_plus_1"
+    return None
+
+
+def _project_v2_order(
+    session: dict[str, Any],
+    intent: dict[str, Any],
+    *,
+    status: str,
+    reason: str | None,
+    price: float,
+    fee: float,
+    trade_date: str,
+) -> dict[str, Any]:
+    intent_id = str(intent["id"])
+    with db() as connection:
+        existing = connection.execute(
+            "select * from paper_orders where id=?",
+            (intent_id,),
+        ).fetchone()
+        if existing:
+            return row_to_dict(existing) or {}
+        quantity = float(intent["quantity"]) if status == "filled" else 0.0
+        if status == "filled":
+            position = connection.execute(
+                """
+                select * from paper_positions
+                where session_id=? and symbol=?
+                """,
+                (session["id"], intent["symbol"]),
+            ).fetchone()
+            current_quantity = float(position["quantity"] if position else 0)
+            average_price = float(position["average_price"] if position else 0)
+            signed_quantity = quantity if intent["side"] == "buy" else -quantity
+            new_quantity = current_quantity + signed_quantity
+            current_cash_row = connection.execute(
+                "select cash from paper_sessions where id=?",
+                (session["id"],),
+            ).fetchone()
+            current_cash = float(current_cash_row["cash"])
+            if intent["side"] == "buy":
+                current_cash -= quantity * price + fee
+                average_price = (
+                    ((current_quantity * average_price) + (quantity * price)) / new_quantity
+                    if new_quantity
+                    else 0
+                )
+                last_buy_date = trade_date
+            else:
+                current_cash += quantity * price - fee
+                last_buy_date = position["last_buy_date"] if position else None
+                if new_quantity <= 0:
+                    average_price = 0
+            if new_quantity <= 0:
+                connection.execute(
+                    "delete from paper_positions where session_id=? and symbol=?",
+                    (session["id"], intent["symbol"]),
+                )
+            else:
+                connection.execute(
+                    """
+                    insert into paper_positions
+                        (session_id,symbol,quantity,average_price,market_price,market_value,
+                         last_buy_date,updated_at)
+                    values (?,?,?,?,?,?,?,?)
+                    on conflict(session_id,symbol) do update set
+                        quantity=excluded.quantity,average_price=excluded.average_price,
+                        market_price=excluded.market_price,market_value=excluded.market_value,
+                        last_buy_date=excluded.last_buy_date,updated_at=excluded.updated_at
+                    """,
+                    (
+                        session["id"],
+                        intent["symbol"],
+                        new_quantity,
+                        average_price,
+                        price,
+                        new_quantity * price,
+                        last_buy_date,
+                        utc_now(),
+                    ),
+                )
+            connection.execute(
+                "update paper_sessions set cash=?,updated_at=? where id=?",
+                (current_cash, utc_now(), session["id"]),
+            )
+        now = utc_now()
+        connection.execute(
+            """
+            insert into paper_orders
+                (id,session_id,signal_id,trade_date,symbol,side,quantity,order_price,
+                 fill_price,fee,status,reason,created_at,filled_at)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                intent_id,
+                session["id"],
+                None,
+                trade_date,
+                intent["symbol"],
+                intent["side"],
+                quantity,
+                price,
+                price if status == "filled" else None,
+                fee if status == "filled" else 0,
+                status,
+                reason,
+                now,
+                now if status == "filled" else None,
+            ),
+        )
+        row = connection.execute(
+            "select * from paper_orders where id=?",
+            (intent_id,),
+        ).fetchone()
+    return row_to_dict(row) or {}
+
+
+def _process_v2_lean_intents(
+    *,
+    session: dict[str, Any],
+    paper_run: dict[str, Any],
+    child: dict[str, Any],
+    orders: list[dict[str, Any]],
+) -> dict[str, Any]:
+    captured = []
+    for order in orders:
+        event_key = _order_event_key(order)
+        price = float(order.get("price") or order.get("fillPrice") or 0)
+        intent = paper_order_pipeline.record_intent(
+            session_id=str(session["id"]),
+            paper_run_id=str(paper_run["id"]),
+            backtest_run_id=str(child["id"]),
+            event_key=event_key,
+            trade_date=_order_trade_date(order),
+            symbol=str(order.get("symbol") or session["symbol"]).upper(),
+            side=str(order.get("side") or "").lower(),
+            quantity=abs(float(order.get("quantity") or 0)),
+            requested_price=price,
+            raw_intent=order,
+            attempt=1,
+        )
+        captured.append((intent, order, event_key, price))
+    paper_order_pipeline.complete_checkpoint(
+        str(paper_run["id"]),
+        "intent_capture",
+        {"eventKeys": [item[2] for item in captured]},
+    )
+
+    decisions = []
+    projected_orders = []
+    fill_keys = []
+    for intent, raw_order, event_key, price in captured:
+        state = paper_order_pipeline.current_state(str(intent["id"]))
+        if state == "rejected":
+            reason = next(
+                (
+                    item.get("payload", {}).get("reason")
+                    for item in paper_order_pipeline.list_transitions(str(intent["id"]))
+                    if item.get("to_state") == "rejected"
+                ),
+                None,
+            )
+            projected_orders.append(
+                _project_v2_order(
+                    session,
+                    intent,
+                    status="rejected",
+                    reason=reason,
+                    price=price,
+                    fee=0,
+                    trade_date=str(intent["trade_date"]),
+                )
+            )
+            decisions.append({"intentId": intent["id"], "accepted": False, "reason": reason})
+            continue
+        paper_order_pipeline.append_transition(
+            str(intent["id"]),
+            "validating",
+            event_type="constraint_validation_started",
+            idempotency_key="validating",
+        )
+        session = get_session(str(session["id"])) or session
+        reason = _lean_intent_rejection(session, raw_order, str(intent["trade_date"]))
+        if reason:
+            paper_order_pipeline.append_transition(
+                str(intent["id"]),
+                "rejected",
+                event_type="constraint_rejected",
+                idempotency_key="constraint_result",
+                payload={"reason": reason},
+            )
+            projected_orders.append(
+                _project_v2_order(
+                    session,
+                    intent,
+                    status="rejected",
+                    reason=reason,
+                    price=price,
+                    fee=0,
+                    trade_date=str(intent["trade_date"]),
+                )
+            )
+            decisions.append({"intentId": intent["id"], "accepted": False, "reason": reason})
+            continue
+        paper_order_pipeline.append_transition(
+            str(intent["id"]),
+            "accepted",
+            event_type="constraint_accepted",
+            idempotency_key="constraint_result",
+        )
+        paper_order_pipeline.append_transition(
+            str(intent["id"]),
+            "submitted",
+            event_type="lean_match_submitted",
+            idempotency_key="submitted",
+        )
+        quantity = float(intent["quantity"])
+        fee = _fee(quantity, price, str(intent["side"]), session)
+        fill_key = f"{event_key}:fill"
+        paper_order_pipeline.record_fill_and_ledger(
+            str(intent["id"]),
+            external_fill_key=fill_key,
+            trade_date=str(intent["trade_date"]),
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            payload=raw_order,
+            currency="HKD" if session.get("venue") == "hongkong" else "CNY",
+        )
+        fill_keys.append(fill_key)
+        paper_order_pipeline.append_transition(
+            str(intent["id"]),
+            "filled",
+            event_type="lean_fill_recorded",
+            idempotency_key="filled",
+            payload={"fillKey": fill_key, "quantity": quantity, "price": price, "fee": fee},
+        )
+        projected_orders.append(
+            _project_v2_order(
+                session,
+                intent,
+                status="filled",
+                reason=None,
+                price=price,
+                fee=fee,
+                trade_date=str(intent["trade_date"]),
+            )
+        )
+        paper_order_pipeline.append_transition(
+            str(intent["id"]),
+            "settled",
+            event_type="ledger_projected",
+            idempotency_key="settled",
+        )
+        decisions.append({"intentId": intent["id"], "accepted": True, "reason": None})
+    paper_order_pipeline.complete_checkpoint(
+        str(paper_run["id"]),
+        "constraint_validation",
+        {"decisions": decisions},
+    )
+    paper_order_pipeline.complete_checkpoint(
+        str(paper_run["id"]),
+        "matching",
+        {"fillKeys": fill_keys},
+    )
+    paper_order_pipeline.complete_checkpoint(
+        str(paper_run["id"]),
+        "ledger",
+        {"projectedOrderIds": [item["id"] for item in projected_orders]},
+    )
+    return {"orders": projected_orders, "intents": [item[0] for item in captured]}
+
+
 def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
     paper_run = get_walkforward_run(paper_run_id)
     if not paper_run:
@@ -718,16 +1131,52 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
             )
         return fail_walkforward_run(paper_run_id, "history_reconciliation_failed")
     trade_date = str(paper_run["trade_date"])
-    new_orders = [
+    raw_new_orders = [
         item for item in _orders_through(result, trade_date)
         if _order_trade_date(item) > baseline_date
     ]
-    order_fingerprint = _orders_fingerprint(new_orders)
-    equity = _last_equity(result, float(session["equity"]))
-    holdings = [dict(item) for item in (result.get("holdings") or []) if isinstance(item, dict)]
+    order_fingerprint = _orders_fingerprint(raw_new_orders)
+    is_v2 = session.get("mode") == "lean_walkforward_v2"
+    v2_intents: list[dict[str, Any]] = []
+    if is_v2:
+        processed = _process_v2_lean_intents(
+            session=session,
+            paper_run=paper_run,
+            child=child,
+            orders=raw_new_orders,
+        )
+        new_orders = processed["orders"]
+        v2_intents = processed["intents"]
+        session = get_session(str(session["id"])) or session
+        holdings = list_positions(str(session["id"]))
+        market_value = 0.0
+        for holding in holdings:
+            bar = _execution_bar(session, str(holding["symbol"]), trade_date)
+            market_price = float(
+                (bar or {}).get("close")
+                or holding.get("market_price")
+                or holding.get("average_price")
+                or 0
+            )
+            holding["market_price"] = market_price
+            holding["market_value"] = float(holding["quantity"]) * market_price
+            market_value += float(holding["market_value"])
+        cash_balance = float(session["cash"])
+        equity = cash_balance + market_value
+    else:
+        new_orders = raw_new_orders
+        equity = _last_equity(result, float(session["equity"]))
+        holdings = [dict(item) for item in (result.get("holdings") or []) if isinstance(item, dict)]
+        market_value = sum(
+            float(item.get("marketValue") or item.get("market_value") or 0)
+            for item in holdings
+        )
+        cash_balance = max(0.0, equity - market_value)
+    fills = [item for item in new_orders if item.get("status") == "filled"]
+    rejects = [item for item in new_orders if item.get("status") == "rejected"]
     now = utc_now()
     with db() as connection:
-        for order in new_orders:
+        for order in raw_new_orders:
             event_key = _order_event_key(order)
             event_id = str(uuid.uuid4())
             connection.execute(
@@ -739,50 +1188,68 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 """,
                 (event_id, session["id"], paper_run_id, child["id"], event_key, _order_trade_date(order), json_dump(order), now),
             )
-            side = str(order.get("side") or "").lower()
-            quantity = abs(float(order.get("quantity") or 0))
-            price = float(order.get("price") or order.get("fillPrice") or 0)
-            connection.execute(
-                """
-                insert into paper_orders
-                    (id, session_id, trade_date, symbol, side, quantity, order_price, fill_price,
-                     fee, status, reason, created_at, filled_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-                on conflict(id) do update set id = excluded.id
-                """,
-                (
-                    event_key,
-                    session["id"],
-                    _order_trade_date(order),
-                    order.get("symbol") or session["symbol"],
-                    side,
-                    quantity,
-                    price,
-                    price,
-                    _paper_order_status(order.get("status")),
-                    order.get("tag"),
-                    now,
-                    str(order.get("time") or now),
-                ),
-            )
-        connection.execute("delete from paper_positions where session_id = ?", (session["id"],))
-        for holding in holdings:
-            symbol = str(holding.get("symbol") or holding.get("Symbol") or session["symbol"])
-            quantity = float(holding.get("quantity") or holding.get("Quantity") or 0)
-            if quantity == 0:
-                continue
-            average = float(holding.get("averagePrice") or holding.get("AveragePrice") or holding.get("average_price") or 0)
-            market_price = float(holding.get("price") or holding.get("Price") or holding.get("marketPrice") or 0)
-            connection.execute(
-                """
-                insert into paper_positions
-                    (session_id, symbol, quantity, average_price, market_price, market_value, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (session["id"], symbol, quantity, average, market_price, quantity * market_price, now),
-            )
+            if not is_v2:
+                side = str(order.get("side") or "").lower()
+                quantity = abs(float(order.get("quantity") or 0))
+                price = float(order.get("price") or order.get("fillPrice") or 0)
+                connection.execute(
+                    """
+                    insert into paper_orders
+                        (id, session_id, trade_date, symbol, side, quantity, order_price, fill_price,
+                         fee, status, reason, created_at, filled_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                    on conflict(id) do update set id = excluded.id
+                    """,
+                    (
+                        event_key,
+                        session["id"],
+                        _order_trade_date(order),
+                        order.get("symbol") or session["symbol"],
+                        side,
+                        quantity,
+                        price,
+                        price,
+                        _paper_order_status(order.get("status")),
+                        order.get("tag"),
+                        now,
+                        str(order.get("time") or now),
+                    ),
+                )
+        if not is_v2:
+            connection.execute("delete from paper_positions where session_id = ?", (session["id"],))
+            for holding in holdings:
+                symbol = str(holding.get("symbol") or holding.get("Symbol") or session["symbol"])
+                quantity = float(holding.get("quantity") or holding.get("Quantity") or 0)
+                if quantity == 0:
+                    continue
+                average = float(holding.get("averagePrice") or holding.get("AveragePrice") or holding.get("average_price") or 0)
+                market_price = float(holding.get("price") or holding.get("Price") or holding.get("marketPrice") or 0)
+                connection.execute(
+                    """
+                    insert into paper_positions
+                        (session_id, symbol, quantity, average_price, market_price, market_value, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session["id"], symbol, quantity, average, market_price, quantity * market_price, now),
+                )
+        else:
+            for holding in holdings:
+                connection.execute(
+                    """
+                    update paper_positions
+                    set market_price=?,market_value=?,updated_at=?
+                    where session_id=? and symbol=?
+                    """,
+                    (
+                        holding["market_price"],
+                        holding["market_value"],
+                        now,
+                        session["id"],
+                        holding["symbol"],
+                    ),
+                )
         snapshot = {
-            "source": "lean_walkforward",
+            "source": str(session["mode"]),
             "paperRunId": paper_run_id,
             "backtestRunId": child["id"],
             "positions": holdings,
@@ -801,8 +1268,8 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 str(uuid.uuid4()),
                 session["id"],
                 trade_date,
-                max(0.0, equity - sum(float(item.get("marketValue") or item.get("market_value") or 0) for item in holdings)),
-                sum(float(item.get("marketValue") or item.get("market_value") or 0) for item in holdings),
+                cash_balance,
+                market_value,
                 equity,
                 json_dump(holdings),
                 parameters.get("benchmarkSymbol"),
@@ -810,12 +1277,18 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
             ),
         )
         report = {
-            "schemaVersion": 2,
-            "mode": "lean_walkforward",
+            "schemaVersion": 3 if is_v2 else 2,
+            "mode": str(session["mode"]),
             "sessionId": session["id"],
             "tradeDate": trade_date,
             "NAV": equity,
+            "cash": cash_balance,
             "orders": new_orders,
+            "trades": fills,
+            "rejects": rejects,
+            "rejectionReasons": [
+                item.get("reason") for item in rejects if item.get("reason")
+            ],
             "positions": holdings,
             "statistics": result.get("statistics") or {},
             "summaryMetrics": result.get("summary_metrics") or {},
@@ -829,10 +1302,11 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
             insert into paper_daily_reports
                 (id, session_id, trade_date, report_json, signals_json, orders_json, trades_json,
                  rejects_json, positions_json, snapshot_json, benchmark_json, qa_json, created_at)
-            values (?, ?, ?, ?, '[]', ?, ?, '[]', ?, ?, '{}', ?, ?)
+            values (?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, '{}', ?, ?)
             on conflict(session_id, trade_date) do update set
                 report_json = excluded.report_json, orders_json = excluded.orders_json,
-                trades_json = excluded.trades_json, positions_json = excluded.positions_json,
+                trades_json = excluded.trades_json, rejects_json = excluded.rejects_json,
+                positions_json = excluded.positions_json,
                 snapshot_json = excluded.snapshot_json, qa_json = excluded.qa_json
             """,
             (
@@ -841,7 +1315,8 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 trade_date,
                 json_dump(report),
                 json_dump(new_orders),
-                json_dump(new_orders),
+                json_dump(fills),
+                json_dump(rejects),
                 json_dump(holdings),
                 json_dump(snapshot),
                 json_dump(report["qa"]),
@@ -859,10 +1334,42 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
         connection.execute(
             """
             update paper_sessions
-            set equity = ?, last_processed_date = ?, status = 'running', failure_json = null, updated_at = ?
+            set cash = ?, equity = ?, last_processed_date = ?, status = 'running',
+                failure_json = null, updated_at = ?
             where id = ?
             """,
-            (equity, trade_date, now, session["id"]),
+            (cash_balance, equity, trade_date, now, session["id"]),
+        )
+    if is_v2:
+        paper_order_pipeline.complete_checkpoint(
+            paper_run_id,
+            "snapshot_report",
+            {
+                "tradeDate": trade_date,
+                "orderFingerprint": order_fingerprint,
+                "orderIds": [item["id"] for item in new_orders],
+                "equity": equity,
+            },
+        )
+        for intent in v2_intents:
+            if paper_order_pipeline.current_state(str(intent["id"])) == "settled":
+                paper_order_pipeline.append_transition(
+                    str(intent["id"]),
+                    "reconciled",
+                    event_type="daily_reconciliation_passed",
+                    idempotency_key="reconciled",
+                    payload=reconciliation,
+                )
+        paper_order_pipeline.complete_checkpoint(
+            paper_run_id,
+            "reconciliation",
+            {
+                **reconciliation,
+                "intentStates": {
+                    str(intent["id"]): paper_order_pipeline.current_state(str(intent["id"]))
+                    for intent in v2_intents
+                },
+            },
         )
     return get_walkforward_run(paper_run_id) or {}
 
@@ -969,7 +1476,7 @@ def create_signal(
         raise KeyError("Paper session not found.")
     if session.get("legacy_read_only"):
         raise ValueError("Legacy Paper Replay sessions are read-only.")
-    if session.get("mode") == "lean_walkforward":
+    if _is_lean_mode(session.get("mode")):
         raise ValueError("LEAN Paper orders must originate from the frozen project strategy.")
     signal_symbol = _normalize_session_symbol(session, symbol or session["symbol"])
     signal_id = str(uuid.uuid4())
@@ -1598,7 +2105,7 @@ def run_replay(
     session = get_session(session_id)
     if not session:
         raise KeyError("Paper session not found.")
-    if session.get("mode") == "lean_walkforward":
+    if _is_lean_mode(session.get("mode")):
         raise ValueError("LEAN Paper replay must be queued through the walk-forward runner.")
     dates = _replay_dates(session, start_date, end_date)
     # This global governance snapshot is invariant during one replay. Computing

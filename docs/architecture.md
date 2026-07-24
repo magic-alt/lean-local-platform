@@ -113,10 +113,10 @@ Example or batch form
   -> standard backtest / optimization / research service
   -> reconcile terminal children in a periodic task
   -> aggregate progress and metrics
-  -> cancel, retry failed children or export CSV
+  -> cancel, retry failed children, restart cancelled work or export CSV
 ```
 
-Supported batch shapes include independent symbol/strategy matrices, multi-strategy runs, parameter grids, rolling windows, point-in-time universe portfolios, walk-forward optimization and research batches. A batch does not bypass the global LEAN scheduler lease limit.
+Supported batch shapes include independent symbol/strategy matrices, multi-strategy runs, parameter grids, rolling windows, point-in-time universe portfolios, walk-forward optimization and research batches. Walk-forward folds isolate train, validation and OOS; only validation selects parameters. A batch does not bypass the global LEAN scheduler lease limit.
 
 ## Data Synchronization Chain
 

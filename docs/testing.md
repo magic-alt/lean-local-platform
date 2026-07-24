@@ -122,6 +122,8 @@ cd web/backend
 
 ```bash
 # 2) Level 5: 21-day real LEAN Paper chain + optional fault matrix
+# Enable only on the isolated remediation stack; run_level5_audit requires v2.
+export LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1
 cd web/backend
 .venv/bin/python scripts/run_level5_audit.py \
   --project-id PROJECT_ID \
@@ -155,11 +157,16 @@ cd web/backend
 - restart recovery points at selected fault phases
 - constraints/reject coverage
 
+The strict Level 5 result counts fills and policy rejects from the same v2
+session. The optional `--constraints` helper remains supplementary coverage and
+cannot substitute for a rejected real LEAN-sourced intent in that session.
+
 For one-shot dry-run before execution:
 
 ```bash
 web/backend/.venv/bin/python scripts/run_lean_paper_walkforward_acceptance.py \
   --project-id PROJECT_ID \
+  --paper-mode lean_walkforward_v2 \
   --start-date 2023-07-03 --days 21 \
   --evidence-out web/runtime/audit/paper-21-day.json \
   --dry-run

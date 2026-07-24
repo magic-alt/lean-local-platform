@@ -106,10 +106,11 @@ POST   /api/experiment-batches
 GET    /api/experiment-batches/{batch_id}
 POST   /api/experiment-batches/{batch_id}/cancel
 POST   /api/experiment-batches/{batch_id}/retry-failed
+POST   /api/experiment-batches/{batch_id}/restart
 GET    /api/experiment-batches/{batch_id}/export.csv
 ```
 
-The example catalog covers backtest, optimization and research workflows. Preview expands symbols, strategies, parameter grids, rolling windows or PIT-universe instructions and rejects a request that exceeds `maxBatchRuns`. Creation persists the batch and its child specifications; dispatch remains bounded by the batch window and the global scheduler lease limit. Cancellation and retry update persisted child state and survive service restarts.
+The example catalog covers backtest, optimization and research workflows. Preview expands symbols, strategies, parameter grids, rolling windows or PIT-universe instructions and rejects a request that exceeds `maxBatchRuns`. Walk-forward expands train, validation and OOS phases; parameter selection uses validation only. Creation persists the batch and its child specifications; dispatch remains bounded by the batch window and the global scheduler lease limit. Failed-only retry and cancelled-batch restart preserve successful children and survive service restarts.
 
 ## Tasks
 
@@ -298,9 +299,17 @@ GET    /api/paper/{session_id}/reports/{trade_date}
 POST   /api/paper/{session_id}/run-day
 POST   /api/paper/{session_id}/replay
 GET    /api/paper/{session_id}/runs
+GET    /api/paper/{session_id}/intents
+GET    /api/paper/{session_id}/intents/{intent_id}/transitions
 ```
 
 Creating a LEAN Paper session requires `projectId` and `sourceBacktestId`. The source run must belong to the project, have passed execution validation, contain complete data, and retain its strategy snapshot. Each A-share trading day runs that frozen project through the standard LEAN backtest worker and reconciles historical order fingerprints before the Paper ledger advances. Legacy replay sessions remain readable but cannot be resumed.
+
+`mode=lean_walkforward_v2` additionally requires
+`LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1`. It records LEAN output as immutable
+intents, applies constraints before fill/ledger projection, appends legal state
+transitions, and persists six recovery checkpoints. The mode is disabled by
+default pending a new production-like Level 5 acceptance.
 
 ## Insights and A-share Technology Daily Report
 

@@ -1,6 +1,6 @@
 # Paper 模拟交易
 
-Paper 页面提供 `lean_walkforward` 和 `signal_simulation` 两种模式。它们都只在本地模拟，不连接真实券商，也不会自动发出实盘订单。
+Paper 页面提供 `lean_walkforward` 和 `signal_simulation` 两种稳定模式，并提供受功能开关保护的 `lean_walkforward_v2` 整改模式。它们都只在本地模拟，不连接真实券商，也不会自动发出实盘订单。
 
 ![Paper 会话创建、状态和每日运行区域](assets/paper-sessions.png)
 
@@ -9,9 +9,15 @@ Paper 页面提供 `lean_walkforward` 和 `signal_simulation` 两种模式。它
 | 模式 | 输入 | 行为 |
 | --- | --- | --- |
 | `lean_walkforward` | Project + 可信 Backtest | 每个交易日运行隔离 LEAN 窗口并保存每日证据 |
+| `lean_walkforward_v2` | Project + 可信 Backtest | 将 LEAN 输出作为 intent，经统一约束、撮合、fill 和 ledger 管线处理 |
 | `signal_simulation` | 手工或 Insights 信号 | 按执行规则模拟目标仓位、订单和持仓 |
 
 LEAN Paper 必须同时提供 `projectId` 和 `sourceBacktestId`。候选接口只返回满足项目关联和可信度要求的历史运行。
+
+`lean_walkforward_v2` 默认关闭。仅在隔离整改环境设置
+`LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1` 后才能创建新 v2 session。旧 session 不会
+自动迁移或改写；完成新的 21 日真实 LEAN、故障恢复和对账验收前，v2 也不代表
+Level 5 已获生产认证。
 
 ## 创建 LEAN Paper
 
@@ -49,6 +55,12 @@ Create Paper Session 只展示当前模式需要的字段：LEAN Walk-forward �
 
 LEAN Paper 必须按交易日顺序推进。`replay` 对该模式只允许开始日等于结束日，不能一次跨越多个日期并跳过每日状态。
 
+v2 将每条 LEAN 订单输出先持久化为不可变 intent，再按合法状态图追加 transition。
+约束通过后才允许写 fill 和 ledger；约束失败会在同一来源链上形成带原因的 rejected
+order。`intent_capture`、`constraint_validation`、`matching`、`ledger`、
+`snapshot_report` 和 `reconciliation` 六个 checkpoint 都带稳定 digest，重复完成
+同一阶段时若 payload 漂移会直接失败。
+
 ## 信号模拟
 
 手工信号接口接收交易日、方向、标的、目标仓位、强度、原因和来源。服务端执行规则拥有最终决定权；无效方向、不可交易标的、风险上限或缺失行情会产生拒绝原因。
@@ -72,6 +84,8 @@ Insights 产生的候选信号不会自动进入 Paper。用户必须显式调�
 | `GET/POST` | `/api/paper` | 会话列表和创建 |
 | `GET` | `/api/paper/candidates?projectId=...` | 可信历史候选 |
 | `GET` | `/api/paper/{id}` | 会话、信号、订单、持仓和运行 |
+| `GET` | `/api/paper/{id}/intents` | v2 不可变订单意图 |
+| `GET` | `/api/paper/{id}/intents/{intent_id}/transitions` | v2 订单状态迁移证据 |
 | `POST` | `/api/paper/{id}/run-day` | 推进一个交易日 |
 | `POST` | `/api/paper/{id}/replay` | 信号模拟回放或单日 LEAN 运行 |
 | `GET` | `/api/paper/{id}/reports` | 每日报告列表 |

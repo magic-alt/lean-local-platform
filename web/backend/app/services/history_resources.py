@@ -137,6 +137,9 @@ def delete_generated_report(report_id: str) -> dict[str, Any]:
 
 def delete_paper_session(session_id: str) -> dict[str, Any]:
     child_tables = (
+        "paper_ledger_entries",
+        "paper_order_intents",
+        "paper_lean_order_events",
         "paper_walkforward_runs",
         "paper_daily_reports",
         "paper_portfolio_snapshots",
@@ -157,6 +160,33 @@ def delete_paper_session(session_id: str) -> dict[str, Any]:
         ).fetchone()
         if active_tasks and int(active_tasks["count"] or 0) > 0:
             raise ValueError("This Paper session still has an active task. Stop it before deletion.")
+        connection.execute(
+            """
+            delete from paper_run_checkpoints
+            where paper_run_id in (
+                select id from paper_walkforward_runs where session_id=?
+            )
+            """,
+            (session_id,),
+        )
+        connection.execute(
+            """
+            delete from paper_order_fills
+            where intent_id in (
+                select id from paper_order_intents where session_id=?
+            )
+            """,
+            (session_id,),
+        )
+        connection.execute(
+            """
+            delete from paper_order_transitions
+            where intent_id in (
+                select id from paper_order_intents where session_id=?
+            )
+            """,
+            (session_id,),
+        )
         for table in child_tables:
             connection.execute(f"delete from {table} where session_id = ?", (session_id,))
         connection.execute("delete from tasks where related_id = ?", (session_id,))

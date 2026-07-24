@@ -43,6 +43,7 @@ PHASE_ALIASES = {
     "postrun": "post_run",
     "post_run": "post_run",
 }
+CONTROL_API_TIMEOUT = 60
 
 
 def _api_token() -> str:
@@ -67,7 +68,7 @@ def _api(
     path: str,
     payload: dict[str, Any] | None = None,
     *,
-    timeout: int = 60,
+    timeout: int | None = None,
 ) -> tuple[int, Any]:
     headers = {"Content-Type": "application/json"}
     token = _api_token()
@@ -80,7 +81,7 @@ def _api(
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout or CONTROL_API_TIMEOUT) as response:
             raw = response.read().decode("utf-8")
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -290,6 +291,13 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=21)
     parser.add_argument("--session-id")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--api-timeout", type=int, default=60)
+    parser.add_argument(
+        "--paper-mode",
+        choices=("lean_walkforward", "lean_walkforward_v2"),
+        default="lean_walkforward",
+        help="Paper pipeline mode. Level 5 certification must use lean_walkforward_v2.",
+    )
     parser.add_argument("--timeout-per-day", type=int, default=900)
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument(
@@ -329,7 +337,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--require-reject-reason",
-        action="store_true",
+        nargs="?",
+        const="true",
+        default="false",
         help="Require at least one reject reason text when rejected orders exist.",
     )
     parser.add_argument("--min-fill", type=int, default=1)
@@ -338,12 +348,15 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    global CONTROL_API_TIMEOUT
+    CONTROL_API_TIMEOUT = max(1, int(args.api_timeout))
 
     if args.days < 1:
         parser.error("--days must be positive")
 
     require_fill = _parse_boolish(args.require_fill, default=True)
     require_reject = _parse_boolish(args.require_reject, default=True)
+    require_reject_reason = _parse_boolish(args.require_reject_reason, default=False)
 
     if args.min_fill < 0:
         parser.error("--min-fill must be >= 0")
@@ -402,7 +415,7 @@ def main() -> int:
             "/api/paper",
             {
                 "name": f"LEAN 21-day acceptance {args.start_date}",
-                "mode": "lean_walkforward",
+                "mode": args.paper_mode,
                 "projectId": args.project_id,
                 "sourceBacktestId": resolved_source_backtest_id,
                 "startDate": args.start_date,
@@ -559,7 +572,16 @@ def main() -> int:
         for item in orders
         if str(item.get("status") or "").lower() == "rejected"
     ]
-    reject_reasons = [str(item.get("rejectReason") or item.get("failure") or item.get("message") or "") for item in rejects]
+    reject_reasons = [
+        str(
+            item.get("reason")
+            or item.get("rejectReason")
+            or item.get("failure")
+            or item.get("message")
+            or ""
+        )
+        for item in rejects
+    ]
 
     duplicate_status, duplicate_body = _api(
         args.api_url,
@@ -607,7 +629,7 @@ def main() -> int:
     reject_count = len(rejects)
     fills_ok = (not require_fill) or fill_count >= max(0, args.min_fill)
     rejects_ok = (not require_reject) or reject_count >= max(0, args.min_reject)
-    reject_reason_ok = (not args.require_reject_reason) or any(bool((reason or "").strip()) for reason in reject_reasons)
+    reject_reason_ok = (not require_reject_reason) or any(bool((reason or "").strip()) for reason in reject_reasons)
 
     remaining_failure = None
     if not fills_ok:
@@ -629,6 +651,7 @@ def main() -> int:
         "sessionId": session_id,
         "sourceBacktestId": resolved_source_backtest_id,
         "projectId": args.project_id,
+        "paperMode": args.paper_mode,
         "tradeDates": trade_dates,
         "dailyRuns": daily_runs,
         "successfulDays": len(successful_dates),
@@ -655,7 +678,7 @@ def main() -> int:
         "evidence": {
             "requireFill": require_fill,
             "requireReject": require_reject,
-            "requireRejectReason": args.require_reject_reason,
+            "requireRejectReason": require_reject_reason,
             "minFill": args.min_fill,
             "minReject": args.min_reject,
         },

@@ -82,6 +82,16 @@ def retry_failed(batch_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/{batch_id}/restart")
+def restart_cancelled(batch_id: str):
+    try:
+        batch = experiment_batches.restart_cancelled(batch_id)
+        dispatch_experiment_batch_task.apply_async(args=[batch_id], queue="default")
+        return batch
+    except (LeanWebError, NotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{batch_id}/export.csv")
 def export(batch_id: str):
     try:

@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **217** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **220** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -124,6 +124,7 @@
 | `GET` | `/api/experiment-batches/{batch_id}` | Detail | `batch_id` (path, required) | `200` - |
 | `POST` | `/api/experiment-batches/{batch_id}/cancel` | Cancel | `batch_id` (path, required) | `200` - |
 | `GET` | `/api/experiment-batches/{batch_id}/export.csv` | Export | `batch_id` (path, required) | `200` - |
+| `POST` | `/api/experiment-batches/{batch_id}/restart` | Restart Cancelled | `batch_id` (path, required) | `200` - |
 | `POST` | `/api/experiment-batches/{batch_id}/retry-failed` | Retry Failed | `batch_id` (path, required) | `200` - |
 
 ## factors
@@ -242,6 +243,8 @@
 | `GET` | `/api/paper/candidates` | Candidates | `projectId` (query, required) | `200` - |
 | `DELETE` | `/api/paper/{session_id}` | Delete | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}` | Detail | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/intents` | Order Intents | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/intents/{intent_id}/transitions` | Order Intent Transitions | `session_id` (path, required)<br>`intent_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/orders` | Orders | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/positions` | Positions | `session_id` (path, required) | `200` - |
 | `POST` | `/api/paper/{session_id}/replay` | Replay | `session_id` (path, required)<br>body `PaperReplayRequest` | `200` - |

@@ -131,7 +131,8 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           name: kind === "backtest" ? "Batch Backtest" : kind === "optimization" ? "Batch Optimization" : "Research Analysis",
           mode: MODES[kind][0].value, symbolSource: "symbols", symbols: "000001", universeCode: "CSI300",
           start: dayjs().subtract(5, "year").format("YYYY-MM-DD"), end: dayjs().format("YYYY-MM-DD"), cash: 300000,
-          maxCandidates: 200, factorNames: "momentum,volatility", parameterGridJson: '{"fast":[5,10,20],"slow":[30,60]}'
+          maxCandidates: 200, trainYears: 3, testYears: 1, validationMonths: 6, stepYears: 1,
+          factorNames: "momentum,volatility", parameterGridJson: '{"fast":[5,10,20],"slow":[30,60]}'
         }}>
           <FormSection title="批次与标的">
           <FormGrid>
@@ -154,6 +155,12 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           {kind === "optimization" && <>
             <AdvancedFields label="高级优化设置">
               <FormGrid>
+                {mode === "walk_forward" && <>
+                  <Form.Item name="trainYears" label="训练年数"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                  <Form.Item name="testYears" label="评价年数"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                  <Form.Item name="validationMonths" label="Validation 月数"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                  <Form.Item name="stepYears" label="滚动步长（年）"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                </>}
                 <Form.Item className="form-field--full" name="parameterGridJson" label="通用参数网格 JSON"><Input.TextArea rows={3} /></Form.Item>
                 {mode === "multi_strategy" && <Form.Item className="form-field--full" name="parameterGridsJson" label="各项目参数网格（可选，以 projectId 为键）"><Input.TextArea rows={3} placeholder='{"project-id":{"period":[10,20,30]}}' /></Form.Item>}
               </FormGrid>
@@ -180,7 +187,8 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
       </Card>
       <Modal title={selected?.name || "批次详情"} open={Boolean(selected)} onCancel={() => setSelected(undefined)} width={1100} footer={selected && <Space>
         {["queued", "running"].includes(selected.status) && <Button danger icon={<StopOutlined />} onClick={async () => setSelected(await api.cancelExperimentBatch(selected.id))}>取消</Button>}
-        {["partial", "failed", "cancelled"].includes(selected.status) && <Button onClick={async () => setSelected(await api.retryExperimentBatch(selected.id))}>仅重试失败项</Button>}
+        {selected.failed > 0 && !selected.cancel_requested && <Button onClick={async () => setSelected(await api.retryExperimentBatch(selected.id))}>仅重试失败项</Button>}
+        {Boolean(selected.cancel_requested) && selected.cancelled > 0 && <Button onClick={async () => setSelected(await api.restartExperimentBatch(selected.id))}>恢复未完成项</Button>}
         <Button icon={<DownloadOutlined />} href={api.experimentBatchExportUrl(selected.id)}>导出 CSV</Button>
         <Button onClick={() => setSelected(undefined)}>关闭</Button>
       </Space>}>

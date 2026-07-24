@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import itertools
+import json
 import shutil
 import statistics as stats_module
 import uuid
@@ -100,34 +102,97 @@ def _walk_forward_windows(config: dict[str, Any]) -> list[dict[str, Any]]:
     train_years = max(1, int(config.get("trainYears") or 3))
     test_years = max(1, int(config.get("testYears") or 1))
     step_years = max(1, int(config.get("stepYears") or 1))
+    evaluation_months = test_years * 12
+    validation_months = int(config.get("validationMonths") or max(1, evaluation_months // 2))
+    if validation_months <= 0 or validation_months >= evaluation_months:
+        raise LeanWebError("Walk-forward validationMonths must leave a non-empty OOS window.")
+
+    def add_years(value: date, years: int) -> date:
+        try:
+            return value.replace(year=value.year + years)
+        except ValueError:
+            return value.replace(month=2, day=28, year=value.year + years)
+
+    def add_months(value: date, months: int) -> date:
+        month_index = value.month - 1 + months
+        year = value.year + month_index // 12
+        month = month_index % 12 + 1
+        day = value.day
+        while day > 28:
+            try:
+                return value.replace(year=year, month=month, day=day)
+            except ValueError:
+                day -= 1
+        return value.replace(year=year, month=month, day=day)
+
     folds: list[dict[str, Any]] = []
     fold_start = start
     fold = 1
     while True:
-        try:
-            test_start = fold_start.replace(year=fold_start.year + train_years)
-            test_end_exclusive = test_start.replace(year=test_start.year + test_years)
-        except ValueError:
-            test_start = fold_start.replace(month=2, day=28, year=fold_start.year + train_years)
-            test_end_exclusive = test_start.replace(year=test_start.year + test_years)
-        if test_start > end:
+        validation_start = add_years(fold_start, train_years)
+        validation_end_exclusive = add_months(validation_start, validation_months)
+        oos_start = validation_end_exclusive
+        oos_end_exclusive = add_years(validation_start, test_years)
+        if oos_start > end:
             break
-        test_end = min(end, test_end_exclusive - timedelta(days=1))
-        folds.extend(
-            [
-                {"fold": fold, "phase": "train", "start": fold_start.isoformat(), "end": (test_start - timedelta(days=1)).isoformat()},
-                {"fold": fold, "phase": "test", "start": test_start.isoformat(), "end": test_end.isoformat()},
-            ]
-        )
-        try:
-            fold_start = fold_start.replace(year=fold_start.year + step_years)
-        except ValueError:
-            fold_start = fold_start.replace(month=2, day=28, year=fold_start.year + step_years)
+        oos_end = min(end, oos_end_exclusive - timedelta(days=1))
+        windows = [
+            {
+                "fold": fold,
+                "phase": "train",
+                "role": "candidate_generation",
+                "start": fold_start.isoformat(),
+                "end": (validation_start - timedelta(days=1)).isoformat(),
+            },
+            {
+                "fold": fold,
+                "phase": "validation",
+                "role": "parameter_selection",
+                "start": validation_start.isoformat(),
+                "end": (validation_end_exclusive - timedelta(days=1)).isoformat(),
+            },
+            {
+                "fold": fold,
+                "phase": "oos",
+                "role": "unbiased_evaluation",
+                "start": oos_start.isoformat(),
+                "end": oos_end.isoformat(),
+            },
+        ]
+        lineage = {
+            "schemaVersion": 1,
+            "fold": fold,
+            "windows": [
+                {"phase": item["phase"], "role": item["role"], "start": item["start"], "end": item["end"]}
+                for item in windows
+            ],
+        }
+        fold_fingerprint = hashlib.sha256(
+            json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        for item in windows:
+            item["foldFingerprint"] = fold_fingerprint
+            item["phaseFingerprint"] = hashlib.sha256(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "foldFingerprint": fold_fingerprint,
+                        "phase": item["phase"],
+                        "role": item["role"],
+                        "start": item["start"],
+                        "end": item["end"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        folds.extend(windows)
+        fold_start = add_years(fold_start, step_years)
         fold += 1
-        if test_end >= end:
+        if oos_end >= end:
             break
     if not folds:
-        raise LeanWebError("Walk-forward requires enough history for at least one train/test fold.")
+        raise LeanWebError("Walk-forward requires enough history for at least one train/validation/OOS fold.")
     return folds
 
 
@@ -214,6 +279,9 @@ def expand(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]
                     "experimentMode": mode,
                     "experimentFold": window["fold"],
                     "experimentPhase": window["phase"],
+                    "experimentSelectionRole": window.get("role"),
+                    "experimentFoldFingerprint": window.get("foldFingerprint"),
+                    "experimentPhaseFingerprint": window.get("phaseFingerprint"),
                 }
             )
             items.append(
@@ -370,13 +438,55 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         )
     candidates.sort(key=lambda item: (bool(item["valid"]), item["medianSharpe"] if item["medianSharpe"] is not None else float("-inf")), reverse=True)
     walk_forward = []
-    folds = sorted({int(item["fold"]) for item in ranked if item.get("phase") == "train" and item.get("fold") is not None})
+    folds = sorted(
+        {
+            int(item["fold"])
+            for item in ranked
+            if item.get("phase") == "validation" and item.get("fold") is not None
+        }
+    )
     for fold in folds:
-        train = [item for item in ranked if item.get("fold") == fold and item.get("phase") == "train" and item.get("status") == "success" and item.get("sharpe") is not None]
-        best_train = max(train, key=lambda item: float(item["sharpe"]), default=None)
-        test = next((item for item in ranked if best_train and item.get("fold") == fold and item.get("phase") == "test" and item.get("projectId") == best_train.get("projectId") and item.get("symbol") == best_train.get("symbol") and item.get("candidateKey") == best_train.get("candidateKey")), None)
-        if best_train:
-            walk_forward.append({"fold": fold, "selected": best_train.get("overrides"), "trainSharpe": best_train.get("sharpe"), "testSharpe": test.get("sharpe") if test else None, "trainRunId": best_train.get("runId"), "testRunId": test.get("runId") if test else None})
+        validation = [
+            item
+            for item in ranked
+            if item.get("fold") == fold
+            and item.get("phase") == "validation"
+            and item.get("status") == "success"
+            and item.get("sharpe") is not None
+        ]
+        selected = max(validation, key=lambda item: float(item["sharpe"]), default=None)
+        if not selected:
+            continue
+
+        def selected_phase(phase: str) -> dict[str, Any] | None:
+            return next(
+                (
+                    item
+                    for item in ranked
+                    if item.get("fold") == fold
+                    and item.get("phase") == phase
+                    and item.get("projectId") == selected.get("projectId")
+                    and item.get("symbol") == selected.get("symbol")
+                    and item.get("candidateKey") == selected.get("candidateKey")
+                ),
+                None,
+            )
+
+        train = selected_phase("train")
+        oos = selected_phase("oos")
+        walk_forward.append(
+            {
+                "fold": fold,
+                "selectionMetric": "validationSharpe",
+                "selected": selected.get("overrides"),
+                "trainSharpe": train.get("sharpe") if train else None,
+                "validationSharpe": selected.get("sharpe"),
+                "oosSharpe": oos.get("sharpe") if oos else None,
+                "trainRunId": train.get("runId") if train else None,
+                "validationRunId": selected.get("runId"),
+                "oosRunId": oos.get("runId") if oos else None,
+            }
+        )
     return {"rankingMetric": "sharpe", "ranking": ranked, "candidates": candidates, "walkForward": walk_forward}
 
 
@@ -465,6 +575,23 @@ def _dispatch_item(batch: dict[str, Any], item: dict[str, Any]) -> None:
         run = create_failed_backtest_job(request, str(exc))
         with db() as connection:
             connection.execute("update experiment_batch_items set status='failed',attempt=?,related_id=?,task_id=?,error=?,finished_at=? where id=?", (attempt, run.get("id"), run.get("task_id"), str(exc), utc_now(), item["id"]))
+            connection.execute(
+                """
+                insert into experiment_batch_attempts
+                    (id,item_id,attempt,related_id,task_id,status,error,created_at,finished_at)
+                values (?,?,?,?,?,'failed',?,?,?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    item["id"],
+                    attempt,
+                    run.get("id"),
+                    run.get("task_id"),
+                    str(exc),
+                    utc_now(),
+                    utc_now(),
+                ),
+            )
         dispatch_experiment_batch_task.apply_async(args=[batch["id"]], queue="default")
         return
     with db() as connection:
@@ -519,9 +646,33 @@ def cancel(batch_id: str) -> dict[str, Any]:
     from .backtest_service import cancel_backtest
 
     batch = detail(batch_id)
+    now = utc_now()
     with db() as connection:
         connection.execute("update experiment_batches set cancel_requested=1 where id=?", (batch_id,))
-        connection.execute("update experiment_batch_items set status='cancelled',finished_at=? where batch_id=? and status in ('pending','dispatching','queued')", (utc_now(), batch_id))
+        connection.execute(
+            """
+            update experiment_batch_items
+            set status='cancelled',finished_at=?
+            where batch_id=? and status in ('pending','dispatching','queued')
+            """,
+            (now, batch_id),
+        )
+        cancelled_attempts = connection.execute(
+            """
+            select id,attempt from experiment_batch_items
+            where batch_id=? and status='cancelled' and attempt > 0
+            """,
+            (batch_id,),
+        ).fetchall()
+        for item in cancelled_attempts:
+            connection.execute(
+                """
+                update experiment_batch_attempts
+                set status='cancelled',finished_at=?
+                where item_id=? and attempt=? and status not in ('success','failed','cancelled')
+                """,
+                (now, item["id"], item["attempt"]),
+            )
     for item in batch["items"]:
         if item["status"] in ACTIVE and item.get("related_id"):
             cancel_backtest(str(item["related_id"]))
@@ -532,9 +683,50 @@ def retry_failed(batch_id: str) -> dict[str, Any]:
     batch = detail(batch_id)
     if batch["status"] not in TERMINAL | {"partial"}:
         raise LeanWebError("Only a completed batch can retry failed items.")
+    failed_ids = [item["id"] for item in batch["items"] if item["status"] == "failed"]
+    if not failed_ids:
+        raise LeanWebError("The batch has no failed items to retry.")
     with db() as connection:
         connection.execute("update experiment_batches set status='queued',cancel_requested=0,finished_at=null where id=?", (batch_id,))
-        connection.execute("update experiment_batch_items set status='pending',related_id=null,task_id=null,error=null,started_at=null,finished_at=null where batch_id=? and status in ('failed','skipped')", (batch_id,))
+        connection.execute(
+            """
+            update experiment_batch_items
+            set status='pending',related_id=null,task_id=null,error=null,started_at=null,finished_at=null
+            where batch_id=? and status='failed'
+            """,
+            (batch_id,),
+        )
+    return dispatch_window(batch_id)
+
+
+def restart_cancelled(batch_id: str) -> dict[str, Any]:
+    batch = detail(batch_id)
+    if not batch.get("cancel_requested") or batch["status"] not in TERMINAL | {"partial"}:
+        raise LeanWebError("Only a completed cancelled batch can be restarted.")
+    restartable = [
+        item["id"]
+        for item in batch["items"]
+        if item["status"] in {"cancelled", "failed", "skipped"}
+    ]
+    if not restartable:
+        raise LeanWebError("The cancelled batch has no unfinished items to restart.")
+    with db() as connection:
+        connection.execute(
+            """
+            update experiment_batches
+            set status='queued',cancel_requested=0,finished_at=null
+            where id=?
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            update experiment_batch_items
+            set status='pending',related_id=null,task_id=null,error=null,started_at=null,finished_at=null
+            where batch_id=? and status in ('cancelled','failed','skipped')
+            """,
+            (batch_id,),
+        )
     return dispatch_window(batch_id)
 
 

@@ -56,13 +56,18 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         ).fetchone()
     assert "0001_backtest_child_run_indexes" in revisions
     assert "0010_lean_paper_walkforward" in revisions
+    assert "0022_paper_order_pipeline_v2" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(
             "select name from sqlite_master where type = 'table' and name = 'paper_walkforward_runs'"
         ).fetchone()
-    assert {"mode", "source_backtest_id", "last_processed_date"} <= paper_columns
+        intent_table = connection.execute(
+            "select name from sqlite_master where type = 'table' and name = 'paper_order_intents'"
+        ).fetchone()
+    assert {"mode", "source_backtest_id", "last_processed_date", "pipeline_version"} <= paper_columns
     assert walkforward_table is not None
+    assert intent_table is not None
     assert index_row is not None
 
 
