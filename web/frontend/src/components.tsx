@@ -3,6 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { useState } from "react";
 import { BacktestRun, ChartData, OrderMarkerPoint, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
+import { formatInteger, formatNumber } from "./utils/display";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -28,16 +29,42 @@ export function StatusTag({ status }: { status: string }) {
 
 export function lineOption(title: string, datasets: Array<{ name: string; points: { time: string; value: number }[] }>) {
   return {
-    title: { text: title, left: 8, top: 4, textStyle: { fontSize: 14 } },
-    tooltip: { trigger: "axis" },
-    legend: { top: 28 },
-    grid: { left: 54, right: 22, top: 68, bottom: 36 },
-    xAxis: { type: "time" },
-    yAxis: { type: "value", scale: true },
+    animation: false,
+    title: { text: title, left: 8, top: 4, textStyle: { color: "#172033", fontSize: 13, fontWeight: 700 } },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross", label: { backgroundColor: "#102a43" } },
+      valueFormatter: (value: unknown) => formatNumber(value),
+    },
+    legend: { top: 28, right: 18 },
+    grid: { left: 70, right: 28, top: 68, bottom: 68 },
+    toolbox: {
+      right: 12,
+      top: 2,
+      feature: { dataZoom: {}, restore: {}, saveAsImage: { pixelRatio: 2 } },
+    },
+    xAxis: {
+      type: "time",
+      axisLine: { lineStyle: { color: "#cbd5e1" } },
+      axisLabel: { color: "#64748b" },
+    },
+    yAxis: {
+      type: "value",
+      scale: true,
+      splitLine: { lineStyle: { color: "#e8eef4", type: "dashed" } },
+      axisLabel: { color: "#64748b", formatter: (value: unknown) => formatNumber(value, 2) },
+    },
+    dataZoom: [
+      { type: "inside", start: 0, end: 100 },
+      { type: "slider", height: 20, bottom: 12, start: 0, end: 100 },
+    ],
     series: datasets.map((dataset) => ({
       name: dataset.name,
       type: "line",
       showSymbol: false,
+      smooth: false,
+      lineStyle: { width: 2 },
+      emphasis: { focus: "series" },
       data: dataset.points.map((point) => [point.time, point.value])
     }))
   };
@@ -63,8 +90,8 @@ function orderMarkerPoints(
         formatter: [
           `${marker.side} ${marker.symbol}`,
           `Time: ${marker.time}`,
-          `Quantity: ${marker.quantity}`,
-          `Fill: ${marker.fillPrice}`,
+          `Quantity: ${formatInteger(marker.quantity)}`,
+          `Fill: ${formatNumber(marker.fillPrice)}`,
           marker.tag ? `Tag: ${marker.tag}` : ""
         ].filter(Boolean).join("<br/>")
       }
@@ -246,13 +273,14 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           rowKey={(row) => `${row.time}-${row.side}-${row.quantity}`}
           dataSource={chartData.orders}
           size="small"
-          pagination={false}
+          scroll={{ x: 720 }}
+          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `${total} orders` }}
           columns={[
             { title: "Time", dataIndex: "time" },
             { title: "Side", dataIndex: "side" },
             { title: "Symbol", dataIndex: "symbol" },
-            { title: "Quantity", dataIndex: "quantity" },
-            { title: "Price", dataIndex: "price" },
+            { title: "Quantity", dataIndex: "quantity", align: "right", render: (value) => <span className="numeric-cell">{formatInteger(value)}</span> },
+            { title: "Price", dataIndex: "price", align: "right", render: (value) => <span className="numeric-cell">{formatNumber(value)}</span> },
             { title: "Tag", dataIndex: "tag", ellipsis: true }
           ]}
         />

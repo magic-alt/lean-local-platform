@@ -1,4 +1,5 @@
 import type { ChartData, ChartPoint, OrderMarkerPoint } from "../api";
+import { formatInteger, formatNumber } from "../utils/display";
 
 const upColor = "#cf1322";
 const downColor = "#389e0d";
@@ -27,7 +28,7 @@ function orderMarkPoints(markers: OrderMarkerPoint[]) {
       return {
         name: marker.side,
         coord: [day(marker.time), fillPrice],
-        value: `${marker.side} ${Math.abs(marker.quantity)}`,
+        value: `${marker.side} ${formatInteger(Math.abs(marker.quantity))}`,
         symbol: "triangle",
         symbolSize: 15,
         symbolRotate: marker.side === "SELL" ? 180 : 0,
@@ -37,8 +38,8 @@ function orderMarkPoints(markers: OrderMarkerPoint[]) {
           formatter: [
             `${marker.side} ${marker.symbol}`,
             `Date: ${day(marker.time)}`,
-            `Quantity: ${Math.abs(marker.quantity)}`,
-            `Fill: ${fillPrice}`,
+            `Quantity: ${formatInteger(Math.abs(marker.quantity))}`,
+            `Fill: ${formatNumber(fillPrice)}`,
             marker.tag ? `Tag: ${marker.tag}` : "",
           ].filter(Boolean).join("<br/>"),
         },
@@ -88,8 +89,8 @@ export function backtestAssetOption(chartData: ChartData) {
     max: "dataMax",
   }));
   const yAxes: any[] = [
-    { scale: true, splitArea: { show: true }, name: "Price" },
-    { scale: true, gridIndex: 1, splitNumber: 2, name: "Volume" },
+    { scale: true, splitArea: { show: true }, name: "Price", axisLabel: { formatter: (value: unknown) => formatNumber(value, 2) } },
+    { scale: true, gridIndex: 1, splitNumber: 2, name: "Volume", axisLabel: { formatter: (value: unknown) => formatNumber(value, 0) } },
   ];
   panelNames.forEach((name, index) => {
     yAxes.push({
@@ -98,6 +99,7 @@ export function backtestAssetOption(chartData: ChartData) {
       name,
       min: /^RSI$/i.test(name) ? 0 : undefined,
       max: /^RSI$/i.test(name) ? 100 : undefined,
+      axisLabel: { formatter: (value: unknown) => formatNumber(value, 2) },
     });
   });
   const series: any[] = [
@@ -153,7 +155,13 @@ export function backtestAssetOption(chartData: ChartData) {
   const allAxisIndexes = grids.map((_, index) => index);
   return {
     animation: false,
-    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+      valueFormatter: (value: unknown) => Array.isArray(value)
+        ? value.map((item) => formatNumber(item)).join(" / ")
+        : formatNumber(value),
+    },
     axisPointer: { link: [{ xAxisIndex: allAxisIndexes }] },
     legend: { type: "scroll", top: 8, left: 58, right: 24 },
     grid: grids,

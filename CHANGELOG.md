@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-24 — rebuild the Backtest run detail workspace with brokerage-style hierarchy, bounded financial precision, structured overview and analysis ledgers, searchable metrics, tabular order/trade/holding records, improved charts, artifact controls, and responsive terminal layouts.
 - 2026-07-24 — add fail-closed Level 4 validation-only selection and leakage evidence, immutable Paper constraint/matching/reconciliation records, durable daily Paper jobs, and a dedicated allowlisted LEAN runner; remove the raw Docker socket from the general backtest worker and retain Level 4/5 hard-gate failures until production-like replay, recovery, DR, credential and fault-matrix evidence exists.
 - Derive Paper v2 cash and position read models from immutable opening and fill
   ledger entries, and separate principal from commission so a replay cannot
