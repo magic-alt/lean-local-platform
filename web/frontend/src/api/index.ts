@@ -580,9 +580,9 @@ export const api = {
   ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/ashare-tech-insights/capabilities"),
   ashareTechReports: () => request<AshareTechReportList>("/api/ashare-tech-insights/reports"),
   ashareTechReport: (id: string) => request<AshareTechReport>(`/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`),
-  deleteAshareTechReport: (id: string) =>
-    request<{ deleted: boolean; id: string; deletedTasks: number }>(
-      `/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`,
+  deleteAshareTechReport: (id: string, force = false) =>
+    request<{ deleted: boolean; id: string; deletedTasks: number; cancelledTasks: number; recoveredOrphan: boolean }>(
+      `/api/ashare-tech-insights/reports/${encodeURIComponent(id)}${force ? "?force=true" : ""}`,
       { method: "DELETE" }
     ),
   createAshareTechReport: (payload: { requestedDate?: string; force?: boolean }) =>
@@ -596,7 +596,7 @@ export const api = {
     request<AshareTechWatchlistItem>("/api/ashare-tech-insights/watchlist/items", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),
-  updateAshareTechWatchlistItem: (code: string, payload: { enabled?: boolean; ruleTags?: AshareTechRuleTag[] }) =>
+  updateAshareTechWatchlistItem: (code: string, payload: { enabled?: boolean; groupKey?: AshareTechWatchlistItem["groupKey"]; ruleTags?: AshareTechRuleTag[] }) =>
     request<AshareTechWatchlistItem>(`/api/ashare-tech-insights/watchlist/items/${encodeURIComponent(code)}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),

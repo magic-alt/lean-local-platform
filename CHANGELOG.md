@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-24 — 将通用结构化 Insight 升级为统一 technical 指标/诊断视图和可审计 Agent 工作流，增加行情新鲜度、不确定性、证据覆盖与执行边界检查；同时兼容模型 JSON、signal 枚举/百分数/评分差异，禁止观望信号进入 Paper，为 View 增加加载态、选中高亮和详情自动定位，开放 A 股科技日报观察池规则分组编辑，并支持取消活动任务或清理孤儿状态后删除卡死历史报告。
 - 2026-07-24 — rebuild the Backtest run detail workspace with brokerage-style hierarchy, bounded financial precision, structured overview and analysis ledgers, searchable metrics, tabular order/trade/holding records, improved charts, artifact controls, and responsive terminal layouts.
 - 2026-07-24 — add fail-closed Level 4 validation-only selection and leakage evidence, immutable Paper constraint/matching/reconciliation records, durable daily Paper jobs, and a dedicated allowlisted LEAN runner; remove the raw Docker socket from the general backtest worker and retain Level 4/5 hard-gate failures until production-like replay, recovery, DR, credential and fault-matrix evidence exists.
 - Derive Paper v2 cash and position read models from immutable opening and fill

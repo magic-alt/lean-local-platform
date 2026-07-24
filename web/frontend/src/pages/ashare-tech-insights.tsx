@@ -156,7 +156,7 @@ export function AshareTechInsights() {
     finally { setMutating(false); }
   }
 
-  async function updateStock(code: string, payload: { enabled?: boolean; ruleTags?: AshareTechRuleTag[] }) {
+  async function updateStock(code: string, payload: { enabled?: boolean; groupKey?: AshareTechWatchlistItem["groupKey"]; ruleTags?: AshareTechRuleTag[] }) {
     setMutating(true);
     try {
       await api.updateAshareTechWatchlistItem(code, payload);
@@ -190,9 +190,14 @@ export function AshareTechInsights() {
   async function deleteReport(item: AshareTechReport) {
     setMutating(true);
     try {
-      await api.deleteAshareTechReport(item.id);
+      const active = ["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status);
+      const result = await api.deleteAshareTechReport(item.id, active);
       if (selected?.id === item.id) setSelected(null);
-      message.success(`已删除 ${item.requested_date} 的历史报告`);
+      message.success(result.recoveredOrphan
+        ? `已清理 ${item.requested_date} 的孤儿报告`
+        : result.cancelledTasks > 0
+          ? `已取消任务并删除 ${item.requested_date} 的报告`
+          : `已删除 ${item.requested_date} 的历史报告`);
       await reports.reload();
     } catch (error) { message.error((error as Error).message); }
     finally { setMutating(false); }
@@ -246,9 +251,15 @@ export function AshareTechInsights() {
           pagination={{ pageSize: 10 }}
           columns={[
             { title: "代码", dataIndex: "code", width: 90 }, { title: "名称", dataIndex: "name", width: 150 },
-            { title: "固定分组", dataIndex: "group", width: 220 },
+            { title: "规则分组（可编辑）", width: 220, render: (_, item) => <Select
+              value={item.groupKey}
+              options={watchlist.data.groups.map((group) => ({ value: group.key, label: group.name }))}
+              style={{ width: "100%" }}
+              disabled={mutating}
+              onChange={(groupKey) => void updateStock(item.code, { groupKey })}
+            /> },
             { title: "启用", width: 80, render: (_, item) => <Switch checked={item.enabled} loading={mutating} onChange={(enabled) => void updateStock(item.code, { enabled })} /> },
-            { title: "特殊规则标签", width: 260, render: (_, item) => <Select
+            { title: "特殊规则标签（可编辑）", width: 260, render: (_, item) => <Select
               mode="multiple" value={item.ruleTags} options={ruleTagOptions} style={{ width: "100%" }} disabled={mutating}
               onChange={(ruleTags) => void updateStock(item.code, { ruleTags: ruleTags as AshareTechRuleTag[] })}
             /> },
@@ -268,13 +279,16 @@ export function AshareTechInsights() {
             <Button size="small" onClick={() => void loadDetail(item.id)}>查看</Button>
             <Popconfirm
               title={`删除 ${item.requested_date} 的历史报告？`}
-              description="报告及关联任务日志会被删除，此操作不可撤销。"
+              description={["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status)
+                ? "活动任务会先取消；若任务已丢失，则清理孤儿状态。报告及日志随后删除。"
+                : "报告及关联任务日志会被删除，此操作不可撤销。"}
               okText="删除"
               okButtonProps={{ danger: true }}
               onConfirm={() => void deleteReport(item)}
-              disabled={["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status)}
             >
-              <Button danger size="small" icon={<DeleteOutlined />} loading={mutating} disabled={["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status)}>删除</Button>
+              <Button danger size="small" icon={<DeleteOutlined />} loading={mutating}>
+                {["created", "queued", "running", "waiting_data", "interrupted"].includes(item.status) ? "取消并删除" : "删除"}
+              </Button>
             </Popconfirm>
           </Space> }
         ]} />

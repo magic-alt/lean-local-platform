@@ -20,10 +20,10 @@ def configure_platform(tmp_path, monkeypatch):
     db_module.init_db()
 
 
-def import_daily_bars(symbol="AAPL", asset_class="equity", market="usa", venue="usa"):
+def import_daily_bars(symbol="AAPL", asset_class="equity", market="usa", venue="usa", end: date | None = None):
     from app.services.market_repository import upsert_market_daily_bars
 
-    start = date(2024, 1, 1)
+    start = (end or date.today()) - timedelta(days=89)
     rows = []
     for index in range(90):
         close = 100 + index
@@ -99,6 +99,123 @@ def test_context_and_guardrails_cover_daily_data_and_spot_short_block(tmp_path, 
     assert "spot_short_exposure_blocked" in guardrail["violations"]
 
 
+def test_context_marks_implicitly_current_but_stale_market_data_as_degraded(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    import_daily_bars(end=date(2017, 3, 30))
+    from app.services import insights
+
+    context = insights.build_context({
+        "symbol": "AAPL",
+        "assetClass": "equity",
+        "market": "usa",
+        "venue": "usa",
+        "lookbackBars": 90,
+    })
+
+    assert context["asOfDate"] == "2017-03-30"
+    assert context["dataQuality"]["level"] == "degraded"
+    assert any(item.startswith("stale_daily_bars:") for item in context["dataQuality"]["warnings"])
+
+
+def test_guardrails_normalize_model_aliases_percentages_and_numeric_horizon():
+    from app.services import insights
+
+    context = {
+        "instrument": {"assetClass": "equity"},
+        "dataQuality": {"warnings": []},
+    }
+    final, guardrail = insights.guard_signal(
+        {
+            "stance": "bearish",
+            "direction": "short",
+            "intent": "sell",
+            "targetExposure": 50,
+            "confidence": 60,
+            "score": 45,
+            "horizon": 5,
+        },
+        context,
+        [{"fact": "Price is below its moving averages.", "sourceKey": "technical"}],
+    )
+
+    assert final["direction"] == "flat"
+    assert final["intent"] == "exit"
+    assert final["targetExposure"] == 0
+    assert final["confidence"] == 0.6
+    assert final["score"] == 45
+    assert final["horizon"] == "5d"
+    assert guardrail["violations"] == ["spot_short_exposure_blocked"]
+    assert "intent:sell->exit" in guardrail["normalizedFields"]
+    assert "targetExposure:50->0.5" in guardrail["normalizedFields"]
+    assert "confidence:60->0.6" in guardrail["normalizedFields"]
+    assert "horizon:5->5d" in guardrail["normalizedFields"]
+
+
+def test_guardrails_normalize_derivative_percentage_exposure_without_blocking():
+    from app.services import insights
+
+    final, guardrail = insights.guard_signal(
+        {
+            "stance": "bearish",
+            "direction": "short",
+            "intent": "open",
+            "targetExposure": 25,
+            "confidence": 70,
+            "score": 65,
+            "horizon": "10",
+        },
+        {
+            "instrument": {"assetClass": "future"},
+            "dataQuality": {"warnings": []},
+        },
+        [{"fact": "Price is below support.", "sourceKey": "technical"}],
+    )
+
+    assert final["direction"] == "short"
+    assert final["intent"] == "enter"
+    assert final["targetExposure"] == -0.25
+    assert final["confidence"] == 0.7
+    assert final["horizon"] == "10d"
+    assert guardrail["passed"] is True
+    assert guardrail["adjusted"] is True
+    assert guardrail["violations"] == []
+
+
+def test_guardrails_normalize_fractional_score_and_keep_hold_non_actionable():
+    from app.services import insights
+
+    raw = {
+        "stance": "bearish",
+        "direction": "flat",
+        "intent": "hold",
+        "targetExposure": 0,
+        "confidence": 0.5,
+        "score": 0.4,
+        "horizon": "swing",
+    }
+    final, guardrail = insights.guard_signal(
+        raw,
+        {
+            "instrument": {"assetClass": "equity"},
+            "dataQuality": {"warnings": []},
+        },
+        [{"fact": "Price is below its moving averages.", "sourceKey": "technical"}],
+    )
+    report = insights.normalize_report({
+        "summary": {"headline": "Bearish", "thesis": "Below averages", "score": 0.4},
+        "technical": {},
+        "risks": [],
+        "catalysts": [],
+        "evidence": [],
+    })
+
+    assert final["score"] == 40
+    assert final["actionable"] is False
+    assert guardrail["passed"] is True
+    assert guardrail["adjusted"] is False
+    assert report["summary"]["score"] == 40
+
+
 @pytest.mark.parametrize(
     ("symbol", "asset_class", "market", "venue"),
     [
@@ -136,6 +253,12 @@ def test_insight_run_persists_structured_report_and_signal(tmp_path, monkeypatch
 
     assert result["status"] == "success"
     assert result["report"]["summary"]["score"] == 78
+    assert result["report"]["technical"]["metrics"]["latestClose"] == 189
+    assert result["report"]["technical"]["assessment"]["trend"] == "bullish"
+    assert result["report"]["agent"]["workflowVersion"] == "insight-agent-v2"
+    assert [item["key"] for item in result["report"]["agent"]["steps"]] == [
+        "data", "technical", "evidence", "risk", "guardrail"
+    ]
     assert result["signal"]["finalSignal"]["actionable"] is True
     assert result["signal"]["guardrail"]["passed"] is True
 
@@ -195,6 +318,60 @@ def test_invalid_structured_llm_output_is_retried_then_rejected(monkeypatch):
     with pytest.raises(insights.InsightError, match="after two attempts"):
         insights.request_analysis({"instrument": {}, "price": {}, "technical": {}, "dataQuality": {}})
     assert len(calls) == 2
+
+
+def test_structured_llm_output_coerces_text_sections(monkeypatch):
+    insights = configure_llm(monkeypatch)
+    payloads = []
+    responses = [
+        {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        **json.loads(sample_llm_response()["choices"][0]["message"]["content"]),
+                        "summary": "Trend remains constructive.",
+                        "technical": "Price is above its moving averages.",
+                        "risks": "Volatility can expand.",
+                    })
+                }
+            }]
+        },
+        sample_llm_response(),
+    ]
+
+    def response(payload):
+        payloads.append(json.loads(json.dumps(payload)))
+        return responses[len(payloads) - 1]
+
+    monkeypatch.setattr(insights, "_post_json", response)
+    result = insights.request_analysis({"instrument": {}, "price": {}, "technical": {}, "dataQuality": {}})
+
+    assert result["summary"]["headline"] == "Trend remains constructive."
+    assert result["technical"]["analysis"] == "Price is above its moving averages."
+    assert result["risks"] == ["Volatility can expand."]
+    assert len(payloads) == 1
+
+
+def test_structured_llm_retry_includes_schema_error(monkeypatch):
+    insights = configure_llm(monkeypatch)
+    payloads = []
+    invalid = json.loads(sample_llm_response()["choices"][0]["message"]["content"])
+    invalid["signal"].pop("horizon")
+
+    def response(payload):
+        payloads.append(json.loads(json.dumps(payload)))
+        return (
+            {"choices": [{"message": {"content": json.dumps(invalid)}}]}
+            if len(payloads) == 1
+            else sample_llm_response()
+        )
+
+    monkeypatch.setattr(insights, "_post_json", response)
+    result = insights.request_analysis({"instrument": {}, "price": {}, "technical": {}, "dataQuality": {}})
+
+    assert result["summary"]["score"] == 78
+    assert len(payloads) == 2
+    assert "prior JSON did not match" in payloads[1]["messages"][-1]["content"]
 
 
 def test_kimi_request_uses_structured_non_thinking_mode(monkeypatch):

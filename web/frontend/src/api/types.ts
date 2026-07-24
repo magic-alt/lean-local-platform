@@ -948,9 +948,38 @@ export interface InsightSignalRecord {
   status: string;
   rawSignal: Record<string, unknown>;
   finalSignal: InsightSignalPayload;
-  guardrail: { passed: boolean; adjusted: boolean; violations: string[] };
+  guardrail: { passed: boolean; adjusted: boolean; violations: string[]; normalizedFields?: string[] };
   paper_session_id?: string | null;
   paper_signal_id?: string | null;
+}
+
+export interface InsightTechnicalReport {
+  metrics: Record<string, number | null>;
+  assessment: {
+    trend?: string;
+    momentum?: string;
+    volume?: string;
+    volumeRatio20?: number | null;
+    rangePosition20Pct?: number | null;
+  };
+  modelNotes?: string[];
+}
+
+export interface InsightAgentSummary {
+  workflowVersion: string;
+  objective: string;
+  steps: Array<{ key: string; label: string; status: "complete" | "warning"; detail: string }>;
+  evidenceCoverage: { factCount: number; sourceKeys: string[]; dataSources: string[] };
+  uncertainties: string[];
+  decision: {
+    stance?: string;
+    intent?: string;
+    horizon?: string;
+    score?: number;
+    confidence?: number;
+    actionable?: boolean;
+    summary?: string;
+  };
 }
 
 export interface InsightReport {
@@ -972,7 +1001,8 @@ export interface InsightReport {
   context?: Record<string, unknown> | null;
   report?: {
     summary?: { headline?: string; thesis?: string; score?: number };
-    technical?: Record<string, unknown>;
+    technical?: InsightTechnicalReport;
+    agent?: InsightAgentSummary;
     risks?: string[];
     catalysts?: string[];
     evidence?: InsightEvidence[];

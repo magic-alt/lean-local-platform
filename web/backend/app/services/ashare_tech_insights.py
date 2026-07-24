@@ -211,19 +211,33 @@ def add_watchlist_item(
     return next(row for row in get_watchlist()["items"] if row["code"] == code)
 
 
-def update_watchlist_item(code: str, *, enabled: bool | None = None, rule_tags: list[str] | None = None) -> dict[str, Any]:
+def update_watchlist_item(
+    code: str,
+    *,
+    enabled: bool | None = None,
+    group_key: str | None = None,
+    rule_tags: list[str] | None = None,
+) -> dict[str, Any]:
     watchlist = get_watchlist()
     current = next((item for item in watchlist["items"] if item["code"] == code), None)
     if not current:
         raise KeyError("Watchlist item not found.")
-    tags = current["ruleTags"] if rule_tags is None else _validate_group_and_tags(current["groupKey"], rule_tags)
+    next_group_key = current["groupKey"] if group_key is None else group_key
+    tags = _validate_group_and_tags(
+        next_group_key,
+        current["ruleTags"] if rule_tags is None else rule_tags,
+    )
     next_enabled = current["enabled"] if enabled is None else bool(enabled)
     if current["enabled"] and not next_enabled and watchlist["enabledCount"] <= 1:
         raise AshareTechReportError("观察池至少需要保留1只启用股票。")
     with db() as connection:
         connection.execute(
-            "update ashare_tech_watchlist_items set enabled = ?, rule_tags_json = ?, updated_at = ? where code = ?",
-            (1 if next_enabled else 0, json_dump(tags), utc_now(), code),
+            """
+            update ashare_tech_watchlist_items
+            set group_key = ?, enabled = ?, rule_tags_json = ?, updated_at = ?
+            where code = ?
+            """,
+            (next_group_key, 1 if next_enabled else 0, json_dump(tags), utc_now(), code),
         )
     return next(row for row in get_watchlist()["items"] if row["code"] == code)
 
@@ -925,26 +939,45 @@ def list_reports(limit: int = 50, offset: int = 0) -> dict[str, Any]:
     return {"items": rows_to_dicts(rows), "count": count, "limit": limit, "offset": offset}
 
 
-def delete_report(report_id: str) -> dict[str, Any]:
+def delete_report(report_id: str, *, force: bool = False) -> dict[str, Any]:
     with db() as connection:
         report_row = connection.execute("select * from ashare_tech_reports where id = ?", (report_id,)).fetchone()
-        task_rows = connection.execute("select id, status, log_path from tasks where related_id = ?", (report_id,)).fetchall()
-    report = row_to_dict(report_row)
+        report = row_to_dict(report_row)
+        task_rows = connection.execute(
+            "select id, status, log_path from tasks where related_id = ? or id = ?",
+            (report_id, report.get("task_id") if report else None),
+        ).fetchall()
     if not report:
         raise KeyError("A-share technology report not found.")
     tasks = rows_to_dicts(task_rows)
     active_statuses = {"created", "queued", "running", "waiting_data", "interrupted"}
-    if str(report.get("status")) in active_statuses or any(str(item.get("status")) in active_statuses for item in tasks):
+    active_tasks = [item for item in tasks if str(item.get("status")) in active_statuses]
+    if active_tasks and not force:
         raise AshareTechReportDeleteConflict("请先等待报告完成或取消关联任务，再删除该报告。")
+    if active_tasks:
+        from .tasks import cancel_task
+
+        for task in active_tasks:
+            cancel_task(str(task["id"]))
+    recovered_orphan = str(report.get("status")) in active_statuses and not active_tasks
     with db() as connection:
         connection.execute("delete from ashare_tech_reports where id = ?", (report_id,))
-        connection.execute("delete from tasks where related_id = ?", (report_id,))
+        connection.execute(
+            "delete from tasks where related_id = ? or id = ?",
+            (report_id, report.get("task_id")),
+        )
     for task in tasks:
         try:
             Path(str(task.get("log_path") or "")).unlink(missing_ok=True)
         except OSError:
             pass
-    return {"deleted": True, "id": report_id, "deletedTasks": len(tasks)}
+    return {
+        "deleted": True,
+        "id": report_id,
+        "deletedTasks": len(tasks),
+        "cancelledTasks": len(active_tasks),
+        "recoveredOrphan": recovered_orphan,
+    }
 
 
 def fail_report(report_id: str, error: str) -> None:

@@ -26,6 +26,7 @@ class WatchlistItemCreate(BaseModel):
 
 class WatchlistItemUpdate(BaseModel):
     enabled: bool | None = None
+    groupKey: str | None = None
     ruleTags: list[str] | None = None
 
 
@@ -72,9 +73,9 @@ def report_detail(report_id: str):
 
 
 @router.delete("/reports/{report_id}")
-def delete_report(report_id: str):
+def delete_report(report_id: str, force: bool = False):
     try:
-        return service.delete_report(report_id)
+        return service.delete_report(report_id, force=force)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="A-share technology report not found.") from exc
     except service.AshareTechReportDeleteConflict as exc:
@@ -97,7 +98,12 @@ def add_watchlist_item(request: WatchlistItemCreate):
 @router.patch("/watchlist/items/{code}")
 def update_watchlist_item(code: str, request: WatchlistItemUpdate):
     try:
-        return service.update_watchlist_item(code, enabled=request.enabled, rule_tags=request.ruleTags)
+        return service.update_watchlist_item(
+            code,
+            enabled=request.enabled,
+            group_key=request.groupKey,
+            rule_tags=request.ruleTags,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Watchlist item not found.") from exc
     except service.AshareTechReportError as exc:

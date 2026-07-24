@@ -16,10 +16,10 @@ import {
   message
 } from "antd";
 import { DeleteOutlined, ReloadOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
-import type { InsightReport, PaperSession } from "../api";
+import type { InsightAgentSummary, InsightReport, InsightTechnicalReport, PaperSession } from "../api";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
 import { FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
@@ -29,6 +29,17 @@ import { AshareTechInsights } from "./ashare-tech-insights";
 
 const emptyList = { items: [], count: 0, limit: 100, offset: 0 };
 const loadInsights = () => api.insights({ limit: 100 });
+const guardrailLabels: Record<string, string> = {
+  invalid_stance: "模型返回了无法识别的观点，已改为中性",
+  invalid_direction: "模型返回了无法识别的方向，已改为空仓",
+  invalid_intent: "模型返回了无法识别的操作意图，已改为观望",
+  invalid_horizon: "模型返回了无法识别的持有周期，已改为波段",
+  spot_short_exposure_blocked: "现货资产不支持做空，已转换为空仓/退出建议",
+  invalid_long_price_plan: "多头价格计划顺序不合理，信号不可执行",
+  invalid_short_price_plan: "空头价格计划顺序不合理，信号不可执行",
+  data_quality_degraded: "数据质量不足，信号已降级为观察",
+  evidence_missing: "缺少可追溯证据，信号已降级为观察"
+};
 
 function statusColor(status: string) {
   if (status === "success" || status === "active" || status === "handed_off") return "green";
@@ -37,12 +48,95 @@ function statusColor(status: string) {
   return "default";
 }
 
-function JsonBlock({ value }: { value: unknown }) {
-  return (
-    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: 0 }}>
-      {JSON.stringify(value ?? {}, null, 2)}
-    </pre>
-  );
+const technicalMetricLabels: Record<string, string> = {
+  latestClose: "最新收盘",
+  sma20: "SMA20",
+  sma50: "SMA50",
+  rsi14: "RSI14",
+  return5dPct: "5日收益",
+  return20dPct: "20日收益",
+  realizedVolatility20dPct: "20日年化波动",
+  high20: "20日高点",
+  low20: "20日低点",
+  latestVolume: "最新成交量",
+  averageVolume20: "20日平均成交量"
+};
+const assessmentLabels: Record<string, string> = {
+  bullish: "多头",
+  bearish: "空头",
+  mixed: "震荡/混合",
+  positive: "偏强",
+  negative: "偏弱",
+  neutral: "中性",
+  overbought: "超买",
+  oversold: "超卖",
+  expanding: "放量",
+  contracting: "缩量",
+  normal: "正常",
+  unknown: "未知"
+};
+
+function metricValue(key: string, value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "-";
+  if (key.endsWith("Pct")) return `${value.toFixed(2)}%`;
+  if (key.toLowerCase().includes("volume")) return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
+  return value.toFixed(4).replace(/\.?0+$/, "");
+}
+
+function uncertaintyLabel(value: string) {
+  if (value.startsWith("stale_daily_bars:")) return `行情已滞后 ${value.split(":")[1]}，禁止生成可执行信号`;
+  if (value.startsWith("insufficient_daily_bars:")) return `历史样本不足：${value.split(":")[1]}`;
+  if (value === "daily_bars_missing") return "缺少日线行情";
+  if (value === "backtest_evidence_not_attached") return "未附加回测证据，本报告仅基于行情与技术指标";
+  return value;
+}
+
+function TechnicalPanel({ technical }: { technical?: InsightTechnicalReport }) {
+  if (!technical) return <Alert type="warning" showIcon message="Technical 数据缺失" />;
+  const assessment = technical.assessment || {};
+  return <>
+    <Descriptions bordered size="small" column={3}>
+      <Descriptions.Item label="趋势"><Tag color={assessment.trend === "bullish" ? "green" : assessment.trend === "bearish" ? "red" : "default"}>{assessmentLabels[assessment.trend || "unknown"] || assessment.trend}</Tag></Descriptions.Item>
+      <Descriptions.Item label="动量">{assessmentLabels[assessment.momentum || "unknown"] || assessment.momentum}</Descriptions.Item>
+      <Descriptions.Item label="量能">{assessmentLabels[assessment.volume || "unknown"] || assessment.volume}</Descriptions.Item>
+      <Descriptions.Item label="20日量比">{assessment.volumeRatio20 == null ? "-" : `${assessment.volumeRatio20.toFixed(2)}×`}</Descriptions.Item>
+      <Descriptions.Item label="20日区间位置">{assessment.rangePosition20Pct == null ? "-" : `${assessment.rangePosition20Pct.toFixed(2)}%`}</Descriptions.Item>
+    </Descriptions>
+    <Descriptions bordered size="small" column={3} style={{ marginTop: 12 }}>
+      {Object.entries(technical.metrics || {}).map(([key, value]) => (
+        <Descriptions.Item key={key} label={technicalMetricLabels[key] || key}>{metricValue(key, value)}</Descriptions.Item>
+      ))}
+    </Descriptions>
+    {(technical.modelNotes?.length || 0) > 0 && <Alert type="info" showIcon message="模型补充观察" description={<ul style={{ marginBottom: 0 }}>{technical.modelNotes?.map((item) => <li key={item}>{item}</li>)}</ul>} style={{ marginTop: 12 }} />}
+  </>;
+}
+
+function AgentPanel({ agent }: { agent?: InsightAgentSummary }) {
+  if (!agent) return null;
+  return <>
+    <Alert type="info" showIcon message={`Agent 分析流程 · ${agent.workflowVersion}`} description={agent.objective} />
+    <Table
+      size="small"
+      pagination={false}
+      rowKey="key"
+      dataSource={agent.steps}
+      style={{ marginTop: 12 }}
+      columns={[
+        { title: "步骤", dataIndex: "label", width: 180 },
+        { title: "状态", width: 100, render: (_, item) => <Tag color={item.status === "complete" ? "green" : "orange"}>{item.status === "complete" ? "完成" : "需注意"}</Tag> },
+        { title: "审计摘要", dataIndex: "detail" }
+      ]}
+    />
+    <Descriptions bordered size="small" column={3} style={{ marginTop: 12 }}>
+      <Descriptions.Item label="证据事实">{agent.evidenceCoverage.factCount}</Descriptions.Item>
+      <Descriptions.Item label="证据类型">{agent.evidenceCoverage.sourceKeys.join("、") || "-"}</Descriptions.Item>
+      <Descriptions.Item label="数据源">{agent.evidenceCoverage.dataSources.join("、") || "-"}</Descriptions.Item>
+      <Descriptions.Item label="最终意图">{agent.decision.intent || "-"}</Descriptions.Item>
+      <Descriptions.Item label="周期">{agent.decision.horizon || "-"}</Descriptions.Item>
+      <Descriptions.Item label="可执行"><Tag color={agent.decision.actionable ? "green" : "orange"}>{agent.decision.actionable ? "是" : "否"}</Tag></Descriptions.Item>
+    </Descriptions>
+    {agent.uncertainties.length > 0 && <Alert type="warning" showIcon message="不确定性与边界" description={<ul style={{ marginBottom: 0 }}>{agent.uncertainties.map((item) => <li key={item}>{uncertaintyLabel(item)}</li>)}</ul>} style={{ marginTop: 12 }} />}
+  </>;
 }
 
 function GenericInsightsPage() {
@@ -53,7 +147,7 @@ function GenericInsightsPage() {
     assetClasses: ["equity", "crypto", "crypto_future", "future"],
     resolutions: ["daily"],
     paperHandoffAssetClasses: ["equity", "crypto"],
-    promptVersion: "lean-insights-v1"
+    promptVersion: "lean-insights-v2"
   });
   const reports = useAsyncData(loadInsights, emptyList);
   const paperSessions = useAsyncData<PaperSession[]>(api.paperSessions, []);
@@ -62,17 +156,30 @@ function GenericInsightsPage() {
   const market = Form.useWatch("market", form) || "china";
   const [handoffForm] = Form.useForm();
   const [selected, setSelected] = useState<InsightReport | null>(null);
+  const detailRef = useRef<HTMLDivElement | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [revealId, setRevealId] = useState<string | null>(null);
 
-  const loadDetail = useCallback(async (id: string) => {
+  const loadDetail = useCallback(async (id: string, reveal = false) => {
+    if (reveal) setViewingId(id);
     try {
       setSelected(await api.insight(id));
+      if (reveal) setRevealId(id);
     } catch (error) {
       message.error((error as Error).message);
+    } finally {
+      if (reveal) setViewingId(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (!selected || selected.id !== revealId) return;
+    detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setRevealId(null);
+  }, [revealId, selected]);
 
   useEffect(() => {
     if (!selected || !["queued", "running"].includes(selected.status)) return;
@@ -97,7 +204,7 @@ function GenericInsightsPage() {
       const result = await api.createInsight({ ...values, symbol: values.symbol.trim(), resolution: "daily", dataType: "trade" });
       message.success("Insight task queued");
       await reports.reload();
-      await loadDetail(result.id);
+      await loadDetail(result.id, true);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -189,6 +296,7 @@ function GenericInsightsPage() {
           rowKey="id"
           loading={reports.loading}
           dataSource={reports.data.items}
+          rowClassName={(item) => item.id === selected?.id ? "ant-table-row-selected" : ""}
           pagination={{ pageSize: 10 }}
           columns={[
             { title: "Created", dataIndex: "created_at" },
@@ -198,7 +306,9 @@ function GenericInsightsPage() {
             { title: "As Of", dataIndex: "as_of_date" },
             { title: "Status", render: (_, item) => <Tag color={statusColor(item.status)}>{item.status}</Tag> },
             { title: "Action", render: (_, item) => <Space>
-              <Button size="small" onClick={() => void loadDetail(item.id)}>View</Button>
+              <Button size="small" type={selected?.id === item.id ? "primary" : "default"} loading={viewingId === item.id} onClick={() => void loadDetail(item.id, true)}>
+                {selected?.id === item.id ? "Viewing" : "View"}
+              </Button>
               <Popconfirm
                 title={`Delete ${item.asset_class}/${item.symbol} insight?`}
                 description="The report, guarded signal, task, and task log will be deleted. Paper audit records are preserved."
@@ -215,6 +325,7 @@ function GenericInsightsPage() {
       </Card>
 
       {selected && (
+        <div ref={detailRef} style={{ scrollMarginTop: 16 }}>
         <Card title={`${selected.asset_class}/${selected.venue}/${selected.symbol}`} style={{ marginTop: 16 }}>
           <Descriptions bordered size="small" column={2}>
             <Descriptions.Item label="Status"><Tag color={statusColor(selected.status)}>{selected.status}</Tag></Descriptions.Item>
@@ -232,6 +343,19 @@ function GenericInsightsPage() {
                 <Tag color="blue">Score {selected.report.summary?.score ?? 0}</Tag>
                 <Tag>Data {selected.report.dataQuality?.level || "unknown"}</Tag>
               </Space>
+              {(selected.report.dataQuality?.warnings?.length || 0) > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="数据质量限制"
+                  description={selected.report.dataQuality?.warnings?.map(uncertaintyLabel).join("；")}
+                  style={{ marginTop: 12 }}
+                />
+              )}
+              <Divider>Agent Workflow</Divider>
+              <AgentPanel agent={selected.report.agent} />
+              <Divider>Technical</Divider>
+              <TechnicalPanel technical={selected.report.technical} />
               <Divider>Risks</Divider>
               <ul>{(selected.report.risks || []).map((item) => <li key={item}>{item}</li>)}</ul>
               <Divider>Catalysts</Divider>
@@ -244,8 +368,6 @@ function GenericInsightsPage() {
                 dataSource={selected.report.evidence || []}
                 columns={[{ title: "Source", dataIndex: "sourceKey" }, { title: "Fact", dataIndex: "fact" }]}
               />
-              <Divider>Technical</Divider>
-              <JsonBlock value={selected.report.technical} />
             </>
           )}
           {selected.signal && (
@@ -260,7 +382,13 @@ function GenericInsightsPage() {
                 <Descriptions.Item label="Actionable"><Tag color={finalSignal?.actionable ? "green" : "orange"}>{String(Boolean(finalSignal?.actionable))}</Tag></Descriptions.Item>
               </Descriptions>
               {selected.signal.guardrail.violations.length > 0 && (
-                <Alert type="warning" showIcon message="Guardrail adjustments" description={selected.signal.guardrail.violations.join(", ")} style={{ marginTop: 16 }} />
+                <Alert
+                  type={selected.signal.guardrail.violations.every((item) => item === "spot_short_exposure_blocked") ? "info" : "warning"}
+                  showIcon
+                  message="信号安全调整"
+                  description={selected.signal.guardrail.violations.map((item) => guardrailLabels[item] || item).join("；")}
+                  style={{ marginTop: 16 }}
+                />
               )}
               {finalSignal?.actionable && capabilities.data.paperHandoffAssetClasses.includes(selected.asset_class) && !selected.signal.paper_signal_id && (
                 <Card type="inner" title="Confirm Paper Handoff" style={{ marginTop: 16 }}>
@@ -281,6 +409,7 @@ function GenericInsightsPage() {
           <Divider />
           <Alert type="info" message={selected.report?.disclaimer || "Research use only; not investment advice."} />
         </Card>
+        </div>
       )}
     </>
   );

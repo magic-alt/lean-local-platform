@@ -174,8 +174,11 @@ def test_watchlist_defaults_adds_updates_deletes_and_resets(tmp_path, monkeypatc
     with pytest.raises(service.AshareTechReportError, match="已在观察池"):
         service.add_watchlist_item("603019", "ai_compute", [], adapter=FakeValidationAdapter())
 
-    disabled = service.update_watchlist_item("603019", enabled=False, rule_tags=["storage"])
+    disabled = service.update_watchlist_item(
+        "603019", enabled=False, group_key="semiconductor_storage", rule_tags=["storage"]
+    )
     assert disabled["enabled"] is False
+    assert disabled["groupKey"] == "semiconductor_storage"
     assert disabled["ruleTags"] == ["storage"]
     deleted = service.delete_watchlist_item("603019")
     assert deleted["deleted"] is True
@@ -291,3 +294,25 @@ def test_ashare_tech_history_report_delete_cleans_task_and_blocks_active_report(
     assert client.get(f"/api/ashare-tech-insights/reports/{report['id']}").status_code == 404
     with db() as connection:
         assert connection.execute("select count(*) as count from tasks where related_id = ?", (report["id"],)).fetchone()["count"] == 0
+
+
+def test_ashare_tech_history_report_delete_recovers_orphan_and_can_cancel_active(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.services import ashare_tech_insights as service
+    from app.services.tasks import create_task
+
+    client = TestClient(app)
+    orphan = service.create_report("2026-07-21")
+    deleted_orphan = client.delete(f"/api/ashare-tech-insights/reports/{orphan['id']}")
+    assert deleted_orphan.status_code == 200
+    assert deleted_orphan.json()["recoveredOrphan"] is True
+
+    active = service.create_report("2026-07-22")
+    task = create_task("ashare_tech_report", "A股科技股日报", {}, related_id=active["id"])
+    service.attach_task(active["id"], task["id"])
+    deleted_active = client.delete(f"/api/ashare-tech-insights/reports/{active['id']}?force=true")
+
+    assert deleted_active.status_code == 200
+    assert deleted_active.json()["cancelledTasks"] == 1
