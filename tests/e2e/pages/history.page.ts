@@ -8,9 +8,9 @@ export class HistoryPage extends BasePage {
   }
 
   async open() {
-    await this.gotoHash("/backtests");
+    await this.gotoHash("/backtests?view=history");
     await this.expectHeading("Backtests");
-    await expect(this.page.getByText("History")).toBeVisible();
+    await expect(this.page.getByText("Backtest History")).toBeVisible();
     const clear = this.page.getByRole("button", { name: "Clear" });
     if (await clear.count()) {
       await clear.click();

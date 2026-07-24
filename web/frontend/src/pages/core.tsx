@@ -36,7 +36,7 @@ import {
   SettingOutlined,
   SlidersOutlined
 } from "@ant-design/icons";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import Editor from "@monaco-editor/react";
@@ -349,7 +349,8 @@ export function Dashboard() {
         <Space wrap>
           <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => navigate("/projects")}>New Project</Button>
           <Button icon={<DatabaseOutlined />} onClick={() => navigate("/data")}>Fetch Data</Button>
-          <Button icon={<PlayCircleOutlined />} onClick={() => navigate("/backtests")}>Run Backtest</Button>
+          <Button icon={<PlayCircleOutlined />} onClick={() => navigate("/backtests?view=run")}>Run Backtest</Button>
+          <Button onClick={() => navigate("/backtests?view=history")}>Backtest History</Button>
           <Button icon={<ExperimentOutlined />} onClick={() => navigate("/paper")}>Paper Replay</Button>
           <Button icon={<SettingOutlined />} onClick={() => navigate("/settings")}>Settings</Button>
         </Space>
@@ -366,7 +367,6 @@ export function Dashboard() {
         <Card><Statistic title="Latest Status" value={latest?.status ?? "N/A"} /></Card>
         <Card><Statistic title="Latest Symbol" value={latest?.symbol ?? "N/A"} /></Card>
       </div>
-      <Card title="Recent Backtests"><RunsTable runs={runs.data} onOpen={(id) => navigate(`/runs/${id}`)} /></Card>
       <Modal
         title="Manage local history"
         open={historyOpen}
@@ -382,7 +382,7 @@ export function Dashboard() {
         />
         <div className="history-resource-list">
           {[
-            { label: "Backtests", count: runs.data.length, route: "/backtests" },
+            { label: "Backtests", count: runs.data.length, route: "/backtests?view=history" },
             { label: "Tasks", count: tasks.data.length, route: "/tasks" },
             { label: "Optimizations", route: "/optimization" },
             { label: "Research sessions", route: "/research" },
@@ -1518,12 +1518,20 @@ export function ProjectsPage() {
             </FormActions>
           </Form>
           <div className="grid" style={{ marginTop: 16 }}>
-            <Card><Statistic title="Backtests" value={projectRuns.length} /></Card>
+            <Card>
+              <Statistic title="Backtests" value={projectRuns.length} />
+              <Button
+                type="link"
+                style={{ paddingInline: 0 }}
+                onClick={() => navigate(`/backtests?view=history&projectId=${encodeURIComponent(selectedProject.id)}`)}
+              >
+                View project history
+              </Button>
+            </Card>
             <Card><Statistic title="Tasks" value={projectTasks.length} /></Card>
             <Card><Statistic title="Symbol" value={String(form.getFieldValue("symbol") || "-")} /></Card>
             <Card><Statistic title="Local Symbols" value={symbols.length} /></Card>
           </div>
-          <Card title="Project Backtests" style={{ marginTop: 16 }}><RunsTable runs={projectRuns} onOpen={(id) => navigate(`/runs/${id}`)} onDelete={async (run) => { await api.deleteBacktest(run.id); await Promise.all([runs.reload(), projects.reload()]); }} /></Card>
         </Card>
         <Card
           title="Strategy Source"
@@ -2277,13 +2285,31 @@ export function DataPage() {
   );
 }
 
+type BacktestHistoryFilters = {
+  name?: string;
+  status?: string;
+  market?: string;
+  projectId?: string;
+  symbol?: string;
+};
+
+function backtestHistoryFiltersFromSearch(searchParams: URLSearchParams): BacktestHistoryFilters {
+  const filters: BacktestHistoryFilters = {};
+  (["name", "status", "market", "projectId", "symbol"] as const).forEach((key) => {
+    const value = searchParams.get(key)?.trim();
+    if (value) filters[key] = value;
+  });
+  return filters;
+}
+
 export function BacktestsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
-  const [filters, setFilters] = useState<{ name?: string; status?: string; market?: string; projectId?: string; symbol?: string }>({});
+  const [filters, setFilters] = useState<BacktestHistoryFilters>(() => backtestHistoryFiltersFromSearch(searchParams));
   const loadRuns = useCallback(() => api.backtests(filters), [filters]);
   const runs = useAsyncData(loadRuns, []);
   const [form] = Form.useForm();
@@ -2297,6 +2323,8 @@ export function BacktestsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [preflight, setPreflight] = useState<BacktestPreflight>();
+  const activeView = searchParams.get("view") === "history" ? "history" : "run";
+  const searchParamsKey = searchParams.toString();
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
@@ -2320,6 +2348,34 @@ export function BacktestsPage() {
   useEffect(() => {
     api.symbols(market, assetClass, venue, resolution, dataType).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
   }, [assetClass, dataType, market, resolution, venue]);
+
+  useEffect(() => {
+    const nextFilters = backtestHistoryFiltersFromSearch(searchParams);
+    setFilters((current) => (
+      JSON.stringify(current) === JSON.stringify(nextFilters) ? current : nextFilters
+    ));
+    if (searchParams.get("view") === "history") {
+      historyForm.resetFields();
+      historyForm.setFieldsValue(nextFilters);
+    }
+  }, [historyForm, searchParamsKey]);
+
+  function selectView(view: string) {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.set("view", view);
+    setSearchParams(nextSearchParams);
+  }
+
+  function applyHistoryFilters(values: BacktestHistoryFilters) {
+    const nextFilters = Object.fromEntries(
+      Object.entries(values).filter(([, value]) => String(value ?? "").trim())
+    ) as BacktestHistoryFilters;
+    setFilters(nextFilters);
+    const nextSearchParams = new URLSearchParams();
+    nextSearchParams.set("view", "history");
+    Object.entries(nextFilters).forEach(([key, value]) => nextSearchParams.set(key, String(value)));
+    setSearchParams(nextSearchParams, { replace: true });
+  }
 
   async function submit(values: any) {
     if (submitting) return;
@@ -2350,8 +2406,17 @@ export function BacktestsPage() {
   return (
     <>
       <div className="toolbar"><h1 className="page-title">Backtests</h1><Button icon={<ReloadOutlined />} onClick={runs.reload}>Refresh</Button></div>
-      <ExampleGallery kind="backtest" onCreated={() => projects.reload()} />
-      <Card title="New Backtest">
+      <Tabs
+        activeKey={activeView}
+        onChange={selectView}
+        items={[
+          {
+            key: "run",
+            label: "Run Backtest",
+            children: (
+              <>
+                <ExampleGallery kind="backtest" onCreated={() => projects.reload()} />
+                <Card title="New Backtest">
         <Form
           form={form}
           key={`${market}-${selectedProjectId ?? "none"}-${templates.data.length}`}
@@ -2475,18 +2540,30 @@ export function BacktestsPage() {
         </Form>
       </Card>
       <BatchWorkbench kind="backtest" projects={projects.data} />
-      <Card title="History" style={{ marginTop: 16 }}>
-        <Form form={historyForm} layout="inline" style={{ marginBottom: 12 }} onFinish={(values) => setFilters(values)}>
+              </>
+            )
+          },
+          {
+            key: "history",
+            label: `History (${runs.data.length})`,
+            children: (
+              <Card title="Backtest History">
+        <p className="muted">All backtest records are managed here. Use project and run filters to narrow the canonical history.</p>
+        <Form form={historyForm} layout="inline" style={{ marginBottom: 12 }} initialValues={filters} onFinish={applyHistoryFilters}>
           <Form.Item name="name" label="Name"><Input placeholder="Name" style={{ width: 180 }} /></Form.Item>
           <Form.Item name="status" label="Status"><Select data-testid="history-status-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Status" style={{ width: 150 }} options={["created", "queued", "running", "success", "failed", "cancelled"].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="market" label="Market"><Select data-testid="history-market-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Market" style={{ width: 150 }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
           <Form.Item name="projectId" label="Project"><Select data-testid="history-project-select" virtual={false} showSearch optionFilterProp="label" allowClear placeholder="Project" style={{ width: 220 }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
           <Form.Item name="symbol" label="Symbol"><SecuritySearch market="all" placeholder="代码 / 公司" style={{ width: 180 }} /></Form.Item>
           <Button htmlType="submit">Filter</Button>
-          <Button onClick={() => { historyForm.resetFields(); setFilters({}); }}>Clear</Button>
+          <Button onClick={() => { historyForm.resetFields(); applyHistoryFilters({}); }}>Clear</Button>
         </Form>
         <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(`/runs/${id}`)} onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }} />
-      </Card>
+              </Card>
+            )
+          }
+        ]}
+      />
     </>
   );
 }
