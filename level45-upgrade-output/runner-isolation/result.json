@@ -1,0 +1,14 @@
+{
+  "observedAt": "2026-07-24T14:00:00+08:00",
+  "generalBacktestWorkerDockerSocket": false,
+  "dedicatedRunnerDockerSocket": true,
+  "runnerReadOnlyRootFilesystem": true,
+  "runnerMemoryLimitBytes": 536870912,
+  "runnerPidsLimit": 128,
+  "runnerCapabilityDrop": ["ALL"],
+  "leanNetworkPolicy": "none",
+  "realLeanSmokeRunId": "spy-20200102-20200228-20260724135943",
+  "realLeanSmokeStatus": "success",
+  "realLeanSmokeExitCode": 0,
+  "runnerAuditRecordPersisted": true
+}

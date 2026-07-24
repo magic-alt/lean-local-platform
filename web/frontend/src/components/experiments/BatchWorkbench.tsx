@@ -132,6 +132,7 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           mode: MODES[kind][0].value, symbolSource: "symbols", symbols: "000001", universeCode: "CSI300",
           start: dayjs().subtract(5, "year").format("YYYY-MM-DD"), end: dayjs().format("YYYY-MM-DD"), cash: 300000,
           maxCandidates: 200, trainYears: 3, testYears: 1, validationMonths: 6, stepYears: 1,
+          adjustmentContract: "raw-v1", featurePipelineVersion: "features-v1", labelHorizonDays: 0,
           factorNames: "momentum,volatility", parameterGridJson: '{"fast":[5,10,20],"slow":[30,60]}'
         }}>
           <FormSection title="批次与标的">
@@ -160,6 +161,11 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
                   <Form.Item name="testYears" label="评价年数"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
                   <Form.Item name="validationMonths" label="Validation 月数"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
                   <Form.Item name="stepYears" label="滚动步长（年）"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
+                  <Form.Item className="form-field--wide" name="datasetVersion" label="冻结 Dataset Version" rules={[{ required: true, message: "必须选择已认证的 dataset version" }]}><Input placeholder="dataset:production:..." /></Form.Item>
+                  <Form.Item className="form-field--wide" name="universeVersion" label="冻结 Universe Version" rules={[{ required: true, message: "必须记录 universe version" }]}><Input placeholder="universe:CSI300:..." /></Form.Item>
+                  <Form.Item className="form-field--wide" name="adjustmentContract" label="复权契约" rules={[{ required: true }]}><Input /></Form.Item>
+                  <Form.Item className="form-field--wide" name="featurePipelineVersion" label="特征流水线版本" rules={[{ required: true }]}><Input /></Form.Item>
+                  <Form.Item name="labelHorizonDays" label="标签窗口（日）"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
                 </>}
                 <Form.Item className="form-field--full" name="parameterGridJson" label="通用参数网格 JSON"><Input.TextArea rows={3} /></Form.Item>
                 {mode === "multi_strategy" && <Form.Item className="form-field--full" name="parameterGridsJson" label="各项目参数网格（可选，以 projectId 为键）"><Input.TextArea rows={3} placeholder='{"project-id":{"period":[10,20,30]}}' /></Form.Item>}
@@ -194,6 +200,23 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
       </Space>}>
         {selected && <>
           <Alert showIcon type={selected.status === "success" ? "success" : selected.status === "partial" ? "warning" : "info"} message={`${selected.status} · ${completed(selected)}/${selected.total}`} description={`成功 ${selected.succeeded} · 失败 ${selected.failed} · 跳过 ${selected.skipped} · 取消 ${selected.cancelled}`} />
+          {selected.walkForwardEvidence && <Card size="small" title="Train / Validation / 参数冻结 / OOS" style={{ marginTop: 12, marginBottom: 12 }}>
+            <Alert
+              showIcon
+              type={selected.walkForwardEvidence.windows.every((window) => window.leakage?.decision === "ALLOW") ? "success" : "error"}
+              message={`Dataset ${selected.walkForwardEvidence.dataset_version} · Universe ${selected.walkForwardEvidence.universe_version}`}
+              description={`选择指标 ${selected.walkForwardEvidence.selection_metric} · ${selected.walkForwardEvidence.selection_rule}`}
+            />
+            <Table size="small" rowKey="id" pagination={false} dataSource={selected.walkForwardEvidence.windows} columns={[
+              { title: "Fold", dataIndex: "fold" },
+              { title: "Train", render: (_, row) => `${row.train_start} – ${row.train_end}` },
+              { title: "Validation", render: (_, row) => `${row.validation_start} – ${row.validation_end}` },
+              { title: "OOS", render: (_, row) => `${row.oos_start} – ${row.oos_end}` },
+              { title: "泄漏检查", render: (_, row) => <Tag color={row.leakage?.decision === "ALLOW" ? "success" : "error"}>{row.leakage?.decision || "MISSING"}</Tag> },
+              { title: "候选/选中", render: (_, row) => `${row.candidates?.length || 0}/${row.candidates?.filter((candidate: any) => Boolean(candidate.selected)).length || 0}` },
+              { title: "OOS 状态", render: (_, row) => row.oosEvaluation?.status || "等待参数冻结" }
+            ]} />
+          </Card>}
           <Table size="small" rowKey={(row) => String(row.itemId)} dataSource={ranking} pagination={{ pageSize: 20 }} columns={[
             { title: "股票", dataIndex: "symbol" }, { title: "项目", dataIndex: "projectId", ellipsis: true },
             { title: "状态", dataIndex: "status" }, { title: "Sharpe", dataIndex: "sharpe" },

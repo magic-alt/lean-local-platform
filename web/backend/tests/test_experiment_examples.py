@@ -126,6 +126,10 @@ def test_walk_forward_expands_independent_validation_and_oos_with_lineage(tmp_pa
         "stepYears": 1,
         "parameterGrid": {"fast": [10]},
         "minWalkForwardFolds": 2,
+        "datasetVersion": "dataset:test:v1",
+        "universeVersion": "symbols:600519:v1",
+        "adjustmentContract": "raw-v1",
+        "featurePipelineVersion": "features:test:v1",
     }
 
     items, _selection = experiment_batches.expand(config)
@@ -178,9 +182,105 @@ def test_walk_forward_expands_independent_validation_and_oos_with_lineage(tmp_pa
         config,
         {"status": "success", "items": audit_items},
     )
-    assert status == "passed"
-    assert failures == []
+    assert status == "failed"
+    assert failures == ["walk_forward_evidence_missing"]
     assert not any("phase" in warning for warning in warnings)
+
+
+def test_walk_forward_oos_is_blocked_until_validation_selection_is_frozen(tmp_path, monkeypatch):
+    db_module = configure(tmp_path, monkeypatch)
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("selection-gate", template_key="ema_cross", market="china")
+    batch = experiment_batches.create_batch(
+        {
+            "kind": "optimization",
+            "mode": "walk_forward",
+            "projectId": project["id"],
+            "symbol": "600519",
+            "start": "2023-01-01",
+            "end": "2024-12-31",
+            "trainYears": 1,
+            "testYears": 1,
+            "validationMonths": 6,
+            "parameterGrid": {"fast": [10, 20]},
+            "datasetVersion": "dataset:test:v1",
+            "universeVersion": "symbols:600519:v1",
+            "adjustmentContract": "raw-v1",
+            "featurePipelineVersion": "features:test:v1",
+        }
+    )
+    oos = [
+        item
+        for item in batch["items"]
+        if item["parameters"]["parameters"]["experimentPhase"] == "oos"
+    ]
+    assert {item["status"] for item in oos} == {"blocked_selection"}
+    validation = [
+        item
+        for item in batch["items"]
+        if item["parameters"]["parameters"]["experimentPhase"] == "validation"
+    ]
+    with db_module.db() as connection:
+        for index, item in enumerate(validation, start=1):
+            connection.execute(
+                """
+                update experiment_batch_items
+                set status='success',result_json=?,finished_at='now'
+                where id=?
+                """,
+                (
+                    db_module.json_dump(
+                        {
+                            "statistics": {
+                                "Sharpe Ratio": str(index),
+                                "Net Profit": f"{index}%",
+                                "Drawdown": f"{3-index}%",
+                                "Total Orders": str(index + 2),
+                            }
+                        }
+                    ),
+                    item["id"],
+                ),
+            )
+
+    refreshed = experiment_batches.refresh(batch["id"])
+    refreshed_oos = [
+        item
+        for item in refreshed["items"]
+        if item["parameters"]["parameters"]["experimentPhase"] == "oos"
+    ]
+    assert sorted(item["status"] for item in refreshed_oos) == ["pending", "skipped"]
+    evidence = refreshed["walkForwardEvidence"]["windows"][0]
+    assert evidence["selection"]["selection_metric"] == "validationSharpe"
+    assert sum(int(item["selected"]) for item in evidence["candidates"]) == 1
+    assert evidence["leakage"]["decision"] == "ALLOW"
+
+
+def test_walk_forward_fails_closed_without_frozen_lineage(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    from app.core.errors import LeanWebError
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("missing-lineage", template_key="ema_cross", market="china")
+    try:
+        experiment_batches.preview(
+            {
+                "kind": "optimization",
+                "mode": "walk_forward",
+                "projectId": project["id"],
+                "symbol": "600519",
+                "start": "2023-01-01",
+                "end": "2024-12-31",
+                "parameterGrid": {"fast": [10]},
+            }
+        )
+    except LeanWebError as exc:
+        assert "datasetVersion" in str(exc)
+    else:
+        raise AssertionError("walk-forward without frozen lineage must fail closed")
 
 
 def test_batch_retry_and_restart_preserve_successful_children(tmp_path, monkeypatch):

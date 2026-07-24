@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..services import paper as paper_service
 from ..core.errors import NotFoundError
 from ..services.history_resources import delete_paper_session
+from ..services import paper_scheduler
 from ..tasks.worker import (
     fail_paper_walkforward_task,
     finalize_paper_walkforward_task,
@@ -130,6 +131,27 @@ def detail(session_id: str):
             if session.get("mode") == "lean_walkforward_v2"
             else []
         ),
+        "constraintDecisions": (
+            paper_service.paper_order_pipeline.list_constraint_decisions(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
+        "fills": (
+            paper_service.paper_order_pipeline.list_fills(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
+        "ledger": (
+            paper_service.paper_order_pipeline.list_ledger_entries(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
+        "reconciliations": (
+            paper_service.paper_order_pipeline.list_reconciliations(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
+        "dailyJobs": paper_scheduler.list_jobs(session_id),
     }
 
 
@@ -226,7 +248,45 @@ def run_day(session_id: str, request: PaperRunDayRequest):
         if not session:
             raise KeyError("Paper session not found.")
         if paper_service._is_lean_mode(session.get("mode")):
+            job = paper_scheduler.ensure_job(session_id, request.tradeDate)
+            if job.get("state") == "COMPLETED":
+                existing = [
+                    item
+                    for item in paper_service.list_walkforward_runs(session_id)
+                    if str(item.get("trade_date")) == request.tradeDate
+                    and item.get("status") == "success"
+                ]
+                if existing:
+                    return existing[0]
+            if job.get("state") == "SCHEDULED":
+                job = paper_scheduler.transition_job(
+                    str(job["id"]),
+                    "READY",
+                    event_type="manual_readiness_passed",
+                    expected_states={"SCHEDULED"},
+                )
+            elif job.get("state") in {"FAILED", "BLOCKED_DATA", "BLOCKED_QA"}:
+                job = paper_scheduler.transition_job(
+                    str(job["id"]),
+                    "RETRYING",
+                    event_type="manual_retry",
+                    expected_states={"FAILED", "BLOCKED_DATA", "BLOCKED_QA"},
+                )
+                job = paper_scheduler.transition_job(
+                    str(job["id"]),
+                    "READY",
+                    event_type="manual_retry_ready",
+                    expected_states={"RETRYING"},
+                )
             paper_run = paper_service.create_walkforward_run(session_id, request.tradeDate)
+            paper_scheduler.transition_job(
+                str(job["id"]),
+                "RUNNING",
+                event_type="manual_workflow_queued",
+                expected_states={"READY", "RETRYING"},
+                paper_run_id=str(paper_run["id"]),
+                task_id=str(paper_run.get("task_id") or "") or None,
+            )
             workflow = chain(
                 mark_paper_walkforward_running_task.si(paper_run["id"]),
                 run_backtest_task.si(paper_run["task_id"], paper_run["backtest_run_id"]),
@@ -276,3 +336,38 @@ def order_intent_transitions(session_id: str, intent_id: str):
     if not intent or str(intent.get("session_id")) != session_id:
         raise HTTPException(status_code=404, detail="Paper order intent not found.")
     return paper_service.paper_order_pipeline.list_transitions(intent_id)
+
+
+@router.get("/{session_id}/constraint-decisions")
+def constraint_decisions(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.paper_order_pipeline.list_constraint_decisions(session_id)
+
+
+@router.get("/{session_id}/fills")
+def fills(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.paper_order_pipeline.list_fills(session_id)
+
+
+@router.get("/{session_id}/ledger")
+def ledger(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.paper_order_pipeline.list_ledger_entries(session_id)
+
+
+@router.get("/{session_id}/reconciliations")
+def reconciliations(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_service.paper_order_pipeline.list_reconciliations(session_id)
+
+
+@router.get("/{session_id}/daily-jobs")
+def daily_jobs(session_id: str):
+    if not paper_service.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    return paper_scheduler.list_jobs(session_id)

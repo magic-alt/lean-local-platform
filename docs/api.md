@@ -308,7 +308,9 @@ Creating a LEAN Paper session requires `projectId` and `sourceBacktestId`. The s
 `mode=lean_walkforward_v2` additionally requires
 `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1`. It records LEAN output as immutable
 intents, applies constraints before fill/ledger projection, appends legal state
-transitions, and persists six recovery checkpoints. The mode is disabled by
+transitions, persists opening balance, principal, commission and position
+ledger entries, and rebuilds mutable cash/position read models from that ledger.
+It persists six recovery checkpoints. The mode is disabled by
 default pending a new production-like Level 5 acceptance.
 
 ## Insights and A-share Technology Daily Report

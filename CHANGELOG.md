@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- 2026-07-24 — add fail-closed Level 4 validation-only selection and leakage evidence, immutable Paper constraint/matching/reconciliation records, durable daily Paper jobs, and a dedicated allowlisted LEAN runner; remove the raw Docker socket from the general backtest worker and retain Level 4/5 hard-gate failures until production-like replay, recovery, DR, credential and fault-matrix evidence exists.
+- Derive Paper v2 cash and position read models from immutable opening and fill
+  ledger entries, and separate principal from commission so a replay cannot
+  double-count fees.
 - 2026-07-24 — continue Level 4/5 remediation: split walk-forward evaluation into fingerprinted train/validation/OOS phases with validation-only parameter selection and UI controls; add failed-only retry and cancelled-batch restart while preserving successful children; introduce a feature-gated LEAN Paper v2 immutable intent/13-state transition/constraint/matching/fill/ledger pipeline with six idempotent recovery checkpoints, migration, audit APIs and deletion support; repair the Level 5 wrapper's CLI, evidence parsing and reject-reason handling; keep legacy sessions and historical evidence unchanged pending a new production-like Level 4 and 21-day Level 5 revalidation.
 - 2026-07-24 — harden re-audit truthfulness: add a disposable real-MySQL migration/locking/uniqueness lane and an explicitly uncertified Level 5 SLO/RPO/RTO/runbook contract; authenticate Level 4 and production-like Playwright evidence clients; fail invariant violations and legacy train/test-only walk-forward; add the missing real 3×3 grid and three-window probes; align Level 3/5 audit defaults with Compose port 8000; and correct stale API/authentication, migration and maturity documentation.
 - 2026-07-24 — add reproducible Level 4/5 re-audit runners for rolling, walk-forward, dynamic PIT and 21-day LEAN Paper evidence; make the Level 5 fault matrix opt-in and document the evidence-producing verification paths.

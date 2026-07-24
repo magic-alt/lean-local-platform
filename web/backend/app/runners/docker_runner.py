@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
 import selectors
 import shutil
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -20,8 +23,66 @@ class DockerRunResult:
 
 
 class DockerRunner:
-    def __init__(self, timeout_seconds: int | None = None):
+    def __init__(self, timeout_seconds: int | None = None, *, allow_remote: bool = True):
         self.timeout_seconds = timeout_seconds
+        self.allow_remote = allow_remote
+
+    @staticmethod
+    def _runner_token() -> str:
+        configured = os.environ.get("LEAN_RUNNER_TOKEN", "").strip()
+        if configured:
+            return configured
+        token_path = Path(
+            os.environ.get(
+                "LEAN_RUNNER_TOKEN_FILE",
+                "/workspace/web/runtime/secrets/runner_token",
+            )
+        )
+        try:
+            return token_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def _run_remote(
+        self,
+        command: list[str],
+        output_callback: Callable[[str], None],
+        *,
+        container_name: str,
+    ) -> DockerRunResult:
+        runner_url = os.environ.get("LEAN_RUNNER_URL", "").strip().rstrip("/")
+        token = self._runner_token()
+        if not runner_url or not token:
+            raise LeanPlatformError("restricted_runner_not_configured")
+        payload = json.dumps(
+            {
+                "runId": container_name.removeprefix("lean-"),
+                "command": command,
+                "containerName": container_name,
+                "timeoutSeconds": int(self.timeout_seconds or 3600),
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            runner_url + "/v1/jobs/run",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(
+            request,
+            timeout=max(60, int(self.timeout_seconds or 3600) + 30),
+        ) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        for line in body.get("output") or []:
+            output_callback(str(line))
+        return DockerRunResult(
+            exit_code=int(body.get("exitCode") or 0),
+            timed_out=bool(body.get("timedOut")),
+            error=body.get("error"),
+        )
 
     @staticmethod
     def docker_path() -> str:
@@ -51,6 +112,10 @@ class DockerRunner:
         cwd: Path = REPO_ROOT,
         container_name: str | None = None,
     ) -> DockerRunResult:
+        if self.allow_remote and os.environ.get("LEAN_RUNNER_URL", "").strip():
+            if not container_name:
+                raise LeanPlatformError("restricted_runner_container_name_required")
+            return self._run_remote(command, output_callback, container_name=container_name)
         self.docker_path()
         output_callback("running: " + " ".join(command))
         start = time.monotonic()

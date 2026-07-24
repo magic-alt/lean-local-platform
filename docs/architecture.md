@@ -118,6 +118,13 @@ Example or batch form
 
 Supported batch shapes include independent symbol/strategy matrices, multi-strategy runs, parameter grids, rolling windows, point-in-time universe portfolios, walk-forward optimization and research batches. Walk-forward folds isolate train, validation and OOS; only validation selects parameters. A batch does not bypass the global LEAN scheduler lease limit.
 
+The feature-gated Paper v2 remediation path treats LEAN order output as immutable
+intents rather than final portfolio facts. It records accepted fills as
+append-only opening-balance, principal, commission and position ledger entries;
+cash and positions are reconstructed read models. This path remains unapproved
+until the documented production-like 21-day and interruption-recovery evidence
+is complete.
+
 ## Data Synchronization Chain
 
 ```text

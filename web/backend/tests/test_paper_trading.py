@@ -369,16 +369,59 @@ def test_paper_v2_lean_intents_share_constraints_matching_and_ledger(tmp_path, m
         item["symbol"]: paper_order_pipeline.current_state(item["id"])
         for item in intents
     }
-    assert states == {"600519": "settled", "000001": "rejected"}
+    assert states == {"600519": "RECONCILIATION_PENDING", "000001": "REJECTED"}
     with db_module.db() as connection:
         fill_count = connection.execute("select count(*) as count from paper_order_fills").fetchone()["count"]
         ledger_count = connection.execute("select count(*) as count from paper_ledger_entries").fetchone()["count"]
         order_count = connection.execute("select count(*) as count from paper_orders").fetchone()["count"]
         checkpoint_count = connection.execute("select count(*) as count from paper_run_checkpoints").fetchone()["count"]
+        ledger_entries = connection.execute(
+            "select entry_type,asset,amount from paper_ledger_entries order by entry_type"
+        ).fetchall()
     assert fill_count == 1
-    assert ledger_count == 3
+    # Opening cash plus principal, commission and position entries.  Repeating
+    # the same LEAN intent must not duplicate either the fill or its fees.
+    assert ledger_count == 4
     assert order_count == 2
     assert checkpoint_count == 4
+    assert [(entry["entry_type"], entry["asset"]) for entry in ledger_entries] == [
+        ("CASH_DEPOSIT", "cash"),
+        ("COMMISSION", "cash"),
+        ("POSITION_INCREASE", "equity"),
+        ("TRADE_PRINCIPAL", "cash"),
+    ]
+    assert [entry["amount"] for entry in ledger_entries] == pytest.approx(
+        [100000.0, -paper._fee(100, 10.2, "buy", session), 1020.0, -1020.0]
+    )
+    current = paper.get_session(session["id"])
+    assert current["cash"] == pytest.approx(100000 - (100 * 10.2) - paper._fee(100, 10.2, "buy", current))
+    projection = paper_order_pipeline.ledger_projection(session["id"])
+    assert projection["cash"] == pytest.approx(current["cash"])
+    assert projection["positions"] == [
+        {
+            "symbol": "600519",
+            "quantity": 100.0,
+            "average_price": 10.2,
+            "last_buy_date": "2024-01-04",
+        }
+    ]
+
+    # Session rows are read models.  A worker restart must be able to discard
+    # stale rows and reconstruct the same balances without another fee entry.
+    with db_module.db() as connection:
+        connection.execute("update paper_sessions set cash=1 where id=?", (session["id"],))
+        connection.execute("delete from paper_positions where session_id=?", (session["id"],))
+    rebuilt = paper._apply_v2_ledger_projection(session["id"], "2024-01-04")
+    assert rebuilt == projection
+    assert paper.get_session(session["id"])["cash"] == pytest.approx(projection["cash"])
+    assert [
+        {key: position[key] for key in ("symbol", "quantity", "average_price", "last_buy_date")}
+        for position in paper.list_positions(session["id"])
+    ] == projection["positions"]
+    with db_module.db() as connection:
+        assert connection.execute(
+            "select count(*) as count from paper_ledger_entries"
+        ).fetchone()["count"] == 4
 
 
 def test_paper_v2_transition_graph_rejects_illegal_state_changes(tmp_path, monkeypatch):
@@ -402,7 +445,7 @@ def test_paper_v2_transition_graph_rejects_illegal_state_changes(tmp_path, monke
     with pytest.raises(ValueError, match="Illegal Paper order transition"):
         paper_order_pipeline.append_transition(
             intent["id"],
-            "filled",
+            "FILLED",
             event_type="skip_constraints",
             idempotency_key="illegal",
         )

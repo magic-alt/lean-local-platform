@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "assessmentDate": "2026-07-24",
+  "gitBaseline": {
+    "branch": "main",
+    "commit": "2d7b5bc52222871d782c823afef0ca0fe3b6d699",
+    "dirtyBeforeWork": true
+  },
+  "commands": {
+    "backend": "cd web/backend && .venv/bin/python -m pytest -q",
+    "frontendBuild": "cd web/frontend && npm run build",
+    "browser": "cd web/frontend && npm run test:e2e",
+    "help": "web/backend/.venv/bin/python scripts/check_help_docs.py",
+    "hygiene": "python3 scripts/check_repository_hygiene.py"
+  },
+  "verified": {
+    "backend": "376 passed, 2 skipped",
+    "frontendBuild": "PASS",
+    "browser": "15 passed, 1 skipped",
+    "helpDocs": "29 checked",
+    "repositoryHygiene": "PASS",
+    "realRestrictedRunnerLeanRun": "spy-20200102-20200228-20260724135943"
+  },
+  "notCertified": [
+    "Level 4 full production-like audit",
+    "Level 5 21-day same-session replay",
+    "F1-F6 recovery equivalence",
+    "complete isolated fault matrix",
+    "production-scale encrypted DR",
+    "credential rotation",
+    "signed supply-chain release"
+  ]
+}

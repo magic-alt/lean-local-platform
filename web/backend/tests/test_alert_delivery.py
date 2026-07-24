@@ -110,6 +110,7 @@ def test_paper_walkforward_failure_emits_critical_alert(monkeypatch):
             "trade_date": "2026-07-22",
         },
     )
+    monkeypatch.setattr(worker.paper_scheduler, "job_for_date", lambda session_id, trade_date: None)
     monkeypatch.setattr(worker, "emit_alert", lambda event_type, **kwargs: captured.append((event_type, kwargs)))
 
     result = worker.fail_paper_walkforward_task(None, RuntimeError("LEAN exited 1"), None, "paper-run")
@@ -139,6 +140,27 @@ def test_paper_scheduler_failure_records_warning_and_operational_alert(monkeypat
             }
         ],
     )
+    monkeypatch.setattr(worker.paper_scheduler, "recover_orphaned_jobs", lambda: [])
+    monkeypatch.setattr(
+        worker.paper_scheduler,
+        "ensure_job",
+        lambda session_id, trade_date: {
+            "id": "daily-job",
+            "state": "SCHEDULED",
+            "attempt": 0,
+            "max_attempts": 3,
+        },
+    )
+    monkeypatch.setattr(
+        worker.paper_scheduler,
+        "transition_job",
+        lambda job_id, state, **kwargs: {
+            "id": job_id,
+            "state": state,
+            "attempt": 0,
+            "max_attempts": 3,
+        },
+    )
     monkeypatch.setattr(worker.paper_service, "list_walkforward_runs", lambda session_id: [])
     monkeypatch.setattr(
         worker.paper_service,
@@ -164,3 +186,37 @@ def test_paper_scheduler_failure_records_warning_and_operational_alert(monkeypat
     assert captured[0][0] == "paper_schedule_failed"
     assert captured[0][1]["severity"] == "warning"
     assert captured[0][1]["dedupe_key"] == "paper_schedule_failed:paper-session"
+
+
+def test_paper_scheduler_advances_from_last_processed_date_with_market_calendar(monkeypatch):
+    from app.tasks import worker
+
+    captured_dates = []
+    monkeypatch.setattr(
+        worker.paper_service,
+        "list_sessions",
+        lambda: [
+            {
+                "id": "paper-session",
+                "mode": "lean_walkforward_v2",
+                "status": "running",
+                "auto_advance": True,
+                "venue": "china",
+                "start_date": "2026-07-01",
+                "last_processed_date": "2026-07-22",
+            }
+        ],
+    )
+    monkeypatch.setattr(worker.paper_scheduler, "recover_orphaned_jobs", lambda: [])
+    monkeypatch.setattr(
+        worker.paper_service,
+        "_next_trade_date",
+        lambda market, trade_date: (
+            captured_dates.append((market, trade_date)) or "2099-01-01"
+        ),
+    )
+
+    result = worker.schedule_paper_walkforward_task.run()
+
+    assert result == {"scheduled": [], "recovered": []}
+    assert captured_dates == [("china", "2026-07-22")]

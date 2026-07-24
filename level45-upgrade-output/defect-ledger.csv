@@ -1,0 +1,13 @@
+id,wave,defect,status,evidence_or_blocker
+L4-01,1,No independent validation and frozen OOS selection,IMPLEMENTED_NOT_CERTIFIED,migrations 0023 and focused tests
+L4-02,1,No unified leakage evaluator,IMPLEMENTED_NOT_CERTIFIED,experiment_leakage.py and focused tests
+L4-03,1,No production dataset for full rerun,OPEN_BLOCKING,dataset baseline production=0 certified=0
+L5-01,2,LEAN fills bypass persisted constraints and matching,IMPLEMENTED_NOT_CERTIFIED,migration 0024 and focused tests
+L5-02,3,No compliant same-session 21-day fills and rejects,OPEN_BLOCKING,no new 21-day evidence
+L5-03,4,No six-phase clean-baseline equivalence proof,OPEN_BLOCKING,no F1-F6 production-like evidence
+OPS-01,5,No durable daily job state,IMPLEMENTED_NOT_CERTIFIED,migration 0025 and focused tests
+OPS-02,5,Incomplete fault and alert escalation matrix,OPEN_BLOCKING,no isolated full matrix
+SEC-01,6,General worker holds Docker socket,CLOSED_FOR_BACKTEST_WORKER,runtime docker inspect evidence
+DR-01,6,No production-scale encrypted off-volume restore,OPEN_BLOCKING,no restore drill
+SEC-02,6,Default credentials not fully rotated,OPEN_BLOCKING,rotation not performed
+SC-01,7,No signed release and verified trusted signer,OPEN_BLOCKING,no signing evidence

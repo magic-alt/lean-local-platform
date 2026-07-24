@@ -41,6 +41,7 @@ from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import paper as paper_service
+from ..services import paper_scheduler
 from ..services import data_sync
 from ..services.alerts import emit_alert
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
@@ -131,12 +132,47 @@ def mark_paper_walkforward_running_task(paper_run_id: str):
     reject_on_worker_lost=True,
 )
 def finalize_paper_walkforward_task(paper_run_id: str):
-    return paper_service.finalize_walkforward_run(paper_run_id)
+    result = paper_service.finalize_walkforward_run(paper_run_id)
+    job = paper_scheduler.job_for_date(
+        str(result.get("session_id") or ""),
+        str(result.get("trade_date") or ""),
+    )
+    if job and result.get("status") == "success":
+        paper_scheduler.transition_job(
+            str(job["id"]),
+            "COMPLETED",
+            event_type="paper_run_completed",
+            payload={"paperRunId": paper_run_id},
+            expected_states={"RUNNING", "RETRYING"},
+            paper_run_id=paper_run_id,
+            task_id=str(result.get("task_id") or "") or None,
+        )
+    elif job:
+        paper_scheduler.transition_job(
+            str(job["id"]),
+            "FAILED",
+            event_type="paper_run_failed",
+            payload={"paperRunId": paper_run_id, "error": str(result.get("failure") or "finalize_failed")},
+            expected_states={"RUNNING", "RETRYING"},
+        )
+    return result
 
 
 @celery_app.task(name="lean_web.fail_paper_walkforward")
 def fail_paper_walkforward_task(request, exc, traceback, paper_run_id: str):  # pragma: no cover - Celery errback
     failed = paper_service.fail_walkforward_run(paper_run_id, str(exc))
+    job = paper_scheduler.job_for_date(
+        str(failed.get("session_id") or ""),
+        str(failed.get("trade_date") or ""),
+    )
+    if job and job.get("state") in {"RUNNING", "RETRYING"}:
+        paper_scheduler.transition_job(
+            str(job["id"]),
+            "FAILED",
+            event_type="worker_error",
+            payload={"paperRunId": paper_run_id, "error": str(exc)},
+            expected_states={"RUNNING", "RETRYING"},
+        )
     _emit_operational_alert(
         "paper_walkforward_failed",
         severity="critical",
@@ -160,6 +196,7 @@ def schedule_paper_walkforward_task(self):
     from celery import chain
 
     scheduled = []
+    recovered = paper_scheduler.recover_orphaned_jobs()
     retry_errors = []
     today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     for session in paper_service.list_sessions():
@@ -171,7 +208,10 @@ def schedule_paper_walkforward_task(self):
             continue
         next_date = session.get("start_date")
         if session.get("last_processed_date"):
-            next_date = paper_service._next_china_trade_date(str(session["last_processed_date"]))
+            next_date = paper_service._next_trade_date(
+                str(session.get("venue") or "china"),
+                str(session["last_processed_date"]),
+            )
         if not next_date or str(next_date) > today:
             continue
         current_runs = paper_service.list_walkforward_runs(session["id"])
@@ -180,8 +220,53 @@ def schedule_paper_walkforward_task(self):
             for item in current_runs
         ):
             continue
+        job = paper_scheduler.ensure_job(str(session["id"]), str(next_date))
+        if job.get("state") == "COMPLETED":
+            continue
+        if job.get("state") in {"RUNNING", "READY"}:
+            continue
+        if job.get("state") in {"FAILED", "BLOCKED_DATA", "BLOCKED_QA", "RETRYING"}:
+            if int(job.get("attempt") or 0) >= int(job.get("max_attempts") or 3):
+                if job.get("state") != "ESCALATED":
+                    job = paper_scheduler.transition_job(
+                        str(job["id"]),
+                        "ESCALATED",
+                        event_type="retry_budget_exhausted",
+                        payload={"error": job.get("last_error")},
+                        expected_states={"FAILED", "BLOCKED_DATA", "BLOCKED_QA", "RETRYING"},
+                    )
+                continue
+            if job.get("state") != "RETRYING":
+                job = paper_scheduler.transition_job(
+                    str(job["id"]),
+                    "RETRYING",
+                    event_type="automatic_retry",
+                    expected_states={"FAILED", "BLOCKED_DATA", "BLOCKED_QA"},
+                )
+            job = paper_scheduler.transition_job(
+                str(job["id"]),
+                "READY",
+                event_type="retry_ready",
+                expected_states={"RETRYING"},
+            )
+        elif job.get("state") == "SCHEDULED":
+            job = paper_scheduler.transition_job(
+                str(job["id"]),
+                "READY",
+                event_type="readiness_passed",
+                expected_states={"SCHEDULED"},
+            )
         try:
             paper_run = paper_service.create_walkforward_run(session["id"], str(next_date))
+            job = paper_scheduler.transition_job(
+                str(job["id"]),
+                "RUNNING",
+                event_type="workflow_queued",
+                payload={"paperRunId": paper_run["id"]},
+                expected_states={"READY", "RETRYING"},
+                paper_run_id=str(paper_run["id"]),
+                task_id=str(paper_run.get("task_id") or "") or None,
+            )
             workflow = chain(
                 mark_paper_walkforward_running_task.si(paper_run["id"]),
                 run_backtest_task.si(paper_run["task_id"], paper_run["backtest_run_id"]),
@@ -190,6 +275,20 @@ def schedule_paper_walkforward_task(self):
             workflow.apply_async(link_error=fail_paper_walkforward_task.s(paper_run["id"]))
             scheduled.append(paper_run["id"])
         except Exception as exc:
+            message = str(exc).lower()
+            blocked_state = "BLOCKED_QA" if "qa" in message else "BLOCKED_DATA" if any(
+                token in message for token in ("data", "benchmark", "certif", "source", "reference")
+            ) else "FAILED"
+            try:
+                paper_scheduler.transition_job(
+                    str(job["id"]),
+                    blocked_state,
+                    event_type="schedule_failed",
+                    payload={"error": str(exc)},
+                    expected_states={"READY", "RUNNING"},
+                )
+            except Exception:
+                logger.exception("Failed to transition Paper daily job after schedule error")
             paper_service.record_session_warning(session["id"], "paper_schedule_waiting", str(exc))
             _emit_operational_alert(
                 "paper_schedule_failed",
@@ -205,7 +304,7 @@ def schedule_paper_walkforward_task(self):
             continue
     if retry_errors:
         raise self.retry(exc=RuntimeError("; ".join(retry_errors[:3])), countdown=30 * 60)
-    return {"scheduled": scheduled}
+    return {"scheduled": scheduled, "recovered": recovered}
 
 
 def _update_table(table: str, row_id: str, **fields):

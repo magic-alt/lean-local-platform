@@ -275,6 +275,7 @@ def _validate_rolling(
 def _validate_walk_forward(
     items: list[dict[str, Any]],
     config: dict[str, Any],
+    detail: dict[str, Any],
     failures: list[str],
     warnings: list[str],
     min_folds: int,
@@ -359,6 +360,33 @@ def _validate_walk_forward(
         missing_summary = sorted(set(folds) - summary_folds)
         if missing_summary:
             warnings.append(f"walk_forward_summary_fold_gap:{missing_summary}")
+
+    evidence = detail.get("walkForwardEvidence")
+    if not isinstance(evidence, dict):
+        failures.append("walk_forward_evidence_missing")
+        return
+    windows = list(evidence.get("windows") or [])
+    if len(windows) < len(folds):
+        failures.append(f"walk_forward_evidence_window_gap:{len(windows)}:{len(folds)}")
+    for window in windows:
+        fold = window.get("fold")
+        leakage = window.get("leakage") or {}
+        if leakage.get("decision") != "ALLOW":
+            failures.append(f"walk_forward_leakage_not_allow:{fold}:{leakage.get('decision')}")
+        selection = window.get("selection") or {}
+        if not selection.get("selection_fingerprint"):
+            failures.append(f"walk_forward_selection_not_frozen:{fold}")
+        candidates = list(window.get("candidates") or [])
+        selected = [candidate for candidate in candidates if _is_truthy(candidate.get("selected"))]
+        if len(selected) != 1:
+            failures.append(f"walk_forward_selected_candidate_count:{fold}:{len(selected)}")
+        if any(candidate.get("validation_sharpe") is None for candidate in candidates):
+            failures.append(f"walk_forward_candidate_metrics_incomplete:{fold}")
+        oos = window.get("oosEvaluation") or {}
+        if oos.get("status") != "COMPLETED":
+            failures.append(f"walk_forward_oos_not_completed:{fold}:{oos.get('status')}")
+        if not oos.get("input_fingerprint") or not oos.get("result_digest"):
+            failures.append(f"walk_forward_oos_fingerprint_missing:{fold}")
 
 
 def _validate_dynamic_pit(
@@ -543,7 +571,7 @@ def _validate_case_result(name: str, config: dict[str, Any], detail: dict[str, A
     elif mode == "rolling":
         _validate_rolling(items, config, failures, warnings, min_folds=min_rolling_folds)
     elif mode == "walk_forward":
-        _validate_walk_forward(items, config, failures, warnings, min_folds=min_walk_folds)
+        _validate_walk_forward(items, config, detail, failures, warnings, min_folds=min_walk_folds)
     elif mode == "dynamic_universe":
         _validate_dynamic_pit(items, config, detail, failures, warnings)
 
@@ -643,7 +671,14 @@ def _run_case(
     return result
 
 
-def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
+def _build_configs(
+    project_id: str,
+    *,
+    dataset_version: str = "",
+    universe_version: str = "",
+    adjustment_contract: str = "raw-v1",
+    feature_pipeline_version: str = "",
+) -> dict[str, dict[str, Any]]:
     return {
         "parameter_grid": {
             "kind": "backtest",
@@ -706,11 +741,15 @@ def _build_configs(project_id: str) -> dict[str, dict[str, Any]]:
             "testYears": 1,
             "stepYears": 1,
             "source": "tushare",
-            "maxCandidates": 1,
+            "maxCandidates": 3,
             "parameterGrid": {
-                "fast": [10],
+                "fast": [5, 10, 15],
             },
             "minWalkForwardFolds": 2,
+            "datasetVersion": dataset_version,
+            "universeVersion": universe_version,
+            "adjustmentContract": adjustment_contract,
+            "featurePipelineVersion": feature_pipeline_version,
         },
         "dynamic_pit": {
             "kind": "backtest",
@@ -750,10 +789,20 @@ def main() -> int:
     parser.add_argument("--evidence-out", help="Write full JSON evidence to this file")
     parser.add_argument("--min-rolling-folds", type=int, default=1)
     parser.add_argument("--min-walk-forward-folds", type=int, default=2)
+    parser.add_argument("--dataset-version", default="", help="Frozen, certified dataset version required by walk-forward")
+    parser.add_argument("--universe-version", default="", help="Frozen PIT universe version required by walk-forward")
+    parser.add_argument("--adjustment-contract", default="raw-v1")
+    parser.add_argument("--feature-pipeline-version", default="", help="Frozen feature-pipeline version required by walk-forward")
     args = parser.parse_args()
 
     selected = {name.strip() for name in args.cases.split(",") if name.strip()}
-    available = _build_configs(args.project_id)
+    available = _build_configs(
+        args.project_id,
+        dataset_version=args.dataset_version,
+        universe_version=args.universe_version,
+        adjustment_contract=args.adjustment_contract,
+        feature_pipeline_version=args.feature_pipeline_version,
+    )
     unknown = sorted(selected - set(available))
     if unknown:
         raise SystemExit(f"Unknown cases: {unknown}")

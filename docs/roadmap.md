@@ -114,7 +114,8 @@ Implemented:
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
 - Feature-gated `lean_walkforward_v2` with immutable LEAN-sourced intents,
   legal 13-state transitions, the shared A-share/portfolio constraint layer,
-  idempotent fills and ledger entries, and six digest-protected checkpoints.
+  idempotent fills and ledger entries, ledger-derived cash/position read models,
+  and six digest-protected checkpoints.
 - A-share T+1, suspension, limit, lot, fee and portfolio constraints in both
   signal simulation and the v2 LEAN intent path.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.

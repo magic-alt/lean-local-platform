@@ -1,0 +1,6 @@
+{
+  "status": "NOT_CERTIFIED",
+  "sbomSignatureVerified": false,
+  "trustedSignerVerified": false,
+  "releaseGate": "RELEASE_BLOCKED"
+}

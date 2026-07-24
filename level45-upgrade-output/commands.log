@@ -1,0 +1,12 @@
+2026-07-24 baseline environment, git, migration and dataset inventory captured
+2026-07-24 focused pytest: 36 passed
+2026-07-24 frontend npm run build: PASS
+2026-07-24 initial full pytest: 375 passed, 1 failed, 2 skipped (stale generated API help)
+2026-07-24 generated docs/help/api-reference.md
+2026-07-24 final full pytest: 376 passed, 2 skipped
+2026-07-24 repository hygiene: PASS
+2026-07-24 help docs: 29 checked
+2026-07-24 Chromium Playwright: 15 passed, 1 skipped
+2026-07-24 real restricted-runner LEAN smoke: spy-20200102-20200228-20260724135943 success exit=0
+2026-07-24 real MySQL: migrations 0023 through 0026 applied; runner audit record success
+2026-07-24 runtime inspection: general backtest worker no Docker socket; dedicated runner read-only rootfs memory=512MiB pids=128 capdrop=ALL

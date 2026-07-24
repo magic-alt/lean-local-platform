@@ -57,7 +57,8 @@ LEAN Paper 必须按交易日顺序推进。`replay` 对该模式只允许开始
 
 v2 将每条 LEAN 订单输出先持久化为不可变 intent，再按合法状态图追加 transition。
 约束通过后才允许写 fill 和 ledger；约束失败会在同一来源链上形成带原因的 rejected
-order。`intent_capture`、`constraint_validation`、`matching`、`ledger`、
+order。开仓现金与持仓、成交本金、手续费均写入 append-only ledger；会话现金和
+持仓只是从该账本重建的读模型，重试同一 intent 不会再次成交或扣费。`intent_capture`、`constraint_validation`、`matching`、`ledger`、
 `snapshot_report` 和 `reconciliation` 六个 checkpoint 都带稳定 digest，重复完成
 同一阶段时若 payload 漂移会直接失败。
 

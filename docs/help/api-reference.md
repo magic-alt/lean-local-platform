@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **220** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **225** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -243,10 +243,15 @@
 | `GET` | `/api/paper/candidates` | Candidates | `projectId` (query, required) | `200` - |
 | `DELETE` | `/api/paper/{session_id}` | Delete | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}` | Detail | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/constraint-decisions` | Constraint Decisions | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/daily-jobs` | Daily Jobs | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/fills` | Fills | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/intents` | Order Intents | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/intents/{intent_id}/transitions` | Order Intent Transitions | `session_id` (path, required)<br>`intent_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/ledger` | Ledger | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/orders` | Orders | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/positions` | Positions | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/reconciliations` | Reconciliations | `session_id` (path, required) | `200` - |
 | `POST` | `/api/paper/{session_id}/replay` | Replay | `session_id` (path, required)<br>body `PaperReplayRequest` | `200` - |
 | `GET` | `/api/paper/{session_id}/reports` | Reports | `session_id` (path, required)<br>`light` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `GET` | `/api/paper/{session_id}/reports/{trade_date}` | Report | `session_id` (path, required)<br>`trade_date` (path, required) | `200` - |

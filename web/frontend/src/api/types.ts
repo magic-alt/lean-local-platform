@@ -330,6 +330,17 @@ export interface ExperimentBatch {
   status: string;
   config: Record<string, unknown>;
   summary?: { rankingMetric?: string; ranking?: Array<Record<string, unknown>> } | null;
+  walkForwardEvidence?: {
+    id: string;
+    status: string;
+    dataset_version: string;
+    universe_version: string;
+    adjustment_contract: string;
+    feature_pipeline_version: string;
+    selection_metric: string;
+    selection_rule: string;
+    windows: Array<Record<string, any>>;
+  } | null;
   total: number;
   queued: number;
   running: number;

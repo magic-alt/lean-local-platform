@@ -47,6 +47,10 @@ npm run build
 
 This runs `tsc -b` and Vite build.
 
+There is currently no `npm run test` component-test script. The maintained
+frontend test entrypoint is Playwright (`npm run test:e2e`); it must not be
+silently substituted with the build command.
+
 Focused and full browser suites run against an isolated MySQL/Redis/ClickHouse
 stack. Synthetic A-share fixtures are explicitly tagged `environment=research`
 and `synthetic=true`; they require `allowResearchSource=true` and can never be

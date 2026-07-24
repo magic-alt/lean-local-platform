@@ -249,6 +249,13 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
         "strategySnapshotMainFile": source_parameters.get("strategySnapshotMainFile"),
         "strategySnapshotAlgorithmClass": source_parameters.get("strategySnapshotAlgorithmClass"),
         "strategySnapshotLanguage": source_parameters.get("strategySnapshotLanguage"),
+        "strategySnapshotHash": source_parameters.get("strategySnapshotHash")
+        or source_parameters.get("strategyFingerprint"),
+        "datasetVersion": source_certification.get("datasetVersion")
+        or source_certification.get("id"),
+        "universeVersion": (source_fingerprint.get("universe") or {}).get("version")
+        if isinstance(source_fingerprint.get("universe"), dict)
+        else source_fingerprint.get("universeVersion"),
     }
     with db() as connection:
         connection.execute(
@@ -767,9 +774,13 @@ def _lean_intent_rejection(
         return "invalid_side"
     if quantity <= 0:
         return "invalid_quantity"
-    if price <= 0:
-        return "invalid_price"
     if session.get("venue") == "china":
+        bar = _ashare_bar(symbol, trade_date, str((session.get("parameters") or {}).get("source") or "") or None)
+        if not bar:
+            return "stale_data"
+        price = float(bar.get("open") or 0)
+        if price <= 0:
+            return "stale_price"
         gate = quality_gate(symbol, trade_date)
         if not gate["passed"]:
             report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
@@ -777,6 +788,8 @@ def _lean_intent_rejection(
         can_trade, reason = is_tradeable(symbol, trade_date, side)
         if not can_trade:
             return reason
+    elif price <= 0:
+        return "invalid_price"
     position = _position(session["id"], symbol)
     current_quantity = float((position or {}).get("quantity") or 0)
     signal = {"id": "", "symbol": symbol, "target_percent": None}
@@ -817,6 +830,38 @@ def _lean_intent_rejection(
     return None
 
 
+def _deterministic_v2_match_price(
+    session: dict[str, Any],
+    intent: dict[str, Any],
+) -> tuple[float | None, str | None]:
+    contract = str((session.get("parameters") or {}).get("executionPolicy") or "next_open").lower()
+    if contract != "next_open":
+        return None, "unsupported_execution_contract"
+    if session.get("venue") == "china":
+        bar = _ashare_bar(
+            str(intent["symbol"]),
+            str(intent["trade_date"]),
+            str((session.get("parameters") or {}).get("source") or "") or None,
+        )
+        if not bar:
+            return None, "market_data_unavailable"
+        open_price = float(bar.get("open") or 0)
+        if open_price <= 0:
+            return None, "invalid_open_price"
+    else:
+        open_price = float(intent.get("requested_price") or 0)
+        if open_price <= 0:
+            return None, "market_data_unavailable"
+    order_type = str(intent.get("order_type") or "market").lower()
+    limit_price = intent.get("limit_price")
+    if order_type == "limit" and limit_price is not None:
+        if str(intent["side"]) == "buy" and open_price > float(limit_price):
+            return None, "limit_not_marketable"
+        if str(intent["side"]) == "sell" and open_price < float(limit_price):
+            return None, "limit_not_marketable"
+    return open_price, None
+
+
 def _project_v2_order(
     session: dict[str, Any],
     intent: dict[str, Any],
@@ -836,68 +881,6 @@ def _project_v2_order(
         if existing:
             return row_to_dict(existing) or {}
         quantity = float(intent["quantity"]) if status == "filled" else 0.0
-        if status == "filled":
-            position = connection.execute(
-                """
-                select * from paper_positions
-                where session_id=? and symbol=?
-                """,
-                (session["id"], intent["symbol"]),
-            ).fetchone()
-            current_quantity = float(position["quantity"] if position else 0)
-            average_price = float(position["average_price"] if position else 0)
-            signed_quantity = quantity if intent["side"] == "buy" else -quantity
-            new_quantity = current_quantity + signed_quantity
-            current_cash_row = connection.execute(
-                "select cash from paper_sessions where id=?",
-                (session["id"],),
-            ).fetchone()
-            current_cash = float(current_cash_row["cash"])
-            if intent["side"] == "buy":
-                current_cash -= quantity * price + fee
-                average_price = (
-                    ((current_quantity * average_price) + (quantity * price)) / new_quantity
-                    if new_quantity
-                    else 0
-                )
-                last_buy_date = trade_date
-            else:
-                current_cash += quantity * price - fee
-                last_buy_date = position["last_buy_date"] if position else None
-                if new_quantity <= 0:
-                    average_price = 0
-            if new_quantity <= 0:
-                connection.execute(
-                    "delete from paper_positions where session_id=? and symbol=?",
-                    (session["id"], intent["symbol"]),
-                )
-            else:
-                connection.execute(
-                    """
-                    insert into paper_positions
-                        (session_id,symbol,quantity,average_price,market_price,market_value,
-                         last_buy_date,updated_at)
-                    values (?,?,?,?,?,?,?,?)
-                    on conflict(session_id,symbol) do update set
-                        quantity=excluded.quantity,average_price=excluded.average_price,
-                        market_price=excluded.market_price,market_value=excluded.market_value,
-                        last_buy_date=excluded.last_buy_date,updated_at=excluded.updated_at
-                    """,
-                    (
-                        session["id"],
-                        intent["symbol"],
-                        new_quantity,
-                        average_price,
-                        price,
-                        new_quantity * price,
-                        last_buy_date,
-                        utc_now(),
-                    ),
-                )
-            connection.execute(
-                "update paper_sessions set cash=?,updated_at=? where id=?",
-                (current_cash, utc_now(), session["id"]),
-            )
         now = utc_now()
         connection.execute(
             """
@@ -930,6 +913,37 @@ def _project_v2_order(
     return row_to_dict(row) or {}
 
 
+def _apply_v2_ledger_projection(session_id: str, trade_date: str) -> dict[str, Any]:
+    """Update mutable read models solely from immutable Paper v2 ledger entries."""
+    projection = paper_order_pipeline.ledger_projection(session_id)
+    with db() as connection:
+        connection.execute("delete from paper_positions where session_id=?", (session_id,))
+        for position in projection["positions"]:
+            connection.execute(
+                """
+                insert into paper_positions
+                    (session_id,symbol,quantity,average_price,market_price,market_value,
+                     last_buy_date,updated_at)
+                values (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    session_id,
+                    position["symbol"],
+                    position["quantity"],
+                    position["average_price"],
+                    position["average_price"],
+                    position["quantity"] * position["average_price"],
+                    position.get("last_buy_date"),
+                    utc_now(),
+                ),
+            )
+        connection.execute(
+            "update paper_sessions set cash=?,updated_at=? where id=?",
+            (projection["cash"], utc_now(), session_id),
+        )
+    return projection
+
+
 def _process_v2_lean_intents(
     *,
     session: dict[str, Any],
@@ -937,6 +951,12 @@ def _process_v2_lean_intents(
     child: dict[str, Any],
     orders: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    paper_order_pipeline.ensure_opening_ledger(
+        session_id=str(session["id"]),
+        cash=float(session.get("cash") or 0),
+        positions=list_positions(str(session["id"])),
+        currency="HKD" if session.get("venue") == "hongkong" else "CNY",
+    )
     captured = []
     for order in orders:
         event_key = _order_event_key(order)
@@ -953,6 +973,49 @@ def _process_v2_lean_intents(
             requested_price=price,
             raw_intent=order,
             attempt=1,
+            lean_order_id=str(
+                order.get("orderId")
+                or order.get("id")
+                or order.get("order_id")
+                or event_key
+            ),
+            project_snapshot_id=str(
+                (session.get("parameters") or {}).get("strategySnapshotDir") or ""
+            )
+            or None,
+            project_snapshot_hash=str(
+                (session.get("parameters") or {}).get("strategySnapshotHash")
+                or (session.get("parameters") or {}).get("parameterHash")
+                or ""
+            )
+            or None,
+            strategy_fingerprint=str(
+                child.get("result_fingerprint")
+                or child.get("input_fingerprint")
+                or child.get("fingerprint")
+                or ""
+            )
+            or None,
+            order_type=str(order.get("orderType") or order.get("type") or "market"),
+            limit_price=order.get("limitPrice"),
+            stop_price=order.get("stopPrice"),
+            signal_time=str(order.get("signalTime") or order.get("time") or "") or None,
+            requested_execution_time=str(
+                order.get("requestedExecutionTime") or order.get("time") or ""
+            )
+            or None,
+            dataset_version=str(
+                (session.get("parameters") or {}).get("datasetVersion")
+                or (session.get("parameters") or {}).get("dataset_version")
+                or ""
+            )
+            or None,
+            universe_version=str(
+                (session.get("parameters") or {}).get("universeVersion")
+                or (session.get("parameters") or {}).get("universe_version")
+                or ""
+            )
+            or None,
         )
         captured.append((intent, order, event_key, price))
     paper_order_pipeline.complete_checkpoint(
@@ -966,40 +1029,77 @@ def _process_v2_lean_intents(
     fill_keys = []
     for intent, raw_order, event_key, price in captured:
         state = paper_order_pipeline.current_state(str(intent["id"]))
-        if state == "rejected":
-            reason = next(
-                (
-                    item.get("payload", {}).get("reason")
-                    for item in paper_order_pipeline.list_transitions(str(intent["id"]))
-                    if item.get("to_state") == "rejected"
-                ),
-                None,
+        if state != "INTENT_CREATED":
+            with db() as connection:
+                existing_order = connection.execute(
+                    "select * from paper_orders where id=?",
+                    (intent["id"],),
+                ).fetchone()
+            projected = row_to_dict(existing_order)
+            if not projected:
+                raise ValueError(f"Intent {intent['id']} is {state} without a Paper order projection.")
+            projected_orders.append(projected)
+            if projected.get("status") == "filled":
+                with db() as connection:
+                    prior_fills = connection.execute(
+                        """
+                        select external_fill_key from paper_order_fills
+                        where intent_id=? order by created_at,id
+                        """,
+                        (intent["id"],),
+                    ).fetchall()
+                fill_keys.extend(str(item["external_fill_key"]) for item in prior_fills)
+            reason = projected.get("reason")
+            decisions.append(
+                {
+                    "intentId": intent["id"],
+                    "accepted": projected.get("status") != "rejected",
+                    "reason": reason,
+                }
             )
-            projected_orders.append(
-                _project_v2_order(
-                    session,
-                    intent,
-                    status="rejected",
-                    reason=reason,
-                    price=price,
-                    fee=0,
-                    trade_date=str(intent["trade_date"]),
-                )
-            )
-            decisions.append({"intentId": intent["id"], "accepted": False, "reason": reason})
             continue
         paper_order_pipeline.append_transition(
             str(intent["id"]),
-            "validating",
+            "VALIDATION_PENDING",
             event_type="constraint_validation_started",
-            idempotency_key="validating",
+            idempotency_key="validation_pending",
         )
         session = get_session(str(session["id"])) or session
         reason = _lean_intent_rejection(session, raw_order, str(intent["trade_date"]))
+        portfolio_snapshot = {
+            "cash": float(session.get("cash") or 0),
+            "equity": float(session.get("equity") or 0),
+            "positions": list_positions(str(session["id"])),
+        }
+        paper_order_pipeline.record_constraint_decision(
+            str(intent["id"]),
+            decision="REJECT" if reason else "ACCEPT",
+            constraint_version=str(intent.get("constraint_version") or "paper-constraints-v2"),
+            rule_code=reason,
+            rule_inputs={
+                "tradeDate": intent["trade_date"],
+                "symbol": intent["symbol"],
+                "side": intent["side"],
+                "quantity": intent["quantity"],
+                "requestedPrice": intent.get("requested_price"),
+            },
+            portfolio_snapshot=portfolio_snapshot,
+            reference_data_version=str(
+                intent.get("dataset_version")
+                or (session.get("parameters") or {}).get("source")
+                or "UNVERSIONED"
+            ),
+            rules=[
+                {
+                    "code": reason or "all_rules_passed",
+                    "decision": "REJECT" if reason else "ACCEPT",
+                }
+            ],
+        )
         if reason:
             paper_order_pipeline.append_transition(
                 str(intent["id"]),
-                "rejected",
+                "REJECTED",
                 event_type="constraint_rejected",
                 idempotency_key="constraint_result",
                 payload={"reason": reason},
@@ -1019,18 +1119,46 @@ def _process_v2_lean_intents(
             continue
         paper_order_pipeline.append_transition(
             str(intent["id"]),
-            "accepted",
+            "ACCEPTED",
             event_type="constraint_accepted",
             idempotency_key="constraint_result",
         )
         paper_order_pipeline.append_transition(
             str(intent["id"]),
-            "submitted",
+            "MATCHING",
             event_type="lean_match_submitted",
-            idempotency_key="submitted",
+            idempotency_key="matching",
         )
         quantity = float(intent["quantity"])
-        fee = _fee(quantity, price, str(intent["side"]), session)
+        matched_price, no_fill_reason = _deterministic_v2_match_price(session, intent)
+        if matched_price is None:
+            paper_order_pipeline.append_transition(
+                str(intent["id"]),
+                "EXPIRED",
+                event_type="paper_match_no_fill",
+                idempotency_key="matching_result",
+                payload={"reason": no_fill_reason},
+            )
+            projected_orders.append(
+                _project_v2_order(
+                    session,
+                    intent,
+                    status="expired",
+                    reason=no_fill_reason,
+                    price=price,
+                    fee=0,
+                    trade_date=str(intent["trade_date"]),
+                )
+            )
+            decisions.append(
+                {"intentId": intent["id"], "accepted": True, "reason": no_fill_reason}
+            )
+            continue
+        price = matched_price
+        fee_breakdown = _fee_breakdown(quantity, price, str(intent["side"]), session)
+        fee = fee_breakdown["commission"] + fee_breakdown["statutory"]
+        tax = fee_breakdown["tax"]
+        total_fee = fee + tax
         fill_key = f"{event_key}:fill"
         paper_order_pipeline.record_fill_and_ledger(
             str(intent["id"]),
@@ -1039,16 +1167,30 @@ def _process_v2_lean_intents(
             quantity=quantity,
             price=price,
             fee=fee,
+            tax=tax,
+            slippage=0.0,
+            fee_model_version="paper-fees-v2",
+            matching_contract="next_open-v1",
             payload=raw_order,
             currency="HKD" if session.get("venue") == "hongkong" else "CNY",
         )
+        _apply_v2_ledger_projection(str(session["id"]), str(intent["trade_date"]))
+        session = get_session(str(session["id"])) or session
         fill_keys.append(fill_key)
         paper_order_pipeline.append_transition(
             str(intent["id"]),
-            "filled",
+            "FILLED",
             event_type="lean_fill_recorded",
             idempotency_key="filled",
-            payload={"fillKey": fill_key, "quantity": quantity, "price": price, "fee": fee},
+            payload={
+                "fillKey": fill_key,
+                "quantity": quantity,
+                "price": price,
+                "fee": fee,
+                "tax": tax,
+                "slippage": 0.0,
+                "matchingContract": "next_open-v1",
+            },
         )
         projected_orders.append(
             _project_v2_order(
@@ -1057,15 +1199,15 @@ def _process_v2_lean_intents(
                 status="filled",
                 reason=None,
                 price=price,
-                fee=fee,
+                fee=total_fee,
                 trade_date=str(intent["trade_date"]),
             )
         )
         paper_order_pipeline.append_transition(
             str(intent["id"]),
-            "settled",
+            "RECONCILIATION_PENDING",
             event_type="ledger_projected",
-            idempotency_key="settled",
+            idempotency_key="reconciliation_pending",
         )
         decisions.append({"intentId": intent["id"], "accepted": True, "reason": None})
     paper_order_pipeline.complete_checkpoint(
@@ -1341,6 +1483,24 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
             (cash_balance, equity, trade_date, now, session["id"]),
         )
     if is_v2:
+        ledger_reconciliation = paper_order_pipeline.reconcile_session_day(
+            session_id=str(session["id"]),
+            paper_run_id=paper_run_id,
+            trade_date=trade_date,
+        )
+        reconciliation = {
+            **reconciliation,
+            "ledger": ledger_reconciliation,
+            "passed": bool(
+                reconciliation.get("passed")
+                and ledger_reconciliation.get("status") == "RECONCILED"
+            ),
+        }
+        with db() as connection:
+            connection.execute(
+                "update paper_walkforward_runs set reconciliation_json=? where id=?",
+                (json_dump(reconciliation), paper_run_id),
+            )
         paper_order_pipeline.complete_checkpoint(
             paper_run_id,
             "snapshot_report",
@@ -1351,11 +1511,51 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 "equity": equity,
             },
         )
+        if not reconciliation["passed"]:
+            for intent in v2_intents:
+                state = paper_order_pipeline.current_state(str(intent["id"]))
+                if state in {"FILLED", "REJECTED", "CANCELLED", "EXPIRED", "FAILED"}:
+                    paper_order_pipeline.append_transition(
+                        str(intent["id"]),
+                        "RECONCILIATION_PENDING",
+                        event_type="daily_reconciliation_started",
+                        idempotency_key="reconciliation_pending",
+                        payload=reconciliation,
+                    )
+                    state = "RECONCILIATION_PENDING"
+                if state == "RECONCILIATION_PENDING":
+                    paper_order_pipeline.append_transition(
+                        str(intent["id"]),
+                        "RECONCILIATION_FAILED",
+                        event_type="daily_reconciliation_failed",
+                        idempotency_key="reconciliation_failed",
+                        payload=reconciliation,
+                    )
+            paper_order_pipeline.complete_checkpoint(
+                paper_run_id,
+                "reconciliation",
+                {"passed": False, "ledger": ledger_reconciliation},
+            )
+            return fail_walkforward_run(paper_run_id, "ledger_reconciliation_failed")
         for intent in v2_intents:
-            if paper_order_pipeline.current_state(str(intent["id"])) == "settled":
+            if paper_order_pipeline.current_state(str(intent["id"])) in {
+                "FILLED",
+                "REJECTED",
+                "CANCELLED",
+                "EXPIRED",
+                "FAILED",
+            }:
                 paper_order_pipeline.append_transition(
                     str(intent["id"]),
-                    "reconciled",
+                    "RECONCILIATION_PENDING",
+                    event_type="daily_reconciliation_started",
+                    idempotency_key="reconciliation_pending",
+                    payload=reconciliation,
+                )
+            if paper_order_pipeline.current_state(str(intent["id"])) == "RECONCILIATION_PENDING":
+                paper_order_pipeline.append_transition(
+                    str(intent["id"]),
+                    "RECONCILED",
                     event_type="daily_reconciliation_passed",
                     idempotency_key="reconciled",
                     payload=reconciliation,
@@ -1780,7 +1980,12 @@ def _float_parameter(parameters: dict[str, Any], key: str, default: float) -> fl
     return float(value)
 
 
-def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
+def _fee_breakdown(
+    quantity: float,
+    price: float,
+    side: str,
+    session: dict[str, Any],
+) -> dict[str, float]:
     parameters = session.get("parameters") or {}
     value = abs(quantity * price)
     is_hongkong = str(session.get("venue") or "") == "hongkong"
@@ -1799,9 +2004,15 @@ def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> f
                 ("settlementFeeRate", 0.000042),
             )
         )
-        return commission + stamp_tax + statutory
+        return {"commission": commission, "tax": stamp_tax, "statutory": statutory}
     stamp_tax = value * _float_parameter(parameters, "stampTaxSell", 0.0005) if side == "sell" else 0
-    return commission + stamp_tax + value * _float_parameter(parameters, "transferFeeRate", 0.00001)
+    statutory = value * _float_parameter(parameters, "transferFeeRate", 0.00001)
+    return {"commission": commission, "tax": stamp_tax, "statutory": statutory}
+
+
+def _fee(quantity: float, price: float, side: str, session: dict[str, Any]) -> float:
+    breakdown = _fee_breakdown(quantity, price, side, session)
+    return breakdown["commission"] + breakdown["tax"] + breakdown["statutory"]
 
 
 def _round_lot(quantity: float, lot_size: int = 100) -> int:

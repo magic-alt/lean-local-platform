@@ -195,3 +195,60 @@ def test_delete_task_removes_terminal_task_and_log(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("deleted task should not be loadable")
+
+
+def test_paper_daily_job_is_unique_and_completion_marker_is_idempotent(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import paper_scheduler
+
+    first = paper_scheduler.ensure_job("session-1", "2026-07-22")
+    duplicate = paper_scheduler.ensure_job("session-1", "2026-07-22")
+    assert duplicate["id"] == first["id"]
+
+    ready = paper_scheduler.transition_job(
+        first["id"],
+        "READY",
+        event_type="readiness_passed",
+        expected_states={"SCHEDULED"},
+    )
+    running = paper_scheduler.transition_job(
+        first["id"],
+        "RUNNING",
+        event_type="workflow_queued",
+        expected_states={"READY"},
+        paper_run_id="paper-run-1",
+    )
+    completed = paper_scheduler.transition_job(
+        first["id"],
+        "COMPLETED",
+        event_type="paper_run_completed",
+        expected_states={"RUNNING"},
+    )
+    replay = paper_scheduler.transition_job(
+        first["id"],
+        "COMPLETED",
+        event_type="duplicate_completion",
+        expected_states={"RUNNING", "COMPLETED"},
+    )
+
+    assert ready["state"] == "READY"
+    assert running["attempt"] == 1
+    assert completed["completion_marker"] == "session-1:2026-07-22:complete"
+    assert replay["version"] == completed["version"]
+
+
+def test_paper_daily_job_blocks_illegal_skip_over_running(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import paper_scheduler
+
+    job = paper_scheduler.ensure_job("session-1", "2026-07-22")
+    try:
+        paper_scheduler.transition_job(
+            job["id"],
+            "COMPLETED",
+            event_type="illegal_skip",
+        )
+    except ValueError as exc:
+        assert "SCHEDULED -> COMPLETED" in str(exc)
+    else:
+        raise AssertionError("daily job must not complete without readiness and running")

@@ -1,0 +1,11 @@
+{
+  "database": "mysql://mysql:3306/lean_market",
+  "verifiedInContainer": true,
+  "latestRevision": "0026_restricted_runner_jobs",
+  "newRevisions": [
+    "0023_walk_forward_validation_oos",
+    "0024_paper_constraint_matching_reconciliation",
+    "0025_paper_daily_scheduler",
+    "0026_restricted_runner_jobs"
+  ]
+}

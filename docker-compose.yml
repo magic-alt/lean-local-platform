@@ -284,12 +284,56 @@ services:
     extends:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
+    environment:
+      LEAN_RUNNER_URL: http://lean-runner:8010
+      LEAN_RUNNER_TOKEN_FILE: /workspace/web/runtime/secrets/runner_token
     volumes:
       - .:/workspace
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
+    depends_on:
+      lean-runner:
+        condition: service_healthy
+
+  lean-runner:
+    logging: *bounded-logging
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: uvicorn app.runner_service:app --host 0.0.0.0 --port 8010
+    environment:
+      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_RUNNER_TOKEN_FILE: /workspace/web/runtime/secrets/runner_token
+      LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
+      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
+      LEAN_DOCKER_NETWORK: none
+      LEAN_DOCKER_CPUS: ${LEAN_DOCKER_CPUS:-2}
+      LEAN_DOCKER_MEMORY: ${LEAN_DOCKER_MEMORY:-4g}
+      LEAN_DOCKER_PIDS_LIMIT: ${LEAN_DOCKER_PIDS_LIMIT:-512}
+      LEAN_DOCKER_READ_ONLY: "1"
+    volumes:
+      - .:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    cpus: "1.0"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   beat:
     logging: *bounded-logging
