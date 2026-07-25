@@ -89,14 +89,24 @@ report. Synthetic and `environment=research` batches cannot be promoted.
 ## Portable CSI300 evidence
 
 `config/data-sources/csi300_pit_sources.json` records the verified official
-source hashes, coverage boundary and manual events. Referenced XLS/PDF files are
-resolved below `web/runtime/source-cache/csi300-official/` or an explicit
-`--cache-dir`; the manifest itself is machine-independent.
+detail/attachment URLs, source hashes, launch coverage and initial-snapshot
+reconstruction. Referenced files are retained below
+`web/runtime/source-cache/csi300-official/` or an explicit `--cache-dir`; the
+manifest itself is machine-independent and the bundle inventory has its own
+SHA-256.
 
-The production manifest references an operator-retained offline official-source
-bundle and intentionally fails validation if an attachment is absent or its
-hash differs. To test the portable parser without that bundle, use the tracked
-example manifest:
+Fetch or refresh the official bundle, then replay it without network access:
+
+```bash
+web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py --dry-run
+web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py \
+  --offline --dry-run
+```
+
+The offline gate intentionally fails if any file is absent, its hash differs,
+the event chain is inconsistent, or a sampled membership does not resolve to
+300 securities. To test the portable parser without the production bundle, use
+the tracked example manifest:
 
 ```bash
 web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
@@ -104,8 +114,11 @@ web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
   --dry-run --validate
 ```
 
-The current verified official-cache reconstruction starts at 2017-12-08. The
-earlier CSI300 history remains an explicit coverage gap in the living roadmap.
+The verified official reconstruction now starts at the index launch on
+2005-04-08. It derives launch membership by reversing only official early
+adjustments from the official 2005-07-01 300-member snapshot; current
+constituents are used only as a final equality check, never as a historical
+seed.
 
 TuShare Pro also exposes monthly `index_weight` snapshots. They are useful as
 an independent historical cross-check, but are not CSIndex official source
@@ -136,7 +149,5 @@ series is reconciled against the official announcement bundle.
 The 2026-07-23 governed run fetched 76,498 TuShare rows, accepted 254 complete
 monthly snapshots (76,200 no-lookahead membership intervals) covering
 2005-04-29 through 2026-06-30, and quarantined the incomplete 298-member
-snapshot dated 2009-12-31. This closes the TuShare shadow coverage gap only.
-`CSI300` production PIT remains unavailable before the verified official
-2017-12-08 boundary; `CSI300_TUSHARE` is never considered an official-source
-replacement.
+snapshot dated 2009-12-31. `CSI300_TUSHARE` remains an independent shadow
+cross-check and is never considered an official-source replacement.

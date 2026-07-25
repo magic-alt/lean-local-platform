@@ -891,6 +891,63 @@ def test_empty_instrument_result_advances_coverage_watermark(tmp_path, monkeypat
     assert adapter.calls == 1
 
 
+def test_quarantined_archive_reconciliation_preserves_ledger_and_records_resolution(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from scripts import reconcile_provider_archives
+
+    with db() as connection:
+        connection.execute(
+            """
+            insert into provider_raw_archive_issues
+                (archive_id,provider,dataset_key,run_id,object_id,row_count,payload_sha256,
+                 archive_sha256,uncompressed_size,compressed_size,compression,
+                 archive_created_at,issue_code,detected_at)
+            values ('old-archive','tushare','stock_basic','old-run','missing-object',1,
+                    'payload','archive',1,1,'gzip','2026-01-01','stored_object_missing',
+                    '2026-01-02')
+            """
+        )
+
+    monkeypatch.setattr(
+        reconcile_provider_archives,
+        "_latest_ten_dataset_run",
+        lambda: {"id": "verified-run"},
+    )
+    monkeypatch.setattr(
+        reconcile_provider_archives,
+        "_sync_completion_evidence",
+        lambda run_id, keys: {
+            "passed": True,
+            "items": [
+                {
+                    "datasetKey": key,
+                    "passed": True,
+                    "archiveRequired": False,
+                }
+                for key in sorted(keys)
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        reconcile_provider_archives,
+        "integrity_report",
+        lambda: {"passed": True, "orphanArchives": [], "objectsWithoutChunks": []},
+    )
+
+    report = reconcile_provider_archives.reconcile(apply=True)
+
+    assert report["passed"] is True
+    assert report["reconciledCount"] == 1
+    with db() as connection:
+        issue = connection.execute(
+            "select * from provider_raw_archive_issues where archive_id='old-archive'"
+        ).fetchone()
+    assert issue["status"] == "superseded_verified"
+    assert issue["resolution_run_id"] == "verified-run"
+    assert issue["resolution_code"] == "superseded_by_lossless_canonical_evidence"
+
+
 def test_suspend_incremental_fetches_once_per_trade_date_not_once_per_symbol(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, utc_now

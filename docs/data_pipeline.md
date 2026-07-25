@@ -123,9 +123,8 @@ Known limitations remain: intraday auction mechanics are incomplete; board-speci
 
 ## Remaining Data Work
 
-- CSI300 official PIT membership before 2017-12-08.
-- Reconcile the `CSI300_TUSHARE` monthly-snapshot shadow universe against
-  immutable CSIndex adjustment notices before any promotion to `CSI300`.
+- Maintain the immutable CSI300 bundle and record any official corrections
+  without substituting the `CSI300_TUSHARE` shadow universe.
 - PIT coverage reports for every offered research universe.
 - Full ETF, convertible-bond, futures/options and factor quality gates.
 - Scheduled incremental Parquet and ClickHouse maintenance with visible watermarks.

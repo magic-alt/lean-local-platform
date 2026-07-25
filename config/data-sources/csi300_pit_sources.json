@@ -1,891 +1,837 @@
 {
   "index_code": "CSI300",
-  "source": "csindex:official:cache",
-  "coverage_status": "partial_verified_from_official_cache",
-  "coverage_start": "2017-12-08",
-  "coverage_note": "Official CSIndex cached attachment reconstruction covers CSI300 from 2017-12-08 onward. It is real source data, but not full 2005-present history because earlier official notices were not available in the local cache.",
-  "missing_history_before": "2017-12-08",
+  "source": "csindex:official",
+  "coverage_status": "full_verified_official_bundle",
+  "coverage_start": "2005-04-08",
+  "coverage_end": null,
+  "missing_history_before": null,
+  "coverage_note": "Official CSIndex announcement detail responses and immutable attachments reconstruct CSI300 membership from launch without using current constituents as the historical seed.",
+  "initial_announce_date": "2005-04-08",
+  "initial_effective_date": "2005-04-08",
   "initial_reconstruction": {
-    "method": "reverse_events_from_current_membership",
+    "method": "official_2005_snapshot_and_adjustment",
     "member_count": 300,
-    "as_of_date": "2017-12-08"
+    "current_constituent_substitution": false
+  },
+  "event_count": 1850,
+  "bundle": {
+    "cache_path": "web/runtime/source-cache/csi300-official",
+    "manifest": "web/runtime/source-cache/csi300-official/bundle-manifest.json",
+    "file_count": 124,
+    "sha256": "309f2f3a24510add6d6d3f5023b48c35b51a913edd3806d20b95403b87c2dc31",
+    "fetch_command": "web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py --dry-run",
+    "offline_verify_command": "web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py --offline --dry-run"
   },
   "initial_members": [
     {
       "symbol": "000001",
-      "name": "Ping An Bank",
-      "listed_date": "1991-04-03",
-      "delisted_date": null
+      "name": "深发展Ａ"
     },
     {
       "symbol": "000002",
-      "name": "Vanke A",
-      "listed_date": "1991-01-29",
-      "delisted_date": null
-    },
-    {
-      "symbol": "000008",
-      "name": "神州高铁",
-      "listed_date": null
+      "name": "万 科Ａ"
     },
     {
       "symbol": "000009",
-      "name": "中国宝安",
+      "name": "深宝安Ａ"
+    },
+    {
+      "symbol": "000012",
+      "name": "南 玻Ａ"
+    },
+    {
+      "symbol": "000016",
+      "name": "深康佳Ａ"
+    },
+    {
+      "symbol": "000021",
+      "name": "深科技Ａ"
+    },
+    {
+      "symbol": "000022",
+      "name": "深赤湾Ａ"
+    },
+    {
+      "symbol": "000024",
+      "name": "招商地产"
+    },
+    {
+      "symbol": "000027",
+      "name": "深能源Ａ"
+    },
+    {
+      "symbol": "000029",
+      "name": "深深房Ａ",
       "listed_date": null
+    },
+    {
+      "symbol": "000031",
+      "name": "深宝恒Ａ"
+    },
+    {
+      "symbol": "000036",
+      "name": "华联控股"
+    },
+    {
+      "symbol": "000039",
+      "name": "中集集团"
     },
     {
       "symbol": "000060",
-      "name": "中金岭南",
-      "listed_date": null
+      "name": "中金岭南"
+    },
+    {
+      "symbol": "000061",
+      "name": "农 产 品"
     },
     {
       "symbol": "000063",
-      "name": "中兴通讯",
-      "listed_date": "1997-11-18",
-      "delisted_date": null
+      "name": "中兴通讯"
+    },
+    {
+      "symbol": "000066",
+      "name": "长城电脑"
+    },
+    {
+      "symbol": "000068",
+      "name": "赛格三星"
     },
     {
       "symbol": "000069",
-      "name": "华侨城 A",
-      "listed_date": null
+      "name": "华侨城Ａ"
+    },
+    {
+      "symbol": "000088",
+      "name": "盐田港Ａ"
+    },
+    {
+      "symbol": "000089",
+      "name": "深圳机场"
+    },
+    {
+      "symbol": "000096",
+      "name": "广聚能源"
     },
     {
       "symbol": "000100",
-      "name": "TCL科技",
-      "listed_date": "2004-01-30",
-      "delisted_date": null
-    },
-    {
-      "symbol": "000156",
-      "name": "华数传媒",
-      "listed_date": null
+      "name": "TCL 集团"
     },
     {
       "symbol": "000157",
-      "name": "中联重科",
-      "listed_date": "2000-10-12",
-      "delisted_date": null
+      "name": "中联重科"
     },
     {
-      "symbol": "000166",
-      "name": "申万宏源",
-      "listed_date": "2015-01-26",
-      "delisted_date": null
+      "symbol": "000400",
+      "name": "许继电气"
     },
     {
-      "symbol": "000333",
-      "name": "美的集团",
-      "listed_date": "2013-09-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "000338",
-      "name": "潍柴动力",
-      "listed_date": "2007-04-30",
-      "delisted_date": null
+      "symbol": "000401",
+      "name": "冀东水泥"
     },
     {
       "symbol": "000402",
-      "name": "金融街",
-      "listed_date": null
+      "name": "金 融 街"
     },
     {
-      "symbol": "000413",
-      "name": "东旭光电",
-      "listed_date": null
+      "symbol": "000406",
+      "name": "石油大明"
     },
     {
-      "symbol": "000415",
-      "name": "渤海租赁",
-      "listed_date": null
+      "symbol": "000410",
+      "name": "沈阳机床"
+    },
+    {
+      "symbol": "000420",
+      "name": "吉林化纤"
     },
     {
       "symbol": "000423",
-      "name": "东阿阿胶",
-      "listed_date": null
+      "name": "东阿阿胶"
     },
     {
       "symbol": "000425",
-      "name": "徐工机械",
-      "listed_date": "1996-08-28",
-      "delisted_date": null
+      "name": "徐工科技"
+    },
+    {
+      "symbol": "000429",
+      "name": "粤高速Ａ"
+    },
+    {
+      "symbol": "000488",
+      "name": "晨鸣纸业"
+    },
+    {
+      "symbol": "000498",
+      "name": "丹东化纤"
     },
     {
       "symbol": "000503",
-      "name": "国新健康",
+      "name": "海虹控股"
+    },
+    {
+      "symbol": "000507",
+      "name": "粤 富 华"
+    },
+    {
+      "symbol": "000511",
+      "name": "银基发展"
+    },
+    {
+      "symbol": "000518",
+      "name": "四环生物"
+    },
+    {
+      "symbol": "000520",
+      "name": "中国凤凰"
+    },
+    {
+      "symbol": "000527",
+      "name": "美的电器"
+    },
+    {
+      "symbol": "000528",
+      "name": "桂柳工Ａ"
+    },
+    {
+      "symbol": "000532",
+      "name": "力合股份",
       "listed_date": null
     },
     {
-      "symbol": "000538",
-      "name": "云南白药",
-      "listed_date": "1993-12-15",
-      "delisted_date": null
+      "symbol": "000533",
+      "name": "万家乐Ａ"
     },
     {
-      "symbol": "000540",
-      "name": "中天金融",
-      "listed_date": null
+      "symbol": "000539",
+      "name": "粤电力Ａ"
     },
     {
-      "symbol": "000555",
-      "name": "神州信息",
-      "listed_date": null
+      "symbol": "000541",
+      "name": "佛山照明"
+    },
+    {
+      "symbol": "000543",
+      "name": "皖能电力"
+    },
+    {
+      "symbol": "000550",
+      "name": "江铃汽车"
     },
     {
       "symbol": "000559",
-      "name": "万向钱潮",
+      "name": "万向钱潮"
+    },
+    {
+      "symbol": "000562",
+      "name": "宏源证券",
       "listed_date": null
     },
     {
       "symbol": "000568",
-      "name": "泸州老窖",
-      "listed_date": "1994-05-09",
-      "delisted_date": null
+      "name": "泸州老窖"
+    },
+    {
+      "symbol": "000571",
+      "name": "新大洲Ａ"
+    },
+    {
+      "symbol": "000573",
+      "name": "粤宏远Ａ"
+    },
+    {
+      "symbol": "000581",
+      "name": "威孚高科"
+    },
+    {
+      "symbol": "000601",
+      "name": "韶能股份"
+    },
+    {
+      "symbol": "000612",
+      "name": "焦作万方"
     },
     {
       "symbol": "000623",
-      "name": "吉林敖东",
-      "listed_date": null
+      "name": "吉林敖东"
     },
     {
       "symbol": "000625",
-      "name": "长安汽车",
-      "listed_date": "1997-06-10",
-      "delisted_date": null
+      "name": "长安汽车"
     },
     {
-      "symbol": "000627",
-      "name": "天茂集团",
-      "listed_date": null
+      "symbol": "000629",
+      "name": "新 钢 钒"
     },
     {
       "symbol": "000630",
-      "name": "铜陵有色",
-      "listed_date": null
+      "name": "铜都铜业"
+    },
+    {
+      "symbol": "000636",
+      "name": "风华高科"
     },
     {
       "symbol": "000651",
-      "name": "格力电器",
-      "listed_date": "1996-11-18",
-      "delisted_date": null
+      "name": "格力电器"
     },
     {
-      "symbol": "000671",
-      "name": "阳光城",
-      "listed_date": null
+      "symbol": "000659",
+      "name": "珠海中富"
     },
     {
-      "symbol": "000686",
-      "name": "东北证券",
-      "listed_date": null
+      "symbol": "000666",
+      "name": "经纬纺机"
+    },
+    {
+      "symbol": "000680",
+      "name": "山推股份"
+    },
+    {
+      "symbol": "000682",
+      "name": "东方电子"
+    },
+    {
+      "symbol": "000698",
+      "name": "沈阳化工"
+    },
+    {
+      "symbol": "000708",
+      "name": "大冶特钢"
     },
     {
       "symbol": "000709",
-      "name": "河钢股份",
-      "listed_date": null
+      "name": "唐钢股份"
     },
     {
-      "symbol": "000718",
-      "name": "苏宁环球",
-      "listed_date": null
+      "symbol": "000717",
+      "name": "韶钢松山"
     },
     {
       "symbol": "000725",
-      "name": "京东方A",
-      "listed_date": "2001-01-12",
-      "delisted_date": null
+      "name": "京东方Ａ"
     },
     {
-      "symbol": "000728",
-      "name": "国元证券",
-      "listed_date": null
+      "symbol": "000726",
+      "name": "鲁 泰Ａ"
     },
     {
-      "symbol": "000738",
-      "name": "航发控制",
-      "listed_date": null
+      "symbol": "000727",
+      "name": "华东科技"
     },
     {
-      "symbol": "000750",
-      "name": "国海证券",
-      "listed_date": null
+      "symbol": "000729",
+      "name": "燕京啤酒"
     },
     {
-      "symbol": "000768",
-      "name": "中航西飞",
-      "listed_date": "1997-06-26",
-      "delisted_date": null
+      "symbol": "000733",
+      "name": "振华科技"
     },
     {
-      "symbol": "000776",
-      "name": "广发证券",
-      "listed_date": "1997-06-11",
-      "delisted_date": null
+      "symbol": "000735",
+      "name": "罗 牛 山"
     },
     {
-      "symbol": "000783",
-      "name": "长江证券",
-      "listed_date": null
+      "symbol": "000737",
+      "name": "南风化工"
+    },
+    {
+      "symbol": "000758",
+      "name": "中色股份"
+    },
+    {
+      "symbol": "000763",
+      "name": "锦州石化"
+    },
+    {
+      "symbol": "000767",
+      "name": "漳泽电力"
+    },
+    {
+      "symbol": "000778",
+      "name": "新兴铸管"
+    },
+    {
+      "symbol": "000780",
+      "name": "草原兴发"
+    },
+    {
+      "symbol": "000786",
+      "name": "北新建材"
     },
     {
       "symbol": "000792",
-      "name": "*ST盐湖",
-      "listed_date": null
+      "name": "盐湖钾肥"
     },
     {
-      "symbol": "000793",
-      "name": "华闻传媒",
-      "listed_date": null
+      "symbol": "000800",
+      "name": "一汽轿车"
     },
     {
-      "symbol": "000826",
-      "name": "启迪桑德",
-      "listed_date": null
+      "symbol": "000806",
+      "name": "银河科技"
+    },
+    {
+      "symbol": "000807",
+      "name": "云铝股份"
+    },
+    {
+      "symbol": "000817",
+      "name": "辽河油田"
+    },
+    {
+      "symbol": "000822",
+      "name": "山东海化"
+    },
+    {
+      "symbol": "000823",
+      "name": "超声电子"
+    },
+    {
+      "symbol": "000825",
+      "name": "太钢不锈"
+    },
+    {
+      "symbol": "000828",
+      "name": "东莞控股"
+    },
+    {
+      "symbol": "000831",
+      "name": "关铝股份"
     },
     {
       "symbol": "000839",
-      "name": "中信国安",
-      "listed_date": null
+      "name": "中信国安"
     },
     {
       "symbol": "000858",
-      "name": "五 粮 液",
-      "listed_date": "1998-04-27",
-      "delisted_date": null
+      "name": "五 粮 液"
     },
     {
-      "symbol": "000876",
-      "name": "新希望",
-      "listed_date": null
+      "symbol": "000866",
+      "name": "扬子石化"
+    },
+    {
+      "symbol": "000875",
+      "name": "吉电股份"
+    },
+    {
+      "symbol": "000878",
+      "name": "云南铜业"
+    },
+    {
+      "symbol": "000886",
+      "name": "海南高速"
     },
     {
       "symbol": "000895",
-      "name": "双汇发展",
-      "listed_date": "1998-12-10",
-      "delisted_date": null
+      "name": "双汇发展"
+    },
+    {
+      "symbol": "000898",
+      "name": "鞍钢新轧"
+    },
+    {
+      "symbol": "000900",
+      "name": "现代投资"
+    },
+    {
+      "symbol": "000912",
+      "name": "泸 天 化"
+    },
+    {
+      "symbol": "000916",
+      "name": "华北高速"
     },
     {
       "symbol": "000917",
-      "name": "电广传媒",
+      "name": "电广传媒"
+    },
+    {
+      "symbol": "000920",
+      "name": "南方汇通"
+    },
+    {
+      "symbol": "000921",
+      "name": "科龙电器",
       "listed_date": null
     },
     {
-      "symbol": "000938",
-      "name": "紫光股份",
-      "listed_date": "1999-11-04",
-      "delisted_date": null
+      "symbol": "000927",
+      "name": "一汽夏利"
+    },
+    {
+      "symbol": "000930",
+      "name": "丰原生化"
+    },
+    {
+      "symbol": "000932",
+      "name": "华菱管线"
+    },
+    {
+      "symbol": "000933",
+      "name": "神火股份"
+    },
+    {
+      "symbol": "000937",
+      "name": "金牛能源"
+    },
+    {
+      "symbol": "000939",
+      "name": "凯迪电力"
+    },
+    {
+      "symbol": "000949",
+      "name": "新乡化纤"
+    },
+    {
+      "symbol": "000956",
+      "name": "中原油气"
     },
     {
       "symbol": "000959",
-      "name": "首钢股份",
-      "listed_date": null
+      "name": "首钢股份"
     },
     {
-      "symbol": "000961",
-      "name": "中南建设",
-      "listed_date": null
+      "symbol": "000960",
+      "name": "锡业股份"
     },
     {
-      "symbol": "000963",
-      "name": "华东医药",
-      "listed_date": "2000-01-27",
-      "delisted_date": null
+      "symbol": "000962",
+      "name": "东方钽业"
     },
     {
-      "symbol": "000977",
-      "name": "浪潮信息",
-      "listed_date": null
+      "symbol": "000968",
+      "name": "煤 气 化"
+    },
+    {
+      "symbol": "000970",
+      "name": "中科三环"
     },
     {
       "symbol": "000983",
-      "name": "西山煤电",
-      "listed_date": null
-    },
-    {
-      "symbol": "001979",
-      "name": "招商蛇口",
-      "listed_date": "2015-12-30",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002007",
-      "name": "华兰生物",
-      "listed_date": null
-    },
-    {
-      "symbol": "002008",
-      "name": "大族激光",
-      "listed_date": null
-    },
-    {
-      "symbol": "002024",
-      "name": "ST易购",
-      "listed_date": null
-    },
-    {
-      "symbol": "002027",
-      "name": "分众传媒",
-      "listed_date": "2004-08-04",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002044",
-      "name": "美年健康",
-      "listed_date": null
-    },
-    {
-      "symbol": "002049",
-      "name": "紫光国芯",
-      "listed_date": null
-    },
-    {
-      "symbol": "002065",
-      "name": "东华软件",
-      "listed_date": null
-    },
-    {
-      "symbol": "002074",
-      "name": "国轩高科",
-      "listed_date": null
-    },
-    {
-      "symbol": "002081",
-      "name": "金螳螂",
-      "listed_date": null
-    },
-    {
-      "symbol": "002131",
-      "name": "利欧股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "002142",
-      "name": "宁波银行",
-      "listed_date": "2007-07-19",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002146",
-      "name": "荣盛发展",
-      "listed_date": null
-    },
-    {
-      "symbol": "002152",
-      "name": "广电运通",
-      "listed_date": null
-    },
-    {
-      "symbol": "002153",
-      "name": "石基信息",
-      "listed_date": null
-    },
-    {
-      "symbol": "002174",
-      "name": "游族网络",
-      "listed_date": null
-    },
-    {
-      "symbol": "002183",
-      "name": "怡亚通",
-      "listed_date": null
-    },
-    {
-      "symbol": "002195",
-      "name": "二三四五",
-      "listed_date": null
-    },
-    {
-      "symbol": "002202",
-      "name": "金风科技",
-      "listed_date": null
-    },
-    {
-      "symbol": "002230",
-      "name": "科大讯飞",
-      "listed_date": "2008-05-12",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002236",
-      "name": "大华股份",
-      "listed_date": "2008-05-20",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002241",
-      "name": "歌尔股份",
-      "listed_date": "2008-05-22",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002252",
-      "name": "上海莱士",
-      "listed_date": null
-    },
-    {
-      "symbol": "002292",
-      "name": "奥飞娱乐",
-      "listed_date": null
-    },
-    {
-      "symbol": "002299",
-      "name": "圣农发展",
-      "listed_date": null
-    },
-    {
-      "symbol": "002304",
-      "name": "洋河股份",
-      "listed_date": "2009-11-06",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002310",
-      "name": "东方园林",
-      "listed_date": null
-    },
-    {
-      "symbol": "002352",
-      "name": "顺丰控股",
-      "listed_date": "2010-02-05",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002385",
-      "name": "大北农",
-      "listed_date": null
-    },
-    {
-      "symbol": "002411",
-      "name": "延安必康",
-      "listed_date": null
-    },
-    {
-      "symbol": "002415",
-      "name": "海康威视",
-      "listed_date": "2010-05-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002424",
-      "name": "贵州百灵",
-      "listed_date": null
-    },
-    {
-      "symbol": "002426",
-      "name": "胜利精密",
-      "listed_date": null
-    },
-    {
-      "symbol": "002450",
-      "name": "*ST康得",
-      "listed_date": null
-    },
-    {
-      "symbol": "002456",
-      "name": "欧菲光",
-      "listed_date": null
-    },
-    {
-      "symbol": "002465",
-      "name": "海格通信",
-      "listed_date": null
-    },
-    {
-      "symbol": "002466",
-      "name": "天齐锂业",
-      "listed_date": null
-    },
-    {
-      "symbol": "002470",
-      "name": "金正大",
-      "listed_date": null
-    },
-    {
-      "symbol": "002475",
-      "name": "立讯精密",
-      "listed_date": "2010-09-15",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002500",
-      "name": "山西证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "002508",
-      "name": "老板电器",
-      "listed_date": null
-    },
-    {
-      "symbol": "002555",
-      "name": "三七互娱",
-      "listed_date": null
-    },
-    {
-      "symbol": "002558",
-      "name": "巨人网络",
-      "listed_date": null
-    },
-    {
-      "symbol": "002594",
-      "name": "比亚迪",
-      "listed_date": "2011-06-30",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002602",
-      "name": "世纪华通",
-      "listed_date": null
-    },
-    {
-      "symbol": "002673",
-      "name": "西部证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "002714",
-      "name": "牧原股份",
-      "listed_date": "2014-01-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002736",
-      "name": "国信证券",
-      "listed_date": "2014-12-29",
-      "delisted_date": null
-    },
-    {
-      "symbol": "002739",
-      "name": "万达电影",
-      "listed_date": null
-    },
-    {
-      "symbol": "002797",
-      "name": "第一创业",
-      "listed_date": null
-    },
-    {
-      "symbol": "002831",
-      "name": "裕同科技",
-      "listed_date": null
-    },
-    {
-      "symbol": "002839",
-      "name": "张家港行",
-      "listed_date": null
-    },
-    {
-      "symbol": "002841",
-      "name": "视源股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "300017",
-      "name": "网宿科技",
-      "listed_date": null
-    },
-    {
-      "symbol": "300024",
-      "name": "机器人",
-      "listed_date": null
-    },
-    {
-      "symbol": "300027",
-      "name": "华谊兄弟",
-      "listed_date": null
-    },
-    {
-      "symbol": "300033",
-      "name": "同花顺",
-      "listed_date": "2009-12-25",
-      "delisted_date": null
-    },
-    {
-      "symbol": "300059",
-      "name": "东方财富",
-      "listed_date": "2010-03-19",
-      "delisted_date": null
-    },
-    {
-      "symbol": "300070",
-      "name": "碧水源",
-      "listed_date": null
-    },
-    {
-      "symbol": "300072",
-      "name": "三聚环保",
-      "listed_date": null
-    },
-    {
-      "symbol": "300104",
-      "name": "乐视网",
-      "listed_date": null
-    },
-    {
-      "symbol": "300124",
-      "name": "汇川技术",
-      "listed_date": "2010-09-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "300133",
-      "name": "华策影视",
-      "listed_date": null
-    },
-    {
-      "symbol": "300144",
-      "name": "宋城演艺",
-      "listed_date": null
-    },
-    {
-      "symbol": "300168",
-      "name": "万达信息",
-      "listed_date": null
-    },
-    {
-      "symbol": "300251",
-      "name": "光线传媒",
-      "listed_date": null
-    },
-    {
-      "symbol": "300315",
-      "name": "掌趣科技",
-      "listed_date": null
+      "name": "西山煤电"
     },
     {
       "symbol": "600000",
-      "name": "Shanghai Pudong Development Bank",
-      "listed_date": "1999-11-10",
-      "delisted_date": null
+      "name": "浦发银行"
+    },
+    {
+      "symbol": "600001",
+      "name": "邯郸钢铁"
+    },
+    {
+      "symbol": "600002",
+      "name": "齐鲁石化"
+    },
+    {
+      "symbol": "600004",
+      "name": "白云机场"
+    },
+    {
+      "symbol": "600005",
+      "name": "武钢股份"
+    },
+    {
+      "symbol": "600006",
+      "name": "东风汽车"
+    },
+    {
+      "symbol": "600007",
+      "name": "中国国贸"
     },
     {
       "symbol": "600008",
-      "name": "首创股份",
-      "listed_date": null
+      "name": "首创股份"
     },
     {
       "symbol": "600009",
-      "name": "上海机场",
-      "listed_date": "1998-02-18",
-      "delisted_date": null
+      "name": "上海机场"
     },
     {
       "symbol": "600010",
-      "name": "包钢股份",
-      "listed_date": "2001-03-09",
-      "delisted_date": null
+      "name": "钢联股份"
+    },
+    {
+      "symbol": "600011",
+      "name": "华能国际"
+    },
+    {
+      "symbol": "600012",
+      "name": "皖通高速"
     },
     {
       "symbol": "600015",
-      "name": "华夏银行",
-      "listed_date": "2003-09-12",
-      "delisted_date": null
+      "name": "华夏银行"
     },
     {
       "symbol": "600016",
-      "name": "民生银行",
-      "listed_date": "2000-12-19",
-      "delisted_date": null
+      "name": "民生银行"
     },
     {
       "symbol": "600018",
-      "name": "上港集团",
-      "listed_date": "2006-10-26",
-      "delisted_date": null
+      "name": "上港集箱"
     },
     {
       "symbol": "600019",
-      "name": "宝钢股份",
-      "listed_date": "2000-12-12",
-      "delisted_date": null
+      "name": "宝钢股份"
+    },
+    {
+      "symbol": "600020",
+      "name": "中原高速"
     },
     {
       "symbol": "600021",
-      "name": "上海电力",
-      "listed_date": null
+      "name": "上海电力"
     },
     {
-      "symbol": "600023",
-      "name": "浙能电力",
-      "listed_date": null
+      "symbol": "600022",
+      "name": "济南钢铁"
+    },
+    {
+      "symbol": "600026",
+      "name": "中海发展"
     },
     {
       "symbol": "600028",
-      "name": "中国石化",
-      "listed_date": "2001-08-08",
-      "delisted_date": null
+      "name": "中国石化"
     },
     {
       "symbol": "600029",
-      "name": "南方航空",
-      "listed_date": "2003-07-25",
-      "delisted_date": null
+      "name": "南方航空"
     },
     {
       "symbol": "600030",
-      "name": "中信证券",
-      "listed_date": "2003-01-06",
-      "delisted_date": null
+      "name": "中信证券"
     },
     {
       "symbol": "600031",
-      "name": "三一重工",
-      "listed_date": "2003-07-03",
-      "delisted_date": null
+      "name": "三一重工"
+    },
+    {
+      "symbol": "600033",
+      "name": "福建高速"
+    },
+    {
+      "symbol": "600035",
+      "name": "楚天高速"
     },
     {
       "symbol": "600036",
-      "name": "招商银行",
-      "listed_date": "2002-04-09",
-      "delisted_date": null
+      "name": "招商银行"
     },
     {
       "symbol": "600037",
-      "name": "歌华有线",
-      "listed_date": null
-    },
-    {
-      "symbol": "600038",
-      "name": "中直股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "600048",
-      "name": "保利发展",
-      "listed_date": "2006-07-31",
-      "delisted_date": null
+      "name": "歌华有线"
     },
     {
       "symbol": "600050",
-      "name": "中国联通",
-      "listed_date": "2002-10-09",
-      "delisted_date": null
+      "name": "中国联通"
+    },
+    {
+      "symbol": "600057",
+      "name": "夏新电子"
+    },
+    {
+      "symbol": "600058",
+      "name": "五矿发展"
     },
     {
       "symbol": "600060",
-      "name": "海信电器",
-      "listed_date": null
-    },
-    {
-      "symbol": "600061",
-      "name": "国投资本",
-      "listed_date": "1997-05-19",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600066",
-      "name": "宇通客车",
-      "listed_date": null
+      "name": "海信电器"
     },
     {
       "symbol": "600068",
-      "name": "葛洲坝",
+      "name": "葛 洲 坝"
+    },
+    {
+      "symbol": "600072",
+      "name": "江南重工",
       "listed_date": null
+    },
+    {
+      "symbol": "600073",
+      "name": "上海梅林"
     },
     {
       "symbol": "600074",
-      "name": "*ST保千",
-      "listed_date": null
+      "name": "中达股份"
+    },
+    {
+      "symbol": "600078",
+      "name": "澄星股份"
     },
     {
       "symbol": "600085",
-      "name": "同仁堂",
-      "listed_date": "1997-06-25",
-      "delisted_date": null
+      "name": "同 仁 堂"
+    },
+    {
+      "symbol": "600087",
+      "name": "南京水运"
+    },
+    {
+      "symbol": "600088",
+      "name": "中视传媒"
     },
     {
       "symbol": "600089",
-      "name": "特变电工",
-      "listed_date": null
+      "name": "特变电工"
+    },
+    {
+      "symbol": "600091",
+      "name": "明天科技"
+    },
+    {
+      "symbol": "600096",
+      "name": "云 天 化"
+    },
+    {
+      "symbol": "600098",
+      "name": "广州控股"
     },
     {
       "symbol": "600100",
-      "name": "同方股份",
-      "listed_date": null
+      "name": "清华同方"
+    },
+    {
+      "symbol": "600102",
+      "name": "莱钢股份"
+    },
+    {
+      "symbol": "600103",
+      "name": "青山纸业"
     },
     {
       "symbol": "600104",
-      "name": "上汽集团",
-      "listed_date": "1997-11-25",
-      "delisted_date": null
+      "name": "上海汽车"
     },
     {
-      "symbol": "600109",
-      "name": "国金证券",
-      "listed_date": null
+      "symbol": "600108",
+      "name": "亚盛集团"
     },
     {
-      "symbol": "600111",
-      "name": "北方稀土",
-      "listed_date": "1997-09-24",
-      "delisted_date": null
+      "symbol": "600110",
+      "name": "中科英华"
     },
     {
       "symbol": "600115",
-      "name": "中国东航",
-      "listed_date": "1997-11-05",
-      "delisted_date": null
+      "name": "东方航空"
     },
     {
-      "symbol": "600118",
-      "name": "中国卫星",
-      "listed_date": null
+      "symbol": "600117",
+      "name": "西宁特钢"
     },
     {
-      "symbol": "600150",
-      "name": "中国船舶",
-      "listed_date": null
+      "symbol": "600121",
+      "name": "郑州煤电"
+    },
+    {
+      "symbol": "600123",
+      "name": "兰花科创"
+    },
+    {
+      "symbol": "600126",
+      "name": "杭钢股份"
+    },
+    {
+      "symbol": "600135",
+      "name": "乐凯胶片"
+    },
+    {
+      "symbol": "600138",
+      "name": "中 青 旅"
     },
     {
       "symbol": "600153",
-      "name": "建发股份",
-      "listed_date": null
+      "name": "建发股份"
     },
     {
-      "symbol": "600157",
-      "name": "永泰能源",
-      "listed_date": null
+      "symbol": "600166",
+      "name": "福田汽车"
     },
     {
       "symbol": "600170",
-      "name": "上海建工",
-      "listed_date": null
+      "name": "上海建工"
+    },
+    {
+      "symbol": "600171",
+      "name": "上海贝岭"
     },
     {
       "symbol": "600177",
-      "name": "雅戈尔",
-      "listed_date": null
+      "name": "雅 戈 尔"
+    },
+    {
+      "symbol": "600183",
+      "name": "生益科技"
     },
     {
       "symbol": "600188",
-      "name": "兖州煤业",
-      "listed_date": null
+      "name": "兖州煤业"
+    },
+    {
+      "symbol": "600190",
+      "name": "锦 州 港"
     },
     {
       "symbol": "600196",
-      "name": "复星医药",
-      "listed_date": "1998-08-07",
-      "delisted_date": null
+      "name": "复星医药"
     },
     {
-      "symbol": "600208",
-      "name": "新湖中宝",
-      "listed_date": null
+      "symbol": "600198",
+      "name": "大唐电信"
+    },
+    {
+      "symbol": "600205",
+      "name": "山东铝业"
+    },
+    {
+      "symbol": "600207",
+      "name": "安彩高科"
+    },
+    {
+      "symbol": "600210",
+      "name": "紫江企业"
+    },
+    {
+      "symbol": "600215",
+      "name": "长春经开"
+    },
+    {
+      "symbol": "600220",
+      "name": "江苏阳光"
     },
     {
       "symbol": "600221",
-      "name": "海航控股",
+      "name": "海南航空"
+    },
+    {
+      "symbol": "600228",
+      "name": "昌九生化",
       "listed_date": null
     },
     {
-      "symbol": "600233",
-      "name": "圆通速递",
-      "listed_date": null
+      "symbol": "600231",
+      "name": "凌钢股份"
+    },
+    {
+      "symbol": "600236",
+      "name": "桂冠电力"
     },
     {
       "symbol": "600256",
-      "name": "广汇能源",
-      "listed_date": null
+      "name": "广汇股份"
+    },
+    {
+      "symbol": "600266",
+      "name": "北京城建"
+    },
+    {
+      "symbol": "600269",
+      "name": "赣粤高速"
+    },
+    {
+      "symbol": "600270",
+      "name": "外运发展"
     },
     {
       "symbol": "600271",
@@ -893,99 +839,60 @@
       "listed_date": null
     },
     {
-      "symbol": "600276",
-      "name": "恒瑞医药",
-      "listed_date": "2000-10-18",
-      "delisted_date": null
+      "symbol": "600282",
+      "name": "南钢股份"
     },
     {
-      "symbol": "600297",
-      "name": "广汇汽车",
-      "listed_date": null
+      "symbol": "600296",
+      "name": "兰州铝业"
+    },
+    {
+      "symbol": "600307",
+      "name": "酒钢宏兴"
+    },
+    {
+      "symbol": "600308",
+      "name": "华泰股份"
     },
     {
       "symbol": "600309",
-      "name": "万华化学",
-      "listed_date": "2001-01-05",
-      "delisted_date": null
+      "name": "烟台万华"
     },
     {
-      "symbol": "600332",
-      "name": "白云山",
-      "listed_date": null
+      "symbol": "600320",
+      "name": "振华港机"
     },
     {
-      "symbol": "600340",
-      "name": "华夏幸福",
-      "listed_date": null
+      "symbol": "600333",
+      "name": "长春燃气"
     },
     {
-      "symbol": "600352",
-      "name": "浙江龙盛",
-      "listed_date": null
+      "symbol": "600348",
+      "name": "国阳新能"
+    },
+    {
+      "symbol": "600350",
+      "name": "山东基建"
+    },
+    {
+      "symbol": "600357",
+      "name": "承德钒钛"
     },
     {
       "symbol": "600362",
-      "name": "江西铜业",
-      "listed_date": "2002-01-11",
-      "delisted_date": null
+      "name": "江西铜业"
     },
     {
-      "symbol": "600369",
-      "name": "西南证券",
-      "listed_date": null
+      "symbol": "600377",
+      "name": "宁沪高速"
     },
     {
-      "symbol": "600372",
-      "name": "中航电子",
-      "listed_date": null
+      "symbol": "600408",
+      "name": "安泰集团"
     },
     {
-      "symbol": "600373",
-      "name": "中文传媒",
-      "listed_date": null
-    },
-    {
-      "symbol": "600376",
-      "name": "首开股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "600383",
-      "name": "金地集团",
-      "listed_date": null
-    },
-    {
-      "symbol": "600406",
-      "name": "国电南瑞",
-      "listed_date": "2003-10-16",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600415",
-      "name": "小商品城",
-      "listed_date": null
-    },
-    {
-      "symbol": "600436",
-      "name": "片仔癀",
-      "listed_date": "2003-06-16",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600446",
-      "name": "金证股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "600482",
-      "name": "中国动力",
-      "listed_date": null
-    },
-    {
-      "symbol": "600485",
-      "name": "信威集团",
-      "listed_date": null
+      "symbol": "600428",
+      "name": "中远航运"
     },
     {
       "symbol": "600489",
@@ -993,929 +900,1196 @@
       "listed_date": null
     },
     {
-      "symbol": "600498",
-      "name": "烽火通信",
-      "listed_date": null
+      "symbol": "600500",
+      "name": "中化国际"
     },
     {
-      "symbol": "600518",
-      "name": "ST康美",
-      "listed_date": null
+      "symbol": "600508",
+      "name": "上海能源"
     },
     {
       "symbol": "600519",
-      "name": "Kweichow Moutai",
-      "listed_date": "2001-08-27",
-      "delisted_date": null
+      "name": "贵州茅台"
     },
     {
-      "symbol": "600522",
-      "name": "中天科技",
-      "listed_date": null
+      "symbol": "600548",
+      "name": "深 高 速"
     },
     {
-      "symbol": "600535",
-      "name": "天士力",
-      "listed_date": null
+      "symbol": "600569",
+      "name": "安阳钢铁"
     },
     {
-      "symbol": "600547",
-      "name": "山东黄金",
-      "listed_date": "2003-08-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600549",
-      "name": "厦门钨业",
-      "listed_date": null
-    },
-    {
-      "symbol": "600570",
-      "name": "恒生电子",
-      "listed_date": "2003-12-16",
-      "delisted_date": null
+      "symbol": "600581",
+      "name": "八一钢铁"
     },
     {
       "symbol": "600583",
-      "name": "海油工程",
-      "listed_date": null
+      "name": "海油工程"
     },
     {
       "symbol": "600585",
-      "name": "海螺水泥",
-      "listed_date": "2002-02-07",
-      "delisted_date": null
+      "name": "海螺水泥"
     },
     {
-      "symbol": "600588",
-      "name": "用友网络",
-      "listed_date": "2001-05-18",
-      "delisted_date": null
+      "symbol": "600591",
+      "name": "上海航空"
     },
     {
-      "symbol": "600606",
-      "name": "绿地控股",
-      "listed_date": null
+      "symbol": "600597",
+      "name": "光明乳业"
+    },
+    {
+      "symbol": "600598",
+      "name": "北 大 荒"
+    },
+    {
+      "symbol": "600600",
+      "name": "青岛啤酒"
+    },
+    {
+      "symbol": "600601",
+      "name": "方正科技"
+    },
+    {
+      "symbol": "600602",
+      "name": "广电电子"
+    },
+    {
+      "symbol": "600608",
+      "name": "上海科技"
+    },
+    {
+      "symbol": "600621",
+      "name": "上海金陵"
+    },
+    {
+      "symbol": "600630",
+      "name": "龙头股份"
+    },
+    {
+      "symbol": "600631",
+      "name": "百联股份"
+    },
+    {
+      "symbol": "600635",
+      "name": "大众公用"
     },
     {
       "symbol": "600637",
-      "name": "东方明珠",
+      "name": "广电信息"
+    },
+    {
+      "symbol": "600638",
+      "name": "新 黄 浦"
+    },
+    {
+      "symbol": "600639",
+      "name": "浦东金桥"
+    },
+    {
+      "symbol": "600641",
+      "name": "中远发展",
       "listed_date": null
+    },
+    {
+      "symbol": "600642",
+      "name": "申能股份"
+    },
+    {
+      "symbol": "600643",
+      "name": "爱建股份"
     },
     {
       "symbol": "600649",
-      "name": "城投控股",
-      "listed_date": null
+      "name": "原水股份"
+    },
+    {
+      "symbol": "600652",
+      "name": "爱使股份"
+    },
+    {
+      "symbol": "600653",
+      "name": "申华控股"
+    },
+    {
+      "symbol": "600654",
+      "name": "飞乐股份"
     },
     {
       "symbol": "600660",
-      "name": "福耀玻璃",
-      "listed_date": "1993-06-10",
-      "delisted_date": null
+      "name": "福耀玻璃"
+    },
+    {
+      "symbol": "600662",
+      "name": "强生控股"
     },
     {
       "symbol": "600663",
-      "name": "陆家嘴",
-      "listed_date": null
+      "name": "陆 家 嘴"
     },
     {
       "symbol": "600674",
-      "name": "川投能源",
-      "listed_date": null
+      "name": "川投能源"
     },
     {
-      "symbol": "600682",
-      "name": "南京新百",
-      "listed_date": null
-    },
-    {
-      "symbol": "600685",
-      "name": "中船防务",
-      "listed_date": null
+      "symbol": "600675",
+      "name": "中华企业"
     },
     {
       "symbol": "600688",
-      "name": "上海石化",
-      "listed_date": null
+      "name": "上海石化"
     },
     {
       "symbol": "600690",
-      "name": "600690",
-      "listed_date": "1993-11-19",
-      "delisted_date": null
+      "name": "青岛海尔"
     },
     {
-      "symbol": "600703",
-      "name": "三安光电",
-      "listed_date": null
-    },
-    {
-      "symbol": "600704",
-      "name": "物产中大",
-      "listed_date": null
+      "symbol": "600694",
+      "name": "大商股份"
     },
     {
       "symbol": "600705",
-      "name": "中航产融",
+      "name": "北亚集团"
+    },
+    {
+      "symbol": "600707",
+      "name": "彩虹股份"
+    },
+    {
+      "symbol": "600710",
+      "name": "常林股份",
       "listed_date": null
+    },
+    {
+      "symbol": "600717",
+      "name": "天 津 港"
     },
     {
       "symbol": "600718",
-      "name": "东软集团",
-      "listed_date": null
+      "name": "东软股份"
     },
     {
-      "symbol": "600737",
-      "name": "中粮糖业",
-      "listed_date": null
+      "symbol": "600724",
+      "name": "宁波富达"
+    },
+    {
+      "symbol": "600726",
+      "name": "华电能源"
     },
     {
       "symbol": "600739",
-      "name": "辽宁成大",
-      "listed_date": null
+      "name": "辽宁成大"
     },
     {
       "symbol": "600741",
-      "name": "华域汽车",
-      "listed_date": "1996-08-26",
-      "delisted_date": null
+      "name": "巴士股份"
+    },
+    {
+      "symbol": "600744",
+      "name": "华银电力"
+    },
+    {
+      "symbol": "600747",
+      "name": "大显股份"
+    },
+    {
+      "symbol": "600748",
+      "name": "上实发展",
+      "listed_date": null
+    },
+    {
+      "symbol": "600757",
+      "name": "华源发展",
+      "listed_date": null
+    },
+    {
+      "symbol": "600761",
+      "name": "安徽合力",
+      "listed_date": null
+    },
+    {
+      "symbol": "600770",
+      "name": "综艺股份"
+    },
+    {
+      "symbol": "600779",
+      "name": "全兴股份"
+    },
+    {
+      "symbol": "600780",
+      "name": "通宝能源"
+    },
+    {
+      "symbol": "600790",
+      "name": "轻 纺 城"
     },
     {
       "symbol": "600795",
-      "name": "国电电力",
-      "listed_date": "1997-03-18",
-      "delisted_date": null
+      "name": "国电电力"
     },
     {
-      "symbol": "600804",
-      "name": "鹏博士",
-      "listed_date": null
+      "symbol": "600797",
+      "name": "浙大网新"
     },
     {
-      "symbol": "600816",
-      "name": "*ST安信",
-      "listed_date": null
+      "symbol": "600805",
+      "name": "悦达投资"
+    },
+    {
+      "symbol": "600808",
+      "name": "马钢股份"
+    },
+    {
+      "symbol": "600811",
+      "name": "东方集团"
+    },
+    {
+      "symbol": "600812",
+      "name": "华北制药"
     },
     {
       "symbol": "600820",
-      "name": "隧道股份",
+      "name": "隧道股份"
+    },
+    {
+      "symbol": "600832",
+      "name": "东方明珠"
+    },
+    {
+      "symbol": "600835",
+      "name": "上海机电"
+    },
+    {
+      "symbol": "600838",
+      "name": "上海九百",
       "listed_date": null
     },
     {
-      "symbol": "600827",
-      "name": "百联股份",
-      "listed_date": null
+      "symbol": "600839",
+      "name": "四川长虹"
     },
     {
-      "symbol": "600837",
-      "name": "海通证券",
-      "listed_date": null
+      "symbol": "600849",
+      "name": "上海医药"
+    },
+    {
+      "symbol": "600851",
+      "name": "海欣股份"
+    },
+    {
+      "symbol": "600854",
+      "name": "春兰股份"
+    },
+    {
+      "symbol": "600863",
+      "name": "内蒙华电"
+    },
+    {
+      "symbol": "600866",
+      "name": "星湖科技"
+    },
+    {
+      "symbol": "600868",
+      "name": "梅雁股份"
     },
     {
       "symbol": "600871",
-      "name": "*ST油服",
-      "listed_date": null
+      "name": "仪征化纤"
+    },
+    {
+      "symbol": "600874",
+      "name": "创业环保"
+    },
+    {
+      "symbol": "600879",
+      "name": "火箭股份"
+    },
+    {
+      "symbol": "600881",
+      "name": "亚泰集团"
+    },
+    {
+      "symbol": "600884",
+      "name": "杉杉股份"
     },
     {
       "symbol": "600886",
-      "name": "国投电力",
-      "listed_date": "1996-01-18",
-      "delisted_date": null
+      "name": "国投电力"
     },
     {
       "symbol": "600887",
-      "name": "伊利股份",
-      "listed_date": "1996-03-12",
-      "delisted_date": null
+      "name": "伊利股份"
     },
     {
-      "symbol": "600893",
-      "name": "航发动力",
-      "listed_date": "1996-04-08",
-      "delisted_date": null
+      "symbol": "600894",
+      "name": "广钢股份"
     },
     {
       "symbol": "600895",
-      "name": "张江高科",
-      "listed_date": null
+      "name": "张江高科"
     },
     {
       "symbol": "600900",
-      "name": "长江电力",
-      "listed_date": "2003-11-18",
-      "delisted_date": null
+      "name": "长江电力"
     },
     {
-      "symbol": "600909",
-      "name": "华安证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "600919",
-      "name": "江苏银行",
-      "listed_date": "2016-08-02",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600926",
-      "name": "杭州银行",
-      "listed_date": "2016-10-27",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600958",
-      "name": "东方证券",
-      "listed_date": "2015-03-23",
-      "delisted_date": null
-    },
-    {
-      "symbol": "600959",
-      "name": "江苏有线",
-      "listed_date": null
-    },
-    {
-      "symbol": "600977",
-      "name": "中国电影",
-      "listed_date": null
-    },
-    {
-      "symbol": "600999",
-      "name": "招商证券",
-      "listed_date": "2009-11-17",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601006",
-      "name": "大秦铁路",
-      "listed_date": "2006-08-01",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601009",
-      "name": "南京银行",
-      "listed_date": "2007-07-19",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601018",
-      "name": "宁波港",
-      "listed_date": null
-    },
-    {
-      "symbol": "601021",
-      "name": "春秋航空",
-      "listed_date": "2015-01-21",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601088",
-      "name": "中国神华",
-      "listed_date": "2007-10-09",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601099",
-      "name": "太平洋",
-      "listed_date": null
-    },
-    {
-      "symbol": "601111",
-      "name": "中国国航",
-      "listed_date": "2006-08-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601117",
-      "name": "中国化学",
-      "listed_date": null
-    },
-    {
-      "symbol": "601118",
-      "name": "海南橡胶",
-      "listed_date": null
-    },
-    {
-      "symbol": "601127",
-      "name": "小康股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "601155",
-      "name": "新城控股",
-      "listed_date": null
-    },
-    {
-      "symbol": "601163",
-      "name": "三角轮胎",
-      "listed_date": null
-    },
-    {
-      "symbol": "601166",
-      "name": "兴业银行",
-      "listed_date": "2007-02-05",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601169",
-      "name": "北京银行",
-      "listed_date": "2007-09-19",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601186",
-      "name": "中国铁建",
-      "listed_date": "2008-03-10",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601198",
-      "name": "东兴证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "601211",
-      "name": "国泰海通",
-      "listed_date": "2015-06-26",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601216",
-      "name": "君正集团",
-      "listed_date": null
-    },
-    {
-      "symbol": "601225",
-      "name": "陕西煤业",
-      "listed_date": "2014-01-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601229",
-      "name": "上海银行",
-      "listed_date": "2016-11-16",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601288",
-      "name": "农业银行",
-      "listed_date": "2010-07-15",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601318",
-      "name": "中国平安",
-      "listed_date": "2007-03-01",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601328",
-      "name": "交通银行",
-      "listed_date": "2007-05-15",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601333",
-      "name": "广深铁路",
-      "listed_date": null
-    },
-    {
-      "symbol": "601336",
-      "name": "新华保险",
-      "listed_date": "2011-12-16",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601375",
-      "name": "中原证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "601377",
-      "name": "兴业证券",
-      "listed_date": "2010-10-13",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601390",
-      "name": "中国中铁",
-      "listed_date": "2007-12-03",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601398",
-      "name": "工商银行",
-      "listed_date": "2006-10-27",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601555",
-      "name": "东吴证券",
-      "listed_date": null
-    },
-    {
-      "symbol": "601600",
-      "name": "中国铝业",
-      "listed_date": "2007-04-30",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601601",
-      "name": "中国太保",
-      "listed_date": "2007-12-25",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601607",
-      "name": "上海医药",
-      "listed_date": null
-    },
-    {
-      "symbol": "601608",
-      "name": "中信重工",
-      "listed_date": null
-    },
-    {
-      "symbol": "601611",
-      "name": "中国核建",
-      "listed_date": null
-    },
-    {
-      "symbol": "601618",
-      "name": "中国中冶",
-      "listed_date": "2009-09-21",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601628",
-      "name": "中国人寿",
-      "listed_date": "2007-01-09",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601633",
-      "name": "长城汽车",
-      "listed_date": "2011-09-28",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601668",
-      "name": "中国建筑",
-      "listed_date": "2009-07-29",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601669",
-      "name": "中国电建",
-      "listed_date": "2011-10-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601688",
-      "name": "华泰证券",
-      "listed_date": "2010-02-26",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601718",
-      "name": "际华集团",
-      "listed_date": null
-    },
-    {
-      "symbol": "601727",
-      "name": "上海电气",
-      "listed_date": null
-    },
-    {
-      "symbol": "601766",
-      "name": "中国中车",
-      "listed_date": "2008-08-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601788",
-      "name": "光大证券",
-      "listed_date": "2009-08-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601800",
-      "name": "中国交建",
-      "listed_date": "2012-03-09",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601818",
-      "name": "光大银行",
-      "listed_date": "2010-08-18",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601857",
-      "name": "中国石油",
-      "listed_date": "2007-11-05",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601866",
-      "name": "中远海发",
-      "listed_date": null
-    },
-    {
-      "symbol": "601872",
-      "name": "招商轮船",
-      "listed_date": null
-    },
-    {
-      "symbol": "601877",
-      "name": "正泰电器",
-      "listed_date": "2010-01-21",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601881",
-      "name": "中国银河",
-      "listed_date": "2017-01-23",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601888",
-      "name": "中国中免",
-      "listed_date": "2009-10-15",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601899",
-      "name": "紫金矿业",
-      "listed_date": "2008-04-25",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601901",
-      "name": "方正证券",
-      "listed_date": "2011-08-10",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601919",
-      "name": "中远海控",
-      "listed_date": "2007-06-26",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601933",
-      "name": "永辉超市",
-      "listed_date": null
-    },
-    {
-      "symbol": "601939",
-      "name": "建设银行",
-      "listed_date": "2007-09-25",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601958",
-      "name": "金钼股份",
-      "listed_date": null
-    },
-    {
-      "symbol": "601966",
-      "name": "玲珑轮胎",
-      "listed_date": null
-    },
-    {
-      "symbol": "601985",
-      "name": "中国核电",
-      "listed_date": "2015-06-10",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601988",
-      "name": "中国银行",
-      "listed_date": "2006-07-05",
-      "delisted_date": null
-    },
-    {
-      "symbol": "601989",
-      "name": "中国重工",
-      "listed_date": null
-    },
-    {
-      "symbol": "601992",
-      "name": "金隅集团",
-      "listed_date": null
-    },
-    {
-      "symbol": "601997",
-      "name": "贵阳银行",
-      "listed_date": null
-    },
-    {
-      "symbol": "601998",
-      "name": "中信银行",
-      "listed_date": "2007-04-27",
-      "delisted_date": null
-    },
-    {
-      "symbol": "603160",
-      "name": "汇顶科技",
-      "listed_date": null
-    },
-    {
-      "symbol": "603858",
-      "name": "步长制药",
-      "listed_date": null
-    },
-    {
-      "symbol": "603993",
-      "name": "洛阳钼业",
-      "listed_date": "2012-10-09",
-      "delisted_date": null
+      "symbol": "600997",
+      "name": "开滦股份"
     }
   ],
   "sources": [
     {
-      "file": "e291b4d9f388279e.xlsx",
-      "announce_date": "2017-11-27",
-      "effective_date": "2017-12-11",
-      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
-      "url": "csindex-cache:e291b4d9f388279e.xlsx",
-      "hash": "e291b4d9f388279ecf06e0c88c57c8ec47761e1dc9727d136502dcc6ae13b94e",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 48,
-      "warnings": []
+      "notice_id": 6773,
+      "title": "沪深300指数样本股名单（2005年7月1日起生效）",
+      "publish_date": "2005-07-22",
+      "announce_date": "2005-07-22",
+      "effective_date": "2005-07-01",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6773",
+      "hash": "12c1590f5928667af344f3435a6a2dcadb5d41a9d83ada137d572cdbde07b63f",
+      "content_type": "html",
+      "parse_status": "snapshot_verified",
+      "event_count": 0,
+      "warnings": [],
+      "reconstruction": {
+        "method": "reverse_official_2005_07_01_snapshot_with_official_2005_07_01_adjustment",
+        "snapshotMemberCount": 300,
+        "reversedEventCount": 28,
+        "initialEffectiveDate": "2005-04-08"
+      }
     },
     {
-      "file": "4afaa21688b3f00b.xlsx",
-      "announce_date": "2018-05-28",
-      "effective_date": "2018-06-11",
-      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
-      "url": "csindex-cache:4afaa21688b3f00b.xlsx",
-      "hash": "4afaa21688b3f00b154640378e2aed63bafcec2b49ed85428c9689fcdd16ca37",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 54,
-      "warnings": []
-    },
-    {
-      "file": "ff9c823bc031d7ac.xlsx",
-      "announce_date": "2018-11-30",
-      "effective_date": "2018-12-17",
-      "title": "沪深300、上证50和中证500等指数2018年第二次定期调整样本股",
-      "url": "csindex-cache:ff9c823bc031d7ac.xlsx",
-      "hash": "ff9c823bc031d7ac86c5106739ee96d1f94537d57683ebce74fd08b1a15f03ad",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 48,
-      "warnings": []
-    },
-    {
-      "file": "4e1908605be2b722.xls",
-      "announce_date": "2019-05-31",
-      "effective_date": "2019-06-17",
-      "title": "沪深300、上证50和中证500等指数2019年第一次定期调整样本股",
-      "url": "csindex-cache:4e1908605be2b722.xls",
-      "hash": "4e1908605be2b722fcfba27f5a164066eb017abc7d9aa24c51be103781e6d6f6",
-      "content_type": "xls",
-      "parse_status": "parsed",
-      "event_count": 38,
-      "warnings": []
-    },
-    {
-      "file": "41605c35abf583c2.xlsx",
-      "announce_date": "2019-11-29",
-      "effective_date": "2019-12-16",
-      "title": "沪深300、上证50和中证500等指数2019年第二次定期调整样本股",
-      "url": "csindex-cache:41605c35abf583c2.xlsx",
-      "hash": "41605c35abf583c23702c73d1e41f25a052da1c6fa1560ed727f42e6709c5fa6",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 32,
-      "warnings": []
-    },
-    {
-      "file": "1c1df5893a9f2a68.xlsx",
-      "announce_date": "2020-05-29",
-      "effective_date": "2020-06-15",
-      "title": "上交所及中证指数调整沪深300、上证50和中证500等指数样本股",
-      "url": "csindex-cache:1c1df5893a9f2a68.xlsx",
-      "hash": "1c1df5893a9f2a6879b703af7c91f6bd7b07686b17140596acb77ca9c1468416",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 42,
-      "warnings": []
-    },
-    {
-      "file": "1094e0a6f284a6a6.xlsx",
-      "announce_date": "2020-11-27",
-      "effective_date": "2020-12-14",
-      "title": "上交所及中证指数调整沪深300、上证50、科创50和中证500等指数样本",
-      "url": "csindex-cache:1094e0a6f284a6a6.xlsx",
-      "hash": "1094e0a6f284a6a6b4b0e5fc3320c6d43cd4467ad844960c7e73fde07665f608",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 52,
-      "warnings": []
-    },
-    {
-      "file": "ea291da157e67749.xlsx",
-      "announce_date": "2021-05-28",
-      "effective_date": "2021-06-15",
-      "title": "关于调整沪深300和中证香港100等指数样本的公告",
-      "url": "csindex-cache:ea291da157e67749.xlsx",
-      "hash": "ea291da157e677490e8d7287f1fa33aa17f69665e76fe6b71b295b038b360e54",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 50,
-      "warnings": []
-    },
-    {
-      "file": "f6b9d596f3fa6072.xlsx",
-      "announce_date": "2021-11-26",
-      "effective_date": "2021-12-13",
-      "title": "关于调整沪深300和中证香港100等指数样本的公告",
-      "url": "csindex-cache:f6b9d596f3fa6072.xlsx",
-      "hash": "f6b9d596f3fa6072258aa1eb2c036517bf20cc74c7879eaad1069cb8e1747909",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 56,
-      "warnings": []
-    },
-    {
-      "file": "a3cceb28f6df96a7.xlsx",
-      "announce_date": "2022-05-27",
-      "effective_date": "2022-06-13",
-      "title": "关于沪深300和中证香港100等指数定期调整结果的公告",
-      "url": "csindex-cache:a3cceb28f6df96a7.xlsx",
-      "hash": "a3cceb28f6df96a77d4747a804b10a346a17f22d9b521261c222bdb03d4ca7a5",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 56,
-      "warnings": []
-    },
-    {
-      "file": "acbf06876606a980.xlsx",
-      "announce_date": "2022-11-25",
-      "effective_date": "2022-12-12",
-      "title": "关于沪深300和中证香港100等指数定期调整结果的公告",
-      "url": "csindex-cache:acbf06876606a980.xlsx",
-      "hash": "acbf06876606a980fd65c3e3185b7725634ad7530f4fa83ee1d3a3963ee23490",
-      "content_type": "xlsx",
-      "parse_status": "parsed",
-      "event_count": 30,
-      "warnings": []
-    },
-    {
-      "file": "5b6b0487112108e6.pdf",
-      "announce_date": "2023-05-26",
-      "effective_date": "2023-06-12",
-      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
-      "url": "csindex-cache:5b6b0487112108e6.pdf",
-      "hash": "5b6b0487112108e6bf6c962add3092e149683c2f7e7b3bbf72c404ec7f017354",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 18,
-      "warnings": []
-    },
-    {
-      "file": "1ccc9012bcb5e539.pdf",
-      "announce_date": "2023-11-24",
-      "effective_date": "2023-12-11",
-      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
-      "url": "csindex-cache:1ccc9012bcb5e539.pdf",
-      "hash": "1ccc9012bcb5e539c662232dd26cd7cc17c98923621e2a1970ef4d5bb1fa6ded",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 28,
-      "warnings": []
-    },
-    {
-      "file": "bfcdac63888f3d85.pdf",
-      "announce_date": "2024-05-31",
-      "effective_date": "2024-06-17",
-      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
-      "url": "csindex-cache:bfcdac63888f3d85.pdf",
-      "hash": "bfcdac63888f3d85e5b9a802041a21a596a12f5479d6767c8229228f2373423f",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 24,
-      "warnings": []
-    },
-    {
-      "file": "e40f15343f472f08.pdf",
-      "announce_date": "2024-11-29",
-      "effective_date": "2024-12-16",
+      "notice_id": 3006137,
       "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
-      "url": "csindex-cache:e40f15343f472f08.pdf",
-      "hash": "e40f15343f472f08a6cb296d7c7bae02fdca90761ec5d19aaf768fe9b09d1e81",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 32,
-      "warnings": []
-    },
-    {
-      "file": "6a114671b42b9926.pdf",
-      "announce_date": "2025-05-30",
-      "effective_date": "2025-06-16",
-      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
-      "url": "csindex-cache:6a114671b42b9926.pdf",
-      "hash": "6a114671b42b99264afb5e6d476bbc1bc58249da5424f7cd3882689011b642b8",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 14,
-      "warnings": []
-    },
-    {
-      "file": "e8d0279d40e5e351.pdf",
-      "announce_date": "2025-11-28",
-      "effective_date": "2025-12-15",
-      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
-      "url": "csindex-cache:e8d0279d40e5e351.pdf",
-      "hash": "e8d0279d40e5e351d16a5e95a7cd177651d7704fe588c318e1af4bd5ac87e268",
-      "content_type": "pdf",
-      "parse_status": "parsed",
-      "event_count": 22,
-      "warnings": []
-    },
-    {
-      "file": "63301b60a2a2040c.pdf",
-      "announce_date": "2026-05-29",
-      "effective_date": "2026-06-15",
-      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
-      "url": "csindex-cache:63301b60a2a2040c.pdf",
+      "url": "https://oss-ch.csindex.com.cn/notice/20260529155822-附件：部分指数样本调整名单.pdf",
       "hash": "63301b60a2a2040c4bdd97c7db5021afc8425e1f0473b96dc0b472a39ba25d32",
       "content_type": "pdf",
       "parse_status": "parsed",
       "event_count": 38,
-      "warnings": []
-    },
-    {
-      "url": "csindex-notice:15546:manual-temp",
-      "local_path": null,
-      "hash": "a0277b6bd8d31484dc245119a9de77dad5308adca5a8d6c1a9f610c1c9fd918c",
-      "content_type": "manual",
-      "parse_status": "manual_verified",
-      "event_count": 2,
       "warnings": [],
-      "announce_date": "2025-02-06",
-      "effective_date": "2025-03-04",
-      "title": "关于调整沪深300等指数样本的公告",
-      "note": "Official notice stated the change takes effect from Haitong Securities delisting date."
+      "announce_date": "2026-05-29",
+      "effective_date": "2026-06-15"
     },
     {
-      "url": "csindex-notice:1006022:manual-temp",
-      "local_path": null,
-      "hash": "898c729d7cd561f389d89bdfa75664500396cdd79fae132367442bd14c386793",
-      "content_type": "manual",
-      "parse_status": "manual_verified",
+      "notice_id": 3006000,
+      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20251128165753-附件：部分指数样本调整名单.pdf",
+      "hash": "e8d0279d40e5e351d16a5e95a7cd177651d7704fe588c318e1af4bd5ac87e268",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 22,
+      "warnings": [],
+      "announce_date": "2025-11-28",
+      "effective_date": "2025-12-15"
+    },
+    {
+      "notice_id": 1006022,
+      "title": "关于调整沪深300等指数样本的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20250722164043-指数样本调整名单.xlsx",
+      "hash": "03219d87e44f9c9e7038e4741d4c22341c7037db70a9d51913e5f9f74dc9a9a5",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
       "event_count": 2,
       "warnings": [],
       "announce_date": "2025-07-25",
-      "effective_date": "2025-09-05",
-      "title": "关于调整沪深300等指数样本的公告",
-      "note": "Official notice stated the change takes effect from China Shipbuilding Industry delisting date."
-    }
-  ],
-  "manual_events": [
-    {
-      "source_url": "csindex-notice:15546:manual-temp",
-      "announce_date": "2025-02-06",
-      "effective_date": "2025-03-04",
-      "adjustment_type": "temp",
-      "events": [
-        {
-          "symbol": "600837",
-          "name": "海通证券",
-          "action_type": "delete"
-        },
-        {
-          "symbol": "601058",
-          "name": "赛轮轮胎",
-          "action_type": "add"
-        }
-      ],
-      "title": "关于调整沪深300等指数样本的公告",
-      "note": "Official notice stated the change takes effect from Haitong Securities delisting date."
+      "effective_date": "2025-09-05"
     },
     {
-      "source_url": "csindex-notice:1006022:manual-temp",
-      "announce_date": "2025-07-25",
-      "effective_date": "2025-09-05",
-      "adjustment_type": "temp",
-      "events": [
-        {
-          "symbol": "601989",
-          "name": "中国重工",
-          "action_type": "delete"
-        },
-        {
-          "symbol": "601298",
-          "name": "青岛港",
-          "action_type": "add"
-        }
-      ],
+      "notice_id": 15690,
+      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20250530154409-附件：部分指数样本调整名单.pdf",
+      "hash": "6a114671b42b99264afb5e6d476bbc1bc58249da5424f7cd3882689011b642b8",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 14,
+      "warnings": [],
+      "announce_date": "2025-05-30",
+      "effective_date": "2025-06-16"
+    },
+    {
+      "notice_id": 15546,
       "title": "关于调整沪深300等指数样本的公告",
-      "note": "Official notice stated the change takes effect from China Shipbuilding Industry delisting date."
+      "url": "https://oss-ch.csindex.com.cn/notice/20250206175421-指数样本调整名单.xlsx",
+      "hash": "e7b797f2b203dc8d9bdc93605b4b5def237785980230b0dc3895cb1abf3bb3c1",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2025-02-06",
+      "effective_date": "2025-03-04"
+    },
+    {
+      "notice_id": 15471,
+      "title": "关于沪深300、中证500、中证1000、中证A500等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20241129172348-附件：部分指数样本调整名单.pdf",
+      "hash": "e40f15343f472f08a6cb296d7c7bae02fdca90761ec5d19aaf768fe9b09d1e81",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 32,
+      "warnings": [],
+      "announce_date": "2024-11-29",
+      "effective_date": "2024-12-16"
+    },
+    {
+      "notice_id": 15267,
+      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20240531170829-附件：部分指数样本调整名单.pdf",
+      "hash": "bfcdac63888f3d85e5b9a802041a21a596a12f5479d6767c8229228f2373423f",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 24,
+      "warnings": [],
+      "announce_date": "2024-05-31",
+      "effective_date": "2024-06-17"
+    },
+    {
+      "notice_id": 15044,
+      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20231124170025-附件：部分指数样本调整名单.pdf",
+      "hash": "1ccc9012bcb5e539c662232dd26cd7cc17c98923621e2a1970ef4d5bb1fa6ded",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 28,
+      "warnings": [],
+      "announce_date": "2023-11-24",
+      "effective_date": "2023-12-11"
+    },
+    {
+      "notice_id": 14796,
+      "title": "关于沪深300、中证500、中证1000等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20230526172747-附件：部分指数样本调整名单.pdf",
+      "hash": "5b6b0487112108e6bf6c962add3092e149683c2f7e7b3bbf72c404ec7f017354",
+      "content_type": "pdf",
+      "parse_status": "parsed",
+      "event_count": 18,
+      "warnings": [],
+      "announce_date": "2023-05-26",
+      "effective_date": "2023-06-12"
+    },
+    {
+      "notice_id": 14497,
+      "title": "关于沪深300和中证香港100等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice%2F20221207152016-%E6%8C%87%E6%95%B0%E6%A0%B7%E6%9C%AC%E8%B0%83%E6%95%B4%E5%90%8D%E5%8D%95.xlsx",
+      "hash": "acbf06876606a980fd65c3e3185b7725634ad7530f4fa83ee1d3a3963ee23490",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 30,
+      "warnings": [],
+      "announce_date": "2022-11-25",
+      "effective_date": "2022-12-12"
+    },
+    {
+      "notice_id": 14223,
+      "title": "关于沪深300和中证香港100等指数定期调整结果的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice%2F20220527185038-%E6%8C%87%E6%95%B0%E6%A0%B7%E6%9C%AC%E8%B0%83%E6%95%B4%E5%90%8D%E5%8D%95.xlsx",
+      "hash": "a3cceb28f6df96a77d4747a804b10a346a17f22d9b521261c222bdb03d4ca7a5",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 56,
+      "warnings": [],
+      "announce_date": "2022-05-27",
+      "effective_date": "2022-06-13"
+    },
+    {
+      "notice_id": 13888,
+      "title": "关于调整沪深300和中证香港100等指数样本的公告",
+      "url": "https://oss-ch.csindex.com.cn/notice/20211130195824-中证指数调入调出名单.xlsx",
+      "hash": "f6b9d596f3fa6072258aa1eb2c036517bf20cc74c7879eaad1069cb8e1747909",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 56,
+      "warnings": [],
+      "announce_date": "2021-11-26",
+      "effective_date": "2021-12-13"
+    },
+    {
+      "notice_id": 12470,
+      "title": "关于调整沪深300和中证香港100等指数样本的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20210610/1623319091660435.xlsx",
+      "hash": "07e8c58d5f02cbaaf5e5b4a98f7c541208218d7a3de9b9627fbff37f31770a07",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 50,
+      "warnings": [],
+      "announce_date": "2021-05-28",
+      "effective_date": "2021-06-15"
+    },
+    {
+      "notice_id": 12470,
+      "title": "关于调整沪深300和中证香港100等指数样本的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20210601/1622509386248149.xlsx",
+      "hash": "ea291da157e677490e8d7287f1fa33aa17f69665e76fe6b71b295b038b360e54",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 50,
+      "warnings": [],
+      "announce_date": "2021-05-28",
+      "effective_date": "2021-06-15"
+    },
+    {
+      "notice_id": 11514,
+      "title": "关于调整沪深300和中证香港100等指数样本的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20210331/1617182729617116.xlsx",
+      "hash": "1094e0a6f284a6a6b4b0e5fc3320c6d43cd4467ad844960c7e73fde07665f608",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 52,
+      "warnings": [],
+      "announce_date": "2020-11-27",
+      "effective_date": "2020-12-14"
+    },
+    {
+      "notice_id": 11429,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20200601/1590972336738429.xlsx",
+      "hash": "1c1df5893a9f2a6879b703af7c91f6bd7b07686b17140596acb77ca9c1468416",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 42,
+      "warnings": [],
+      "announce_date": "2020-06-01",
+      "effective_date": "2020-06-15"
+    },
+    {
+      "notice_id": 11429,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20200603/1591174826676118.xlsx",
+      "hash": "5def8f890c60d9970fa073d2cf5873ca5c6e52188f38f880813e75e382c49657",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 42,
+      "warnings": [],
+      "announce_date": "2020-06-01",
+      "effective_date": "2020-06-15"
+    },
+    {
+      "notice_id": 11529,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20191213/1576217266220014.xlsx",
+      "hash": "41605c35abf583c23702c73d1e41f25a052da1c6fa1560ed727f42e6709c5fa6",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 32,
+      "warnings": [],
+      "announce_date": "2019-12-02",
+      "effective_date": "2019-12-16"
+    },
+    {
+      "notice_id": 11379,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20190612/1560322933287092.xls",
+      "hash": "4e1908605be2b722fcfba27f5a164066eb017abc7d9aa24c51be103781e6d6f6",
+      "content_type": "xls",
+      "parse_status": "parsed",
+      "event_count": 38,
+      "warnings": [],
+      "announce_date": "2019-06-03",
+      "effective_date": "2019-06-17"
+    },
+    {
+      "notice_id": 11859,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20181217/1545023652142456.xlsx",
+      "hash": "ff9c823bc031d7ac86c5106739ee96d1f94537d57683ebce74fd08b1a15f03ad",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 48,
+      "warnings": [],
+      "announce_date": "2018-12-03",
+      "effective_date": "2018-12-17"
+    },
+    {
+      "notice_id": 11518,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20180829/1535531071241051.xlsx",
+      "hash": "4afaa21688b3f00b154640378e2aed63bafcec2b49ed85428c9689fcdd16ca37",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 54,
+      "warnings": [],
+      "announce_date": "2018-05-28",
+      "effective_date": "2018-06-11"
+    },
+    {
+      "notice_id": 12590,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20180227/1519719074537344.xlsx",
+      "hash": "e291b4d9f388279ecf06e0c88c57c8ec47761e1dc9727d136502dcc6ae13b94e",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 48,
+      "warnings": [],
+      "announce_date": "2017-11-27",
+      "effective_date": "2017-12-11"
+    },
+    {
+      "notice_id": 12583,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/indices/info/files/20171122/1511334410841442.xlsx",
+      "hash": "b61eaa73172a19fcac0fe0826c31c9fa3ae12e1a02e654e9ec356634c1309d7b",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 60,
+      "warnings": [],
+      "announce_date": "2017-05-31",
+      "effective_date": "2017-06-12"
+    },
+    {
+      "notice_id": 4794,
+      "title": "关于武钢股份退市的指数调整公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/sseportal/upload/files/upload/20170209600005cons.xlsx",
+      "hash": "d9b3d4766e5b97cb7c82a2c2438d3f7058ab14ce43871dab4a6082e5af97aa8a",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2017-02-09",
+      "effective_date": "2017-02-14"
+    },
+    {
+      "notice_id": 4003,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/sseportal/upload/files/upload/20161212cons.xlsx",
+      "hash": "48243a26fe1099db05dffe5c87aabcb72b884f50b3391d96bd3bf3400c64f81c",
+      "content_type": "xlsx",
+      "parse_status": "parsed",
+      "event_count": 60,
+      "warnings": [],
+      "announce_date": "2016-11-28",
+      "effective_date": "2016-12-12"
+    },
+    {
+      "notice_id": 3855,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/sseportal/upload/files/upload/201605302cons.xls",
+      "hash": "d5bbc6f14ecb4c2929ec70e0e8c6620327c49c4e1a3f19cb0dc43c6629735ec1",
+      "content_type": "xls",
+      "parse_status": "parsed",
+      "event_count": 48,
+      "warnings": [],
+      "announce_date": "2016-05-30",
+      "effective_date": "2016-06-13"
+    },
+    {
+      "notice_id": 2882,
+      "title": "关于调整沪深300等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/sseportal/upload/files/upload/20151228cons.xls",
+      "hash": "c3e9326638b1d584f8d66ee1753c7358dcb0f4b68dce9fa60d64a5616b64a88a",
+      "content_type": "xls",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2015-12-28",
+      "effective_date": "2015-12-30"
+    },
+    {
+      "notice_id": 4272,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/sseportal/upload/files/upload/201511302cons.xls",
+      "hash": "d2561abdfdb3c5c5174c2035b38647ab00dbf31a1b8a725ed06853e142951166",
+      "content_type": "xls",
+      "parse_status": "parsed",
+      "event_count": 40,
+      "warnings": [],
+      "announce_date": "2015-11-30",
+      "effective_date": "2015-12-14"
+    },
+    {
+      "notice_id": 4084,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=4084",
+      "hash": "5314c6cc2a1abe05273495976dae494ba4acad0d2b560972d2babec89ef0e989",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 36,
+      "warnings": [],
+      "announce_date": "2015-06-01",
+      "effective_date": "2015-06-15"
+    },
+    {
+      "notice_id": 6802,
+      "title": "关于调整沪深300和中证香港300等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6802",
+      "hash": "f0554a16435dd6163d59876aa2b9e4b3c9dd878743355127fc0631d49919e6a8",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 4,
+      "warnings": [],
+      "announce_date": "2015-05-14",
+      "effective_date": "2015-05-20"
+    },
+    {
+      "notice_id": 6271,
+      "title": "关于调整沪深300等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6271",
+      "hash": "2a55fdc775f6954b73e5ea9991e38b2aaa0441eff027cbfada26beb4c5fdf17c",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2015-01-22",
+      "effective_date": "2015-01-26"
+    },
+    {
+      "notice_id": 3596,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=3596",
+      "hash": "85298f4206cb36d198d82912cbb77c7644e04573a91b6c3308b7ce425d895707",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 44,
+      "warnings": [],
+      "announce_date": "2014-12-01",
+      "effective_date": "2014-12-15"
+    },
+    {
+      "notice_id": 3670,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=3670",
+      "hash": "ec2a853a97f570caf3b337bde1dfc63d27c3f20f2c144c08c20aea6623e38d0a",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 52,
+      "warnings": [],
+      "announce_date": "2014-06-03",
+      "effective_date": "2014-06-16"
+    },
+    {
+      "notice_id": 6750,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6750",
+      "hash": "d4f72ed2ca4d81c46a16fd6987e34ddb59d5ca38501d297e95b9c7722310ba57",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 42,
+      "warnings": [],
+      "announce_date": "2013-12-02",
+      "effective_date": "2013-12-16"
+    },
+    {
+      "notice_id": 3453,
+      "title": "关于调整沪深300等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=3453",
+      "hash": "eb7b24d1c2c9735f79953eabbde478682318d2dc183a122cee0904424e99e385",
+      "content_type": "html",
+      "parse_status": "parsed_merger_security_master_resolution",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2013-08-13",
+      "effective_date": "2013-09-18",
+      "resolution": {
+        "incomingName": "美的集团",
+        "incomingSymbol": "000333",
+        "effectiveDateField": "securities.listed_date"
+      }
+    },
+    {
+      "notice_id": 2723,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=2723",
+      "hash": "2d834fcd8dac4b34305145854a0ee00ecd858b03e772cf9541dad2ed200d0fb5",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 32,
+      "warnings": [],
+      "announce_date": "2013-06-17",
+      "effective_date": "2013-07-01"
+    },
+    {
+      "notice_id": 3242,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=3242",
+      "hash": "0820950efcc25d2b9abd4980c11d241fd7351588b459e1f73c2763a5535834e0",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 30,
+      "warnings": [],
+      "announce_date": "2012-12-17",
+      "effective_date": "2013-01-04"
+    },
+    {
+      "notice_id": 6699,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6699",
+      "hash": "6bf44f207ee03f7b212546f88e8e7faef7740d6e105d74fce31d0dd16936becf",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 36,
+      "warnings": [],
+      "announce_date": "2012-06-11",
+      "effective_date": "2012-07-02"
+    },
+    {
+      "notice_id": 6687,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6687",
+      "hash": "3dcc078292d1e0337a257957e0e9932bcd9daf428f89b5aef0aa8e7ef65d55f1",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 48,
+      "warnings": [],
+      "announce_date": "2011-12-12",
+      "effective_date": "2012-01-04"
+    },
+    {
+      "notice_id": 792,
+      "title": "关于调整沪深300等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=792",
+      "hash": "96fd7d37b213fd623683fea3b47bd2d8ea9bfb149b1131746fbf438ac855dd20",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2011-08-05",
+      "effective_date": "2011-08-23"
+    },
+    {
+      "notice_id": 2714,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=2714",
+      "hash": "882d8503b13b566ab2b842455260af6278f8169d71f576cd121983c8755f1bed",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 46,
+      "warnings": [],
+      "announce_date": "2011-06-13",
+      "effective_date": "2011-07-01"
+    },
+    {
+      "notice_id": 6150,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6150",
+      "hash": "687ef73296a709cc582d0da6a6f808f271a3e39182a00f735400d8fe317260ff",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 52,
+      "warnings": [],
+      "announce_date": "2010-12-13",
+      "effective_date": "2011-01-04"
+    },
+    {
+      "notice_id": 1607,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1607",
+      "hash": "93e6d8151d236a32bdf0b81b49b1da92161fd8864b15bd08ae62882c5328db02",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2010-07-16",
+      "effective_date": "2010-07-29"
+    },
+    {
+      "notice_id": 1385,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1385",
+      "hash": "896ccd8def6794d8049bf15c2b52da3e2c7361cd866e669ed067c13d2c6b2af3",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 36,
+      "warnings": [],
+      "announce_date": "2010-06-17",
+      "effective_date": "2010-07-01"
+    },
+    {
+      "notice_id": 1335,
+      "title": "关于调整沪深300和中证800等指数样本股的补充公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1335",
+      "hash": "23ba12f35bd05912f6b75875d0e426c6d3d0d9dca2747e8f78dce9a384147b71",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 4,
+      "warnings": [],
+      "announce_date": "2009-12-29",
+      "effective_date": "2009-12-29"
+    },
+    {
+      "notice_id": 1205,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1205",
+      "hash": "74d4b800745ee7c7a9883bb139774492e3bfee2bf80214318395b8a755b96084",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 32,
+      "warnings": [],
+      "announce_date": "2009-12-14",
+      "effective_date": "2010-01-04"
+    },
+    {
+      "notice_id": 1089,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1089",
+      "hash": "cb2927a834f1ffada2dfe33c737f1fdb63049abbf4323efc94f7f12921f587ba",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 48,
+      "warnings": [],
+      "announce_date": "2009-06-15",
+      "effective_date": "2009-07-01"
+    },
+    {
+      "notice_id": 892,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=892",
+      "hash": "a90825d31d2f565706383771e1f746e7f84ea56e5ef238ad820021c6c1be3b9e",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 36,
+      "warnings": [],
+      "announce_date": "2008-12-15",
+      "effective_date": "2009-01-05"
+    },
+    {
+      "notice_id": 20,
+      "title": "关于调整沪深300和中证香港100等指数样本股的公告 ",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=20",
+      "hash": "7c4595b6e90ce8f7b09960379ba54b243da8e55b221e8ca621a46a2fe6aecc92",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 38,
+      "warnings": [],
+      "announce_date": "2008-06-04",
+      "effective_date": "2008-07-01"
+    },
+    {
+      "notice_id": 38,
+      "title": "关于调整沪深300和中证200等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=38",
+      "hash": "733544a71ae7c89234ecab2b15bcdc3ee16ddb7a9b0fd214f9aaf9d0a5761921",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2008-03-10",
+      "effective_date": "2008-03-18"
+    },
+    {
+      "notice_id": 5419,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=5419",
+      "hash": "941cc4679cbf799cd6fb97473d65d0186da04fe0380c92bfcc77ead16e29cca4",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 60,
+      "warnings": [],
+      "announce_date": "2007-12-10",
+      "effective_date": "2008-01-02"
+    },
+    {
+      "notice_id": 56,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=56",
+      "hash": "41d2c2166789e1156c1a3bbf18bb2ae12b78185014ec8bcebb1ec200de77029a",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-11-06",
+      "effective_date": "2007-11-19"
+    },
+    {
+      "notice_id": 61,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=61",
+      "hash": "2fe4845591235560fe3c1f14a6b4aa1fb2c93af792c4d73eb5cf00637995002d",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-10-10",
+      "effective_date": "2007-10-23"
+    },
+    {
+      "notice_id": 1585,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1585",
+      "hash": "265829408b26b1aa757f808a42a9d3c1ce87d5fb3d1d2b1f3f51d8cf0a16ab65",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 56,
+      "warnings": [],
+      "announce_date": "2007-06-11",
+      "effective_date": "2007-07-02"
+    },
+    {
+      "notice_id": 73,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=73",
+      "hash": "530d7be6867a3a7f05d31ea5cbfe7cfea1e51c9fd83802a8efd62f8584e9eb7e",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-05-16",
+      "effective_date": "2007-05-29"
+    },
+    {
+      "notice_id": 77,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=77",
+      "hash": "e96b1cf126134363edc47ce58d2dcddb96d670e8cfef5ff9c59e6f1c315bc91b",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-04-30",
+      "effective_date": "2007-05-18"
+    },
+    {
+      "notice_id": 79,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=79",
+      "hash": "3dd688de13ece312e4a5d24f4d0e39dbf913020e47a1876838e6211d943b3c63",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 4,
+      "warnings": [],
+      "announce_date": "2007-04-27",
+      "effective_date": "2007-04-30"
+    },
+    {
+      "notice_id": 81,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=81",
+      "hash": "93885bee5ee5062e249d017477375d32c9ad42a33a81f4f4303e1e1e7efcd251",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-03-02",
+      "effective_date": "2007-03-15"
+    },
+    {
+      "notice_id": 75,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=75",
+      "hash": "c2b131ae4163ed48a34079962047bd595bd5df9ef8868f675fafadb966eb7835",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-02-06",
+      "effective_date": "2007-02-26"
+    },
+    {
+      "notice_id": 5398,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=5398",
+      "hash": "2ede4acd110d5a6c6dd6e7c3ee43350e7415eeabfc238f9a6d5e3a0321730dfc",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-01-10",
+      "effective_date": "2007-01-23"
+    },
+    {
+      "notice_id": 6575,
+      "title": "关于调整沪深300和中证100指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=6575",
+      "hash": "453958b53a698059e7cf0f808a0b07eb295a131b90b8c93763643ab513b5e818",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 60,
+      "warnings": [],
+      "announce_date": "2006-12-11",
+      "effective_date": "2007-01-04"
+    },
+    {
+      "notice_id": 83,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=83",
+      "hash": "22ff37cd3f10bf35dcaa2aee08a4adbd931046e50deb081386c191d30b77a88a",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2006-10-28",
+      "effective_date": "2006-11-10"
+    },
+    {
+      "notice_id": 85,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=85",
+      "hash": "ba1379925f2c92fdd022ddce43deb55f02aaa19c04119129a73521b7e07091f0",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2006-08-02",
+      "effective_date": "2006-08-15"
+    },
+    {
+      "notice_id": 1589,
+      "title": "关于调整沪深300和中证100等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1589",
+      "hash": "968edc21ab61c54b947d11146809777a24abca510c14b48b56546703d0d75a9b",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2006-07-06",
+      "effective_date": "2006-07-19"
+    },
+    {
+      "notice_id": 67,
+      "title": "关于调整沪深300指数和中证100指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=67",
+      "hash": "ab3c2ba426b9761fee209b85dd9e41a89cb074da1d5fb2ff1f3d69aaa4d80f3f",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 60,
+      "warnings": [],
+      "announce_date": "2006-06-12",
+      "effective_date": "2006-07-03"
+    },
+    {
+      "notice_id": 92,
+      "title": "关于对沪深300指数样本股进行临时调整的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=92",
+      "hash": "d5bccf7556dc50175edb47971ef3732e82373e267191eca7104dbbabcc92d198",
+      "content_type": "html",
+      "parse_status": "parsed_variable_effective_dates",
+      "event_count": 8,
+      "warnings": [],
+      "announce_date": "2006-04-14",
+      "effective_date": null
+    },
+    {
+      "notice_id": 1593,
+      "title": "关于调整沪深300指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=1593",
+      "hash": "ad0efc746726127077b94ee0dd125d718c21dad5e8995cb5f7674055e827fb95",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 28,
+      "warnings": [],
+      "announce_date": "2005-12-20",
+      "effective_date": "2006-01-01"
+    },
+    {
+      "notice_id": 87,
+      "title": "关于调整沪深300指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=87",
+      "hash": "260136f86198ad9a1af67c6c92e0feb96a2ec7dc843d56f2e9c81dda3769f60e",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 28,
+      "warnings": [],
+      "announce_date": "2005-06-22",
+      "effective_date": "2005-07-01"
+    },
+    {
+      "notice_id": 47,
+      "title": "关于调整沪深300和中证200等指数样本股的公告",
+      "url": "https://www.csindex.com.cn/csindex-home/announcement/queryAnnouncementById?id=47",
+      "hash": "1b8387040d506c82d68f598ce5a9d77d8bbf54cb31e14ee6bd9142e2be947d3d",
+      "content_type": "html",
+      "parse_status": "parsed",
+      "event_count": 2,
+      "warnings": [],
+      "announce_date": "2007-12-25",
+      "effective_date": "2007-12-26"
     }
   ]
 }

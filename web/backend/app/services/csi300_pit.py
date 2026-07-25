@@ -174,9 +174,14 @@ def _clean_symbol(value: Any) -> str | None:
     if text.isdigit() and len(text) < 6:
         text = text.zfill(6)
     try:
-        return normalize_symbol(text, "china")
+        normalized = normalize_symbol(text, "china")
     except Exception:
         return None
+    # CSI300 contains mainland A shares only.  In particular, official
+    # multi-index workbooks can contain Hang Seng and index codes alongside
+    # the CSI300 rows; accepting those as securities silently corrupts PIT
+    # membership.
+    return normalized if re.fullmatch(r"[036]\d{5}", normalized) else None
 
 
 def _action(value: Any, default: str | None = None) -> str | None:
@@ -555,37 +560,107 @@ def events_from_csindex_adjustment_frame(
     if not parse_four_column_table or len(frame.columns) < 4 or len(frame) < 3:
         return []
     rows = frame.astype(str).values.tolist()
-    first_header = "".join(rows[0][:4])
-    second_header = "".join(rows[1][:4])
-    if "调出" not in first_header or "调入" not in first_header or "证券代码" not in second_header:
+    header_pair: tuple[int, int] | None = None
+    for action_row_index in range(min(4, len(rows) - 1)):
+        code_row_index = action_row_index + 1
+        action_header = "".join(str(value) for value in rows[action_row_index])
+        code_header = "".join(str(value) for value in rows[code_row_index])
+        if (
+            any(token in action_header for token in ("调出", "删除", "剔除"))
+            and any(token in action_header for token in ("调入", "纳入", "新进"))
+            and "代码" in code_header
+        ):
+            header_pair = (action_row_index, code_row_index)
+            break
+    if header_pair is None:
         return []
-    first_action, second_action = ("delete", "add")
-    if first_header.find("调入") < first_header.find("调出"):
-        first_action, second_action = ("add", "delete")
-    for row in rows[2:]:
-        first_symbol = _clean_symbol(row[0])
-        second_symbol = _clean_symbol(row[2])
-        if first_symbol:
-            events.append(
-                _event(
-                    index_code=index_code,
-                    symbol=first_symbol,
-                    name=row[1],
-                    action_type=first_action,
-                    announce_date=announce_date,
-                    effective_date=effective_date,
-                    adjustment_type=adjustment_type,
-                    source_url=source_url,
-                    raw_file_hash=raw_file_hash,
+    action_row_index, code_row_index = header_pair
+    action_row = rows[action_row_index]
+    code_row = rows[code_row_index]
+
+    action_by_column: dict[int, str] = {}
+    for index in range(len(action_row)):
+        action = _action(action_row[index])
+        if action:
+            action_by_column[index] = action
+    # A containing HTML table can repeat the entire nested adjustment table
+    # as one long cell.  That cell contains both action words and used to be
+    # mistaken for a genuine action column, turning index codes into members.
+    if set(action_by_column.values()) != {"add", "delete"}:
+        return []
+    data_rows = rows[code_row_index + 1 :]
+    symbol_count_by_column = {
+        index: sum(1 for row in data_rows if _clean_symbol(row[index]))
+        for index in action_by_column
+    }
+    code_columns = []
+    for action in ("delete", "add"):
+        candidates = [
+            index
+            for index, column_action in action_by_column.items()
+            if column_action == action and symbol_count_by_column.get(index, 0) > 0
+        ]
+        if candidates:
+            code_columns.append(
+                max(
+                    candidates,
+                    key=lambda index: (
+                        symbol_count_by_column[index],
+                        "代码" in str(code_row[index]),
+                    ),
                 )
             )
-        if second_symbol:
+    if not code_columns:
+        return []
+    first_action_column = min(action_by_column)
+    scope_columns = list(range(first_action_column))
+    title_scope = re.sub(
+        r"\s+",
+        "",
+        " ".join(str(value) for row in rows[:action_row_index] for value in row),
+    ).upper()
+    if not scope_columns and title_scope:
+        index_tokens = ("沪深300", "中证100", "中证500", "中证800", "中证香港", "上证")
+        if any(token in title_scope for token in index_tokens) and "沪深300" not in title_scope:
+            return []
+
+    def in_csi300_scope(row: list[str]) -> bool:
+        if not scope_columns:
+            return True
+        scope = " ".join(str(row[index]) for index in scope_columns)
+        compact = re.sub(r"\s+", "", scope).upper()
+        return any(token in compact for token in ("000300", "399300", "CSI300", "沪深300"))
+
+    name_column_by_code: dict[int, int | None] = {}
+    for code_column in code_columns:
+        action = action_by_column[code_column]
+        matching_names = [
+            index
+            for index, value in enumerate(code_row)
+            if action_by_column.get(index) == action
+            and index != code_column
+            and symbol_count_by_column.get(index, 0) == 0
+        ]
+        name_column_by_code[code_column] = min(
+            matching_names,
+            key=lambda index: abs(index - code_column),
+            default=None,
+        )
+
+    for row in rows[code_row_index + 1 :]:
+        if not in_csi300_scope(row):
+            continue
+        for code_column in code_columns:
+            symbol = _clean_symbol(row[code_column])
+            if not symbol:
+                continue
+            name_column = name_column_by_code[code_column]
             events.append(
                 _event(
                     index_code=index_code,
-                    symbol=second_symbol,
-                    name=row[3],
-                    action_type=second_action,
+                    symbol=symbol,
+                    name=row[name_column] if name_column is not None else symbol,
+                    action_type=action_by_column[code_column],
                     announce_date=announce_date,
                     effective_date=effective_date,
                     adjustment_type=adjustment_type,
@@ -633,11 +708,16 @@ def parse_adjustment_notice(
                     announce_date=announce,
                     effective_date=effective,
                     adjustment_type=adjustment_type,
-                    parse_four_column_table=kind in {"html", "htm", "text/html"} and table_index == 0,
+                    parse_four_column_table=kind in {"html", "htm", "text/html"},
                 )
                 if official_events:
                     events.extend(official_events)
-                    if kind in {"html", "htm", "text/html"}:
+                    # Legacy regular-rebalance notices publish consecutive
+                    # four-column tables (CSI300, CSI100, CSI500, ...).  The
+                    # CSI300 table is first and has no index-code scope
+                    # column.  Six-column tables are explicitly scoped and
+                    # may contain multiple CSI300 corporate-action blocks.
+                    if kind in {"html", "htm", "text/html"} and len(frame.columns) == 4:
                         break
                     continue
                 events.extend(

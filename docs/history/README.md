@@ -14,6 +14,9 @@
   - `LEVEL5_REPLAY_BLOCKED`
   - `LEVEL5_OPERATIONAL_NOT_READY`
   - `LIVE_NOT_READY`
+- [2026-07-25 P0 trust and data-coverage release](p0-trust-release-2026-07-25.md)
+  记录 production Source/QA/reference 矩阵、官方 CSI300 全历史、release
+  golden 双跑与十数据集归档对账证据；不改变 Level 4/5 结论。
 
 ## 维护规则
 

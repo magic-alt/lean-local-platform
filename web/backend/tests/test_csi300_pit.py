@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
@@ -86,6 +88,112 @@ def test_parse_csi300_pdf_text_stops_before_next_index_section():
         ("add", "000657"),
         ("delete", "000786"),
         ("add", "000988"),
+    ]
+
+
+def test_parse_legacy_csindex_html_promotes_embedded_adjustment_headers():
+    from app.services.csi300_pit import parse_adjustment_notice
+
+    html = """
+    <table><tr><td>关于定期调整的说明</td></tr></table>
+    <table>
+      <tr><td>调出样本</td><td>调出样本</td><td>调入样本</td><td>调入样本</td></tr>
+      <tr><td>股票代码</td><td>股票名称</td><td>证券代码</td><td>证券简称</td></tr>
+      <tr><td>000029</td><td>深深房A</td><td>000059</td><td>辽通化工</td></tr>
+    </table>
+    """
+
+    parsed = parse_adjustment_notice(
+        html.encode(),
+        index_code="CSI300",
+        source_url="https://www.csindex.com.cn/legacy/notice",
+        announce_date="2005-06-22",
+        effective_date="2005-07-01",
+        content_type="html",
+    )
+
+    assert sorted((item["action_type"], item["symbol"]) for item in parsed["events"]) == [
+        ("add", "000059"),
+        ("delete", "000029"),
+    ]
+
+
+def test_parse_legacy_csindex_html_filters_index_matrix_to_csi300():
+    from app.services.csi300_pit import parse_adjustment_notice
+
+    html = """
+    <table>
+      <tr><td>指数名称</td><td>调入</td><td>调入</td><td>调出</td><td>调出</td></tr>
+      <tr><td>指数名称</td><td>股票代码</td><td>股票名称</td><td>股票代码</td><td>股票名称</td></tr>
+      <tr><td>沪深300指数</td><td>601857</td><td>中国石油</td><td>002025</td><td>航天电器</td></tr>
+      <tr><td>中证100指数</td><td>601857</td><td>中国石油</td><td>600270</td><td>外运发展</td></tr>
+    </table>
+    """
+
+    parsed = parse_adjustment_notice(
+        html.encode(),
+        index_code="CSI300",
+        source_url="https://www.csindex.com.cn/legacy/notice",
+        announce_date="2007-11-06",
+        effective_date="2007-11-19",
+        content_type="html",
+    )
+
+    assert sorted((item["action_type"], item["symbol"]) for item in parsed["events"]) == [
+        ("add", "601857"),
+        ("delete", "002025"),
+    ]
+
+
+def test_parse_legacy_csindex_html_uses_symbol_values_when_delete_headers_are_reversed():
+    from app.services.csi300_pit import parse_adjustment_notice
+
+    html = """
+    <table>
+      <tr><td>指数名称</td><td>调入</td><td>调入</td><td>调出</td><td>调出</td></tr>
+      <tr><td>指数名称</td><td>股票名称</td><td>股票代码</td><td>股票名称</td><td>股票代码</td></tr>
+      <tr><td>沪深300指数</td><td>大秦铁路</td><td>601006</td><td>000780</td><td>草原兴发</td></tr>
+      <tr><td>中证100指数</td><td>大秦铁路</td><td>601006</td><td>600022</td><td>济南钢铁</td></tr>
+    </table>
+    """
+
+    parsed = parse_adjustment_notice(
+        html.encode(),
+        index_code="CSI300",
+        source_url="https://www.csindex.com.cn/legacy/ipo",
+        announce_date="2006-08-02",
+        effective_date="2006-08-15",
+        content_type="html",
+    )
+
+    assert sorted((item["action_type"], item["symbol"]) for item in parsed["events"]) == [
+        ("add", "601006"),
+        ("delete", "000780"),
+    ]
+
+
+def test_parse_csindex_matrix_does_not_accept_hongkong_security_codes():
+    from app.services.csi300_pit import parse_adjustment_notice
+
+    html = """
+    <table>
+      <tr><td>指数代码</td><td>指数简称</td><td>调出</td><td>调出</td><td>调入</td><td>调入</td></tr>
+      <tr><td>指数代码</td><td>指数简称</td><td>股票代码</td><td>股票名称</td><td>股票代码</td><td>股票名称</td></tr>
+      <tr><td>000300</td><td>沪深300</td><td>600837</td><td>海通证券</td><td>HK06837</td><td>海通证券H</td></tr>
+    </table>
+    """
+
+    parsed = parse_adjustment_notice(
+        html.encode(),
+        index_code="CSI300",
+        source_url="https://www.csindex.com.cn/mixed-market",
+        announce_date="2025-02-06",
+        effective_date="2025-03-04",
+        content_type="html",
+    )
+
+    assert [(item["action_type"], item["symbol"]) for item in parsed["events"]] == [
+        ("delete", "600837"),
     ]
 
 
@@ -188,3 +296,84 @@ def test_csindex_effective_date_uses_next_trade_date_for_close_after(monkeypatch
     content = "<p>本次样本调整将于2021年6月11日收盘后生效。</p>"
 
     assert importer.effective_date_from_content(content, "2021-05-28") == "2021-06-15"
+
+
+def test_csindex_effective_date_parses_legacy_adjustment_phrases(monkeypatch):
+    import scripts.import_csindex_csi300_pit as importer
+
+    monkeypatch.setattr(importer, "_first_trade_date", lambda year, month: f"{year:04d}-{month:02d}-04")
+
+    assert importer.effective_date_from_content(
+        "中证指数有限公司决定自11月19日起进行调整",
+        "2007-11-06",
+    ) == "2007-11-19"
+    assert importer.effective_date_from_content(
+        "决定于7月3日调整沪深300指数样本股",
+        "2006-06-12",
+    ) == "2006-07-03"
+    assert importer.effective_date_from_content(
+        "决定于2008年1月第一个交易日调整样本股",
+        "2007-12-10",
+    ) == "2008-01-04"
+
+
+def test_csindex_offline_download_refuses_missing_attachment(tmp_path):
+    import scripts.import_csindex_csi300_pit as importer
+
+    with pytest.raises(RuntimeError, match="absent from the immutable offline bundle"):
+        importer._download(
+            "https://oss-ch.csindex.com.cn/missing.xlsx",
+            tmp_path,
+            offline=True,
+        )
+
+
+def test_official_initial_members_use_2005_snapshot_not_current_members():
+    import scripts.import_csindex_csi300_pit as importer
+
+    rows = []
+    symbols = [f"{index:06d}" for index in range(1, 301)]
+    for index in range(0, 300, 3):
+        rows.append(
+            "<tr>"
+            + "".join(
+                f"<td>{symbol}</td><td>Name {symbol}</td>"
+                for symbol in symbols[index : index + 3]
+            )
+            + "</tr>"
+        )
+    detail = {
+        "id": 86,
+        "publishDate": "2005-07-12",
+        "title": "沪深300指数样本股名单（2005年7月1日起生效）",
+        "content": (
+            "<table><tr><td>代码</td><td>名称</td><td>代码</td><td>名称</td>"
+            "<td>代码</td><td>名称</td></tr>"
+            + "".join(rows)
+            + "</table>"
+        ),
+    }
+    events = [
+        {
+            "symbol": "000001",
+            "action_type": "delete",
+            "effective_date": "2005-07-01",
+        },
+        {
+            "symbol": "999999",
+            "name": "Replacement",
+            "action_type": "add",
+            "effective_date": "2005-07-01",
+        },
+    ]
+    detail["content"] = detail["content"].replace(
+        "<td>000001</td><td>Name 000001</td>",
+        "<td>999999</td><td>Replacement</td>",
+    )
+
+    initial, source = importer.official_initial_members([detail], events)
+
+    assert len(initial) == 300
+    assert "000001" in {item["symbol"] for item in initial}
+    assert "999999" not in {item["symbol"] for item in initial}
+    assert source["reconstruction"]["method"].startswith("reverse_official")

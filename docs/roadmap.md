@@ -1,6 +1,6 @@
 # Roadmap
 
-Last reviewed: 2026-07-24. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), and the [history index](history/README.md).
+Last reviewed: 2026-07-25. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), the [2026-07-25 P0 trust release](history/p0-trust-release-2026-07-25.md), and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
@@ -75,7 +75,8 @@ Remaining work:
 - PDF, CSV and JSON report export formats; Markdown is already implemented.
 - Richer cross-batch ranking, sensitivity heatmaps and comparison dashboards.
 - Complete ETF, convertible-bond, futures and options data-quality gates.
-- Full historical PIT coverage for every offered universe, especially CSI300 before 2017-12-08.
+- Full historical PIT coverage for every offered universe beyond the now
+  complete official CSI300 launch-to-current chain.
 - Scheduled incremental Parquet/ClickHouse maintenance with visible independent watermarks.
 
 ### Current verification path
@@ -139,10 +140,17 @@ Remaining work:
 
 ### P0: Trust and data coverage
 
-1. Re-run the independent Source/QA/reference gate matrix against certified production data.
-2. Retain or make fetchable the immutable official CSI300 source bundle; fill and verify 2005-2017 PIT membership without current-constituent substitution.
-3. Prove canonical fingerprint/result digest repeatability with release golden runs.
-4. Reconcile all archive references and complete ten-dataset manifest/watermark/archive evidence.
+Status: COMPLETE on 2026-07-25. Machine-readable evidence and checksums are in
+`audit-output/p0-trust-2026-07-25/`.
+
+1. Independent certified-production Source/QA/reference matrix: passed all
+   positive and fail-closed cases.
+2. Official CSI300 immutable bundle and 2005-2017 PIT without
+   current-constituent substitution: passed.
+3. Two real LEAN release golden runs with equal canonical input/result digests:
+   passed.
+4. Ten-dataset manifest/watermark/archive evidence and all historical archive
+   references: passed; 37 retained issues reconciled, 0 open.
 
 ### P1: Stability and operation
 

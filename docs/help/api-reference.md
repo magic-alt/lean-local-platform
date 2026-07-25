@@ -172,7 +172,7 @@
 | `GET` | `/api/ashare-tech-insights/capabilities` | Read Capabilities | - | `200` - |
 | `GET` | `/api/ashare-tech-insights/reports` | List Reports | `limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/ashare-tech-insights/reports` | Create Report | body `AshareTechReportRequest` | `202` - |
-| `DELETE` | `/api/ashare-tech-insights/reports/{report_id}` | Delete Report | `report_id` (path, required) | `200` - |
+| `DELETE` | `/api/ashare-tech-insights/reports/{report_id}` | Delete Report | `report_id` (path, required)<br>`force` (query) | `200` - |
 | `GET` | `/api/ashare-tech-insights/reports/{report_id}` | Report Detail | `report_id` (path, required) | `200` - |
 | `GET` | `/api/ashare-tech-insights/watchlist` | Read Watchlist | - | `200` - |
 | `POST` | `/api/ashare-tech-insights/watchlist/items` | Add Watchlist Item | body `WatchlistItemCreate` | `201` - |

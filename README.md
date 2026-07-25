@@ -95,10 +95,17 @@ python3 scripts/check_repository_hygiene.py
 # 重建已有回测 HTML 报告
 web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
 
-# CSI300 PIT portable parser 示例验证（生产 manifest 需要离线官方附件包）
+# CSI300 PIT portable parser 示例验证
 web/backend/.venv/bin/python scripts/import_csi300_pit_public.py \
   --manifest config/data-sources/csi300_pit_sources.example.json \
   --dry-run --validate
+
+# 获取/刷新中证指数官方来源包并验证，不写数据库
+web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py --dry-run
+
+# 对已保留来源包做纯离线哈希、事件和 PIT 重放门禁
+web/backend/.venv/bin/python scripts/import_csindex_csi300_pit.py \
+  --offline --dry-run
 
 # TuShare CSI300 历史权重只读治理检查（仅影子 universe，不替代官方 PIT）
 web/backend/.venv/bin/python scripts/import_tushare_csi300_pit.py \
@@ -106,11 +113,11 @@ web/backend/.venv/bin/python scripts/import_tushare_csi300_pit.py \
   --dry-run --quarantine-incomplete
 ```
 
-CSI300 官方缓存重建目前从 2017-12-08 开始，不能用当前成分替代更早的历史
-PIT 成分。来源哈希和人工校正位于
-`config/data-sources/csi300_pit_sources.json`，原始附件只存放于
-`web/runtime/source-cache/csi300-official/`。缺失附件时生产 manifest 校验必须
-失败，不能把 manifest 中的声明当作源文件验证结果。
+CSI300 官方公告与附件已从 2005-04-08 起重建完整 PIT，不使用当前成分回填
+历史。可取 URL、逐源哈希、起始快照重建方法和 bundle SHA-256 位于
+`config/data-sources/csi300_pit_sources.json`；保留包位于
+`web/runtime/source-cache/csi300-official/`。缺少文件或哈希不符时离线门禁会
+失败，不能把 manifest 声明本身当作源文件验证结果。
 
 ## 测试
 

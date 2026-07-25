@@ -278,7 +278,9 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
 - A real 21-trading-day LEAN Paper acceptance is available, but it cannot
   close Level 5 unless the same session contains a filled and a policy-rejected
   order.
-- The production CSI300 manifest cannot validate without the operator-retained official attachment bundle.
+- CSI300 release validation requires the operator-retained official bundle;
+  `scripts/import_csindex_csi300_pit.py --offline --dry-run` verifies every
+  retained hash and the complete event chain without network access.
 - Disk exhaustion/OOM and production-scale restore remain isolated-environment
   gates; they must never be injected into the formal workstation data volume.
 - SBOM generation exists, but Python transitive hash locking, vulnerability
