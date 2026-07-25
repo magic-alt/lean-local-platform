@@ -2,6 +2,36 @@
 
 Tasks 展示 Celery 生命周期和日志；Monitoring 展示依赖健康、指标和最近工作流失败。页面进度来自数据库，浏览器只是读取状态，不负责推动任务。
 
+## Paper Account waiting data、重复运行或 projection 异常
+
+先在账户详情的 Automation 检查 trading date、数据 watermark、QA、checkpoint、
+worker/queue 状态和 failure code。
+
+- `waiting_data`：确认交易日是交易所开放日，并检查 Source certification、daily
+  bar watermark、QA critical、PIT/reference 和 benchmark 覆盖。不要关闭门禁强行成交。
+- `queued`：多账户共享全局 LEAN 并发预算，排队不是失败。检查 backtest worker
+  和 Redis，但不要另起绕过 lease 的 runner。
+- `running/finalizing` 超过 15 分钟未更新：Beat 的 orphan recovery 会检查数据库
+  中的 LEAN run 和六阶段 checkpoint。可安全重投同一 Run now；唯一键返回原 cycle。
+- `duplicate_cycle`：同一 deployment/trading date 已存在正式 cycle。查看原 cycle
+  的 result digest，不要创建第二套订单。
+- projection 数值异常：比较 `source_ledger_sequence` 和
+  `source_checkpoint_digest`，再调用 projection refresh task。projection 是缓存；
+  禁止直接改 cash/positions 来“修复”。
+- 有信号无成交：在 Signals/Orders 查看 constraint 和 13-state transition，常见
+  原因是 `next_session_pending`、停牌、涨跌停、T+1、现金下限或风险上限。
+
+真实验收使用：
+
+```bash
+web/backend/.venv/bin/python scripts/run_paper_accounts_acceptance.py \
+  --project-id <project-id> \
+  --source-backtest-id <trusted-backtest-id>
+```
+
+只有 `PAPER_ACCOUNTS_PASS` 表示真实 MySQL、Redis、Celery、restricted LEAN 和 API
+证据全部满足。缺少可信 candidate 时脚本会 fail closed。
+
 ## 首轮检查
 
 ```bash

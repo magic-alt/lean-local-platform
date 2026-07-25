@@ -27,6 +27,23 @@ from .runners.docker_runner import DockerRunner
 app = FastAPI(title="Restricted LEAN Runner", docs_url=None, redoc_url=None)
 
 
+@app.on_event("startup")
+def recover_interrupted_runner_jobs() -> None:
+    """Fail closed for jobs whose owning runner process no longer exists."""
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            update restricted_runner_jobs
+            set status='failed',exit_code=coalesce(exit_code,1),
+                error=coalesce(error,'restricted_runner_restarted'),
+                finished_at=coalesce(finished_at,?)
+            where status='running'
+            """,
+            (now,),
+        )
+
+
 class RunnerJob(BaseModel):
     runId: str = Field(min_length=1, max_length=128)
     command: list[str] = Field(min_length=3, max_length=64)

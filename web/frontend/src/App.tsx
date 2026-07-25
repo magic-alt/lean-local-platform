@@ -22,6 +22,7 @@ const loadCorePages = () => import("./pages/core");
 const loadDocsPages = () => import("./pages/docs");
 const loadInsightsPages = () => import("./pages/insights");
 const loadOperationsPages = () => import("./pages/operations");
+const loadPaperAccountPages = () => import("./pages/paper-accounts");
 const loadResearchPages = () => import("./pages/research");
 
 const Dashboard = lazy(() => loadDashboardPage().then((module) => ({ default: module.Dashboard })));
@@ -33,7 +34,9 @@ const RunDetailPage = lazy(() => loadCorePages().then((module) => ({ default: mo
 const DocsPage = lazy(() => loadDocsPages().then((module) => ({ default: module.DocsPage })));
 const InsightsPage = lazy(() => loadInsightsPages().then((module) => ({ default: module.InsightsPage })));
 const MonitoringPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.MonitoringPage })));
-const PaperPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.PaperPage })));
+const PaperAccountsPage = lazy(() => loadPaperAccountPages().then((module) => ({ default: module.PaperAccountsPage })));
+const PaperAccountDetailPage = lazy(() => loadPaperAccountPages().then((module) => ({ default: module.PaperAccountDetailPage })));
+const LegacyPaperPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.PaperPage })));
 const ReportsPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.ReportsPage })));
 const SettingsPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.SettingsPage })));
 const TasksPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.TasksPage })));
@@ -61,7 +64,7 @@ function AppShell() {
     { key: "/data", icon: <DatabaseOutlined />, label: navigationLink("/data", "Data", loadCorePages) },
     { key: "/backtests", icon: <PlayCircleOutlined />, label: navigationLink("/backtests", "Backtests", loadCorePages) },
     { key: "/optimization", icon: <SlidersOutlined />, label: navigationLink("/optimization", "Optimization", loadCorePages) },
-    { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper", loadOperationsPages) },
+    { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper", loadPaperAccountPages) },
     { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "Research", loadResearchPages) },
     { key: "/docs", icon: <ReadOutlined />, label: navigationLink("/docs", "文档", loadDocsPages) },
     { key: "/reports", icon: <FileTextOutlined />, label: navigationLink("/reports", "Reports", loadOperationsPages) },
@@ -96,7 +99,9 @@ function AppShell() {
               <Route path="/compare" element={<Navigate to="/optimization" replace />} />
               <Route path="/runs/:id" element={<RunDetailPage />} />
               <Route path="/optimization" element={<OptimizationPage />} />
-              <Route path="/paper" element={<PaperPage />} />
+              <Route path="/paper" element={<PaperAccountsPage />} />
+              <Route path="/paper/accounts/:id" element={<PaperAccountDetailPage />} />
+              <Route path="/paper/legacy" element={<LegacyPaperPage />} />
               <Route path="/research" element={<ResearchPage />} />
               <Route path="/docs" element={<Navigate to="/docs/index" replace />} />
               <Route path="/docs/:slug" element={<DocsPage />} />

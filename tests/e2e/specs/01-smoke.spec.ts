@@ -16,7 +16,7 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
       ["Data", "Data Library"],
       ["Backtests", "Backtests"],
       ["Optimization", "Optimization"],
-      ["Paper", "LEAN Paper"],
+      ["Paper", "Paper Accounts"],
       ["Research", "Research"],
       ["Reports", "Reports"],
       ["Insights", "Insights"],

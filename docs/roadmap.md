@@ -112,12 +112,29 @@ service-fault matrix and constraint coverage checks.
 
 Implemented:
 
+- Paper multi-account brokerage workspace with isolated account generations,
+  immutable opening balances, Decimal ledger bridges and rebuildable projections.
+- Frozen/versioned strategy deployments sourced only from trusted
+  `/api/paper/candidates`, with one active `paper_execute` primary per account
+  and optional `signal_only` deployments.
+- Unique daily execution cycles, 60-second due coordination, explicit
+  queued/running/waiting-data states, duplicate Beat/Run-now idempotency,
+  orphan recovery and a durable notification outbox.
+- Paginated account overview, positions, orders, trades, signals, performance,
+  cycles, reports and audit APIs plus 2–10 account comparison.
 - Paper sessions sourced from a successful, validated, frozen backtest project.
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
 - Feature-gated `lean_walkforward_v2` with immutable LEAN-sourced intents,
   legal 13-state transitions, the shared A-share/portfolio constraint layer,
   idempotent fills and ledger entries, ledger-derived cash/position read models,
   and six digest-protected checkpoints.
+
+The new account layer is implemented but is not marked operationally ready
+until `scripts/run_paper_accounts_acceptance.py` produces
+`PAPER_ACCOUNTS_PASS` against a real trusted candidate, MySQL, Redis, Celery and
+restricted LEAN Docker lane. The 2026-07-25 development database currently has
+no `/api/paper/candidates` result suitable for that new acceptance, so this
+release gate remains explicit rather than inferred from unit tests.
 - A-share T+1, suspension, limit, lot, fee and portfolio constraints in both
   signal simulation and the v2 LEAN intent path.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.

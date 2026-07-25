@@ -275,12 +275,14 @@ def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = Tru
         if instrument and instrument.get("lot_size"):
             parameters["lotSize"] = max(1, int(float(instrument["lot_size"])))
     if market == "china":
-        for symbol in (target, benchmark):
-            quality = quality_gate_range(symbol, parameters["start"], parameters["end"])
-            if not quality["passed"]:
-                report_id = quality["blockingReports"][0].get("id") if quality["blockingReports"] else None
-                detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
-                raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {symbol}: {detail}")
+        # Multi-source daily QA is an equity report.  The benchmark has its own
+        # index-aware fail-closed gate above and must not be interpreted as an
+        # equity merely because its code is numeric (for example CSI 300).
+        quality = quality_gate_range(target, parameters["start"], parameters["end"])
+        if not quality["passed"]:
+            report_id = quality["blockingReports"][0].get("id") if quality["blockingReports"] else None
+            detail = f"qa_failed:{report_id}" if report_id else "qa_failed"
+            raise LeanPlatformError(f"A-share data QA critical gate blocked backtest for {target}: {detail}")
         if not bool(context.get("allowResearchSource")):
             from .data_coverage import ashare_coverage
 

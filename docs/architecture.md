@@ -1,21 +1,25 @@
 # Architecture
 
-Last reviewed: 2026-07-24.
+Last reviewed: 2026-07-25.
 
 This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
 ## Current Level
 
-The main chains are implemented. The 2026-07-24 independent controlled re-audit
-accepted Level 3 and Level 3+, while Level 4, Level 5 Replay and Level 5
-Operational remain unaccepted. Historical 2026-07-22 failures remain preserved:
+The main chains are implemented. The 2026-07-25 local evidence accepts Level 3,
+Level 3+, the 21-day Paper v2 baseline, and the six-checkpoint interruption
+chain. Overall operational release remains not ready because production-scale
+restore, credential and supply-chain gates are separate. Historical failures
+remain preserved:
 
 - Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
 - A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.
 - Strategy, dataset and experiment versions plus run fingerprints are persisted for reproducibility.
 - Backtests, optimization and research expose an example catalog and database-backed experiment batches.
 - Data synchronization is resumable and auditable through sync runs, checkpoints, heartbeats, watermarks, validation results and quarantined rows.
-- Paper Replay, factors, ClickHouse, Parquet/DuckDB and observability exist, but real multi-day LEAN Paper, fault injection, production-scale DR and portable PIT source evidence remain incomplete.
+- Paper Account adds isolated opening ledgers, frozen deployments, idempotent
+  daily cycles and rebuildable projections on top of the existing Paper v2
+  intent/order/fill/ledger chain. Legacy sessions remain separate.
 
 ## Component Map
 
@@ -66,7 +70,7 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0021.
+  Ordered MySQL schema migrations. The current latest migration is 0029.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.
@@ -100,6 +104,39 @@ Project/template selection (projectId required)
   -> persist result, fingerprint, validation and experiment snapshots
   -> expose result, logs, objects, structured report and export APIs
 ```
+
+## Paper Account Chain
+
+```text
+Celery Beat (60-second coordinator)
+  -> due active deployments for active accounts
+  -> exchange calendar and certified data/QA/PIT/reference/benchmark gates
+  -> unique deployment + trading-date execution cycle and account checkpoint
+  -> global LEAN scheduler lease and restricted runner
+  -> LEAN close-derived signal evidence
+  -> existing immutable intent + 13-state transition + constraint pipeline
+  -> certified next-session matching
+  -> immutable fill + shared ledger
+  -> six digest-protected checkpoints
+  -> rebuildable account/position projection and daily report
+  -> durable notification outbox
+```
+
+`paper_accounts` never stores mutable current cash or holdings as facts.
+`paper_account_projections` and position/daily projections are caches rebuilt
+from account-tagged ledger entries, fills and certified prices. Each account has
+an independent shadow v2 session solely to reuse the existing LEAN and order
+pipeline; it is not a second ledger. A deployment freezes source Backtest,
+project snapshot, strategy, dataset, universe, parameters and risk version.
+Changing execution inputs creates a new deployment version.
+
+The v1 production acceptance scope is China A-share daily data in
+`Asia/Shanghai`. Trading day T closes and passes certification before the
+strategy runs. Signals become orders for the next certified session; same-close
+matching is prohibited. A no-signal cycle succeeds with an observed
+`no_signal` record. Market, QA, benchmark or reference gaps cause
+`waiting_data`, bounded retry, or a structured terminal failure without ledger
+mutation.
 
 ## Experiment Batch Chain
 

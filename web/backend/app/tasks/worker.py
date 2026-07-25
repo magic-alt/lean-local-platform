@@ -41,6 +41,7 @@ from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import paper as paper_service
+from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
 from ..services import resource_pressure
@@ -243,6 +244,78 @@ def fail_paper_walkforward_task(request, exc, traceback, paper_run_id: str):  # 
         dedupe_key=f"paper_walkforward_failed:{paper_run_id}",
     )
     return failed
+
+
+@celery_app.task(
+    name="lean_web.finalize_paper_execution_cycle",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def finalize_paper_execution_cycle_task(cycle_id: str):
+    return paper_accounts.finalize_cycle(cycle_id)
+
+
+@celery_app.task(name="lean_web.fail_paper_execution_cycle")
+def fail_paper_execution_cycle_task(request, exc, traceback, cycle_id: str):  # pragma: no cover - Celery errback
+    return paper_accounts.fail_cycle(cycle_id, "worker_failed", str(exc))
+
+
+@celery_app.task(
+    name="lean_web.run_paper_execution_cycle",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_paper_execution_cycle_task(cycle_id: str):
+    from celery import chain
+
+    context = paper_accounts.begin_cycle(cycle_id)
+    if context.get("status") in {"waiting_data", "failed", "succeeded", "skipped"}:
+        return context
+    paper_run = context["paperRun"]
+    workflow = chain(
+        mark_paper_walkforward_running_task.si(paper_run["id"]),
+        run_backtest_task.si(paper_run["task_id"], paper_run["backtest_run_id"]),
+        finalize_paper_walkforward_task.si(paper_run["id"]),
+        finalize_paper_execution_cycle_task.si(cycle_id),
+    )
+    result = workflow.apply_async(
+        link_error=fail_paper_execution_cycle_task.s(cycle_id)
+    )
+    return {
+        "cycleId": cycle_id,
+        "paperRunId": paper_run["id"],
+        "workflowTaskId": result.id,
+        "status": "running",
+    }
+
+
+@celery_app.task(name="lean_web.schedule_due_paper_deployments")
+def schedule_due_paper_deployments_task():
+    return paper_accounts.schedule_due_deployments()
+
+
+@celery_app.task(name="lean_web.recover_orphaned_paper_cycles")
+def recover_orphaned_paper_cycles_task():
+    return paper_accounts.recover_orphaned_cycles()
+
+
+@celery_app.task(name="lean_web.refresh_paper_account_projections")
+def refresh_paper_account_projections_task(account_id: str | None = None):
+    if account_id:
+        return {"accounts": [paper_accounts.rebuild_projection(account_id)]}
+    page = paper_accounts.list_accounts(limit=200)
+    return {
+        "accounts": [
+            paper_accounts.rebuild_projection(str(item["id"]))
+            for item in page["items"]
+            if item.get("status") != "archived"
+        ]
+    }
+
+
+@celery_app.task(name="lean_web.deliver_paper_cycle_notifications")
+def deliver_paper_cycle_notifications_task():
+    return paper_accounts.deliver_notifications()
 
 
 @celery_app.task(name="lean_web.schedule_paper_walkforward", bind=True, max_retries=2)
@@ -958,8 +1031,6 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 source=source,
                 allow_truncated=bool(parameters.get("allowTruncatedData")),
             )
-            if benchmark_for_gate:
-                gate_symbols.append(benchmark_for_gate)
             for symbol in gate_symbols:
                 gate = quality_gate_range(symbol, parameters["start"], parameters["end"])
                 if not gate["passed"]:

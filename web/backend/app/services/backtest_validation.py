@@ -222,10 +222,9 @@ def build_backtest_validation(
     batch = latest_batch_for_symbol(symbol, source=source) or {}
     qa_report = batch.get("qa_report") or {}
     benchmark = _benchmark_snapshot(parameters, fingerprint)
-    symbols_to_gate = [symbol]
-    if benchmark.get("symbol") and benchmark["symbol"] != symbol:
-        symbols_to_gate.append(benchmark["symbol"])
-    quality_gates = [quality_gate_range(item, start, end) for item in symbols_to_gate if item]
+    # quality_gate_range is backed by equity multi-source QA. Index benchmarks
+    # are certified by the dedicated benchmark gates and coverage below.
+    quality_gates = [quality_gate_range(symbol, start, end)]
     from .data_coverage import ashare_coverage
 
     coverage_summary = ashare_coverage(

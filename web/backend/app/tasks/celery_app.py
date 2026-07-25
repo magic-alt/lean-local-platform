@@ -36,6 +36,8 @@ celery_app.conf.update(
         "lean_web.dispatch_experiment_batch": {"queue": "default"},
         "lean_web.run_research_batch_item": {"queue": "default"},
         "lean_web.reconcile_experiment_batches": {"queue": "default"},
+        "lean_web.run_paper_execution_cycle": {"queue": "default"},
+        "lean_web.finalize_paper_execution_cycle": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
     # Bulk sync/materialization tasks can legitimately run for several hours.
@@ -58,6 +60,18 @@ celery_app.conf.update(
         },
         "recover-paper-finalizations": {
             "task": "lean_web.recover_paper_finalizations",
+            "schedule": 60.0,
+        },
+        "schedule-due-paper-deployments": {
+            "task": "lean_web.schedule_due_paper_deployments",
+            "schedule": 60.0,
+        },
+        "recover-orphaned-paper-cycles": {
+            "task": "lean_web.recover_orphaned_paper_cycles",
+            "schedule": 60.0,
+        },
+        "deliver-paper-cycle-notifications": {
+            "task": "lean_web.deliver_paper_cycle_notifications",
             "schedule": 60.0,
         },
         "ashare-tech-report-after-close": {

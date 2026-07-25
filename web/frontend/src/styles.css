@@ -58,6 +58,73 @@ body {
   padding: 14px 16px;
 }
 
+.paper-toolbar {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.paper-filter-card {
+  margin-bottom: 16px;
+}
+
+.paper-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(390px, 1fr));
+  gap: 16px;
+}
+
+.paper-account-card {
+  min-width: 0;
+}
+
+.paper-account-card__metrics,
+.paper-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 16px;
+}
+
+.paper-account-card__schedule {
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.paper-wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.paper-wizard-grid__wide {
+  grid-column: 1 / -1;
+}
+
+.paper-account-summary {
+  margin-bottom: 16px;
+}
+
+.paper-account-tabs .ant-tabs-content-holder {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .paper-account-grid,
+  .paper-wizard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .paper-account-card__metrics,
+  .paper-summary-metrics {
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
+  }
+
+  .paper-toolbar {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
 .route-loading {
   min-height: 240px;
   display: grid;

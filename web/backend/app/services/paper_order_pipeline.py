@@ -534,7 +534,9 @@ def ensure_opening_ledger(
         opening = connection.execute(
             """
             select id from paper_ledger_entries
-            where session_id=? and idempotency_key='opening:cash'
+            where session_id=? and asset='cash' and entry_type='CASH_DEPOSIT'
+              and trade_date is null
+            order by created_at,id limit 1
             """,
             (session_id,),
         ).fetchone()

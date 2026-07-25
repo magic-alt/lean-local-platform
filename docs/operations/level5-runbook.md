@@ -6,6 +6,41 @@
 稳定性、Paper 与告警验收可以独立通过，但在生产规模备份恢复、凭据和 restricted
 runner 等全部 release gate 通过前，不得宣布 `LEVEL5_OPERATIONAL_PASS`。
 
+## 多账户调度与账户隔离
+
+Paper Account scheduler 每 60 秒查询 active account 下的 due deployment。账户级
+cycle 使用 `(deployment_id, trading_date)` 和完整 idempotency key 双唯一约束；
+同一账户通过 account checkpoint 串行推进，不同账户可以排队，但仍须获得全局
+LEAN scheduler lease。
+
+值班检查顺序：
+
+1. 区分 `queued`、`running`、`waiting_data`、`finalizing` 和终态；禁止将排队误报
+   为执行失败。
+2. 核对 cycle 的 account generation、strategy/dataset fingerprint 和 opening
+   checkpoint digest。
+3. 检查关联 walk-forward run 与六个 `paper_run_checkpoints`。只有 reconciliation
+   完成后 account cycle 才可 `succeeded`。
+4. 对照 account-tagged ledger 连续 `ledger_sequence` 与 projection 的 source
+   sequence/checkpoint digest。projection 可重建，ledger 不可改。
+5. 同一日期重复 Run now 必须返回同一 cycle ID；第二个 cycle 或第二次 fill 是发布阻断。
+6. 连续三次失败时 deployment 进入 `error`。排除数据、worker、Redis/MySQL 或
+   restricted runner 问题后显式恢复。
+
+账户 A 与 B 的 account ID、shadow session、opening ledger、generation、
+checkpoint、intent/fill/ledger bridge 和 projection 必须完全隔离。克隆只复制
+配置，新账户从独立 opening ledger 开始。
+
+```bash
+web/backend/.venv/bin/python scripts/run_paper_accounts_acceptance.py \
+  --project-id <project-id> \
+  --source-backtest-id <trusted-backtest-id>
+```
+
+默认 evidence 为 `web/runtime/audit/paper-accounts-acceptance.json`，必须包含 account、
+deployment、cycle、input/result digest、ledger reconciliation、duplicate Run now
+与前端 E2E 路径。通知 outbox 失败不能回滚 ledger；应单独检查并重投 delivery。
+
 ## 值班入口与发布前检查
 
 1. 检查 `GET /api/health`，确认 API 和 Redis 正常。

@@ -44,6 +44,14 @@ import type {
   PaperDailyReport,
   PaperBacktestCandidate,
   PaperWalkforwardRun,
+  PaperAccount,
+  PaperAccountOverview,
+  PaperAccountComparison,
+  PaperDeployment,
+  PaperExecutionCycle,
+  PaperPosition,
+  PaperSignal,
+  PagedResponse,
   ChartPoint,
   ChartData,
   DataQueryRow,
@@ -544,6 +552,101 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tradeDate, autoSignal })
     }),
+  paperAccounts: (filters?: {
+    status?: string;
+    market?: string;
+    strategy?: string;
+    keyword?: string;
+    health?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return request<PagedResponse<PaperAccount>>(`/api/paper/accounts?${query.toString()}`);
+  },
+  paperAccount: (id: string) =>
+    request<PaperAccount>(`/api/paper/accounts/${encodeURIComponent(id)}`),
+  createPaperAccount: (payload: {
+    name: string;
+    description?: string;
+    marketScope: "china";
+    baseCurrency: "CNY";
+    initialCash: string;
+    benchmarkSymbol: string;
+    riskConfig?: Record<string, unknown>;
+  }) => request<PaperAccount>("/api/paper/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }),
+  updatePaperAccount: (id: string, payload: Record<string, unknown>) =>
+    request<PaperAccount>(`/api/paper/accounts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  paperAccountAction: (id: string, action: "activate" | "pause" | "resume" | "archive") =>
+    request<PaperAccount>(`/api/paper/accounts/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
+  clonePaperAccount: (id: string, payload: { name?: string; initialCash?: string } = {}) =>
+    request<PaperAccount>(`/api/paper/accounts/${encodeURIComponent(id)}/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  paperAccountOverview: (id: string) =>
+    request<PaperAccountOverview>(`/api/paper/accounts/${encodeURIComponent(id)}/overview`),
+  paperAccountPositions: (id: string) =>
+    request<PagedResponse<PaperPosition>>(`/api/paper/accounts/${encodeURIComponent(id)}/positions`),
+  paperAccountOrders: (id: string) =>
+    request<PagedResponse<Record<string, unknown>>>(`/api/paper/accounts/${encodeURIComponent(id)}/orders`),
+  paperAccountTrades: (id: string) =>
+    request<PagedResponse<Record<string, unknown>>>(`/api/paper/accounts/${encodeURIComponent(id)}/trades`),
+  paperAccountSignals: (id: string) =>
+    request<PagedResponse<PaperSignal>>(`/api/paper/accounts/${encodeURIComponent(id)}/signals`),
+  paperAccountCycles: (id: string) =>
+    request<PagedResponse<PaperExecutionCycle>>(`/api/paper/accounts/${encodeURIComponent(id)}/cycles`),
+  paperAccountReports: (id: string) =>
+    request<PagedResponse<Record<string, unknown>>>(`/api/paper/accounts/${encodeURIComponent(id)}/daily-reports`),
+  paperAccountAudit: (id: string) =>
+    request<PagedResponse<Record<string, unknown>>>(`/api/paper/accounts/${encodeURIComponent(id)}/audit`),
+  paperAccountPerformance: (id: string) =>
+    request<{ points: Array<Record<string, unknown>>; benchmarkSymbol: string; currency: string }>(
+      `/api/paper/accounts/${encodeURIComponent(id)}/performance`
+    ),
+  paperDeployments: (accountId: string) =>
+    request<PaperDeployment[]>(`/api/paper/accounts/${encodeURIComponent(accountId)}/deployments`),
+  createPaperDeployment: (accountId: string, payload: {
+    name?: string;
+    projectId: string;
+    sourceBacktestId: string;
+    scheduleType?: string;
+    scheduleExpression?: string;
+    marketTimezone?: string;
+    executionTiming?: string;
+    signalMode?: string;
+    universeConfig?: Record<string, unknown>;
+    isPrimary?: boolean;
+  }) => request<PaperDeployment>(`/api/paper/accounts/${encodeURIComponent(accountId)}/deployments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }),
+  paperDeploymentAction: (id: string, action: "activate" | "pause" | "resume") =>
+    request<PaperDeployment>(`/api/paper/deployments/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
+  runPaperDeploymentNow: (id: string, tradingDate?: string) =>
+    request<PaperExecutionCycle>(`/api/paper/deployments/${encodeURIComponent(id)}/run-now`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tradingDate })
+    }),
+  comparePaperAccounts: (ids: string[]) => {
+    const query = new URLSearchParams();
+    ids.forEach((id) => query.append("accountId", id));
+    return request<PaperAccountComparison>(`/api/paper/accounts/compare?${query.toString()}`);
+  },
   insightCapabilities: () => request<InsightCapabilities>("/api/insights/capabilities"),
   insights: (filters?: { assetClass?: string; symbol?: string; status?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();

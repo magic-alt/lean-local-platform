@@ -882,6 +882,34 @@ def _lean_intent_rejection(
     )
     if portfolio_reason:
         return portfolio_reason
+    parameters = _session_parameters(session)
+    max_order_amount = _parameter_float(
+        parameters,
+        "maxOrderAmount",
+        "max_order_amount",
+    )
+    principal = quantity * price
+    if max_order_amount is not None and principal - max_order_amount > 1e-9:
+        return "max_order_amount"
+    max_daily_turnover = _parameter_float(
+        parameters,
+        "maxDailyTurnover",
+        "max_daily_turnover",
+    )
+    if max_daily_turnover is not None and float(session.get("equity") or 0) > 0:
+        with db() as connection:
+            turnover = connection.execute(
+                """
+                select coalesce(sum(abs(fill.quantity * fill.price)),0) as principal
+                from paper_order_fills fill
+                join paper_order_intents intent on intent.id=fill.intent_id
+                where intent.session_id=? and intent.trade_date=?
+                """,
+                (session["id"], trade_date),
+            ).fetchone()
+        projected_turnover = (float(turnover["principal"] or 0) + principal) / float(session["equity"])
+        if projected_turnover - max_daily_turnover > 1e-12:
+            return "max_daily_turnover"
     if side == "buy":
         cap = _parameter_float(
             _session_parameters(session),
@@ -1037,6 +1065,16 @@ def _process_v2_lean_intents(
         positions=list_positions(str(session["id"])),
         currency="HKD" if session.get("venue") == "hongkong" else "CNY",
     )
+    # The mutable legacy session is a read model only. Refresh it from the
+    # immutable ledger even when LEAN produced no executable order so opening
+    # cash, rejected-only days, and no-signal days reconcile identically.
+    projection_date = str(
+        paper_run.get("trade_date")
+        or (_order_trade_date(orders[0]) if orders else session.get("last_processed_date"))
+        or date.today().isoformat()
+    )
+    _apply_v2_ledger_projection(str(session["id"]), projection_date)
+    session = get_session(str(session["id"])) or session
     captured = []
     for order in orders:
         event_key = _order_event_key(order)

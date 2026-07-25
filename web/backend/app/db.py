@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
+sqlite3.register_adapter(Decimal, lambda value: format(value, "f"))
+
 from .core.config import (
     DATABASE_URL,
     OBJECT_STORE_DIR,
@@ -103,6 +105,9 @@ JSON_COLUMNS = {
     "metrics_json": "metrics",
     "derived_status_json": "derivedStatus",
     "endpoint_counts_json": "endpointCounts",
+    "universe_config_json": "universeConfig",
+    "projection_json": "projection",
+    "evidence_json": "evidence",
 }
 
 
@@ -163,6 +168,9 @@ LONG_TEXT_COLUMNS = {
     "requested_datasets_json",
     "derived_status_json",
     "endpoint_counts_json",
+    "universe_config_json",
+    "projection_json",
+    "evidence_json",
     "error",
     "error_message",
 }

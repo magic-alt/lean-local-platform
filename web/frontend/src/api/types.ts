@@ -949,6 +949,175 @@ export interface PaperDailyReport {
   report?: Record<string, unknown>;
 }
 
+export interface PagedResponse<T> {
+  items: T[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
+export interface PaperAccount {
+  id: string;
+  shadow_session_id: string;
+  name: string;
+  description?: string | null;
+  status: "draft" | "active" | "paused" | "error" | "archived";
+  market_scope: "china";
+  base_currency: "CNY";
+  initial_cash: string;
+  benchmark_symbol: string;
+  current_generation: number;
+  cash?: string;
+  available_cash?: string;
+  frozen_cash?: string;
+  market_value?: string;
+  total_equity?: string;
+  realized_pnl?: string;
+  unrealized_pnl?: string;
+  daily_pnl?: string;
+  cumulative_return?: string;
+  benchmark_return?: string;
+  excess_return?: string;
+  position_count?: number;
+  health_status?: string;
+  primary_strategy?: string | null;
+  last_successful_trading_date?: string | null;
+  next_scheduled_at?: string | null;
+  pending_signal_count?: number;
+  pending_order_count?: number;
+  last_valuation_at?: string | null;
+  quote_data_timestamp?: string | null;
+  source_checkpoint_digest?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaperDeployment {
+  id: string;
+  paper_account_id: string;
+  version: number;
+  name: string;
+  status: "active" | "paused" | "disabled" | "error";
+  is_primary: number | boolean;
+  project_id: string;
+  source_backtest_id: string;
+  strategy_version_id?: string | null;
+  project_snapshot_id: string;
+  dataset_version_id: string;
+  schedule_type: string;
+  schedule_expression: string;
+  market_timezone: string;
+  execution_timing: "next_open";
+  signal_mode: "paper_execute" | "signal_only";
+  strategy_fingerprint: string;
+  dataset_fingerprint: string;
+  deployment_fingerprint: string;
+  last_successful_trading_date?: string | null;
+  next_scheduled_at?: string | null;
+  consecutive_failures: number;
+}
+
+export interface PaperExecutionCycle {
+  id: string;
+  paper_account_id: string;
+  deployment_id: string;
+  trading_date: string;
+  status: "scheduled" | "waiting_data" | "queued" | "running" | "finalizing" | "succeeded" | "skipped" | "failed";
+  signal_count: number;
+  intent_count: number;
+  order_count: number;
+  fill_count: number;
+  rejected_count: number;
+  skip_reason?: string | null;
+  failure_code?: string | null;
+  failure_detail?: string | null;
+  result_digest?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface PaperAccountOverview {
+  account: PaperAccount;
+  deployment?: PaperDeployment | null;
+  latestCycle?: PaperExecutionCycle | null;
+  dataReadiness?: {
+    symbol?: string;
+    watermark?: {
+      provider?: string;
+      dataset_key?: string;
+      last_data_date?: string | null;
+      validation_status?: string;
+      updated_at?: string;
+    } | null;
+    qa?: {
+      id?: string;
+      severity?: string;
+      created_at?: string;
+    } | null;
+  };
+}
+
+export interface PaperPosition {
+  paper_account_id: string;
+  symbol: string;
+  security_name?: string | null;
+  market: string;
+  quantity: string;
+  sellable_quantity: string;
+  frozen_quantity: string;
+  average_cost: string;
+  certified_price?: string | null;
+  market_value: string;
+  account_weight: string;
+  daily_pnl: string;
+  unrealized_pnl: string;
+  realized_pnl: string;
+  quote_data_timestamp?: string | null;
+  data_status: string;
+}
+
+export interface PaperSignal {
+  id: string;
+  paper_account_id: string;
+  deployment_id: string;
+  cycle_id: string;
+  signal_type: string;
+  symbol?: string | null;
+  signal_timestamp: string;
+  intended_execution_date?: string | null;
+  target_quantity?: string | null;
+  target_weight?: string | null;
+  disposition: string;
+  no_trade_reason?: string | null;
+  lean_run_id?: string | null;
+  data_timestamp?: string | null;
+  evidence?: Record<string, unknown>;
+}
+
+export interface PaperAccountComparison {
+  comparable: boolean;
+  reason?: string | null;
+  currencies: string[];
+  comparisonStart?: string | null;
+  valuationDate?: string | null;
+  missingData: string[];
+  accounts: Array<{
+    accountId: string;
+    name: string;
+    currency: string;
+    benchmarkSymbol: string;
+    cumulativeReturn: string;
+    benchmarkReturn: string;
+    excessReturn: string;
+    turnover: string;
+    tradeCount: number;
+    positionCount: number;
+    riskRejectCount: number;
+    cashRatio: string;
+    lastRunDate?: string | null;
+  }>;
+}
+
 export interface InsightCapabilities {
   configured: boolean;
   provider?: string | null;

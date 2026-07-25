@@ -6,6 +6,7 @@ def test_preflight_repairs_symbol_and_benchmark_with_selected_source(monkeypatch
 
     ready = {"600460": False, "000300": False}
     repaired = []
+    quality_symbols = []
 
     monkeypatch.setattr(
         preflight,
@@ -43,7 +44,11 @@ def test_preflight_repairs_symbol_and_benchmark_with_selected_source(monkeypatch
     monkeypatch.setattr(preflight, "_target_gate", target_gate)
     monkeypatch.setattr(preflight, "_benchmark_gate", benchmark_gate)
     monkeypatch.setattr(preflight, "_repair_symbol", repair)
-    monkeypatch.setattr(preflight, "quality_gate_range", lambda symbol, start, end: {"passed": True, "blockingReports": []})
+    def quality_gate(symbol, start, end):
+        quality_symbols.append(symbol)
+        return {"passed": True, "blockingReports": []}
+
+    monkeypatch.setattr(preflight, "quality_gate_range", quality_gate)
 
     result = prepare_backtest_request(
         {
@@ -62,6 +67,7 @@ def test_preflight_repairs_symbol_and_benchmark_with_selected_source(monkeypatch
     assert result["parameters"]["source"] == "tushare"
     assert result["preflight"]["ready"] is True
     assert result["preflight"]["repaired"] == ["symbol", "benchmark"]
+    assert quality_symbols == ["600460"]
 
 
 def test_tushare_benchmark_repair_uses_explicit_index_endpoint(monkeypatch):
