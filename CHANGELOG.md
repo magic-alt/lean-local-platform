@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-25 — 修复 LEAN ResultsAnalyzer 在周末或美股休市日错误要求 SPY 覆盖到自然日的问题，明确区分 SPY 技术参考、美股、A 股和港股交易日历；将 New Backtest 与批量回测合并为按运行范围配置切换的统一入口，并让批次子任务继承市场、基准、来源、费用、滑点与研究数据覆盖配置；补齐全部回测案例模板检查和 Web 使用/排障文档。
 - 2026-07-25 — preserve Web data across route changes with shared stale-while-revalidate caching and in-flight request deduplication; lazy-load and intent-prefetch page bundles; stop terminal Research sessions from polling forever; parallelize and coalesce Backtest detail refreshes; and ignore stale page, search, file and preview responses after navigation.
 - 2026-07-25 — add cross-batch experiment ranking and side-by-side comparison, parameter-sensitivity heatmaps and Train/Validation/OOS charts; add executable factor normalization, neutralization, portfolio-construction and robustness templates; and add persisted futures continuous-contract series with versioned fees, strict margin metadata, LEAN mapping/adjustment controls and roll-level PnL/cost attribution.
 - 2026-07-25 — complete local P1 stability and Paper operations acceptance: prove five accepted LEAN jobs under a two-active/three-queued budget, queued/running phase cancellation, Redis/MySQL/worker recovery, a real 21-day LEAN Paper v2 baseline and six-checkpoint interruption/idempotency chain; add durable finalization recovery, independent notification escalation, automatic resolved notices, disk/memory/CPU/queue pressure alerts, evidence-producing acceptance scripts, and the Level 5 operational runbook.

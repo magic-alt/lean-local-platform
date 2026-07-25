@@ -76,6 +76,7 @@ import type {
   SecurityProfile,
   StrategyTemplate,
   Task,
+  WorkflowExample,
 } from "../api";
 import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
@@ -2285,7 +2286,13 @@ export function BacktestsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [preflight, setPreflight] = useState<BacktestPreflight>();
+  const [batchPreset, setBatchPreset] = useState<{
+    example: WorkflowExample;
+    project: Project;
+    defaults: Record<string, unknown>;
+  }>();
   const activeView = searchParams.get("view") === "history" ? "history" : "run";
+  const runScope = searchParams.get("scope") === "batch" ? "batch" : "single";
   const searchParamsKey = searchParams.toString();
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
@@ -2338,6 +2345,53 @@ export function BacktestsPage() {
     setSearchParams(nextSearchParams);
   }
 
+  function selectRunScope(scope: "single" | "batch") {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.set("view", "run");
+    nextSearchParams.set("scope", scope);
+    setSearchParams(nextSearchParams);
+  }
+
+  function applyExample(project: Project, example: WorkflowExample) {
+    void projects.reload();
+    const defaults = example.defaults || {};
+    const isBatch = example.mode !== "independent"
+      || Boolean(defaults.universeCode)
+      || example.tags.includes("批量")
+      || ["symbol-strategies", "strategy-symbol-matrix"].includes(example.key);
+    if (isBatch) {
+      setBatchPreset({ example, project, defaults });
+      selectRunScope("batch");
+      return;
+    }
+    const nextMarket = String(defaults.market || projectMarket(project));
+    const nextAssetClass = projectAssetClass(project);
+    const nextVenue = projectVenue(project);
+    const nextResolution = projectResolution(project);
+    const nextDataType = projectDataType(project);
+    setSelectedProjectId(project.id);
+    setAssetClass(nextAssetClass);
+    setMarket(nextMarket);
+    setVenue(nextVenue);
+    setResolution(nextResolution);
+    setDataType(nextDataType);
+    form.setFieldsValue({
+      projectId: project.id,
+      name: example.name,
+      symbol: defaults.symbol || (nextMarket === "china" ? "000001" : nextMarket === "hongkong" ? "00700" : "AAPL"),
+      assetClass: nextAssetClass,
+      market: nextMarket,
+      venue: nextVenue,
+      resolution: nextResolution,
+      dataType: nextDataType,
+      benchmarkSymbol: defaultBenchmark(nextMarket),
+      source: defaultBacktestSource(nextMarket),
+      parameters: defaults.parameters || templateDefaults(projectTemplate(project, templates.data))
+    });
+    setPreflight(undefined);
+    selectRunScope("single");
+  }
+
   function applyHistoryFilters(values: BacktestHistoryFilters) {
     const nextFilters = Object.fromEntries(
       Object.entries(values).filter(([, value]) => String(value ?? "").trim())
@@ -2387,7 +2441,34 @@ export function BacktestsPage() {
             label: "Run Backtest",
             children: (
               <>
-                <ExampleGallery kind="backtest" onCreated={() => projects.reload()} />
+                <ExampleGallery kind="backtest" onCreated={applyExample} />
+                <Card
+                  size="small"
+                  title="Run configuration"
+                  style={{ marginTop: 16 }}
+                  extra={(
+                    <Select
+                      aria-label="Backtest run scope"
+                      value={runScope}
+                      style={{ width: 180 }}
+                      onChange={selectRunScope}
+                      options={[
+                        { value: "single", label: "单次回测" },
+                        { value: "batch", label: "批量回测" }
+                      ]}
+                    />
+                  )}
+                >
+                  <Alert
+                    showIcon
+                    type="info"
+                    message={runScope === "single" ? "提交一个回测运行" : "按配置展开批次"}
+                    description={runScope === "single"
+                      ? "使用一个项目、一个标的和一个时间窗口，提交前执行同一套 preflight。"
+                      : "项目、标的/PIT 股票池、窗口和参数共同决定工作单元数；每个子回测仍执行同一套 preflight。"}
+                  />
+                </Card>
+                {runScope === "single" ? (
                 <Card title="New Backtest">
         <Form
           form={form}
@@ -2511,7 +2592,9 @@ export function BacktestsPage() {
           <FormActions><Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run Backtest</Button></FormActions>
         </Form>
       </Card>
-      <BatchWorkbench kind="backtest" projects={projects.data} />
+                ) : (
+                  <BatchWorkbench kind="backtest" projects={projects.data} preset={batchPreset} />
+                )}
               </>
             )
           },

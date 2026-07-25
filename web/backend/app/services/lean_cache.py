@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import zipfile
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,69 @@ from .db_object_store import put_file, restore_to_path
 LEAN_DATA_NAMESPACE = "lean-data-files"
 RESULTS_ANALYZER_REFERENCE_SYMBOL = "SPY"
 RESULTS_ANALYZER_REFERENCE_MARKET = "usa"
+
+
+def _observed_us_holiday(value: date) -> date:
+    if value.weekday() == 5:
+        return value - timedelta(days=1)
+    if value.weekday() == 6:
+        return value + timedelta(days=1)
+    return value
+
+
+def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
+    value = date(year, month, 1)
+    return value + timedelta(days=(weekday - value.weekday()) % 7 + (occurrence - 1) * 7)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    value = date(year + (month == 12), 1 if month == 12 else month + 1, 1) - timedelta(days=1)
+    return value - timedelta(days=(value.weekday() - weekday) % 7)
+
+
+def _easter_sunday(year: int) -> date:
+    """Return Gregorian Easter Sunday using the anonymous computus."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    weekday_offset = (32 + 2 * e + 2 * i - h - k) % 7
+    month_seed = (a + 11 * h + 22 * weekday_offset) // 451
+    month = (h + weekday_offset - 7 * month_seed + 114) // 31
+    day = (h + weekday_offset - 7 * month_seed + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def _us_equity_holidays(year: int) -> set[date]:
+    holidays = {
+        _observed_us_holiday(date(year, 1, 1)),
+        _nth_weekday(year, 2, 0, 3),  # Washington's Birthday
+        _easter_sunday(year) - timedelta(days=2),  # Good Friday
+        _last_weekday(year, 5, 0),  # Memorial Day
+        _observed_us_holiday(date(year, 7, 4)),
+        _nth_weekday(year, 9, 0, 1),  # Labor Day
+        _nth_weekday(year, 11, 3, 4),  # Thanksgiving
+        _observed_us_holiday(date(year, 12, 25)),
+    }
+    if year >= 1998:
+        holidays.add(_nth_weekday(year, 1, 0, 3))  # Martin Luther King Jr. Day
+    if year >= 2022:
+        holidays.add(_observed_us_holiday(date(year, 6, 19)))  # Juneteenth
+    # New Year's Day can be observed on December 31 of the preceding year.
+    next_new_year = _observed_us_holiday(date(year + 1, 1, 1))
+    if next_new_year.year == year:
+        holidays.add(next_new_year)
+    return holidays
+
+
+def _last_expected_us_equity_session(requested_end: date) -> date:
+    value = requested_end
+    while value.weekday() >= 5 or value in _us_equity_holidays(value.year):
+        value -= timedelta(days=1)
+    return value
 
 
 def _data_relative(path: Path) -> str:
@@ -100,21 +163,29 @@ def ensure_lean_interest_rate_reference_data() -> dict[str, Any]:
 
 
 def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[str, Any]:
-    """Ensure LEAN's built-in ResultsAnalyzer can load its hard-coded SPY history."""
+    """Ensure LEAN's built-in ResultsAnalyzer can load its hard-coded SPY history.
+
+    SPY is a technical dependency of LEAN's analyzer, so this check intentionally
+    uses the US equity calendar. Target and benchmark coverage remain governed by
+    the configured China, Hong Kong, or US market in backtest preflight.
+    """
     interest_rate = ensure_lean_interest_rate_reference_data()
     requested_start = parse_date(start) - timedelta(days=3)
     requested_end = parse_date(end)
+    expected_end = _last_expected_us_equity_session(requested_end)
     zip_path = _lean_daily_path(RESULTS_ANALYZER_REFERENCE_SYMBOL, RESULTS_ANALYZER_REFERENCE_MARKET)
     coverage = _daily_zip_coverage(zip_path)
     if (
         coverage["passed"]
         and coverage["firstDate"] <= requested_start.isoformat()
-        and coverage["lastDate"] >= requested_end.isoformat()
+        and coverage["lastDate"] >= expected_end.isoformat()
     ):
         return {
             "symbol": RESULTS_ANALYZER_REFERENCE_SYMBOL,
             "market": RESULTS_ANALYZER_REFERENCE_MARKET,
             "source": "local-cache",
+            "requestedEndDate": requested_end.isoformat(),
+            "expectedLastTradeDate": expected_end.isoformat(),
             "coverage": coverage,
             "refreshed": False,
             "interestRate": interest_rate,
@@ -162,16 +233,19 @@ def ensure_lean_results_analyzer_reference_data(start: str, end: str) -> dict[st
     if (
         not refreshed_coverage["passed"]
         or refreshed_coverage["firstDate"] > requested_start.isoformat()
-        or refreshed_coverage["lastDate"] < requested_end.isoformat()
+        or refreshed_coverage["lastDate"] < expected_end.isoformat()
     ):
         raise LeanPlatformError(
-            "LEAN results analyzer SPY refresh did not cover the requested backtest window: "
-            f"{refreshed_coverage}"
+            "LEAN results analyzer SPY refresh did not cover the expected US equity session: "
+            f"market={RESULTS_ANALYZER_REFERENCE_MARKET}, requestedEnd={requested_end.isoformat()}, "
+            f"expectedLastTradeDate={expected_end.isoformat()}, coverage={refreshed_coverage}"
         )
     return {
         "symbol": RESULTS_ANALYZER_REFERENCE_SYMBOL,
         "market": RESULTS_ANALYZER_REFERENCE_MARKET,
         "source": "yahoo",
+        "requestedEndDate": requested_end.isoformat(),
+        "expectedLastTradeDate": expected_end.isoformat(),
         "coverage": refreshed_coverage,
         "refreshed": True,
         "daily": metadata,

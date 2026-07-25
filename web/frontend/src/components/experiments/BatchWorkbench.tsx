@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message } from "antd";
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message } from "antd";
 import { DeleteOutlined, DownloadOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useState } from "react";
 import type { Key } from "react";
@@ -6,9 +6,10 @@ import dayjs from "dayjs";
 import ReactECharts from "echarts-for-react";
 
 import { api } from "../../api";
-import type { ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project } from "../../api";
+import type { ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project, WorkflowExample } from "../../api";
 import { DateStringPicker } from "../DateStringPicker";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
+import { marketCostParameters } from "../../domain/backtest-request";
 
 
 const MODES = {
@@ -85,8 +86,31 @@ function metricText(value: unknown) {
   return Number.isFinite(number) ? number.toFixed(4) : "-";
 }
 
+type BatchPreset = {
+  example: WorkflowExample;
+  project: Project;
+  defaults: Record<string, unknown>;
+};
 
-export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimization" | "research"; projects: Project[] }) {
+function defaultBenchmark(market: string) {
+  if (market === "china") return "000300";
+  if (market === "hongkong") return "02800";
+  return "SPY";
+}
+
+function defaultSource(market: string) {
+  return market === "china" || market === "hongkong" ? "tushare" : "";
+}
+
+export function BatchWorkbench({
+  kind,
+  projects,
+  preset
+}: {
+  kind: "backtest" | "optimization" | "research";
+  projects: Project[];
+  preset?: BatchPreset;
+}) {
   const [form] = Form.useForm();
   const [preview, setPreview] = useState<ExperimentBatchPreview>();
   const [batches, setBatches] = useState<ExperimentBatch[]>([]);
@@ -97,6 +121,7 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
   const [busy, setBusy] = useState(false);
   const symbolSource = Form.useWatch("symbolSource", form) || "symbols";
   const mode = Form.useWatch("mode", form) || MODES[kind][0].value;
+  const market = Form.useWatch("market", form) || "china";
 
   async function reload() {
     try {
@@ -109,23 +134,34 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
 
   useEffect(() => { void reload(); }, [kind]);
   useEffect(() => {
-    const applyExample = (event: Event) => {
-      const detail = (event as CustomEvent).detail as { example?: { kind?: string; mode?: string }; project?: Project; launch?: { defaults?: Record<string, unknown> } };
+    const applyPreset = (detail: { example?: { kind?: string; mode?: string }; project?: Project; defaults?: Record<string, unknown> }) => {
       if (detail.example?.kind !== kind || !detail.project) return;
-      const defaults = detail.launch?.defaults || {};
+      const defaults = detail.defaults || {};
+      const nextMarket = String(defaults.market || "china");
       form.setFieldsValue({
+        market: nextMarket,
+        benchmarkSymbol: defaultBenchmark(nextMarket),
+        source: defaultSource(nextMarket),
         ...defaults,
         mode: detail.example.mode || MODES[kind][0].value,
         projectIds: [detail.project.id],
         symbolSource: defaults.universeCode ? "universe" : "symbols",
         symbols: defaults.symbol || "000001",
-        parameterGridJson: defaults.parameterGrid ? JSON.stringify(defaults.parameterGrid) : form.getFieldValue("parameterGridJson")
+        parameterGridJson: defaults.parameterGrid ? JSON.stringify(defaults.parameterGrid) : form.getFieldValue("parameterGridJson"),
+        parameters: defaults.parameters || {}
       });
       setPreview(undefined);
     };
+    if (preset) {
+      applyPreset(preset);
+    }
+    const applyExample = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { example?: { kind?: string; mode?: string }; project?: Project; launch?: { defaults?: Record<string, unknown> } };
+      applyPreset({ example: detail.example, project: detail.project, defaults: detail.launch?.defaults });
+    };
     window.addEventListener("lean-example-instantiated", applyExample);
     return () => window.removeEventListener("lean-example-instantiated", applyExample);
-  }, [form, kind]);
+  }, [form, kind, preset]);
   useEffect(() => {
     if (!batches.some((item) => ["queued", "running"].includes(item.status))) return;
     const timer = window.setInterval(() => void reload(), 4000);
@@ -139,10 +175,20 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
     let parameterGrids = {};
     if (values.parameterGridsJson) parameterGrids = JSON.parse(values.parameterGridsJson);
     const projectIds = values.projectIds || (values.projectId ? [values.projectId] : []);
+    const executionParameters = kind === "research" ? (values.parameters || {}) : {
+      ...(values.parameters || {}),
+      benchmarkSymbol: values.benchmarkSymbol,
+      feeModel: values.feeModel,
+      slippageModel: values.slippageModel,
+      source: values.source,
+      allowResearchSource: values.allowResearchSource === true,
+      ...marketCostParameters(values.market, values.feeModel, values.slippageModel)
+    };
     return {
       ...values,
       kind,
       projectIds,
+      parameters: executionParameters,
       symbols: values.symbolSource === "symbols" ? symbols : [],
       universeCode: values.symbolSource === "universe" || mode === "dynamic_universe" ? values.universeCode : undefined,
       asOfDate: values.asOfDate || values.start,
@@ -199,11 +245,13 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
 
   return (
     <>
-      <Card title={kind === "backtest" ? "批量回测" : kind === "optimization" ? "批量优化" : "快捷研究任务"} style={{ marginTop: 16 }}>
+      <Card title={kind === "backtest" ? "New Backtest" : kind === "optimization" ? "批量优化" : "快捷研究任务"} style={{ marginTop: 16 }}>
         <Form form={form} layout="vertical" onFinish={submit} initialValues={{
           name: kind === "backtest" ? "Batch Backtest" : kind === "optimization" ? "Batch Optimization" : "Research Analysis",
           mode: MODES[kind][0].value, symbolSource: "symbols", symbols: "000001", universeCode: "CSI300",
           start: dayjs().subtract(5, "year").format("YYYY-MM-DD"), end: dayjs().format("YYYY-MM-DD"), cash: 300000,
+          market: "china", benchmarkSymbol: "000300", source: "tushare", feeModel: "default", slippageModel: "default",
+          allowResearchSource: false,
           maxCandidates: 200, trainYears: 3, testYears: 1, validationMonths: 6, stepYears: 1,
           adjustmentContract: "raw-v1", featurePipelineVersion: "features-v1", labelHorizonDays: 0,
           factorNames: "momentum,volatility", parameterGridJson: '{"fast":[5,10,20],"slow":[30,60]}'
@@ -212,6 +260,7 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           <FormGrid>
             <Form.Item className="form-field--wide" name="name" label="批次名称" rules={[{ required: true }]}><Input /></Form.Item>
             <Form.Item name="mode" label="运行模式"><Select options={MODES[kind]} onChange={() => setPreview(undefined)} /></Form.Item>
+            {kind !== "research" && <Form.Item name="market" label="市场"><Select onChange={(value) => form.setFieldsValue({ benchmarkSymbol: defaultBenchmark(value), source: defaultSource(value) })} options={[{ value: "china", label: "A 股" }, { value: "hongkong", label: "港股" }, { value: "usa", label: "美股" }]} /></Form.Item>}
             {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
             {kind !== "research" && <Form.Item name="symbolSource" label="标的来源"><Select options={[{ value: "symbols", label: "股票代码" }, { value: "universe", label: "PIT股票池" }]} /></Form.Item>}
             {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item className="form-field--wide" name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
@@ -225,6 +274,24 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
             <Form.Item name="end" label="结束日期"><DateStringPicker /></Form.Item>
             <Form.Item name="cash" label="每个运行初始资金"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
           </FormGrid>
+          </FormSection>}
+          {kind !== "research" && <FormSection title="执行与数据配置" description="每个展开后的子回测复用同一市场、基准、来源、费用和滑点口径。">
+            <FormGrid>
+              <Form.Item name="benchmarkSymbol" label="基准" rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item className="form-field--wide" name="source" label="数据来源">
+                {market === "china" || market === "hongkong" ? <Select options={[
+                  { value: "tushare", label: "TuShare Pro" },
+                  { value: "akshare", label: "AKShare" },
+                  { value: "baostock", label: "Baostock" },
+                  { value: "yfinance", label: "YFinance" }
+                ]} /> : <Input placeholder="optional provider source" />}
+              </Form.Item>
+              <Form.Item name="feeModel" label="费用模型"><Select options={[{ value: "default", label: "市场默认费用" }, { value: "zero", label: "零费用（仅研究）" }]} /></Form.Item>
+              <Form.Item name="slippageModel" label="滑点模型"><Select options={[{ value: "default", label: "默认" }, { value: "zero", label: "零滑点" }]} /></Form.Item>
+              <Form.Item className="form-field--full" name="allowResearchSource" valuePropName="checked" label="Research data override">
+                <Checkbox>允许显式选择未经认证的研究数据；生成的运行不可作为可信 Paper 输入</Checkbox>
+              </Form.Item>
+            </FormGrid>
           </FormSection>}
           {kind === "optimization" && <>
             <AdvancedFields label="高级优化设置">

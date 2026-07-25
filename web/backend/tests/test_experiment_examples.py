@@ -58,6 +58,21 @@ def test_example_catalog_instantiates_editable_research_project(tmp_path, monkey
     assert project["config"]["exampleVersion"] == 1
 
 
+def test_all_backtest_examples_reference_renderable_strategy_templates():
+    from app.services import examples
+    from app.services.strategies import get_template, render_python_template
+
+    catalog = examples.list_examples("backtest")
+
+    assert len(catalog) == 10
+    for example in catalog:
+        template = get_template(example["templateKey"])
+        assert template["key"] == example["templateKey"]
+        code = render_python_template(f"Example{example['key'].replace('-', '').title()}", template["key"])
+        compile(code, f"<example:{example['key']}>", "exec")
+        assert "constant benchmark fallback is disabled" in code
+
+
 def test_batch_preview_freezes_pit_members_and_expands_project_matrix(tmp_path, monkeypatch):
     db_module = configure(tmp_path, monkeypatch)
     seed_universe(db_module)
@@ -82,6 +97,46 @@ def test_batch_preview_freezes_pit_members_and_expands_project_matrix(tmp_path, 
     assert batch["total"] == 4
     assert batch["config"]["resolvedSelection"]["asOfDate"] == "2022-01-01"
     assert len(batch["items"]) == 4
+
+
+def test_batch_children_preserve_unified_market_and_execution_configuration(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("unified-config", template_key="buy_hold", market="china")
+    items, _selection = experiment_batches.expand(
+        {
+            "kind": "backtest",
+            "mode": "independent",
+            "projectId": project["id"],
+            "symbol": "000001",
+            "market": "china",
+            "start": "2024-01-01",
+            "end": "2024-12-31",
+            "benchmarkSymbol": "000300",
+            "source": "tushare",
+            "feeModel": "zero",
+            "slippageModel": "zero",
+            "allowResearchSource": True,
+            "parameters": {
+                "benchmarkSymbol": "000300",
+                "commissionRate": 0,
+                "slippageBps": 0,
+            },
+        }
+    )
+
+    request = items[0]["parameters"]
+    assert request["market"] == "china"
+    assert request["venue"] == "china"
+    assert request["benchmarkSymbol"] == "000300"
+    assert request["source"] == "tushare"
+    assert request["feeModel"] == "zero"
+    assert request["slippageModel"] == "zero"
+    assert request["allowResearchSource"] is True
+    assert request["parameters"]["commissionRate"] == 0
+    assert request["parameters"]["slippageBps"] == 0
 
 
 def test_dynamic_universe_persists_effective_membership_schedule(tmp_path, monkeypatch):

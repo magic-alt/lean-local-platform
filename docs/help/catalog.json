@@ -3,7 +3,7 @@
   {"slug":"quick-start","source":"help/quick-start.md","group":"guide","category":"getting-started","order":20,"summary":"从配置、启动和建库到首个可信回测。"},
   {"slug":"strategies","source":"help/strategies.md","group":"guide","category":"experiments","order":30,"summary":"项目、策略模板、案例、参数和 A 股执行约束。"},
   {"slug":"data","source":"help/data.md","group":"guide","category":"data","order":40,"summary":"全量与增量同步、按需数据、Preview、CSV、质量和 PIT。"},
-  {"slug":"backtests","source":"help/backtests.md","group":"guide","category":"experiments","order":50,"summary":"单次回测、preflight、批量矩阵、动态组合和结果可信度。"},
+  {"slug":"backtests","source":"help/backtests.md","group":"guide","category":"experiments","order":50,"summary":"统一 New Backtest 入口、按配置选择单次或批量、市场日历、preflight、案例和排障。"},
   {"slug":"optimization","source":"help/optimization.md","group":"guide","category":"experiments","order":60,"summary":"参数网格、稳健优化、Walk-forward 和多策略寻优。"},
   {"slug":"research","source":"help/research.md","group":"guide","category":"experiments","order":70,"summary":"快捷研究、批量因子分析和 Jupyter Research 工作区。"},
   {"slug":"paper","source":"help/paper.md","group":"guide","category":"operations","order":80,"summary":"LEAN Paper、信号模拟、逐日运行、回放和订单检查。"},

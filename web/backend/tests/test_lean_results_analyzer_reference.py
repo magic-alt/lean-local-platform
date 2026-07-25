@@ -1,5 +1,7 @@
 import zipfile
 
+import pytest
+
 
 def _rows(start: str, end: str):
     return [
@@ -74,3 +76,60 @@ def test_results_analyzer_reference_reuses_covering_spy_cache(tmp_path, monkeypa
     assert result["refreshed"] is False
     with zipfile.ZipFile(data_dir / "equity" / "usa" / "daily" / "spy.zip") as archive:
         assert archive.namelist() == ["spy.csv"]
+
+
+def test_results_analyzer_reference_accepts_friday_for_weekend_end(tmp_path, monkeypatch):
+    data_dir = _configure_data_dir(tmp_path, monkeypatch)
+    import app.services.lean_cache as lean_cache
+    from app.lean_engine.data_writers import write_lean_daily_zip
+
+    write_lean_daily_zip("SPY", _rows("2023-12-20", "2026-07-24"), "test", overwrite=True, market="usa")
+
+    def unexpected_fetch(*args, **kwargs):
+        raise AssertionError("Friday coverage should satisfy a Saturday request")
+
+    monkeypatch.setattr(lean_cache, "fetch_yahoo_rows", unexpected_fetch)
+
+    result = lean_cache.ensure_lean_results_analyzer_reference_data("2024-01-01", "2026-07-25")
+
+    assert result["refreshed"] is False
+    assert result["market"] == "usa"
+    assert result["requestedEndDate"] == "2026-07-25"
+    assert result["expectedLastTradeDate"] == "2026-07-24"
+    assert result["coverage"]["lastDate"] == "2026-07-24"
+    assert (data_dir / "equity" / "usa" / "daily" / "spy.zip").is_file()
+
+
+def test_results_analyzer_reference_accepts_prior_session_for_us_holiday(tmp_path, monkeypatch):
+    _configure_data_dir(tmp_path, monkeypatch)
+    import app.services.lean_cache as lean_cache
+    from app.lean_engine.data_writers import write_lean_daily_zip
+
+    write_lean_daily_zip("SPY", _rows("2023-12-20", "2026-07-02"), "test", overwrite=True, market="usa")
+    monkeypatch.setattr(
+        lean_cache,
+        "fetch_yahoo_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("holiday coverage should reuse cache")),
+    )
+
+    result = lean_cache.ensure_lean_results_analyzer_reference_data("2024-01-01", "2026-07-03")
+
+    assert result["expectedLastTradeDate"] == "2026-07-02"
+
+
+def test_results_analyzer_reference_rejects_missing_expected_us_session(tmp_path, monkeypatch):
+    _configure_data_dir(tmp_path, monkeypatch)
+    from app.lean_engine.errors import LeanPlatformError
+    import app.services.lean_cache as lean_cache
+
+    monkeypatch.setattr(
+        lean_cache,
+        "fetch_yahoo_rows",
+        lambda symbol, start, end: _rows("1993-01-29", "2026-07-23"),
+    )
+
+    with pytest.raises(
+        LeanPlatformError,
+        match=r"market=usa.*expectedLastTradeDate=2026-07-24",
+    ):
+        lean_cache.ensure_lean_results_analyzer_reference_data("2024-01-01", "2026-07-25")

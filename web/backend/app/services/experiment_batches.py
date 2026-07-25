@@ -67,13 +67,17 @@ def _base_request(config: dict[str, Any], project_id: str, symbol: str) -> dict[
     project = get_project(project_id)
     project_config = project.get("config") or {}
     market = str(config.get("market") or project_config.get("market") or "china")
-    return {
+    request = {
         "projectId": project_id,
         "symbol": symbol,
         "name": str(config.get("name") or "Batch Backtest"),
         "assetClass": str(config.get("assetClass") or project_config.get("assetClass") or "equity"),
         "market": market,
-        "venue": str(config.get("venue") or project_config.get("venue") or market),
+        "venue": str(
+            config.get("venue")
+            or (market if config.get("market") else project_config.get("venue"))
+            or market
+        ),
         "resolution": str(config.get("resolution") or project_config.get("resolution") or "daily"),
         "dataType": str(config.get("dataType") or project_config.get("dataType") or "trade"),
         "start": str(config.get("start") or "2020-01-01"),
@@ -82,6 +86,17 @@ def _base_request(config: dict[str, Any], project_id: str, symbol: str) -> dict[
         "dockerImage": config.get("dockerImage") or get_settings()["dockerImage"],
         "parameters": {**dict(project_config.get("parameters") or {}), **dict(config.get("parameters") or {})},
     }
+    for key in (
+        "benchmarkSymbol",
+        "source",
+        "providerSource",
+        "allowResearchSource",
+        "feeModel",
+        "slippageModel",
+    ):
+        if key in config:
+            request[key] = config[key]
+    return request
 
 
 def _rolling_windows(config: dict[str, Any]) -> list[tuple[str, str]]:
