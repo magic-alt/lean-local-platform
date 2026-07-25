@@ -253,26 +253,48 @@ export function DocsPage() {
   const next = currentIndex >= 0 && currentIndex < items.length - 1 ? items[currentIndex + 1] : undefined;
 
   useEffect(() => {
+    let active = true;
     const timer = window.setTimeout(() => {
       setListLoading(true);
       void api.helpArticles(query).then(
-        (result) => setItems(result.items),
-        (error: Error) => message.error(error.message)
-      ).finally(() => setListLoading(false));
+        (result) => {
+          if (active) setItems(result.items);
+        },
+        (error: Error) => {
+          if (active) message.error(error.message);
+        }
+      ).finally(() => {
+        if (active) setListLoading(false);
+      });
       const params = new URLSearchParams(searchParams);
       if (query.trim()) params.set("q", query.trim()); else params.delete("q");
       setSearchParams(params, { replace: true });
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, [query]);
 
   useEffect(() => {
+    let active = true;
     setArticleLoading(true);
     setArticleError(undefined);
     void api.helpArticle(slug).then(
-      (value) => setArticle(value),
-      (error: Error) => { setArticle(undefined); setArticleError(error.message); }
-    ).finally(() => setArticleLoading(false));
+      (value) => {
+        if (active) setArticle(value);
+      },
+      (error: Error) => {
+        if (!active) return;
+        setArticle(undefined);
+        setArticleError(error.message);
+      }
+    ).finally(() => {
+      if (active) setArticleLoading(false);
+    });
+    return () => {
+      active = false;
+    };
   }, [slug]);
 
   useEffect(() => {

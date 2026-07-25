@@ -1,24 +1,26 @@
 import { Button, Card, Empty, Input, Space, Tag, message } from "antd";
 import { CopyOutlined, SearchOutlined } from "@ant-design/icons";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { api } from "../../api";
 import type { Project, WorkflowExample } from "../../api";
+import { useAsyncData } from "../../hooks";
 
+const exampleLoaders: Record<WorkflowExample["kind"], () => Promise<WorkflowExample[]>> = {
+  backtest: () => api.examples("backtest").then((result) => result.items),
+  optimization: () => api.examples("optimization").then((result) => result.items),
+  research: () => api.examples("research").then((result) => result.items)
+};
 
 export function ExampleGallery({ kind, onCreated }: { kind: WorkflowExample["kind"]; onCreated?: (project: Project, example: WorkflowExample) => void }) {
-  const [items, setItems] = useState<WorkflowExample[]>([]);
+  const examples = useAsyncData(exampleLoaders[kind], []);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string>();
 
-  useEffect(() => {
-    void api.examples(kind).then((result) => setItems(result.items)).catch((error) => message.error((error as Error).message));
-  }, [kind]);
-
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return !needle ? items : items.filter((item) => `${item.name} ${item.description} ${item.tags.join(" ")}`.toLowerCase().includes(needle));
-  }, [items, query]);
+    return !needle ? examples.data : examples.data.filter((item) => `${item.name} ${item.description} ${item.tags.join(" ")}`.toLowerCase().includes(needle));
+  }, [examples.data, query]);
 
   async function instantiate(example: WorkflowExample) {
     setBusy(example.key);
@@ -35,7 +37,7 @@ export function ExampleGallery({ kind, onCreated }: { kind: WorkflowExample["kin
   }
 
   return (
-    <Card title="可直接使用的案例" extra={<Input allowClear prefix={<SearchOutlined />} placeholder="搜索案例" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: 240 }} />}>
+    <Card loading={examples.loading && examples.data.length === 0} title="可直接使用的案例" extra={<Input allowClear prefix={<SearchOutlined />} placeholder="搜索案例" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: 240 }} />}>
       {!filtered.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
         <div className="grid">
           {filtered.map((item) => (

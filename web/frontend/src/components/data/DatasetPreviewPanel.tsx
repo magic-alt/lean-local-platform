@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Empty, Input, Select, Space, Spin, Tag, message } from "antd";
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 
 import { api } from "../../api";
@@ -149,6 +149,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
   const [result, setResult] = useState<DatasetPreviewResult>();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const requestSequence = useRef(0);
   const pageSize = 100;
 
   async function load(
@@ -156,6 +157,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
     selectedDataset = dataset,
     filters = { keyword, startDate, endDate },
   ) {
+    const sequence = ++requestSequence.current;
     setLoading(true);
     setLoadError("");
     try {
@@ -166,6 +168,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         limit: pageSize,
         offset: (page - 1) * pageSize,
       });
+      if (sequence !== requestSequence.current) return;
       setResult({
         ...response,
         items: Array.isArray(response.items)
@@ -175,13 +178,18 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         offset: Number.isFinite(Number(response.offset)) ? Number(response.offset) : 0,
       });
     } catch (error) {
+      if (sequence !== requestSequence.current) return;
       const detail = (error as Error).message || "数据集预览加载失败";
       setLoadError(detail);
       message.error(detail);
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
   }
+
+  useEffect(() => () => {
+    requestSequence.current += 1;
+  }, []);
 
   useEffect(() => {
     setKeyword("");

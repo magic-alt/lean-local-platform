@@ -188,7 +188,7 @@ function GenericInsightsPage() {
       void reports.reload();
     }, 2000);
     return () => window.clearTimeout(timer);
-  }, [loadDetail, reports, selected]);
+  }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
   async function submit(values: {
     symbol: string;

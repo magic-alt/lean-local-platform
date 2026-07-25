@@ -324,83 +324,6 @@ function BacktestMetricCard({
   );
 }
 
-export function Dashboard() {
-  const navigate = useNavigate();
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const runs = useAsyncData(api.backtests, []);
-  const tasks = useAsyncData(api.tasks, []);
-  const latest = runs.data[0];
-  const activeTasks = tasks.data.filter((task) => ["created", "queued", "running"].includes(task.status)).length;
-  const finishedRuns = runs.data.filter((run) => ["success", "succeeded", "failed", "cancelled"].includes(run.status));
-  const successfulRuns = runs.data.filter((run) => run.status === "success" || run.status === "succeeded").length;
-  const successRate = finishedRuns.length ? Math.round((successfulRuns / finishedRuns.length) * 100) : 0;
-  const durations = runs.data.map((run) => run.duration_seconds).filter((value): value is number => typeof value === "number");
-  const averageDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0;
-  return (
-    <>
-      <div className="toolbar">
-        <h1 className="page-title">Dashboard</h1>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => { runs.reload(); tasks.reload(); }}>Refresh</Button>
-          <Button icon={<DeleteOutlined />} onClick={() => setHistoryOpen(true)}>Manage Local History</Button>
-        </Space>
-      </div>
-      <Card className="workflow-card" style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => navigate("/projects")}>New Project</Button>
-          <Button icon={<DatabaseOutlined />} onClick={() => navigate("/data")}>Fetch Data</Button>
-          <Button icon={<PlayCircleOutlined />} onClick={() => navigate("/backtests?view=run")}>Run Backtest</Button>
-          <Button onClick={() => navigate("/backtests?view=history")}>Backtest History</Button>
-          <Button icon={<ExperimentOutlined />} onClick={() => navigate("/paper")}>Paper Replay</Button>
-          <Button icon={<SettingOutlined />} onClick={() => navigate("/settings")}>Settings</Button>
-        </Space>
-      </Card>
-      <div className="grid">
-        <Card><Statistic title="Backtests" value={runs.data.length} /></Card>
-        <Card><Statistic title="Active Tasks" value={activeTasks} /></Card>
-        <Card><Statistic title="Success Rate" value={successRate} suffix="%" /></Card>
-        <Card><Statistic title="Average Duration" value={averageDuration} suffix="s" /></Card>
-      </div>
-      <div className="grid">
-        <Card><Statistic title="Latest Net Profit" value={latest?.statistics?.["Net Profit"] ?? "N/A"} /></Card>
-        <Card><Statistic title="Latest Sharpe" value={latest?.statistics?.["Sharpe Ratio"] ?? "N/A"} /></Card>
-        <Card><Statistic title="Latest Status" value={latest?.status ?? "N/A"} /></Card>
-        <Card><Statistic title="Latest Symbol" value={latest?.symbol ?? "N/A"} /></Card>
-      </div>
-      <Modal
-        title="Manage local history"
-        open={historyOpen}
-        onCancel={() => setHistoryOpen(false)}
-        footer={<Button onClick={() => setHistoryOpen(false)}>Close</Button>}
-      >
-        <Alert
-          type="warning"
-          showIcon
-          message="There is no global one-click delete."
-          description="Review a resource page, then delete one item or an explicit selection. Running work must be cancelled or stopped first. Market data is never included."
-          style={{ marginBottom: 16 }}
-        />
-        <div className="history-resource-list">
-          {[
-            { label: "Backtests", count: runs.data.length, route: "/backtests?view=history" },
-            { label: "Tasks", count: tasks.data.length, route: "/tasks" },
-            { label: "Optimizations", route: "/optimization" },
-            { label: "Research sessions", route: "/research" },
-            { label: "Reports", route: "/reports" },
-            { label: "Paper sessions", route: "/paper" },
-            { label: "Projects", route: "/projects" },
-          ].map((item) => (
-            <div className="history-resource-row" key={item.route}>
-              <div><strong>{item.label}</strong>{item.count != null && <span className="muted"> · {item.count} local records</span>}</div>
-              <Button size="small" onClick={() => { setHistoryOpen(false); navigate(item.route); }}>Review</Button>
-            </div>
-          ))}
-        </div>
-      </Modal>
-    </>
-  );
-}
-
 function MarketDataDownloader({
   compact = false,
   forcedAssetClass,
@@ -1128,22 +1051,39 @@ export function ProjectsPage() {
       setSourceCode("");
       return;
     }
+    let active = true;
     const path = selectedProject.main_file || String(selectedProject.config?.mainFile || "main.py");
     setSourceLoading(true);
     api.readProjectFile(selectedProject.id, path)
       .then((file) => {
+        if (!active) return;
         setSourcePath(file.path);
         setSourceCode(file.content);
         setSourceDirty(false);
       })
-      .catch((error) => message.error((error as Error).message))
-      .finally(() => setSourceLoading(false));
+      .catch((error) => {
+        if (active) message.error((error as Error).message);
+      })
+      .finally(() => {
+        if (active) setSourceLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [selectedProject?.id]);
 
   useEffect(() => {
+    let active = true;
     api.symbols(selectedMarket, selectedAssetClass, selectedVenue, selectedResolution, selectedDataType)
-      .then((result) => setSymbols(result.symbols))
-      .catch((error) => message.error((error as Error).message));
+      .then((result) => {
+        if (active) setSymbols(result.symbols);
+      })
+      .catch((error) => {
+        if (active) message.error((error as Error).message);
+      });
+    return () => {
+      active = false;
+    };
   }, [selectedAssetClass, selectedDataType, selectedMarket, selectedResolution, selectedVenue]);
 
   async function createProject(values: any) {
@@ -1600,7 +1540,8 @@ export function DataPage() {
   const storageTargets = useAsyncData<OnDemandStorageTarget[]>(
     loadOnDemandStorageTargets,
     [],
-    false
+    false,
+    "data:on-demand-storage-targets"
   );
   const [downloadForm] = Form.useForm();
   const [downloadDataset, setDownloadDataset] = useState<DataSyncCatalog["items"][number] | null>(null);
@@ -1685,15 +1626,25 @@ export function DataPage() {
     const activeId = currentSync?.id;
     if (!activeId) return;
     let cancelled = false;
-    const refresh = () => api.dataSyncRun(activeId).then((next) => {
-      if (!cancelled) {
-        setSyncRun(next);
-        if (!["queued", "running", "cancelling"].includes(next.status)) catalog.reload();
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const next = await api.dataSyncRun(activeId);
+        if (!cancelled) {
+          setSyncRun(next);
+          if (!["queued", "running", "cancelling"].includes(next.status)) void catalog.reload();
+        }
+      } catch {
+        // The next scheduled refresh retries transient polling failures.
+      } finally {
+        refreshing = false;
       }
-    }).catch(() => undefined);
-    refresh();
+    };
+    void refresh();
     if (!["queued", "running", "cancelling"].includes(currentSync?.status || "")) return () => { cancelled = true; };
-    const timer = window.setInterval(refresh, 3000);
+    const timer = window.setInterval(() => { void refresh(); }, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [currentSync?.id, currentSync?.status]);
 
@@ -1701,13 +1652,23 @@ export function DataPage() {
     const active = Object.entries(downloadTasks).filter(([, task]) => ["queued", "running"].includes(task.status));
     if (!active.length) return;
     let cancelled = false;
-    const refresh = () => Promise.all(
-      active.map(([dataset, task]) => api.task(task.id).then((next) => [dataset, next] as const))
-    ).then((items) => {
-      if (!cancelled) setDownloadTasks((current) => ({ ...current, ...Object.fromEntries(items) }));
-    }).catch(() => undefined);
-    const timer = window.setInterval(refresh, 2000);
-    refresh();
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const items = await Promise.all(
+          active.map(([dataset, task]) => api.task(task.id).then((next) => [dataset, next] as const))
+        );
+        if (!cancelled) setDownloadTasks((current) => ({ ...current, ...Object.fromEntries(items) }));
+      } catch {
+        // The next scheduled refresh retries transient polling failures.
+      } finally {
+        refreshing = false;
+      }
+    };
+    const timer = window.setInterval(() => { void refresh(); }, 2000);
+    void refresh();
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [Object.values(downloadTasks).map((task) => `${task.id}:${task.status}`).join("|")]);
 
@@ -2311,7 +2272,8 @@ export function BacktestsPage() {
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const [filters, setFilters] = useState<BacktestHistoryFilters>(() => backtestHistoryFiltersFromSearch(searchParams));
   const loadRuns = useCallback(() => api.backtests(filters), [filters]);
-  const runs = useAsyncData(loadRuns, []);
+  const runsCacheKey = useMemo(() => `backtests:${JSON.stringify(filters)}`, [filters]);
+  const runs = useAsyncData(loadRuns, [], true, runsCacheKey);
   const [form] = Form.useForm();
   const [historyForm] = Form.useForm();
   const [assetClass, setAssetClass] = useState("equity");
@@ -2346,7 +2308,17 @@ export function BacktestsPage() {
   }, [form, settings.data.defaultAssetClass, settings.data.defaultDataType, settings.data.defaultMarket, settings.data.defaultResolution, settings.data.defaultVenue]);
 
   useEffect(() => {
-    api.symbols(market, assetClass, venue, resolution, dataType).then((result) => setSymbols(result.symbols)).catch((error) => message.error((error as Error).message));
+    let active = true;
+    api.symbols(market, assetClass, venue, resolution, dataType)
+      .then((result) => {
+        if (active) setSymbols(result.symbols);
+      })
+      .catch((error) => {
+        if (active) message.error((error as Error).message);
+      });
+    return () => {
+      active = false;
+    };
   }, [assetClass, dataType, market, resolution, venue]);
 
   useEffect(() => {
@@ -2581,47 +2553,66 @@ export function RunDetailPage() {
   const [metricQuery, setMetricQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>();
+  const reloadInFlight = useRef<{ id: string; promise: Promise<void> } | undefined>(undefined);
+  const currentRunId = useRef(id);
+  currentRunId.current = id;
   const active = run ? ["created", "queued", "checking", "running"].includes(run.status) : false;
-  const reload = useCallback(async () => {
-    if (!id) return;
-    const next = await api.backtest(id);
-    setRun(next);
-    setLogs((await api.logs(id)).logs);
-    try {
-      setTrust(await api.backtestValidation(id));
-    } catch {
-      setTrust(undefined);
-    }
-    try {
-      setAdmission(await api.backtestAdmission(id));
-    } catch {
-      setAdmission(undefined);
-    }
-    if (next.result_json_path) {
-      try {
-        setChart(await api.chartData(id));
-        setChartError(undefined);
-      } catch (error) {
+  const reload = useCallback(() => {
+    if (!id) return Promise.resolve();
+    if (reloadInFlight.current?.id === id) return reloadInFlight.current.promise;
+
+    const requestedId = id;
+    const load = async () => {
+      const [next, nextLogs, nextTrust, nextAdmission] = await Promise.all([
+        api.backtest(requestedId),
+        api.logs(requestedId),
+        api.backtestValidation(requestedId).catch(() => undefined),
+        api.backtestAdmission(requestedId).catch(() => undefined)
+      ]);
+      if (currentRunId.current !== requestedId) return;
+      setRun(next);
+      setLogs(nextLogs.logs);
+      setTrust(nextTrust);
+      setAdmission(nextAdmission);
+
+      if (!next.result_json_path) {
         setChart(undefined);
-        setChartError(error instanceof Error ? error.message : "Chart data could not be loaded.");
-      }
-    } else {
-      setChart(undefined);
-      setChartError(undefined);
-    }
-    if (next.result_json_path) {
-      try {
-        setResult((await api.backtestResult(id)).result);
-      } catch {
+        setChartError(undefined);
         setResult(undefined);
+        setLastUpdated(new Date());
+        return;
       }
-    }
-    setLastUpdated(new Date());
+
+      const [chartOutcome, resultOutcome] = await Promise.allSettled([
+        api.chartData(requestedId),
+        api.backtestResult(requestedId)
+      ]);
+      if (currentRunId.current !== requestedId) return;
+      if (chartOutcome.status === "fulfilled") {
+        setChart(chartOutcome.value);
+        setChartError(undefined);
+      } else {
+        setChart(undefined);
+        setChartError(chartOutcome.reason instanceof Error ? chartOutcome.reason.message : "Chart data could not be loaded.");
+      }
+      setResult(resultOutcome.status === "fulfilled" ? resultOutcome.value.result : undefined);
+      setLastUpdated(new Date());
+    };
+
+    const promise = load().finally(() => {
+      if (reloadInFlight.current?.promise === promise) {
+        reloadInFlight.current = undefined;
+      }
+    });
+    reloadInFlight.current = { id: requestedId, promise };
+    return promise;
   }, [id]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(reload, 1000);
+    const timer = window.setInterval(() => { void reload(); }, 1000);
     return () => window.clearInterval(timer);
   }, [active, reload]);
   async function cancelRun() {

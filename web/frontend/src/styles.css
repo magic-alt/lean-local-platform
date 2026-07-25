@@ -58,6 +58,12 @@ body {
   padding: 14px 16px;
 }
 
+.route-loading {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+}
+
 .page-title {
   margin: 0 0 8px;
   font-size: 21px;

@@ -24,12 +24,6 @@ export default defineConfig({
           if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router-dom/")) {
             return "vendor-react";
           }
-          if (id.includes("/antd/") || id.includes("@ant-design") || id.includes("/rc-")) {
-            return "vendor-antd";
-          }
-          if (id.includes("/monaco-editor") || id.includes("@monaco-editor")) {
-            return "vendor-monaco";
-          }
           return undefined;
         }
       }

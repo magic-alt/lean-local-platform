@@ -133,12 +133,13 @@ export function ResearchPage() {
   const [logsOpen, setLogsOpen] = useState(false);
   const today = dayjs().format("YYYY-MM-DD");
   const researchStart = dayjs().subtract(2, "year").format("YYYY-MM-DD");
+  const hasActiveSession = sessions.data.some((item) => ["queued", "starting", "running"].includes(item.status));
 
   useEffect(() => {
-    if (!sessions.data.some((item) => ["queued", "starting", "running", "success"].includes(item.status))) return;
-    const timer = window.setInterval(sessions.reload, 4000);
+    if (!hasActiveSession) return;
+    const timer = window.setInterval(() => { void sessions.reload(); }, 4000);
     return () => window.clearInterval(timer);
-  }, [sessions.data, sessions.reload]);
+  }, [hasActiveSession, sessions.reload]);
 
   const databaseDetail = databaseHealth.data.detail;
   const databaseDetailRecord = typeof databaseDetail === "object" && databaseDetail !== null && !Array.isArray(databaseDetail)

@@ -41,7 +41,7 @@ function compareChart(result?: BacktestCompareResult, key: "equityCurve" | "draw
 
 export function CompareRunsPanel() {
   const loadRuns = useCallback(() => api.backtests({ status: "success" }), []);
-  const runs = useAsyncData(loadRuns, []);
+  const runs = useAsyncData(loadRuns, [], true, "backtests:success");
   const [result, setResult] = useState<BacktestCompareResult>();
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();

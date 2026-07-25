@@ -131,7 +131,7 @@ export function AshareTechInsights() {
     if (!selected || !["queued", "running", "waiting_data"].includes(selected.status)) return;
     const timer = window.setTimeout(() => { void loadDetail(selected.id); void reports.reload(); }, 3000);
     return () => window.clearTimeout(timer);
-  }, [loadDetail, reports, selected]);
+  }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
   async function create(values: { requestedDate?: string; force?: boolean }) {
     setSubmitting(true);

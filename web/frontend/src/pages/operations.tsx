@@ -90,6 +90,8 @@ import {
   templateDefaults
 } from "../utils/strategy";
 
+const loadFailedWorkflows = () => api.workflows("failed", 50);
+
 export function PaperPage() {
   const sessions = useAsyncData(api.paperSessions, []);
   const projects = useAsyncData(api.projects, []);
@@ -116,11 +118,21 @@ export function PaperPage() {
       form.setFieldValue("sourceBacktestId", undefined);
       return;
     }
+    let active = true;
     setCandidatesLoading(true);
     api.paperCandidates(projectId)
-      .then(setCandidates)
-      .catch((error) => message.error((error as Error).message))
-      .finally(() => setCandidatesLoading(false));
+      .then((items) => {
+        if (active) setCandidates(items);
+      })
+      .catch((error) => {
+        if (active) message.error((error as Error).message);
+      })
+      .finally(() => {
+        if (active) setCandidatesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [form, paperMode, projectId]);
 
   async function submit(values: any) {
@@ -528,7 +540,7 @@ export function MonitoringPage() {
   });
   const up = health.data.dependencies.filter((item) => item.ok).length;
   const down = Math.max(0, health.data.dependencies.length - up);
-  const workflowFailures = useAsyncData<WorkflowSummary[]>(() => api.workflows("failed", 50), []);
+  const workflowFailures = useAsyncData<WorkflowSummary[]>(loadFailedWorkflows, []);
   return (
     <>
       <div className="toolbar">
