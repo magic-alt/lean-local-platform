@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..core.errors import NotFoundError
 from ..services import futures
 
 router = APIRouter(prefix="/api/futures", tags=["futures"])
@@ -59,6 +60,29 @@ class FuturesMainMappingRequest(BaseModel):
     source: str = "derived"
 
 
+class FuturesFeeScheduleRequest(BaseModel):
+    product: str
+    exchange: str
+    openRate: float = Field(default=0, ge=0)
+    closeRate: float = Field(default=0, ge=0)
+    closeTodayRate: float = Field(default=0, ge=0)
+    perContract: float = Field(default=0, ge=0)
+    slippageTicks: float = Field(default=0, ge=0)
+    currency: str = "CNY"
+    version: str
+    source: str = "manual"
+
+
+class FuturesContinuousRequest(BaseModel):
+    product: str
+    exchange: str
+    startDate: str
+    endDate: str
+    adjustment: str = "backward_ratio"
+    contracts: float = 1.0
+    strictMetadata: bool = True
+
+
 class TqSdkImportRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     startDate: str
@@ -95,6 +119,64 @@ def set_main_rule(request: FuturesMainRuleRequest):
             min_open_interest_days=request.minOpenInterestDays,
             source=request.source,
         )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/fee-schedules")
+def set_fee_schedule(request: FuturesFeeScheduleRequest):
+    try:
+        return futures.set_fee_schedule(
+            product=request.product,
+            exchange=request.exchange,
+            open_rate=request.openRate,
+            close_rate=request.closeRate,
+            close_today_rate=request.closeTodayRate,
+            per_contract=request.perContract,
+            slippage_ticks=request.slippageTicks,
+            currency=request.currency,
+            version=request.version,
+            source=request.source,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/fee-schedules/{exchange}/{product}")
+def fee_schedule(exchange: str, product: str):
+    try:
+        item = futures.fee_schedule(product, exchange)
+        if not item:
+            raise HTTPException(status_code=404, detail="Futures fee schedule not found.")
+        return item
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/continuous-contracts")
+def build_continuous_contract(request: FuturesContinuousRequest):
+    try:
+        return futures.build_continuous_contract(
+            product=request.product,
+            exchange=request.exchange,
+            start_date=request.startDate,
+            end_date=request.endDate,
+            adjustment=request.adjustment,
+            contracts=request.contracts,
+            strict_metadata=request.strictMetadata,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/continuous-contracts/{build_id}")
+def continuous_contract(build_id: str):
+    try:
+        return futures.continuous_contract(build_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

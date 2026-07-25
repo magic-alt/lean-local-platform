@@ -78,5 +78,8 @@ Optimization 将参数候选展开成标准 LEAN 子回测，因此共享单次�
 | `GET` | `/api/optimize/{id}` | 查询状态与结果 |
 | `POST` | `/api/experiment-batches/preview` | 预览批量优化展开 |
 | `POST` | `/api/experiment-batches` | 创建批量优化 |
+| `POST` | `/api/experiment-batches/compare` | 跨 2–10 个批次按 Sharpe、收益、回撤或交易数排名并返回并排指标 |
+
+批次历史支持勾选多个已完成批次。比较结果使用每批成功运行的指标中位数排序，同时展示最佳运行、参数二维敏感性热图，以及按 fold 对齐的 Train / Validation / OOS Sharpe。热图单元格聚合同一参数组合跨标的、窗口或 fold 的均值与中位数，并保留样本数，避免把单次最优误当成稳健区域。
 
 Optimization 的输出是研究证据，不会自动创建 Paper 会话或覆盖项目参数。

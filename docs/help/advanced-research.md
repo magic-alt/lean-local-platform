@@ -34,12 +34,19 @@ Watchlist 项目必须先通过 TuShare 验证为在市 A 股，名称由系统�
 - 计算单因子值或因子矩阵；
 - 评价 IC、Rank IC、分层收益等结果；
 - 对多个因子或股票池批量评价；
+- 使用 winsor z-score、稳健 z-score、rank、min-max 等模板做截面标准化；
+- 按行业等分类去均值，并对市值、beta 等数值暴露做回归中性化；
+- 使用等权 Top-N、分数/排名加权或目标 gross/net 的多空模板构建组合；
+- 展开标准化、中性化、构建方式、市场阶段与成本倍数稳健性网格；
 - 查询历史评价记录。
 
 ```text
 GET  /api/factors/engines
+GET  /api/factors/templates
 POST /api/factors/values
 POST /api/factors/matrix
+POST /api/factors/transform
+POST /api/factors/portfolio
 POST /api/factors/evaluate
 POST /api/factors/evaluate-batch
 GET  /api/factors/evaluations
@@ -53,9 +60,9 @@ GET  /api/factors/evaluations
 
 ## 期货和可转债
 
-期货接口覆盖合约资料、日线、主力规则、主力映射、农产品主力和 TqSdk 导入。可转债接口覆盖条款、日线、赎回事件、双低和赎回风险。
+期货接口覆盖合约资料、日线、主力规则、主力映射、农产品主力和 TqSdk 导入。连续合约构建支持 raw、backward ratio 和 backward difference 三种价格序列；逐日结果同时保存合约乘数、保证金率、名义敞口、保证金占用、盯市盈亏、手续费、滑点和净盈亏。换月事件单独记录旧/新合约、同日价差、roll yield、市场盈亏和交易成本。
 
-这些能力适合数据研究和 API 集成；连续合约、换月、交易所级费用和完整验收仍在 Roadmap 中。不要把“接口存在”理解为已经达到生产实盘门禁。
+费用表必须带版本，严格模式下缺少乘数、保证金率、tick size、同日旧合约价格或费用表都会阻止构建。Research 页可以保存费用表并直接构建、绘制和查看换月归因。交易所临时调费、分品种平今规则和券商加收仍需按真实账户维护版本，研究结果不能替代生产实盘验收。
 
 ## Level 3+ 工作流
 

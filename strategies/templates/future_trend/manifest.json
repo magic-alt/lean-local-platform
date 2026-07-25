@@ -30,6 +30,25 @@
       "type": "number",
       "default": 180,
       "min": 1
+    },
+    {
+      "key": "dataMappingMode",
+      "label": "Mapping Mode",
+      "type": "text",
+      "default": "open_interest"
+    },
+    {
+      "key": "dataNormalizationMode",
+      "label": "Continuous Adjustment",
+      "type": "text",
+      "default": "backward_ratio"
+    },
+    {
+      "key": "contractDepthOffset",
+      "label": "Contract Depth Offset",
+      "type": "number",
+      "default": 0,
+      "min": 0
     }
   ]
 }

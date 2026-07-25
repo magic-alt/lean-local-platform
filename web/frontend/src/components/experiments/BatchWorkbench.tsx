@@ -1,10 +1,12 @@
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message } from "antd";
 import { DeleteOutlined, DownloadOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useState } from "react";
+import type { Key } from "react";
 import dayjs from "dayjs";
+import ReactECharts from "echarts-for-react";
 
 import { api } from "../../api";
-import type { ExperimentBatch, ExperimentBatchPreview, Project } from "../../api";
+import type { ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project } from "../../api";
 import { DateStringPicker } from "../DateStringPicker";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
 
@@ -27,12 +29,71 @@ const MODES = {
   ]
 };
 
+function sensitivityOption(sensitivity: ExperimentSensitivity) {
+  const xIndex = new Map(sensitivity.xValues.map((value, index) => [value, index]));
+  const yIndex = new Map(sensitivity.yValues.map((value, index) => [value, index]));
+  const values = sensitivity.cells.map((cell) => cell.value);
+  return {
+    tooltip: {
+      formatter: (item: any) => {
+        const cell = sensitivity.cells[item.data[3]];
+        return `${sensitivity.xParameter}: ${cell.x}<br/>${sensitivity.yParameter}: ${cell.y}<br/>${sensitivity.metric}: ${cell.value.toFixed(4)}<br/>样本: ${cell.count}`;
+      }
+    },
+    grid: { left: 72, right: 40, top: 30, bottom: 70 },
+    xAxis: { type: "category", name: sensitivity.xParameter, data: sensitivity.xValues.map(String), splitArea: { show: true } },
+    yAxis: { type: "category", name: sensitivity.yParameter, data: sensitivity.yValues.map(String), splitArea: { show: true } },
+    visualMap: {
+      min: values.length ? Math.min(...values) : 0,
+      max: values.length ? Math.max(...values) : 1,
+      calculable: true,
+      orient: "horizontal",
+      left: "center",
+      bottom: 4
+    },
+    series: [{
+      type: "heatmap",
+      data: sensitivity.cells.map((cell, index) => [xIndex.get(cell.x), yIndex.get(cell.y), cell.value, index]),
+      label: { show: true, formatter: (item: any) => Number(item.value[2]).toFixed(2) },
+      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.35)" } }
+    }]
+  };
+}
+
+function phaseOption(batches: ExperimentBatchComparison["batches"]) {
+  const points = batches.flatMap((batch) => batch.phaseSeries.map((row: any) => ({
+    key: `${batch.name} · F${row.fold}`,
+    batchId: batch.id,
+    row
+  })));
+  return {
+    tooltip: { trigger: "axis" },
+    legend: { data: ["Train", "Validation", "OOS"] },
+    grid: { left: 60, right: 30, top: 44, bottom: 80 },
+    xAxis: { type: "category", data: points.map((point) => point.key), axisLabel: { rotate: 30 } },
+    yAxis: { type: "value", name: "Sharpe" },
+    series: [
+      { name: "Train", type: "bar", data: points.map((point) => point.row.trainSharpe ?? null) },
+      { name: "Validation", type: "bar", data: points.map((point) => point.row.validationSharpe ?? null) },
+      { name: "OOS", type: "bar", data: points.map((point) => point.row.oosSharpe ?? null) }
+    ]
+  };
+}
+
+function metricText(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(4) : "-";
+}
+
 
 export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimization" | "research"; projects: Project[] }) {
   const [form] = Form.useForm();
   const [preview, setPreview] = useState<ExperimentBatchPreview>();
   const [batches, setBatches] = useState<ExperimentBatch[]>([]);
   const [selected, setSelected] = useState<ExperimentBatch>();
+  const [compareIds, setCompareIds] = useState<Key[]>([]);
+  const [comparison, setComparison] = useState<ExperimentBatchComparison>();
+  const [compareMetric, setCompareMetric] = useState("sharpe");
   const [busy, setBusy] = useState(false);
   const symbolSource = Form.useWatch("symbolSource", form) || "symbols";
   const mode = Form.useWatch("mode", form) || MODES[kind][0].value;
@@ -120,6 +181,18 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
     setSelected(await api.experimentBatch(batch.id));
   }
 
+  async function compareSelected() {
+    if (compareIds.length < 2) return;
+    setBusy(true);
+    try {
+      setComparison(await api.compareExperimentBatches({ batchIds: compareIds.map(String), metric: compareMetric }));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const activeProjectRequired = kind !== "research" || mode !== "analysis";
   const completed = (batch: ExperimentBatch) => batch.succeeded + batch.failed + batch.skipped + batch.cancelled;
   const ranking = useMemo(() => selected?.summary?.ranking || [], [selected]);
@@ -176,8 +249,26 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
           <FormActions><Button onClick={runPreview}>预览展开</Button><Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={busy}>确认并排队</Button></FormActions>
         </Form>
       </Card>
-      <Card title="批次历史" style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>}>
-        <Table<ExperimentBatch> rowKey="id" size="small" dataSource={batches} columns={[
+      <Card title="批次历史" style={{ marginTop: 16 }} extra={<Space>
+        <Select value={compareMetric} onChange={setCompareMetric} style={{ width: 120 }} options={[
+          { value: "sharpe", label: "Sharpe" },
+          { value: "return", label: "收益" },
+          { value: "drawdown", label: "回撤" },
+          { value: "trades", label: "交易数" }
+        ]} />
+        <Button disabled={compareIds.length < 2} loading={busy} onClick={compareSelected}>比较已选（{compareIds.length}）</Button>
+        <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
+      </Space>}>
+        <Table<ExperimentBatch>
+          rowKey="id"
+          size="small"
+          dataSource={batches}
+          rowSelection={{
+            selectedRowKeys: compareIds,
+            onChange: setCompareIds,
+            getCheckboxProps: (row) => ({ disabled: !["success", "partial", "failed", "cancelled"].includes(row.status) })
+          }}
+          columns={[
           { title: "名称", dataIndex: "name" },
           { title: "模式", dataIndex: "mode", render: (value) => <Tag>{value}</Tag> },
           { title: "状态", dataIndex: "status", render: (value) => <Tag color={value === "success" ? "success" : value === "failed" ? "error" : value === "partial" ? "warning" : "processing"}>{value}</Tag> },
@@ -217,6 +308,23 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
               { title: "OOS 状态", render: (_, row) => row.oosEvaluation?.status || "等待参数冻结" }
             ]} />
           </Card>}
+          {(selected.summary?.walkForward?.length || 0) > 0 && <Card size="small" title="Train / Validation / OOS 表现" style={{ marginTop: 12, marginBottom: 12 }}>
+            <ReactECharts style={{ height: 340 }} option={phaseOption([{
+              id: selected.id,
+              name: selected.name,
+              kind: selected.kind,
+              mode: selected.mode,
+              status: selected.status,
+              createdAt: selected.created_at,
+              rank: 1,
+              metrics: { runs: 0, successes: 0 },
+              parameterSensitivity: selected.summary?.parameterSensitivity || [],
+              phaseSeries: selected.summary?.walkForward || []
+            }])} />
+          </Card>}
+          {(selected.summary?.parameterSensitivity || []).map((sensitivity) => <Card key={`${sensitivity.xParameter}:${sensitivity.yParameter}`} size="small" title={`参数敏感性 · ${sensitivity.xParameter} × ${sensitivity.yParameter}`} style={{ marginBottom: 12 }}>
+            <ReactECharts style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
+          </Card>)}
           <Table size="small" rowKey={(row) => String(row.itemId)} dataSource={ranking} pagination={{ pageSize: 20 }} columns={[
             { title: "股票", dataIndex: "symbol" }, { title: "项目", dataIndex: "projectId", ellipsis: true },
             { title: "状态", dataIndex: "status" }, { title: "Sharpe", dataIndex: "sharpe" },
@@ -225,6 +333,35 @@ export function BatchWorkbench({ kind, projects }: { kind: "backtest" | "optimiz
             { title: "结果", render: (_, row: any) => row.runId ? <a href={`#/runs/${row.runId}`}>打开</a> : "-" },
             { title: "错误", dataIndex: "error", ellipsis: true }
           ]} />
+        </>}
+      </Modal>
+      <Modal title={`跨批次比较 · ${comparison?.rankingMetric || compareMetric}`} open={Boolean(comparison)} onCancel={() => setComparison(undefined)} width={1280} footer={<Button onClick={() => setComparison(undefined)}>关闭</Button>}>
+        {comparison && <>
+          <Alert showIcon type="info" message={`按成功运行的${comparison.rankingBasis}排名`} description={`共比较 ${comparison.batches.length} 个批次；排名指标 ${comparison.rankingMetric}。`} />
+          <Table
+            style={{ marginTop: 12 }}
+            size="small"
+            rowKey="id"
+            pagination={false}
+            dataSource={comparison.batches}
+            columns={[
+              { title: "排名", dataIndex: "rank", width: 70 },
+              { title: "批次", dataIndex: "name" },
+              { title: "模式", dataIndex: "mode", render: (value) => <Tag>{value}</Tag> },
+              { title: "排名值", dataIndex: "rankingValue", render: metricText },
+              { title: "Sharpe 中位", render: (_, row) => metricText(typeof row.metrics.sharpe === "object" ? row.metrics.sharpe.median : null) },
+              { title: "收益中位", render: (_, row) => metricText(typeof row.metrics.return === "object" ? row.metrics.return.median : null) },
+              { title: "回撤中位", render: (_, row) => metricText(typeof row.metrics.drawdown === "object" ? row.metrics.drawdown.median : null) },
+              { title: "成功/总数", render: (_, row) => `${row.metrics.successes}/${row.metrics.runs}` },
+              { title: "最佳运行", render: (_, row) => row.bestRun?.runId ? <a href={`#/runs/${row.bestRun.runId}`}>打开</a> : "-" }
+            ]}
+          />
+          {comparison.batches.some((batch) => batch.phaseSeries.length > 0) && <Card size="small" title="Train / Validation / OOS 并排表现" style={{ marginTop: 12 }}>
+            <ReactECharts style={{ height: 420 }} option={phaseOption(comparison.batches)} />
+          </Card>}
+          {comparison.batches.flatMap((batch) => batch.parameterSensitivity.map((sensitivity) => ({ batch, sensitivity }))).map(({ batch, sensitivity }) => <Card key={`${batch.id}:${sensitivity.xParameter}:${sensitivity.yParameter}`} size="small" title={`${batch.name} · ${sensitivity.xParameter} × ${sensitivity.yParameter}`} style={{ marginTop: 12 }}>
+            <ReactECharts style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
+          </Card>)}
         </>}
       </Modal>
     </>

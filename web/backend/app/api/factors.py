@@ -1,9 +1,10 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..research import factors
+from ..research.factor_pipeline import construct_factor_portfolio, factor_templates, process_factor_rows
 
 router = APIRouter(prefix="/api/factors", tags=["factors"])
 
@@ -50,6 +51,38 @@ class FactorBatchEvaluateRequest(BaseModel):
     engine: str | None = None
 
 
+class FactorPipelineRecord(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    symbol: str
+    value: float
+
+
+class FactorTransformRequest(BaseModel):
+    records: list[FactorPipelineRecord] = Field(min_length=1)
+    normalization: str = "winsor_zscore"
+    winsorLower: float = 0.01
+    winsorUpper: float = 0.99
+    neutralizeGroups: list[str] = Field(default_factory=list)
+    neutralizeExposures: list[str] = Field(default_factory=list)
+    partitionBy: list[str] = Field(default_factory=lambda: ["tradeDate"])
+
+
+class FactorPortfolioRecord(BaseModel):
+    symbol: str
+    score: float
+
+
+class FactorPortfolioRequest(BaseModel):
+    records: list[FactorPortfolioRecord] = Field(min_length=1)
+    method: str = "equal_top"
+    topN: int = Field(default=20, ge=1)
+    bottomN: int = Field(default=20, ge=1)
+    grossExposure: float = Field(default=1.0, gt=0)
+    netExposure: float = 1.0
+    maxWeight: float = Field(default=0.1, gt=0)
+
+
 def _record(item: FactorValueRecord) -> dict[str, Any]:
     return {
         "symbol": item.symbol,
@@ -63,6 +96,46 @@ def _record(item: FactorValueRecord) -> dict[str, Any]:
 @router.get("/engines")
 def engines():
     return {"available": factors.available_engines(), "selected": factors.selected_engine()}
+
+
+@router.get("/templates")
+def templates():
+    return factor_templates()
+
+
+@router.post("/transform")
+def transform(request: FactorTransformRequest):
+    try:
+        return process_factor_rows(
+            [
+                {**item.model_dump(), **(item.model_extra or {})}
+                for item in request.records
+            ],
+            normalization=request.normalization,
+            winsor_lower=request.winsorLower,
+            winsor_upper=request.winsorUpper,
+            neutralize_groups=request.neutralizeGroups,
+            neutralize_exposures=request.neutralizeExposures,
+            partition_by=request.partitionBy,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/portfolio")
+def construct_portfolio(request: FactorPortfolioRequest):
+    try:
+        return construct_factor_portfolio(
+            [item.model_dump() for item in request.records],
+            method=request.method,
+            top_n=request.topN,
+            bottom_n=request.bottomN,
+            gross_exposure=request.grossExposure,
+            net_exposure=request.netExposure,
+            max_weight=request.maxWeight,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/values")

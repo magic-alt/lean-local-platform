@@ -15,3 +15,10 @@
             self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("EMA", "Fast", self.fast.current.value)
         self.plot("EMA", "Slow", self.slow.current.value)
+
+    def on_symbol_changed_events(self, symbol_changed_events):
+        for _, changed_event in symbol_changed_events.items():
+            self.debug(
+                f"Futures roll: {changed_event.old_symbol} -> "
+                f"{changed_event.new_symbol} at {self.time.isoformat()}"
+            )

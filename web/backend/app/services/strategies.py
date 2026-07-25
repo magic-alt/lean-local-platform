@@ -76,13 +76,23 @@ class {class_name}(QCAlgorithm):
             security = self.add_crypto(ticker, self.resolution, venue)
             self.symbol = security.symbol
         elif self.asset_class == "future":
+            mapping_mode = {{
+                "open_interest": DataMappingMode.OPEN_INTEREST,
+                "last_trading_day": DataMappingMode.LAST_TRADING_DAY,
+                "first_day_month": DataMappingMode.FIRST_DAY_MONTH,
+            }}.get(self.get_parameter("dataMappingMode", "open_interest").lower(), DataMappingMode.OPEN_INTEREST)
+            normalization_mode = {{
+                "backward_ratio": DataNormalizationMode.BACKWARDS_RATIO,
+                "backward_difference": DataNormalizationMode.BACKWARDS_PANAMA_CANAL,
+                "raw": DataNormalizationMode.RAW,
+            }}.get(self.get_parameter("dataNormalizationMode", "backward_ratio").lower(), DataNormalizationMode.BACKWARDS_RATIO)
             security = self.add_future(
                 ticker,
                 self.resolution,
                 market=venue,
-                data_mapping_mode=DataMappingMode.OPEN_INTEREST,
-                data_normalization_mode=DataNormalizationMode.BACKWARDS_RATIO,
-                contract_depth_offset=0,
+                data_mapping_mode=mapping_mode,
+                data_normalization_mode=normalization_mode,
+                contract_depth_offset=int(self.get_parameter("contractDepthOffset", 0)),
             )
             security.set_filter(0, int(self.get_parameter("contractWindowDays", 180)))
             self.symbol = security.symbol

@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.errors import LeanWebError, NotFoundError
 from ..services import experiment_batches
@@ -15,6 +15,13 @@ router = APIRouter(prefix="/api/experiment-batches", tags=["experiment-batches"]
 
 class ExperimentBatchRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class ExperimentBatchCompareRequest(BaseModel):
+    batchIds: list[str] = Field(min_length=2, max_length=10)
+    metric: str = "sharpe"
+    xParameter: str | None = None
+    yParameter: str | None = None
 
 
 def _payload(request: ExperimentBatchRequest) -> dict[str, Any]:
@@ -34,6 +41,19 @@ def preview(request: ExperimentBatchRequest):
 @router.get("")
 def batches():
     return experiment_batches.list_batches()
+
+
+@router.post("/compare")
+def compare(request: ExperimentBatchCompareRequest):
+    try:
+        return experiment_batches.compare_batches(
+            request.batchIds,
+            metric=request.metric,
+            x_parameter=request.xParameter,
+            y_parameter=request.yParameter,
+        )
+    except (LeanWebError, NotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("")

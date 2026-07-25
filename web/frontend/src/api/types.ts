@@ -329,7 +329,13 @@ export interface ExperimentBatch {
   example_key?: string | null;
   status: string;
   config: Record<string, unknown>;
-  summary?: { rankingMetric?: string; ranking?: Array<Record<string, unknown>> } | null;
+  summary?: {
+    rankingMetric?: string;
+    ranking?: Array<Record<string, any>>;
+    candidates?: Array<Record<string, any>>;
+    parameterSensitivity?: ExperimentSensitivity[];
+    walkForward?: Array<Record<string, any>>;
+  } | null;
   walkForwardEvidence?: {
     id: string;
     status: string;
@@ -353,6 +359,39 @@ export interface ExperimentBatch {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+}
+
+export interface ExperimentSensitivity {
+  metric: string;
+  xParameter: string;
+  yParameter: string;
+  xValues: number[];
+  yValues: number[];
+  cells: Array<{ x: number; y: number; value: number; median: number; count: number }>;
+}
+
+export interface ExperimentBatchComparison {
+  rankingMetric: string;
+  rankingBasis: string;
+  batches: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    mode: string;
+    status: string;
+    createdAt: string;
+    rank: number;
+    rankingValue?: number | null;
+    metrics: {
+      runs: number;
+      successes: number;
+      [metric: string]: number | { best?: number | null; median?: number | null; mean?: number | null; count: number };
+    };
+    bestRun?: Record<string, any> | null;
+    parameterSensitivity: ExperimentSensitivity[];
+    phaseSeries: Array<Record<string, any>>;
+  }>;
+  metricMatrix: Array<{ metric: string; values: Record<string, Record<string, number | null>> }>;
 }
 
 export interface ExperimentBatchPreview {
@@ -1342,9 +1381,66 @@ export interface CBondRiskItem {
 }
 
 export interface FuturesMainItem {
-  code: string;
-  description: string;
+  contract_code: string;
+  product: string;
   exchange: string;
+  bar_date: string;
+  close?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+  daysToExpiry?: number | null;
+}
+
+export interface FuturesContinuousResult {
+  id: string;
+  product: string;
+  exchange: string;
+  start_date: string;
+  end_date: string;
+  adjustment: string;
+  contracts: number;
+  fee_schedule_version: string;
+  config: Record<string, unknown>;
+  summary: {
+    bars: number;
+    rolls: number;
+    totalVariationPnl: number;
+    totalCommission: number;
+    totalSlippage: number;
+    totalNetPnl: number;
+    maxMarginRequired: number;
+    averageMarginRequired: number;
+    cumulativeRollYield: number;
+  };
+  bars: Array<{
+    trade_date: string;
+    contract_code: string;
+    raw_close: number;
+    adjusted_close: number;
+    margin_required: number;
+    variation_pnl: number;
+    commission: number;
+    slippage: number;
+    net_pnl: number;
+    cumulative_net_pnl: number;
+    is_roll: boolean | number;
+    roll_gap?: number | null;
+    roll_yield?: number | null;
+  }>;
+  rollEvents: Array<{
+    id: string;
+    trade_date: string;
+    from_contract: string;
+    to_contract: string;
+    from_price: number;
+    to_price: number;
+    roll_gap: number;
+    roll_yield: number;
+    market_pnl: number;
+    commission: number;
+    slippage: number;
+    net_pnl: number;
+  }>;
 }
 
 export interface MaintenanceHistoryClearResult {

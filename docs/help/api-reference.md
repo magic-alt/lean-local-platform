@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **227** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **235** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -119,6 +119,7 @@
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/experiment-batches` | Batches | - | `200` - |
 | `POST` | `/api/experiment-batches` | Create | body `ExperimentBatchRequest` | `200` - |
+| `POST` | `/api/experiment-batches/compare` | Compare | body `ExperimentBatchCompareRequest` | `200` - |
 | `POST` | `/api/experiment-batches/preview` | Preview | body `ExperimentBatchRequest` | `200` - |
 | `DELETE` | `/api/experiment-batches/{batch_id}` | Delete | `batch_id` (path, required) | `200` - |
 | `GET` | `/api/experiment-batches/{batch_id}` | Detail | `batch_id` (path, required) | `200` - |
@@ -136,6 +137,9 @@
 | `POST` | `/api/factors/evaluate-batch` | Evaluate Batch | body `FactorBatchEvaluateRequest` | `200` - |
 | `GET` | `/api/factors/evaluations` | Evaluations | `limit` (query) | `200` - |
 | `POST` | `/api/factors/matrix` | Matrix | body `FactorMatrixRequest` | `200` - |
+| `POST` | `/api/factors/portfolio` | Construct Portfolio | body `FactorPortfolioRequest` | `200` - |
+| `GET` | `/api/factors/templates` | Templates | - | `200` - |
+| `POST` | `/api/factors/transform` | Transform | body `FactorTransformRequest` | `200` - |
 | `POST` | `/api/factors/values` | Import Values | body `FactorValueImport` | `200` - |
 
 ## futures
@@ -143,8 +147,12 @@
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/futures/agri-main` | Agri Main | `date` (query, required)<br>`products` (query) | `200` - |
+| `POST` | `/api/futures/continuous-contracts` | Build Continuous Contract | body `FuturesContinuousRequest` | `200` - |
+| `GET` | `/api/futures/continuous-contracts/{build_id}` | Continuous Contract | `build_id` (path, required) | `200` - |
 | `POST` | `/api/futures/contracts` | Import Contracts | body `FuturesContractImport` | `200` - |
 | `POST` | `/api/futures/daily` | Import Daily | body `FuturesDailyImport` | `200` - |
+| `POST` | `/api/futures/fee-schedules` | Set Fee Schedule | body `FuturesFeeScheduleRequest` | `200` - |
+| `GET` | `/api/futures/fee-schedules/{exchange}/{product}` | Fee Schedule | `exchange` (path, required)<br>`product` (path, required) | `200` - |
 | `POST` | `/api/futures/main-mapping` | Refresh Main Mapping | body `FuturesMainMappingRequest` | `200` - |
 | `POST` | `/api/futures/main-rules` | Set Main Rule | body `FuturesMainRuleRequest` | `200` - |
 | `GET` | `/api/futures/main/{product}` | Main Contract | `product` (path, required)<br>`date` (query, required)<br>`exchange` (query) | `200` - |

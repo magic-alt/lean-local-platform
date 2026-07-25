@@ -624,6 +624,64 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _numeric_overrides(items: list[dict[str, Any]]) -> list[str]:
+    keys: set[str] = set()
+    for item in items:
+        for key, value in (item.get("overrides") or {}).items():
+            if _number(value) is not None:
+                keys.add(str(key))
+    return sorted(keys)
+
+
+def _parameter_sensitivity(
+    ranked: list[dict[str, Any]],
+    *,
+    metric: str = "sharpe",
+    x_parameter: str | None = None,
+    y_parameter: str | None = None,
+) -> list[dict[str, Any]]:
+    numeric_keys = _numeric_overrides(ranked)
+    if len(numeric_keys) < 2:
+        return []
+    x_key = x_parameter if x_parameter in numeric_keys else numeric_keys[0]
+    y_key = y_parameter if y_parameter in numeric_keys and y_parameter != x_key else next(
+        key for key in numeric_keys if key != x_key
+    )
+    grouped: dict[tuple[float, float], list[float]] = {}
+    for item in ranked:
+        if item.get("status") != "success":
+            continue
+        overrides = item.get("overrides") or {}
+        x_value = _number(overrides.get(x_key))
+        y_value = _number(overrides.get(y_key))
+        metric_value = _number(item.get(metric))
+        if x_value is None or y_value is None or metric_value is None:
+            continue
+        grouped.setdefault((x_value, y_value), []).append(metric_value)
+    if not grouped:
+        return []
+    cells = [
+        {
+            "x": x_value,
+            "y": y_value,
+            "value": sum(values) / len(values),
+            "median": stats_module.median(values),
+            "count": len(values),
+        }
+        for (x_value, y_value), values in sorted(grouped.items())
+    ]
+    return [
+        {
+            "metric": metric,
+            "xParameter": x_key,
+            "yParameter": y_key,
+            "xValues": sorted({cell["x"] for cell in cells}),
+            "yValues": sorted({cell["y"] for cell in cells}),
+            "cells": cells,
+        }
+    ]
+
+
 def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     ranked = []
     for item in items:
@@ -724,7 +782,120 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "oosRunId": oos.get("runId") if oos else None,
             }
         )
-    return {"rankingMetric": "sharpe", "ranking": ranked, "candidates": candidates, "walkForward": walk_forward}
+    return {
+        "rankingMetric": "sharpe",
+        "ranking": ranked,
+        "candidates": candidates,
+        "parameterSensitivity": _parameter_sensitivity(ranked),
+        "walkForward": walk_forward,
+    }
+
+
+def _aggregate_batch_metrics(ranking: list[dict[str, Any]]) -> dict[str, Any]:
+    successful = [item for item in ranking if item.get("status") == "success"]
+    result: dict[str, Any] = {"runs": len(ranking), "successes": len(successful)}
+    for metric in ("sharpe", "return", "drawdown", "trades"):
+        values = [
+            number
+            for item in successful
+            if (number := _number(item.get(metric))) is not None
+        ]
+        result[metric] = {
+            "best": (
+                min(values, key=abs)
+                if metric == "drawdown" and values
+                else max(values)
+                if values
+                else None
+            ),
+            "median": stats_module.median(values) if values else None,
+            "mean": sum(values) / len(values) if values else None,
+            "count": len(values),
+        }
+    return result
+
+
+def compare_batches(
+    batch_ids: list[str],
+    *,
+    metric: str = "sharpe",
+    x_parameter: str | None = None,
+    y_parameter: str | None = None,
+) -> dict[str, Any]:
+    ids = list(dict.fromkeys(str(value).strip() for value in batch_ids if str(value).strip()))
+    if not 2 <= len(ids) <= 10:
+        raise LeanWebError("Compare between 2 and 10 unique experiment batches.")
+    metric_key = str(metric or "sharpe").strip()
+    if metric_key not in {"sharpe", "return", "drawdown", "trades"}:
+        raise LeanWebError("metric must be sharpe, return, drawdown, or trades.")
+    compared = []
+    for batch_id in ids:
+        batch = detail(batch_id)
+        summary = batch.get("summary") or {}
+        ranking = list(summary.get("ranking") or [])
+        aggregate = _aggregate_batch_metrics(ranking)
+        sensitivity = _parameter_sensitivity(
+            ranking,
+            metric=metric_key,
+            x_parameter=x_parameter,
+            y_parameter=y_parameter,
+        )
+        compared.append(
+            {
+                "id": batch["id"],
+                "name": batch["name"],
+                "kind": batch["kind"],
+                "mode": batch["mode"],
+                "status": batch["status"],
+                "createdAt": batch["created_at"],
+                "metrics": aggregate,
+                "bestRun": next(
+                    (
+                        item
+                        for item in sorted(
+                            ranking,
+                            key=lambda row: (
+                                abs(_number(row.get(metric_key)) or 0)
+                                if metric_key == "drawdown" and _number(row.get(metric_key)) is not None
+                                else _number(row.get(metric_key))
+                                if _number(row.get(metric_key)) is not None
+                                else float("-inf")
+                            ),
+                            reverse=metric_key != "drawdown",
+                        )
+                        if item.get("status") == "success" and _number(item.get(metric_key)) is not None
+                    ),
+                    None,
+                ),
+                "parameterSensitivity": sensitivity,
+                "phaseSeries": summary.get("walkForward") or [],
+            }
+        )
+    def score(item: dict[str, Any]) -> float:
+        value = item["metrics"].get(metric_key, {}).get("median")
+        if value is None:
+            return float("-inf")
+        return -abs(float(value)) if metric_key == "drawdown" else float(value)
+
+    compared.sort(key=score, reverse=True)
+    for index, item in enumerate(compared, start=1):
+        item["rank"] = index
+        item["rankingValue"] = item["metrics"].get(metric_key, {}).get("median")
+    return {
+        "rankingMetric": metric_key,
+        "rankingBasis": "median successful run",
+        "batches": compared,
+        "metricMatrix": [
+            {
+                "metric": metric_name,
+                "values": {
+                    item["id"]: item["metrics"].get(metric_name, {})
+                    for item in compared
+                },
+            }
+            for metric_name in ("sharpe", "return", "drawdown", "trades")
+        ],
+    }
 
 
 def _walk_forward_item_groups(items: list[dict[str, Any]]) -> dict[tuple[str, str, int], dict[str, list[dict[str, Any]]]]:

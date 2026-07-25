@@ -51,6 +51,7 @@ import type {
   DatabaseHealth,
   DependencyHealth,
   FactorEvaluationResult,
+  FuturesContinuousResult,
   FuturesMainItem,
   IndexMember,
   IndexMembersResult,
@@ -124,6 +125,7 @@ export function ResearchPage() {
   const [cbondPool, setCbondPool] = useState<{ asOfDate: string; count: number; items: CBondPoolItem[] }>();
   const [cbondRisk, setCbondRisk] = useState<{ asOfDate: string; count: number; items: CBondRiskItem[] }>();
   const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
+  const [futuresContinuous, setFuturesContinuous] = useState<FuturesContinuousResult>();
   const [pitMembers, setPitMembers] = useState<IndexMembersResult>();
   const [sessionBusy, setSessionBusy] = useState<string>();
   const [toolBusy, setToolBusy] = useState<string>();
@@ -197,6 +199,51 @@ export function ResearchPage() {
       const result = await api.futuresAgriMain(values);
       setFuturesMonitor(result);
       if (!result.count) message.info("该日期没有期货主力数据，请先在 Data 页同步 TuShare 数据。");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setToolBusy(undefined);
+    }
+  }
+
+  async function buildFutures(values: {
+    product: string;
+    exchange: string;
+    startDate: string;
+    endDate: string;
+    adjustment: "none" | "backward_ratio" | "backward_difference";
+    contracts: number;
+    openRate: number;
+    closeRate: number;
+    closeTodayRate: number;
+    perContract: number;
+    slippageTicks: number;
+    feeVersion: string;
+  }) {
+    setToolBusy("futures-continuous");
+    try {
+      await api.setFuturesFeeSchedule({
+        product: values.product,
+        exchange: values.exchange,
+        openRate: values.openRate,
+        closeRate: values.closeRate,
+        closeTodayRate: values.closeTodayRate,
+        perContract: values.perContract,
+        slippageTicks: values.slippageTicks,
+        version: values.feeVersion,
+        source: "research-ui"
+      });
+      const result = await api.buildFuturesContinuous({
+        product: values.product,
+        exchange: values.exchange,
+        startDate: values.startDate,
+        endDate: values.endDate,
+        adjustment: values.adjustment,
+        contracts: values.contracts,
+        strictMetadata: true
+      });
+      setFuturesContinuous(result);
+      message.success(`连续合约已构建：${result.summary.bars} bars / ${result.summary.rolls} rolls`);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -563,6 +610,82 @@ export function ResearchPage() {
                     ]}
                   />
                 </Card>
+                <Card title="Continuous Contract / Margin / Fee / Roll Attribution" style={{ marginTop: 16 }}>
+                  <Form layout="vertical" onFinish={buildFutures} initialValues={{
+                    product: "M",
+                    exchange: "DCE",
+                    startDate: dayjs().subtract(1, "year").format("YYYY-MM-DD"),
+                    endDate: today,
+                    adjustment: "backward_ratio",
+                    contracts: 1,
+                    openRate: 0,
+                    closeRate: 0,
+                    closeTodayRate: 0,
+                    perContract: 0,
+                    slippageTicks: 1,
+                    feeVersion: "manual-v1"
+                  }}>
+                    <FormGrid>
+                      <Form.Item name="product" label="Product" rules={[{ required: true }]}><Input /></Form.Item>
+                      <Form.Item name="exchange" label="Exchange" rules={[{ required: true }]}><Input /></Form.Item>
+                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
+                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
+                      <Form.Item name="adjustment" label="Adjustment"><Select options={[
+                        { value: "backward_ratio", label: "Backward ratio" },
+                        { value: "backward_difference", label: "Backward difference" },
+                        { value: "none", label: "Raw / none" }
+                      ]} /></Form.Item>
+                      <Form.Item name="contracts" label="Contracts"><InputNumber style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="openRate" label="Open fee rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="closeRate" label="Close fee rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="closeTodayRate" label="Close-today rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="perContract" label="Fee / contract"><InputNumber min={0} step={0.1} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="slippageTicks" label="Slippage ticks"><InputNumber min={0} step={0.5} style={{ width: "100%" }} /></Form.Item>
+                      <Form.Item name="feeVersion" label="Fee schedule version" rules={[{ required: true }]}><Input /></Form.Item>
+                    </FormGrid>
+                    <FormActions><Button type="primary" htmlType="submit" loading={toolBusy === "futures-continuous"}>Build & attribute</Button></FormActions>
+                  </Form>
+                </Card>
+                {futuresContinuous && <>
+                  <div className="grid" style={{ marginTop: 16 }}>
+                    <Card><Statistic title="Rolls" value={futuresContinuous.summary.rolls} /></Card>
+                    <Card><Statistic title="Max Margin" value={futuresContinuous.summary.maxMarginRequired} precision={2} /></Card>
+                    <Card><Statistic title="Commission + Slippage" value={futuresContinuous.summary.totalCommission + futuresContinuous.summary.totalSlippage} precision={2} /></Card>
+                    <Card><Statistic title="Net PnL" value={futuresContinuous.summary.totalNetPnl} precision={2} /></Card>
+                  </div>
+                  <Card title="Continuous Price and Net PnL" style={{ marginTop: 16 }}>
+                    <ReactECharts style={{ height: 380 }} option={{
+                      tooltip: { trigger: "axis" },
+                      legend: { data: ["Raw", "Adjusted", "Cumulative net PnL"] },
+                      grid: { left: 64, right: 64, top: 44, bottom: 54 },
+                      xAxis: { type: "category", data: futuresContinuous.bars.map((row) => row.trade_date) },
+                      yAxis: [{ type: "value", name: "Price" }, { type: "value", name: "PnL" }],
+                      series: [
+                        { name: "Raw", type: "line", showSymbol: false, data: futuresContinuous.bars.map((row) => row.raw_close) },
+                        { name: "Adjusted", type: "line", showSymbol: false, data: futuresContinuous.bars.map((row) => row.adjusted_close) },
+                        { name: "Cumulative net PnL", type: "line", yAxisIndex: 1, showSymbol: false, data: futuresContinuous.bars.map((row) => row.cumulative_net_pnl) }
+                      ]
+                    }} />
+                  </Card>
+                  <Card title="Roll Attribution" style={{ marginTop: 16 }}>
+                    <Table
+                      size="small"
+                      rowKey="id"
+                      dataSource={futuresContinuous.rollEvents}
+                      columns={[
+                        { title: "Date", dataIndex: "trade_date" },
+                        { title: "From", dataIndex: "from_contract" },
+                        { title: "To", dataIndex: "to_contract" },
+                        { title: "Gap", dataIndex: "roll_gap", render: (value) => formatDecimal(value) },
+                        { title: "Roll yield", dataIndex: "roll_yield", render: (value) => formatPercent(value) },
+                        { title: "Market PnL", dataIndex: "market_pnl", render: (value) => formatDecimal(value, 2) },
+                        { title: "Commission", dataIndex: "commission", render: (value) => formatDecimal(value, 2) },
+                        { title: "Slippage", dataIndex: "slippage", render: (value) => formatDecimal(value, 2) },
+                        { title: "Net PnL", dataIndex: "net_pnl", render: (value) => formatDecimal(value, 2) }
+                      ]}
+                    />
+                  </Card>
+                </>}
               </>
             )
           }

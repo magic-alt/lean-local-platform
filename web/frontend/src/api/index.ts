@@ -52,6 +52,7 @@ import type {
   CBondPoolItem,
   CBondRiskItem,
   FuturesMainItem,
+  FuturesContinuousResult,
   MaintenanceHistoryClearResult,
   InsightCapabilities,
   InsightListResponse,
@@ -66,6 +67,7 @@ import type {
   DatasetPreviewResult,
   WorkflowExample,
   ExperimentBatch,
+  ExperimentBatchComparison,
   ExperimentBatchPreview,
   HelpArticleSummary,
   HelpArticle
@@ -98,6 +100,10 @@ export const api = {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),
   experimentBatches: () => request<ExperimentBatch[]>("/api/experiment-batches"),
+  compareExperimentBatches: (payload: { batchIds: string[]; metric?: string; xParameter?: string; yParameter?: string }) =>
+    request<ExperimentBatchComparison>("/api/experiment-batches/compare", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
   experimentBatchPreview: (payload: Record<string, unknown>) => request<ExperimentBatchPreview>("/api/experiment-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   createExperimentBatch: (payload: Record<string, unknown>) => request<ExperimentBatch>("/api/experiment-batches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   experimentBatch: (id: string) => request<ExperimentBatch>(`/api/experiment-batches/${encodeURIComponent(id)}`),
@@ -654,5 +660,30 @@ export const api = {
     const query = new URLSearchParams({ date: params.date });
     if (params.products) query.set("products", params.products);
     return request<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>(`/api/futures/agri-main?${query.toString()}`);
-  }
+  },
+  setFuturesFeeSchedule: (payload: {
+    product: string;
+    exchange: string;
+    openRate?: number;
+    closeRate?: number;
+    closeTodayRate?: number;
+    perContract?: number;
+    slippageTicks?: number;
+    currency?: string;
+    version: string;
+    source?: string;
+  }) => request<Record<string, unknown>>("/api/futures/fee-schedules", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  }),
+  buildFuturesContinuous: (payload: {
+    product: string;
+    exchange: string;
+    startDate: string;
+    endDate: string;
+    adjustment: "none" | "backward_ratio" | "backward_difference";
+    contracts: number;
+    strictMetadata?: boolean;
+  }) => request<FuturesContinuousResult>("/api/futures/continuous-contracts", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  })
 };
