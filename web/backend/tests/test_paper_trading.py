@@ -1,6 +1,41 @@
+import http.client
 import sys
 
 import pytest
+
+
+def test_walkforward_acceptance_api_retries_transient_disconnect(monkeypatch):
+    from scripts import run_lean_paper_walkforward_acceptance as acceptance
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"ok"}'
+
+    attempts = iter([http.client.RemoteDisconnected(), Response()])
+
+    def urlopen(*_args, **_kwargs):
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(acceptance.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(acceptance.time, "sleep", lambda _seconds: None)
+
+    assert acceptance._api(
+        "http://127.0.0.1:8000",
+        "GET",
+        "/api/health",
+        timeout=1,
+    ) == (200, {"status": "ok"})
 
 
 def test_lean_order_status_is_normalized_for_paper_reports():
@@ -346,17 +381,25 @@ def test_paper_v2_lean_intents_share_constraints_matching_and_ledger(tmp_path, m
             "status": "filled",
         },
     ]
+    strategy_hash = "a" * 64
+    child = {
+        "id": "backtest-run-v2",
+        "fingerprint": {
+            "strategyFileHash": strategy_hash,
+            "largeEvidence": "x" * 1000,
+        },
+    }
 
     first = paper._process_v2_lean_intents(
         session=session,
         paper_run={"id": "paper-run-v2"},
-        child={"id": "backtest-run-v2"},
+        child=child,
         orders=orders,
     )
     second = paper._process_v2_lean_intents(
         session=paper.get_session(session["id"]),
         paper_run={"id": "paper-run-v2"},
-        child={"id": "backtest-run-v2"},
+        child=child,
         orders=orders,
     )
 
@@ -365,6 +408,7 @@ def test_paper_v2_lean_intents_share_constraints_matching_and_ledger(tmp_path, m
     assert [item["id"] for item in first["orders"]] == [item["id"] for item in second["orders"]]
     intents = paper_order_pipeline.list_intents(session["id"])
     assert len(intents) == 2
+    assert {item["strategy_fingerprint"] for item in intents} == {strategy_hash}
     states = {
         item["symbol"]: paper_order_pipeline.current_state(item["id"])
         for item in intents
@@ -452,10 +496,77 @@ def test_paper_v2_transition_graph_rejects_illegal_state_changes(tmp_path, monke
 
 
 def test_paper_v2_finalize_is_requeued_after_worker_loss():
-    from app.tasks.worker import finalize_paper_walkforward_task
+    from app.tasks.worker import (
+        finalize_paper_walkforward_task,
+        recover_paper_finalizations_task,
+    )
 
     assert finalize_paper_walkforward_task.acks_late is True
     assert finalize_paper_walkforward_task.reject_on_worker_lost is True
+    assert recover_paper_finalizations_task.name == "lean_web.recover_paper_finalizations"
+
+
+def test_paper_finalization_recovery_dispatches_durable_run(monkeypatch):
+    from app.tasks import worker
+
+    transitions = []
+    dispatched = []
+    monkeypatch.setattr(
+        worker.paper_service,
+        "recoverable_walkforward_finalizations",
+        lambda **kwargs: [
+            {
+                "id": "paper-run",
+                "session_id": "paper-session",
+                "trade_date": "2024-01-04",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        worker.paper_scheduler,
+        "job_for_date",
+        lambda session_id, trade_date: {"id": "daily-job", "state": "RUNNING"},
+    )
+    def transition(job_id, state, **kwargs):
+        transitions.append((job_id, state, kwargs))
+        return {"id": job_id, "state": state}
+
+    monkeypatch.setattr(worker.paper_scheduler, "transition_job", transition)
+
+    class Result:
+        id = "replacement-task"
+
+    monkeypatch.setattr(
+        worker.finalize_paper_walkforward_task,
+        "apply_async",
+        lambda args: dispatched.append(args) or Result(),
+    )
+
+    result = worker.recover_paper_finalizations_task(
+        paper_run_id="paper-run",
+        stale_seconds=0,
+    )
+
+    assert dispatched == [["paper-run"]]
+    assert transitions[0][0:2] == ("daily-job", "RETRYING")
+    assert transitions[1][0:2] == ("daily-job", "RUNNING")
+    assert result["recovered"] == [
+        {"paperRunId": "paper-run", "taskId": "replacement-task"}
+    ]
+
+
+def test_successful_paper_finalization_redelivery_is_noop(monkeypatch):
+    from app.services import paper
+
+    completed = {"id": "paper-run", "status": "success"}
+    monkeypatch.setattr(paper, "get_walkforward_run", lambda paper_run_id: completed)
+    monkeypatch.setattr(
+        paper,
+        "get_session",
+        lambda session_id: pytest.fail("completed finalization must not re-enter"),
+    )
+
+    assert paper.finalize_walkforward_run("paper-run") == completed
 
 
 def test_paper_replay_auto_signal_executes_before_generating_next_signal(tmp_path, monkeypatch):
@@ -674,6 +785,71 @@ def test_paper_api_preserves_strategy_extra_parameters(tmp_path, monkeypatch):
     assert parameters["strategy"] == "ema_cross"
 
 
+def test_paper_checkpoint_probe_filters_and_returns_current_run_status(
+    tmp_path,
+    monkeypatch,
+):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from fastapi.testclient import TestClient
+
+    from app.db import db
+    from app.main import app
+    from app.services import paper, paper_order_pipeline
+
+    session = paper.create_session(
+        {
+            "symbol": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "cash": 100000,
+        }
+    )
+    with db() as connection:
+        connection.execute(
+            "update paper_sessions set mode='lean_walkforward_v2',pipeline_version=2 where id=?",
+            (session["id"],),
+        )
+        connection.execute(
+            """
+            insert into paper_walkforward_runs
+            (id,session_id,trade_date,status,created_at,started_at)
+            values ('probe-run',?,'2024-01-04','running','2024-01-04T00:00:00Z','2024-01-04T00:00:00Z')
+            """,
+            (session["id"],),
+        )
+        connection.execute(
+            """
+            insert into paper_run_checkpoints
+            (id,paper_run_id,phase,status,digest,payload_json,created_at,completed_at)
+            values
+            ('probe-intent','probe-run','intent_capture','completed','intent-digest','{}',
+             '2024-01-04T00:00:01Z','2024-01-04T00:00:01Z'),
+            ('probe-ledger','probe-run','ledger','completed','ledger-digest','{}',
+             '2024-01-04T00:00:02Z','2024-01-04T00:00:02Z')
+            """
+        )
+
+    rows = paper_order_pipeline.list_checkpoints(
+        session["id"],
+        trade_date="2024-01-04",
+        phase="intent_capture",
+    )
+    assert [(row["phase"], row["run_status"]) for row in rows] == [
+        ("intent_capture", "running")
+    ]
+
+    response = TestClient(app).get(
+        f"/api/paper/{session['id']}/checkpoints",
+        params={"tradeDate": "2024-01-04", "phase": "intent_capture"},
+    )
+    assert response.status_code == 200
+    assert [
+        (row["phase"], row["run_status"])
+        for row in response.json()
+    ] == [("intent_capture", "running")]
+
+
 def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.core import config
@@ -819,3 +995,26 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
     assert v2_session["parameters"]["maxPositionWeight"] == 0.2
     assert v2_session["parameters"]["minCash"] == 1000
     assert v2_session["parameters"]["blacklist"] == ["000001"]
+
+    captured = {}
+    with db() as connection:
+        connection.execute(
+            "update paper_sessions set cash=1234 where id=?",
+            (v2_session["id"],),
+        )
+    monkeypatch.setattr(
+        paper_module,
+        "create_backtest_job",
+        lambda payload: (
+            captured.update(payload)
+            or {
+                "id": "paper-child",
+                "task_id": "paper-child-task",
+            }
+        ),
+    )
+    monkeypatch.setattr(paper_module, "mark_backtest_queued", lambda run_id: None)
+
+    paper_module.create_walkforward_run(v2_session["id"], "2026-07-14")
+
+    assert captured["cash"] == 50000

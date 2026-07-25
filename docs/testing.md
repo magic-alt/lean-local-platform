@@ -125,29 +125,40 @@ cd web/backend
 ```
 
 ```bash
-# 2) Level 5: 21-day real LEAN Paper chain + optional fault matrix
+# 2) Level 5 baseline: one real 21-day LEAN Paper chain
 # Enable only on the isolated remediation stack; run_level5_audit requires v2.
+cd ../..
 export LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1
-cd web/backend
-.venv/bin/python scripts/run_level5_audit.py \
-  --project-id PROJECT_ID \
-  --start-date 2023-07-03 \
-  --days 21 \
-  --with-fault \
-  --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
-  --constraints \
-  --evidence-dir web/runtime/audit \
-  --api-url http://127.0.0.1:8000
-
-# If you already know the trusted source id, keep explicit linkage:
-.venv/bin/python scripts/run_level5_audit.py \
+export LEAN_FAULT_INJECTION_ENABLED=0
+export LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS=0
+docker compose up -d --no-deps --force-recreate api worker backtest-worker
+web/backend/.venv/bin/python scripts/run_level5_audit.py \
   --project-id PROJECT_ID \
   --source-backtest-id BACKTEST_ID \
   --start-date 2023-07-03 \
   --days 21 \
+  --session-overrides-json '{"blacklist":["SYMBOL"]}' \
+  --require-reject-reason \
+  --evidence-dir web/runtime/audit \
+  --api-url http://127.0.0.1:8000
+
+# 3) Restart the default worker with checkpoint pauses enabled, then run one
+# combined six-phase fault chain and compare its canonical state with baseline.
+export LEAN_FAULT_INJECTION_ENABLED=1
+export LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS=20
+# Match these dates to the six --fault-scenarios dates.
+export LEAN_PAPER_FAULT_PAUSE_TARGETS=YYYY-MM-DD:intent_capture,YYYY-MM-DD:constraint_validation,YYYY-MM-DD:matching,YYYY-MM-DD:ledger,YYYY-MM-DD:snapshot_report,YYYY-MM-DD:reconciliation
+docker compose up -d --no-deps --force-recreate worker
+web/backend/.venv/bin/python scripts/run_level5_audit.py \
+  --project-id PROJECT_ID \
+  --source-backtest-id BACKTEST_ID \
+  --start-date 2023-07-03 \
+  --days 21 \
+  --session-overrides-json '{"blacklist":["SYMBOL"]}' \
+  --require-reject-reason \
   --with-fault \
-  --fault-scenarios worker@7:before_queue,redis@14:during_wait,mysql@20:after_wait \
-  --constraints \
+  --fault-mode combined \
+  --reuse-no-fault-evidence web/runtime/audit/level5-replay-no-fault.json \
   --evidence-dir web/runtime/audit \
   --api-url http://127.0.0.1:8000
 ```
@@ -156,9 +167,13 @@ cd web/backend
 `run_lean_paper_walkforward_acceptance.py` that captures per-session evidence for:
 
 - full 21+ day LEAN walk-forward completion
-- duplicate-call idempotency (`run-day` re-issue must block)
+- duplicate-call idempotency (`run-day` re-issue returns the existing result or
+  blocks, without adding business rows)
 - fills + policy rejects + reject reason presence
-- restart recovery points at selected fault phases
+- restart recovery at all six persisted phases:
+  `intent_capture`, `constraint_validation`, `matching`, `ledger`,
+  `snapshot_report`, and `reconciliation`; every injection must observe the
+  joined run status as `running`
 - constraints/reject coverage
 
 The strict Level 5 result counts fills and policy rejects from the same v2
@@ -188,9 +203,29 @@ web/backend/.venv/bin/python scripts/run_service_restart_fault_acceptance.py \
   --output web/runtime/audit/service-restart-matrix.json
 ```
 
-The wrapper supports `--with-fault` and `--constraints`; both are required
-for full Level 5 replay re-evaluation in the current audit process. When
-`--with-fault` is omitted, fault scenarios are intentionally skipped.
+The wrapper supports `--with-fault`, `--fault-mode combined` and
+`--reuse-no-fault-evidence`. Combined mode injects worker, Redis and MySQL
+restarts at six different dates in one 21-day chain. Reusing baseline evidence
+avoids rerunning it after checkpoint pauses are enabled, while still failing
+closed unless scope, source, dates and canonical digest are comparable.
+
+Five submitted real LEAN jobs, bounded active concurrency, queued/running phase
+cancellation and the lower-level Redis/MySQL/worker restart matrix are covered
+by:
+
+```bash
+web/backend/.venv/bin/python scripts/run_p1_stability_acceptance.py \
+  --project-id PROJECT_ID \
+  --confirm RUN_P1_STABILITY \
+  --execution-limit 2 \
+  --output web/runtime/audit/p1-stability.json
+```
+
+The command restores the previous runtime setting and worker replica count on
+exit. “Five-job concurrency” means five jobs accepted together with the
+configured resource budget enforced: at most two active LEAN runs and at least
+three queued jobs. It must not be interpreted as five unrestricted LEAN
+containers on this workstation.
 
 The Paper command distinguishes a successful 21-day cumulative LEAN chain
 from the stricter Level 5 replay gate. Level 5 also requires at least one fill
@@ -273,11 +308,9 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
 - No frontend component tests yet.
 - No formal benchmark golden files for all templates yet.
 - No full exchange-grade A-share matching acceptance test yet.
-- No resource-pressure/OOM recovery test representative of the complete Docker Desktop stack yet.
-- No accepted production-like five-job concurrency/cancellation/fault matrix yet.
-- A real 21-trading-day LEAN Paper acceptance is available, but it cannot
-  close Level 5 unless the same session contains a filled and a policy-rejected
-  order.
+- No destructive disk-exhaustion/OOM recovery test representative of the
+  complete Docker Desktop stack yet. Disk, memory, CPU and queue pressure are
+  now sampled and alerted, but destructive injection remains isolated-only.
 - CSI300 release validation requires the operator-retained official bundle;
   `scripts/import_csindex_csi300_pit.py --offline --dry-run` verifies every
   retained hash and the complete event chain without network access.

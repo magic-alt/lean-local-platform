@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **225** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **227** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -197,6 +197,7 @@
 | `GET` | `/api/alert-events` | Alert Events | `status` (query)<br>`limit` (query) | `200` - |
 | `POST` | `/api/alert-events/{alert_id}/acknowledge` | Acknowledge Alert | `alert_id` (path, required) | `200` - |
 | `POST` | `/api/alert-events/{alert_id}/resolve` | Resolve Alert | `alert_id` (path, required) | `200` - |
+| `GET` | `/api/operational/resources` | Operational Resources | - | `200` - |
 | `GET` | `/api/pipeline-runs` | Pipeline Runs | `limit` (query) | `200` - |
 | `GET` | `/api/pipeline-runs/{run_id}` | Pipeline Run | `run_id` (path, required) | `200` - |
 | `GET` | `/api/universes/{universe_code}` | Certified Universe | `universe_code` (path, required) | `200` - |
@@ -243,6 +244,7 @@
 | `GET` | `/api/paper/candidates` | Candidates | `projectId` (query, required) | `200` - |
 | `DELETE` | `/api/paper/{session_id}` | Delete | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}` | Detail | `session_id` (path, required) | `200` - |
+| `GET` | `/api/paper/{session_id}/checkpoints` | Checkpoints | `session_id` (path, required)<br>`tradeDate` (query)<br>`phase` (query) | `200` - |
 | `GET` | `/api/paper/{session_id}/constraint-decisions` | Constraint Decisions | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/daily-jobs` | Daily Jobs | `session_id` (path, required) | `200` - |
 | `GET` | `/api/paper/{session_id}/fills` | Fills | `session_id` (path, required) | `200` - |

@@ -30,6 +30,10 @@ ALERT_TYPES = {
     "paper_walkforward_failed",
     "data_sync_failed",
     "scheduled_report_failed",
+    "resource_cpu_pressure",
+    "resource_disk_pressure",
+    "resource_memory_pressure",
+    "resource_queue_pressure",
 }
 
 _SEVERITY_RANK = {
@@ -113,17 +117,18 @@ def _send_webhook(url: str, alert: dict[str, Any], *, timeout_seconds: int, bear
 def _record_delivery(
     alert_id: str,
     *,
+    channel: str = "webhook",
     status: str,
     response_code: int | None,
     error: str | None,
     endpoint: str,
 ) -> dict[str, Any]:
     now = utc_now()
-    delivery_id = str(uuid.uuid5(_DELIVERY_NAMESPACE, f"{alert_id}:webhook"))
+    delivery_id = str(uuid.uuid5(_DELIVERY_NAMESPACE, f"{alert_id}:{channel}"))
     with db() as connection:
         existing = connection.execute(
-            "select id,attempt_count,created_at from alert_deliveries where alert_id=? and channel='webhook'",
-            (alert_id,),
+            "select id,attempt_count,created_at from alert_deliveries where alert_id=? and channel=?",
+            (alert_id, channel),
         ).fetchone()
         if existing:
             connection.execute(
@@ -151,11 +156,12 @@ def _record_delivery(
                 insert into alert_deliveries
                     (id,alert_id,channel,status,attempt_count,last_attempt_at,last_success_at,
                      next_retry_at,last_error,response_code,metadata_json,created_at,updated_at)
-                values (?,?,'webhook',?,1,?,?,null,?,?,?,?,?)
+                values (?,?,?, ?,1,?,?,null,?,?,?,?,?)
                 """,
                 (
                     delivery_id,
                     alert_id,
+                    channel,
                     status,
                     now,
                     now if status == "success" else None,
@@ -167,25 +173,20 @@ def _record_delivery(
                 ),
             )
         row = connection.execute(
-            "select * from alert_deliveries where alert_id=? and channel='webhook'",
-            (alert_id,),
+            "select * from alert_deliveries where alert_id=? and channel=?",
+            (alert_id, channel),
         ).fetchone()
     return row_to_dict(row) or {}
 
 
-def dispatch_alert(alert: dict[str, Any], *, webhook_url: str | None = None) -> dict[str, Any]:
-    url = str(webhook_url if webhook_url is not None else os.environ.get("LEAN_ALERT_WEBHOOK_URL", "")).strip()
-    if not url:
-        return {"channel": "webhook", "status": "disabled"}
-    severity = str(alert.get("severity") or "warning").lower()
-    minimum = str(os.environ.get("LEAN_ALERT_MIN_SEVERITY", "critical")).strip().lower()
-    if _SEVERITY_RANK.get(severity, 0) < _SEVERITY_RANK.get(minimum, 4):
-        return {"channel": "webhook", "status": "below_threshold", "minimumSeverity": minimum}
-    cooldown_until = _parse_time(alert.get("cooldown_until"))
-    if cooldown_until and cooldown_until > datetime.now(timezone.utc):
-        return {"channel": "webhook", "status": "cooldown", "cooldownUntil": cooldown_until.isoformat()}
+def _dispatch_webhook_channel(
+    alert: dict[str, Any],
+    *,
+    channel: str,
+    url: str,
+    bearer_token: str,
+) -> dict[str, Any]:
     timeout_seconds = _env_int("LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS", 5, 1)
-    bearer_token = str(os.environ.get("LEAN_ALERT_WEBHOOK_BEARER_TOKEN", "")).strip()
     response_code: int | None = None
     delivery_error: str | None = None
     try:
@@ -199,14 +200,93 @@ def dispatch_alert(alert: dict[str, Any], *, webhook_url: str | None = None) -> 
     except (OSError, RuntimeError, ValueError, urllib_error.URLError) as exc:
         status = "failed"
         delivery_error = _safe_delivery_error(exc, url)
-    delivery = _record_delivery(
+    return _record_delivery(
         str(alert["id"]),
+        channel=channel,
         status=status,
         response_code=response_code,
         error=delivery_error,
         endpoint=url,
     )
-    if status == "success":
+
+
+def dispatch_alert(
+    alert: dict[str, Any],
+    *,
+    webhook_url: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    url = str(
+        webhook_url
+        if webhook_url is not None
+        else os.environ.get("LEAN_ALERT_WEBHOOK_URL", "")
+    ).strip()
+    escalation_url = str(os.environ.get("LEAN_ALERT_ESCALATION_WEBHOOK_URL", "")).strip()
+    if not url:
+        delivery: dict[str, Any] = {"channel": "webhook", "status": "disabled"}
+    else:
+        delivery = {}
+    severity = str(alert.get("severity") or "warning").lower()
+    minimum = str(os.environ.get("LEAN_ALERT_MIN_SEVERITY", "critical")).strip().lower()
+    if _SEVERITY_RANK.get(severity, 0) < _SEVERITY_RANK.get(minimum, 4):
+        delivery = {
+            "channel": "webhook",
+            "status": "below_threshold",
+            "minimumSeverity": minimum,
+        }
+    cooldown_until = _parse_time(alert.get("cooldown_until"))
+    in_cooldown = bool(
+        not force
+        and cooldown_until
+        and cooldown_until > datetime.now(timezone.utc)
+    )
+    if in_cooldown:
+        delivery = {
+            "channel": "webhook",
+            "status": "cooldown",
+            "cooldownUntil": cooldown_until.isoformat(),
+        }
+    elif url and _SEVERITY_RANK.get(severity, 0) >= _SEVERITY_RANK.get(minimum, 4):
+        delivery = _dispatch_webhook_channel(
+            alert,
+            channel="webhook",
+            url=url,
+            bearer_token=str(
+                os.environ.get("LEAN_ALERT_WEBHOOK_BEARER_TOKEN", "")
+            ).strip(),
+        )
+
+    escalation_after = _env_int("LEAN_ALERT_ESCALATION_AFTER", 1, 1)
+    should_escalate = bool(
+        escalation_url
+        and not in_cooldown
+        and severity == "critical"
+        and int(alert.get("count") or 1) >= escalation_after
+    )
+    if should_escalate:
+        delivery["escalation"] = _dispatch_webhook_channel(
+            alert,
+            channel="escalation_webhook",
+            url=escalation_url,
+            bearer_token=str(
+                os.environ.get(
+                    "LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN",
+                    os.environ.get("LEAN_ALERT_WEBHOOK_BEARER_TOKEN", ""),
+                )
+            ).strip(),
+        )
+    elif escalation_url:
+        delivery["escalation"] = {
+            "channel": "escalation_webhook",
+            "status": "not_due",
+            "afterCount": escalation_after,
+        }
+
+    delivered = delivery.get("status") == "success" or (
+        isinstance(delivery.get("escalation"), dict)
+        and delivery["escalation"].get("status") == "success"
+    )
+    if delivered and not force:
         cooldown_seconds = _env_int("LEAN_ALERT_COOLDOWN_SECONDS", 900, 0)
         cooldown = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)).isoformat()
         with db() as connection:
@@ -252,7 +332,7 @@ def emit_alert(
             "select id,status,count from alert_events where dedupe_key=? order by last_seen_at desc limit 1",
             (key,),
         ).fetchone()
-        if existing and existing["status"] != "open":
+        if existing and existing["status"] == "resolved":
             alert_id = str(existing["id"])
             connection.execute(
                 """
@@ -275,6 +355,36 @@ def emit_alert(
                     alert_id,
                 ),
             )
+            row = connection.execute(
+                "select * from alert_events where id=?",
+                (alert_id,),
+            ).fetchone()
+        elif existing and existing["status"] == "acknowledged":
+            alert_id = str(existing["id"])
+            connection.execute(
+                """
+                update alert_events
+                set event_type=?,severity=?,title=?,message=?,source=?,related_id=?,
+                    details_json=?,last_seen_at=?,count=?
+                where id=?
+                """,
+                (
+                    event_type,
+                    severity,
+                    payload["title"],
+                    payload["message"],
+                    source,
+                    related_id,
+                    json_dump(details or {}),
+                    now,
+                    int(existing["count"] or 0) + 1,
+                    alert_id,
+                ),
+            )
+            row = connection.execute(
+                "select * from alert_events where id=?",
+                (alert_id,),
+            ).fetchone()
         else:
             connection.execute(
                 """
@@ -308,10 +418,10 @@ def emit_alert(
                     1,
                 ),
             )
-        row = connection.execute(
-            "select * from alert_events where dedupe_key = ? and status = 'open'",
-            (key,),
-        ).fetchone()
+            row = connection.execute(
+                "select * from alert_events where dedupe_key = ? and status = 'open'",
+                (key,),
+            ).fetchone()
         count = int(row["count"] or 1) if row else 1
         escalate_after = _env_int("LEAN_ALERT_ESCALATE_AFTER", 3, 2)
         if severity.lower() in {"warning", "error"} and count >= escalate_after:
@@ -365,9 +475,36 @@ def update_alert_status(alert_id: str, status: str, *, actor: str = "api") -> di
     fields = (
         "acknowledged_at = ?, acknowledged_by = ?, status = ?"
         if status == "acknowledged"
-        else "resolved_at = ?, resolved_by = ?, status = ?"
+        else "resolved_at = ?, resolved_by = ?, status = ?, cooldown_until = ?"
+    )
+    values: tuple[Any, ...] = (
+        (now, actor, status, alert_id)
+        if status == "acknowledged"
+        else (now, actor, status, None, alert_id)
     )
     with db() as connection:
-        connection.execute(f"update alert_events set {fields} where id = ?", (now, actor, status, alert_id))
+        connection.execute(f"update alert_events set {fields} where id = ?", values)
         row = connection.execute("select * from alert_events where id = ?", (alert_id,)).fetchone()
-    return row_to_dict(row)
+    item = row_to_dict(row)
+    if item and status == "resolved":
+        item["delivery"] = dispatch_alert(item, force=True)
+    return item
+
+
+def resolve_open_alert(
+    dedupe_key: str,
+    *,
+    actor: str = "resource_monitor",
+) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select id from alert_events
+            where dedupe_key=? and status in ('open','acknowledged')
+            order by last_seen_at desc limit 1
+            """,
+            (dedupe_key,),
+        ).fetchone()
+    if not row:
+        return None
+    return update_alert_status(str(row["id"]), "resolved", actor=actor)

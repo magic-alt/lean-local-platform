@@ -131,14 +131,48 @@ def _position_and_cash(events: list[dict[str, Any]], initial_cash: float) -> dic
 
 def _log_evidence(result_path: Path) -> dict[str, Any]:
     lines: list[str] = []
+    actionable_error_lines: list[str] = []
+    ignored_error_lines: list[str] = []
     for path in (result_path.parent / "log.txt", result_path.parent / "stdout.log", result_path.parent / f"{result_path.stem}-log.txt"):
         if not path.exists():
             continue
         try:
-            lines.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
+            file_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
-    error_lines = list(dict.fromkeys(line.strip() for line in lines if "ERROR::" in line))
+        lines.extend(file_lines)
+        indexed_errors = [
+            (index, line.strip())
+            for index, line in enumerate(file_lines)
+            if "ERROR::" in line
+        ]
+        shutdown_indexes = [
+            index
+            for index, line in enumerate(file_lines)
+            if "PythonInitializer.Shutdown(): start" in line
+        ]
+        shutdown_index = shutdown_indexes[-1] if shutdown_indexes else None
+        python_shutdown_timeout = bool(
+            indexed_errors
+            and shutdown_index is not None
+            and all(
+                index > shutdown_index
+                and (
+                    "Security.ExecuteWithTimeLimit(): Execution Security Error: Operation timed out"
+                    in line
+                    or "Program.Exit(): Failed to shutdown python" in line
+                )
+                for index, line in indexed_errors
+            )
+            and any(
+                "Program.Exit(): Failed to shutdown python" in line
+                for _, line in indexed_errors
+            )
+        )
+        target = ignored_error_lines if python_shutdown_timeout else actionable_error_lines
+        target.extend(line for _, line in indexed_errors)
+    error_lines = list(dict.fromkeys(actionable_error_lines))
+    ignored_error_lines = list(dict.fromkeys(ignored_error_lines))
     error_codes: list[str] = []
     for line in error_lines:
         if "Zero reference price" in line and "dividend" in line:
@@ -158,6 +192,11 @@ def _log_evidence(result_path: Path) -> dict[str, Any]:
         "errorLines": error_lines[:20],
         "errorCount": len(error_lines),
         "errorCodes": list(dict.fromkeys(error_codes)),
+        "observedErrorCount": len(error_lines) + len(ignored_error_lines),
+        "ignoredErrorLines": ignored_error_lines[:20],
+        "ignoredErrorCodes": (
+            ["lean_python_shutdown_timeout"] if ignored_error_lines else []
+        ),
         "completedDate": completed_date,
         "cashAccountConfigured": any("AShare execution account type: cash" in line for line in lines),
     }
@@ -214,6 +253,9 @@ def audit_backtest_execution(
             errorCount=logs["errorCount"],
             errorCodes=logs["errorCodes"],
             errorLines=logs["errorLines"],
+            observedErrorCount=logs["observedErrorCount"],
+            ignoredErrorCodes=logs["ignoredErrorCodes"],
+            ignoredErrorLines=logs["ignoredErrorLines"],
         ),
         _gate(
             "result_analysis_complete",

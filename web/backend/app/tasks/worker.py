@@ -43,6 +43,7 @@ from ..services import ashare_tech_insights
 from ..services import paper as paper_service
 from ..services import paper_scheduler
 from ..services import data_sync
+from ..services import resource_pressure
 from ..services.alerts import emit_alert
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
@@ -65,6 +66,11 @@ def _record_task_metric(kind: str, status: str) -> None:
 def _record_backtest_metric(status: str) -> None:
     if BACKTEST_STATUS is not None:
         BACKTEST_STATUS.labels(status).inc()
+
+
+@celery_app.task(name="lean_web.monitor_operational_resources")
+def monitor_operational_resources_task():
+    return resource_pressure.monitor_operational_resources()
 
 
 @celery_app.task(name="lean_web.generate_insight")
@@ -156,6 +162,54 @@ def finalize_paper_walkforward_task(paper_run_id: str):
             expected_states={"RUNNING", "RETRYING"},
         )
     return result
+
+
+@celery_app.task(name="lean_web.recover_paper_finalizations")
+def recover_paper_finalizations_task(
+    paper_run_id: str | None = None,
+    stale_seconds: int | None = None,
+):
+    configured = int(
+        stale_seconds
+        if stale_seconds is not None
+        else os.environ.get("LEAN_PAPER_FINALIZE_STALE_SECONDS", "120")
+    )
+    candidates = paper_service.recoverable_walkforward_finalizations(
+        stale_seconds=max(0, configured),
+        paper_run_id=paper_run_id,
+    )
+    recovered = []
+    for item in candidates:
+        run_id = str(item["id"])
+        job = paper_scheduler.job_for_date(
+            str(item["session_id"]),
+            str(item["trade_date"]),
+        )
+        if job and job.get("state") == "RUNNING":
+            job = paper_scheduler.transition_job(
+                str(job["id"]),
+                "RETRYING",
+                event_type="finalization_worker_loss_recovered",
+                payload={"paperRunId": run_id},
+                expected_states={"RUNNING"},
+            )
+        if job and job.get("state") == "RETRYING":
+            paper_scheduler.transition_job(
+                str(job["id"]),
+                "RUNNING",
+                event_type="replacement_finalization_dispatched",
+                payload={"paperRunId": run_id},
+                expected_states={"RETRYING"},
+                paper_run_id=run_id,
+            )
+        dispatched = finalize_paper_walkforward_task.apply_async(args=[run_id])
+        recovered.append(
+            {
+                "paperRunId": run_id,
+                "taskId": dispatched.id,
+            }
+        )
+    return {"recovered": recovered, "staleSeconds": max(0, configured)}
 
 
 @celery_app.task(name="lean_web.fail_paper_walkforward")

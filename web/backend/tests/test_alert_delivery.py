@@ -81,6 +81,69 @@ def test_repeated_warning_escalates_and_failed_delivery_is_recorded(monkeypatch)
     assert "secret-value" not in third["delivery"]["last_error"]
 
 
+def test_critical_alert_uses_independent_escalation_channel(monkeypatch):
+    _init_db()
+    from app.services import alerts
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv(
+        "LEAN_ALERT_ESCALATION_WEBHOOK_URL",
+        "https://on-call.example.test/escalate?secret=hidden",
+    )
+    monkeypatch.setenv("LEAN_ALERT_ESCALATION_AFTER", "1")
+    sent = []
+
+    def fake_send(url, alert, *, timeout_seconds, bearer_token):
+        sent.append((url, alert["status"], alert["severity"]))
+        return 202
+
+    monkeypatch.setattr(alerts, "_send_webhook", fake_send)
+    item = alerts.emit_alert(
+        "worker_down",
+        severity="critical",
+        dedupe_key="worker:escalation",
+    )
+
+    assert item["delivery"]["status"] == "disabled"
+    assert item["delivery"]["escalation"]["status"] == "success"
+    assert sent == [
+        (
+            "https://on-call.example.test/escalate?secret=hidden",
+            "open",
+            "critical",
+        )
+    ]
+    deliveries = alerts.list_alert_events(status="open")[0]["deliveries"]
+    assert deliveries[0]["channel"] == "escalation_webhook"
+    assert "hidden" not in str(deliveries[0]["metadata"])
+
+
+def test_resolution_bypasses_cooldown_and_notifies_operator(monkeypatch):
+    _init_db()
+    from app.services import alerts
+
+    monkeypatch.setenv("LEAN_ALERT_WEBHOOK_URL", "https://alerts.example.test/notify")
+    monkeypatch.setenv("LEAN_ALERT_MIN_SEVERITY", "warning")
+    sent_statuses = []
+
+    def fake_send(url, alert, *, timeout_seconds, bearer_token):
+        sent_statuses.append(alert["status"])
+        return 200
+
+    monkeypatch.setattr(alerts, "_send_webhook", fake_send)
+    opened = alerts.emit_alert(
+        "resource_disk_pressure",
+        severity="warning",
+        dedupe_key="resource_pressure:disk",
+    )
+    resolved = alerts.resolve_open_alert("resource_pressure:disk", actor="unit")
+
+    assert opened["delivery"]["status"] == "success"
+    assert resolved["status"] == "resolved"
+    assert resolved["delivery"]["status"] == "success"
+    assert sent_statuses == ["open", "resolved"]
+
+
 def test_resolved_alert_can_reopen_without_primary_key_collision(monkeypatch):
     _init_db()
     from app.services import alerts
@@ -95,6 +158,70 @@ def test_resolved_alert_can_reopen_without_primary_key_collision(monkeypatch):
     assert reopened["status"] == "open"
     assert reopened["count"] == 2
     assert reopened["resolved_at"] is None
+
+
+def test_acknowledged_resource_alert_stays_acknowledged_until_recovery(monkeypatch):
+    _init_db()
+    from app.services import alerts
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    first = alerts.emit_alert(
+        "resource_memory_pressure",
+        severity="warning",
+        dedupe_key="resource_pressure:memory",
+    )
+    acknowledged = alerts.update_alert_status(first["id"], "acknowledged", actor="unit")
+    repeated = alerts.emit_alert(
+        "resource_memory_pressure",
+        severity="warning",
+        dedupe_key="resource_pressure:memory",
+    )
+    resolved = alerts.resolve_open_alert("resource_pressure:memory", actor="monitor")
+
+    assert acknowledged["status"] == "acknowledged"
+    assert repeated["status"] == "acknowledged"
+    assert repeated["count"] == 2
+    assert resolved["status"] == "resolved"
+    assert resolved["resolved_by"] == "monitor"
+
+
+def test_resource_pressure_monitor_alerts_escalates_and_resolves(monkeypatch):
+    _init_db()
+    from app.services import alerts, resource_pressure
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("LEAN_ALERT_ESCALATE_AFTER", "2")
+    monkeypatch.setenv("LEAN_RESOURCE_DISK_WARNING", "70")
+    monkeypatch.setenv("LEAN_RESOURCE_DISK_CRITICAL", "90")
+    pressured = {
+        "disk": {"usedPercent": 80.0, "mounts": []},
+        "memory": {"usedPercent": 50.0},
+        "cpu": {"usedPercent": 10.0},
+        "queue": {"maxDepth": 0},
+    }
+
+    first = resource_pressure.monitor_operational_resources(pressured)
+    second = resource_pressure.monitor_operational_resources(pressured)
+    healthy = resource_pressure.monitor_operational_resources(
+        {
+            "disk": {"usedPercent": 20.0, "mounts": []},
+            "memory": {"usedPercent": 50.0},
+            "cpu": {"usedPercent": 10.0},
+            "queue": {"maxDepth": 0},
+        }
+    )
+
+    assert first["changes"][0]["severity"] == "warning"
+    assert second["changes"][0]["severity"] == "critical"
+    assert healthy["changes"] == [
+        {
+            "kind": "disk",
+            "action": "resolved",
+            "alertId": first["changes"][0]["alertId"],
+        }
+    ]
+    assert alerts.list_alert_events(status="open") == []
+    assert alerts.list_alert_events(status="resolved")[0]["event_type"] == "resource_disk_pressure"
 
 
 def test_paper_walkforward_failure_emits_critical_alert(monkeypatch):

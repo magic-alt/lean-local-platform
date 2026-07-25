@@ -52,6 +52,14 @@ celery_app.conf.update(
             "task": "lean_web.reconcile_experiment_batches",
             "schedule": 60.0,
         },
+        "monitor-operational-resources": {
+            "task": "lean_web.monitor_operational_resources",
+            "schedule": 60.0,
+        },
+        "recover-paper-finalizations": {
+            "task": "lean_web.recover_paper_finalizations",
+            "schedule": 60.0,
+        },
         "ashare-tech-report-after-close": {
             "task": "lean_web.schedule_ashare_tech_report",
             "schedule": crontab(

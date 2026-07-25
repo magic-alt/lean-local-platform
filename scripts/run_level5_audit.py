@@ -23,6 +23,12 @@ KNOWN_PHASES = {
     "after_run",
     "post_run",
     "default",
+    "intent_capture",
+    "constraint_validation",
+    "matching",
+    "ledger",
+    "snapshot_report",
+    "reconciliation",
 }
 KNOWN_SERVICES = {"worker", "redis", "mysql", "api"}
 
@@ -150,14 +156,16 @@ def _run_command(argv: list[str], *, timeout: int) -> tuple[int, Any, str]:
         text=True,
         timeout=timeout,
     )
-    combined = (process.stdout or "").strip()
+    stdout = (process.stdout or "").strip()
+    stderr = (process.stderr or "").strip()
+    combined = "\n".join(part for part in (stdout, stderr) if part)
     if process.returncode != 0:
-        return process.returncode, None, combined or (process.stderr or "")
+        return process.returncode, None, combined
 
     parsed = None
-    if combined:
+    if stdout:
         try:
-            parsed = json.loads(combined.splitlines()[-1])
+            parsed = json.loads(stdout.splitlines()[-1])
         except json.JSONDecodeError:
             parsed = None
     return process.returncode, parsed, combined
@@ -187,6 +195,7 @@ def _run_walkforward_case(
     api_timeout: int,
     timeout_per_day: int,
     paper_mode: str,
+    session_overrides_json: str,
 ) -> dict[str, Any]:
     cmd: list[str] = [
         sys.executable,
@@ -219,6 +228,8 @@ def _run_walkforward_case(
         paper_mode,
         "--api-timeout",
         str(api_timeout),
+        "--session-overrides-json",
+        session_overrides_json,
     ]
     if source_backtest_id:
         cmd.extend(["--source-backtest-id", source_backtest_id])
@@ -284,6 +295,15 @@ def main() -> int:
         help=(
             "Comma-separated scenarios like worker@7:before_queue,redis@14:before_wait,mysql@20:after_wait "
             "(default phase before_queue)."
+        ),
+    )
+    parser.add_argument(
+        "--fault-mode",
+        choices=("combined", "isolated"),
+        default="combined",
+        help=(
+            "combined injects every scenario into one 21-day chain and compares it "
+            "with the clean baseline; isolated runs one full chain per scenario."
         ),
     )
     parser.add_argument(
@@ -353,6 +373,23 @@ def main() -> int:
         default=90,
         help="Timeout for control/API calls (seconds).",
     )
+    parser.add_argument(
+        "--session-overrides-json",
+        default="{}",
+        help=(
+            "Paper session constraints applied to clean and fault runs, for example "
+            "{\"blacklist\":[\"600519\"]}."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-no-fault-evidence",
+        default="",
+        help=(
+            "Reuse a previously passed clean-chain JSON after validating project, "
+            "source, dates, mode, and session overrides. This lets fault-only "
+            "workers enable checkpoint pauses without slowing the clean baseline."
+        ),
+    )
     args = parser.parse_args()
 
     args.days = _require_int_arg("days", args.days, 1)
@@ -362,7 +399,27 @@ def main() -> int:
     args.api_timeout = _require_int_arg("api-timeout", args.api_timeout, 1)
 
     if args.with_fault and not args.fault_scenarios.strip():
-        args.fault_scenarios = "worker@7:before_queue,redis@14:before_wait,mysql@20:after_wait"
+        args.fault_scenarios = (
+            "worker@3:intent_capture,"
+            "redis@6:constraint_validation,"
+            "mysql@9:matching,"
+            "worker@12:ledger,"
+            "redis@15:snapshot_report,"
+            "mysql@18:reconciliation"
+        )
+
+    try:
+        session_overrides = json.loads(args.session_overrides_json)
+    except json.JSONDecodeError as exc:
+        parser.error(f"--session-overrides-json must be valid JSON: {exc}")
+    if not isinstance(session_overrides, dict):
+        parser.error("--session-overrides-json must be a JSON object")
+    normalized_session_overrides = json.dumps(
+        session_overrides,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
     fault_cases = _normalize_and_validate_faults(args.fault_scenarios)
 
@@ -389,28 +446,84 @@ def main() -> int:
         "paperMode": args.paper_mode,
         "cases": {},
         "walkforwardMatrix": [],
+        "sessionOverrides": session_overrides,
+        "faultMode": args.fault_mode,
     }
 
     no_fault_out = evidence_dir / "level5-replay-no-fault.json"
-    no_fault_result = _run_walkforward_case(
-        api_url=args.api_url,
-        project_id=args.project_id,
-        source_backtest_id=resolved_source_backtest_id,
-        docker_project=args.compose_project,
-        start_date=args.start_date,
-        days=args.days,
-        evidence_path=no_fault_out,
-        scenarios=[],
-        execute_timeout=base_timeout,
-        require_fill=args.require_fill,
-        require_reject=args.require_reject,
-        require_reject_reason=args.require_reject_reason,
-        min_fill=args.min_fill,
-        min_reject=args.min_reject,
-        timeout_per_day=args.timeout_per_day,
-        api_timeout=args.api_timeout,
-        paper_mode=args.paper_mode,
-    )
+    if args.reuse_no_fault_evidence:
+        reuse_path = Path(args.reuse_no_fault_evidence).expanduser().resolve()
+        try:
+            no_fault_result = json.loads(reuse_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"no_fault_evidence_unavailable:{reuse_path}:{exc}") from exc
+        expected = {
+            "projectId": args.project_id,
+            "sourceBacktestId": resolved_source_backtest_id,
+            "paperMode": args.paper_mode,
+            "tradeDatesCount": args.days,
+            "sessionOverrides": session_overrides,
+        }
+        actual = {
+            "projectId": no_fault_result.get("projectId"),
+            "sourceBacktestId": no_fault_result.get("sourceBacktestId"),
+            "paperMode": no_fault_result.get("paperMode"),
+            "tradeDatesCount": len(no_fault_result.get("tradeDates") or []),
+            "sessionOverrides": no_fault_result.get("sessionOverrides") or {},
+        }
+        if expected != actual or list(no_fault_result.get("tradeDates") or [])[:1] != [
+            args.start_date
+        ]:
+            raise RuntimeError(
+                f"no_fault_evidence_scope_mismatch:expected={expected}:actual={actual}"
+            )
+        if (
+            no_fault_result.get("status") != "passed"
+            or no_fault_result.get("level5ReplayRequirementsPassed") is not True
+        ):
+            raise RuntimeError("no_fault_evidence_not_passed")
+        session_id = str(no_fault_result.get("sessionId") or "")
+        status, detail = _api(
+            args.api_url,
+            "GET",
+            f"/api/paper/{session_id}",
+            timeout=args.api_timeout,
+        )
+        completed_job_dates = {
+            str(item.get("trade_date") or item.get("tradeDate") or "")
+            for item in (detail.get("dailyJobs") or [])
+            if isinstance(item, dict) and item.get("state") == "COMPLETED"
+        } if status < 400 and isinstance(detail, dict) else set()
+        baseline_dates = set(no_fault_result.get("tradeDates") or [])
+        no_fault_result["dailyJobCoverage"] = {
+            "completedDays": len(baseline_dates & completed_job_dates),
+            "totalDays": len(baseline_dates),
+            "passed": baseline_dates <= completed_job_dates,
+        }
+        if no_fault_result["dailyJobCoverage"]["passed"] is not True:
+            raise RuntimeError("no_fault_daily_job_coverage_incomplete")
+        summary["reusedNoFaultEvidence"] = str(reuse_path)
+    else:
+        no_fault_result = _run_walkforward_case(
+            api_url=args.api_url,
+            project_id=args.project_id,
+            source_backtest_id=resolved_source_backtest_id,
+            docker_project=args.compose_project,
+            start_date=args.start_date,
+            days=args.days,
+            evidence_path=no_fault_out,
+            scenarios=[],
+            execute_timeout=base_timeout,
+            require_fill=args.require_fill,
+            require_reject=args.require_reject,
+            require_reject_reason=args.require_reject_reason,
+            min_fill=args.min_fill,
+            min_reject=args.min_reject,
+            timeout_per_day=args.timeout_per_day,
+            api_timeout=args.api_timeout,
+            paper_mode=args.paper_mode,
+            session_overrides_json=normalized_session_overrides,
+        )
     summary["cases"]["walkforward_no_fault"] = no_fault_result
     summary["cases"]["walkforward_no_fault"]["matrixTag"] = "no_fault"
 
@@ -420,7 +533,90 @@ def main() -> int:
     )
     summary["walkforward_no_fault_passed"] = no_fault_passed
 
-    if args.with_fault and fault_cases:
+    if args.with_fault and fault_cases and args.fault_mode == "combined":
+        tag = "combined-six-phase"
+        print(f"[LEVEL5] running combined fault scenario: {tag}", flush=True)
+        fault_out = evidence_dir / f"level5-replay-{tag}.json"
+        case: dict[str, Any] = {
+            "scenarios": fault_cases,
+            "matrixTag": tag,
+        }
+        try:
+            case["result"] = _run_walkforward_case(
+                api_url=args.api_url,
+                project_id=args.project_id,
+                source_backtest_id=resolved_source_backtest_id,
+                docker_project=args.compose_project,
+                start_date=args.start_date,
+                days=args.days,
+                evidence_path=fault_out,
+                scenarios=fault_cases,
+                execute_timeout=base_timeout,
+                require_fill=args.require_fill,
+                require_reject=args.require_reject,
+                require_reject_reason=args.require_reject_reason,
+                min_fill=args.min_fill,
+                min_reject=args.min_reject,
+                timeout_per_day=args.timeout_per_day,
+                api_timeout=args.api_timeout,
+                paper_mode=args.paper_mode,
+                session_overrides_json=normalized_session_overrides,
+            )
+            case["canonicalEquivalent"] = bool(
+                case["result"].get("canonicalStateSha256")
+                and case["result"].get("canonicalStateSha256")
+                == no_fault_result.get("canonicalStateSha256")
+            )
+            observed_phases = {
+                str(item.get("phase") or "")
+                for item in case["result"].get("faultInjections") or []
+            }
+            six_phase_covered = {
+                "intent_capture",
+                "constraint_validation",
+                "matching",
+                "ledger",
+                "snapshot_report",
+                "reconciliation",
+            } <= observed_phases
+            worker_loss_injected = all(
+                item.get("faultAction") == "sigkill_restart"
+                for item in case["result"].get("faultInjections") or []
+                if item.get("service") == "worker"
+            ) and any(
+                item.get("service") == "worker"
+                for item in case["result"].get("faultInjections") or []
+            )
+            case["sixPhaseCovered"] = six_phase_covered
+            case["workerLossInjected"] = worker_loss_injected
+            case["passed"] = bool(
+                _case_status(case["result"]) == "passed"
+                and case["result"].get("level5ReplayRequirementsPassed") is True
+                and case["canonicalEquivalent"]
+                and six_phase_covered
+                and worker_loss_injected
+            )
+            case["failedReason"] = (
+                None
+                if case["passed"]
+                else case["result"].get("failedReason")
+                or (
+                    "fault_state_digest_differs_from_clean_baseline"
+                    if not case["canonicalEquivalent"]
+                    else (
+                        "six_phase_checkpoint_coverage_missing"
+                        if not six_phase_covered
+                        else "worker_sigkill_evidence_missing"
+                    )
+                )
+            )
+        except Exception as exc:
+            case["passed"] = False
+            case["failedReason"] = str(exc)
+            case["result"] = {"status": "failed"}
+        summary["walkforwardMatrix"].append(case)
+
+    if args.with_fault and fault_cases and args.fault_mode == "isolated":
         for scenario in fault_cases:
             tag = f"{scenario['service']}-{scenario['day']}-{scenario['phase']}"
             print(f"[LEVEL5] running fault scenario: {tag}", flush=True)
@@ -448,6 +644,7 @@ def main() -> int:
                     timeout_per_day=args.timeout_per_day,
                     api_timeout=args.api_timeout,
                     paper_mode=args.paper_mode,
+                    session_overrides_json=normalized_session_overrides,
                 )
                 case["passed"] = bool(
                     _case_status(case["result"]) == "passed"

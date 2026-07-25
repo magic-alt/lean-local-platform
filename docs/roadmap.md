@@ -91,10 +91,11 @@ Remaining work:
 
 ## Level 5: Paper and Operational Safety
 
-Status: replay blocked and operationally not ready. `signal_simulation`
-acceptance is not evidence for a real 21-day LEAN walk-forward. Unattended
-operation, notification/escalation and full failure-recovery acceptance remain
-required.
+Status: local production-like Paper interruption acceptance PASS; overall
+operational release remains NOT READY. On 2026-07-25 a real 21-day LEAN Paper
+v2 baseline and a second 21-day six-phase fault chain passed with identical
+canonical state. This does not close production-scale restore, credential,
+restricted-runner, supply-chain, or live-broker gates.
 
 Current verification path is implemented in:
 
@@ -122,19 +123,24 @@ Implemented:
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.
 - Persistent operational alerts with Webhook delivery, delivery audit records,
   cooldown deduplication and repeated Paper scheduling failure escalation.
+- Independent primary/escalation Webhooks, forced recovery notifications, and
+  disk/memory/CPU/Celery-queue pressure alerts with automatic resolution.
+- Five accepted LEAN jobs under a two-active/three-queued budget, queued and
+  running cancellation, and worker/Redis/MySQL restart invariants.
+- Durable Paper finalization recovery after worker SIGKILL, lightweight
+  checkpoint/run probes, and terminal state only after all six v2 checkpoints.
+- Operational runbook for alert ownership, resource pressure, fault drills,
+  recovery order, and release blocking.
 - Digest-pinned runtime/base images and a version-pinned Grafana datasource plugin.
 
 Remaining work:
 
-- Run a new compliant 21-day v2 session with both real strategy intents that
-  fill and intents that policy rejects; then prove all six recovery phases
-  against a no-fault digest without ledger drift.
-- Keep v2 disabled outside isolated remediation until that evidence passes;
-  legacy sessions remain unchanged.
-- Complete unattended daily orchestration and multi-day notification/escalation acceptance evidence.
+- Complete extended unattended multi-day notification delivery acceptance
+  against production on-call endpoints; local dual-channel lifecycle tests pass.
 - Broker integration, reconciliation and secrets hardening before any live trading.
 - Industry/capacity risk limits, circuit breakers and cross-asset paper acceptance.
-- Restore drills, resource budgets and alert thresholds for MySQL, Redis and Docker.
+- Production-scale restore drills; local resource budgets and alert thresholds
+  are now configured and exercised.
 
 ## Priority Work
 
@@ -155,9 +161,12 @@ Status: COMPLETE on 2026-07-25. Machine-readable evidence and checksums are in
 ### P1: Stability and operation
 
 1. Run scheduled production-scale MySQL backup/restore and stored-object recovery drills.
-2. Complete five-job concurrency, phase cancellation and Redis/MySQL/worker fault injection.
-3. Complete a real 21-day LEAN Paper chain with interruption/idempotency evidence.
-4. Add notification/escalation, resource-pressure alerts and an operational runbook.
+2. COMPLETE — five-job concurrency, phase cancellation and Redis/MySQL/worker
+   fault injection: `web/runtime/audit/p1-stability-2026-07-25.json`.
+3. COMPLETE — real 21-day LEAN Paper chain with interruption/idempotency:
+   `web/runtime/audit/level5-p1-2026-07-25/level5-audit.json`.
+4. COMPLETE — independent notification/escalation, resource-pressure alerts
+   and `docs/operations/level5-runbook.md`.
 
 ### P2: Research productivity
 

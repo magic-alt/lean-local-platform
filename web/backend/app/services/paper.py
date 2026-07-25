@@ -1,7 +1,7 @@
 import hashlib
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,38 @@ def _side(value: str) -> str:
 
 def _is_lean_mode(value: Any) -> bool:
     return str(value or "") in {"lean_walkforward", "lean_walkforward_v2"}
+
+
+def _strategy_fingerprint(child: dict[str, Any]) -> str | None:
+    fingerprint = child.get("fingerprint")
+    containers = [
+        child,
+        fingerprint if isinstance(fingerprint, dict) else {},
+    ]
+    for container in containers:
+        for key in (
+            "strategy_fingerprint",
+            "strategyFingerprint",
+            "strategyFileHash",
+            "strategy_file_sha256",
+            "inputFingerprint",
+            "input_fingerprint",
+            "canonicalResultSha256",
+            "result_fingerprint",
+        ):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized = value.strip()
+                if len(normalized) <= 128:
+                    return normalized
+                return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if isinstance(fingerprint, dict) and fingerprint:
+        return hashlib.sha256(
+            json_dump(fingerprint).encode("utf-8")
+        ).hexdigest()
+    if isinstance(fingerprint, str) and fingerprint.strip():
+        return hashlib.sha256(fingerprint.strip().encode("utf-8")).hexdigest()
+    return None
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -77,6 +109,44 @@ def get_walkforward_run(paper_run_id: str) -> dict[str, Any] | None:
             (paper_run_id,),
         ).fetchone()
     return row_to_dict(row)
+
+
+def recoverable_walkforward_finalizations(
+    *,
+    stale_seconds: int = 120,
+    paper_run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=max(0, int(stale_seconds)))
+    ).isoformat()
+    clauses = [
+        "run.status='running'",
+        "backtest.status='success'",
+        """
+        (
+            select max(checkpoint.created_at)
+            from paper_run_checkpoints checkpoint
+            where checkpoint.paper_run_id=run.id
+        ) < ?
+        """,
+    ]
+    params: list[Any] = [cutoff]
+    if paper_run_id:
+        clauses.append("run.id=?")
+        params.append(paper_run_id)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select run.*
+            from paper_walkforward_runs run
+            join backtest_runs backtest on backtest.id=run.backtest_run_id
+            where {' and '.join(clauses)}
+            order by run.created_at
+            """,
+            params,
+        ).fetchall()
+    return rows_to_dicts(rows)
 
 
 def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
@@ -643,6 +713,12 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
     source_run = get_backtest(source_backtest_id)
     if not source_run:
         raise ValueError("Source backtest is unavailable.")
+    strategy_initial_cash = float(
+        parameters.get("cash")
+        or parameters.get("initialCash")
+        or parameters.get("initial_cash")
+        or session["cash"]
+    )
     request_parameters = {
         key: value
         for key, value in parameters.items()
@@ -663,7 +739,11 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
             "dataType": parameters.get("dataType", "trade"),
             "start": parameters["start"],
             "end": date_value,
-            "cash": session["cash"],
+            # Every cumulative LEAN child must replay from the frozen strategy
+            # initial capital.  The mutable Paper cash row is an external-ledger
+            # read model and using it here makes historical orders diverge after
+            # the source backtest or first Paper day.
+            "cash": strategy_initial_cash,
             "dockerImage": source_run.get("docker_image"),
             "projectId": session["project_id"],
             "benchmarkSymbol": parameters.get("benchmarkSymbol"),
@@ -989,13 +1069,7 @@ def _process_v2_lean_intents(
                 or ""
             )
             or None,
-            strategy_fingerprint=str(
-                child.get("result_fingerprint")
-                or child.get("input_fingerprint")
-                or child.get("fingerprint")
-                or ""
-            )
-            or None,
+            strategy_fingerprint=_strategy_fingerprint(child),
             order_type=str(order.get("orderType") or order.get("type") or "market"),
             limit_price=order.get("limitPrice"),
             stop_price=order.get("stopPrice"),
@@ -1232,6 +1306,11 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
     paper_run = get_walkforward_run(paper_run_id)
     if not paper_run:
         raise KeyError("Paper run not found.")
+    # A worker killed after committing the terminal checkpoint can leave its
+    # Redis message invisible until the broker timeout. Recovery dispatches a
+    # replacement immediately; a later broker redelivery must be a no-op.
+    if paper_run.get("status") == "success":
+        return paper_run
     session = get_session(str(paper_run["session_id"]))
     child = get_backtest(str(paper_run["backtest_run_id"]))
     if not session or not child:
@@ -1465,23 +1544,47 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 now,
             ),
         )
-        connection.execute(
-            """
-            update paper_walkforward_runs
-            set status = 'success', order_fingerprint = ?, reconciliation_json = ?, finished_at = ?
-            where id = ?
-            """,
-            (order_fingerprint, json_dump(reconciliation), now, paper_run_id),
-        )
-        connection.execute(
-            """
-            update paper_sessions
-            set cash = ?, equity = ?, last_processed_date = ?, status = 'running',
-                failure_json = null, updated_at = ?
-            where id = ?
-            """,
-            (cash_balance, equity, trade_date, now, session["id"]),
-        )
+        if is_v2:
+            # The six durable v2 checkpoints are part of finalization. Keep the
+            # run and session cursor non-terminal until reconciliation has been
+            # checkpointed so faults at snapshot/report or reconciliation can
+            # resume from the prior completed phase.
+            connection.execute(
+                """
+                update paper_walkforward_runs
+                set order_fingerprint = ?, reconciliation_json = ?
+                where id = ?
+                """,
+                (order_fingerprint, json_dump(reconciliation), paper_run_id),
+            )
+            connection.execute(
+                """
+                update paper_sessions
+                set cash = ?, equity = ?, status = 'running',
+                    failure_json = null, updated_at = ?
+                where id = ?
+                """,
+                (cash_balance, equity, now, session["id"]),
+            )
+        else:
+            connection.execute(
+                """
+                update paper_walkforward_runs
+                set status = 'success', order_fingerprint = ?,
+                    reconciliation_json = ?, finished_at = ?
+                where id = ?
+                """,
+                (order_fingerprint, json_dump(reconciliation), now, paper_run_id),
+            )
+            connection.execute(
+                """
+                update paper_sessions
+                set cash = ?, equity = ?, last_processed_date = ?, status = 'running',
+                    failure_json = null, updated_at = ?
+                where id = ?
+                """,
+                (cash_balance, equity, trade_date, now, session["id"]),
+            )
     if is_v2:
         ledger_reconciliation = paper_order_pipeline.reconcile_session_day(
             session_id=str(session["id"]),
@@ -1571,6 +1674,37 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
                 },
             },
         )
+        completed_at = utc_now()
+        with db() as connection:
+            connection.execute(
+                """
+                update paper_walkforward_runs
+                set status='success',order_fingerprint=?,reconciliation_json=?,
+                    finished_at=?
+                where id=?
+                """,
+                (
+                    order_fingerprint,
+                    json_dump(reconciliation),
+                    completed_at,
+                    paper_run_id,
+                ),
+            )
+            connection.execute(
+                """
+                update paper_sessions
+                set cash=?,equity=?,last_processed_date=?,status='running',
+                    failure_json=null,updated_at=?
+                where id=?
+                """,
+                (
+                    cash_balance,
+                    equity,
+                    trade_date,
+                    completed_at,
+                    session["id"],
+                ),
+            )
     return get_walkforward_run(paper_run_id) or {}
 
 

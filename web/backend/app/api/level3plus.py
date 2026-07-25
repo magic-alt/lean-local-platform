@@ -3,6 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..services.alerts import list_alert_events, update_alert_status
+from ..services.resource_pressure import (
+    collect_resource_snapshot,
+    evaluate_resource_snapshot,
+)
 from ..services.pipeline_tracking import get_pipeline_run, list_pipeline_runs
 from ..services.universe_certification import get_certified_universe
 
@@ -59,3 +63,12 @@ def resolve_alert(alert_id: str):
     if not payload:
         raise HTTPException(status_code=404, detail="alert_not_found")
     return payload
+
+
+@router.get("/operational/resources")
+def operational_resources():
+    snapshot = collect_resource_snapshot()
+    return {
+        "snapshot": snapshot,
+        "evaluations": evaluate_resource_snapshot(snapshot),
+    }

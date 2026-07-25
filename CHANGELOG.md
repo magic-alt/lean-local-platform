@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 2026-07-25 — complete local P1 stability and Paper operations acceptance: prove five accepted LEAN jobs under a two-active/three-queued budget, queued/running phase cancellation, Redis/MySQL/worker recovery, a real 21-day LEAN Paper v2 baseline and six-checkpoint interruption/idempotency chain; add durable finalization recovery, independent notification escalation, automatic resolved notices, disk/memory/CPU/queue pressure alerts, evidence-producing acceptance scripts, and the Level 5 operational runbook.
 - 2026-07-25 — close P0 trust and data-coverage acceptance: independently re-run certified production Source/QA/reference fail-closed gates; reconstruct official CSI300 PIT from 2005-04-08 without current-member substitution and retain a hash-verified fetchable bundle; prove input/canonical-result repeatability with two real LEAN release goldens; and reconcile all 37 historical archive issues against passing ten-dataset manifest/watermark/archive evidence.
 - 2026-07-25 — consolidate backtest navigation into one canonical Backtest History workspace: remove duplicate run tables from Dashboard and Projects, split run/history tasks into URL-addressable Backtests tabs, and preserve project-scoped filters when entering history.
 - 2026-07-24 — 将通用结构化 Insight 升级为统一 technical 指标/诊断视图和可审计 Agent 工作流，增加行情新鲜度、不确定性、证据覆盖与执行边界检查；同时兼容模型 JSON、signal 枚举/百分数/评分差异，禁止观望信号进入 Paper，为 View 增加加载态、选中高亮和详情自动定位，开放 A 股科技日报观察池规则分组编辑，并支持取消活动任务或清理孤儿状态后删除卡死历史报告。

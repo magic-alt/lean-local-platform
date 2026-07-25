@@ -3,6 +3,38 @@ status: TARGET_NOT_YET_CERTIFIED
 scope: local-production-like-paper
 liveTrading: NOT_READY
 
+certification:
+  overall: NOT_READY
+  p1FiveJobCancellationAndServiceFaults:
+    status: PASS
+    evidence: web/runtime/audit/p1-stability-2026-07-25.json
+    semantics: five_accepted_two_active_three_queued
+  realLeanPaper21Day:
+    status: PASS
+    noFaultEvidence: web/runtime/audit/level5-p1-2026-07-25/level5-replay-no-fault.json
+    sixPhaseFaultEvidence: web/runtime/audit/level5-p1-2026-07-25/level5-replay-combined-six-phase.json
+    combinedAuditEvidence: web/runtime/audit/level5-p1-2026-07-25/level5-audit.json
+    canonicalStateSha256: ff9d91a9cc99bdc1fed0631aa38d25971494278edc3ea91330c458a5d21d2427
+    successfulDays: 21
+    reports: 21
+    checkpoints: 126
+    durableDailyJobsCompleted: 21
+    interruptionRunStatuses:
+      - running
+      - running
+      - running
+      - running
+      - running
+      - running
+  notificationEscalationAndResourcePressure:
+    status: LOCAL_ACCEPTANCE_PASS
+    unitEvidence: web/backend/tests/test_alert_delivery.py
+    operationalEndpoint: /api/operational/resources
+    runbook: docs/operations/level5-runbook.md
+    monitorIntervalSeconds: 60
+    primaryAndIndependentEscalationChannels: true
+    automaticRecoveryNotification: true
+
 slos:
   apiAvailability:
     target: 99.5%
@@ -62,6 +94,17 @@ resourceBudgets:
   disk:
     warningPercent: 75
     criticalPercent: 85
+  memoryPressure:
+    warningPercent: 80
+    criticalPercent: 90
+  cpuPressure:
+    warningPercent: 85
+    criticalPercent: 95
+    measurement: one_minute_load_divided_by_cpu_count
+  queuePressure:
+    warningDepth: 20
+    criticalDepth: 50
+    measurement: maximum_single_celery_queue_depth
   logs:
     maxFile: 20m
     maxFiles: 3

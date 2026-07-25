@@ -125,6 +125,60 @@ def test_execution_audit_accepts_completed_cash_only_ashare_run(tmp_path):
     assert audit["ledger"]["minimumCash"] >= 0
 
 
+def test_execution_audit_retains_but_ignores_post_completion_python_shutdown_timeout(
+    tmp_path,
+):
+    from app.services.backtest_execution_validation import audit_backtest_execution
+
+    result_path = _write_result(
+        tmp_path,
+        statistics={"End Equity": "801000", "Drawdown": "2.5%"},
+        events=[],
+        state={"Status": "Completed", "RuntimeError": ""},
+        log_lines=[
+            "Debug: AShare execution account type: cash; short selling disabled.",
+            "Debug: 2026-07-13 03:00:00 Algorithm Id:(run) completed in 1 seconds.",
+            "TRACE:: PythonInitializer.Shutdown(): start",
+            "ERROR:: Security.ExecuteWithTimeLimit(): Execution Security Error: Operation timed out - 0.166 minutes max.",
+            "ERROR:: Program.Exit(): Failed to shutdown python System.TimeoutException: Execution Security Error.",
+        ],
+    )
+
+    audit = audit_backtest_execution(result_path, _parameters())
+    gate = next(item for item in audit["gates"] if item["name"] == "lean_log_errors")
+
+    assert audit["passed"] is True
+    assert gate["passed"] is True
+    assert gate["details"]["errorCount"] == 0
+    assert gate["details"]["observedErrorCount"] == 2
+    assert gate["details"]["ignoredErrorCodes"] == ["lean_python_shutdown_timeout"]
+
+
+def test_execution_audit_does_not_ignore_algorithm_timeout_before_shutdown(tmp_path):
+    from app.services.backtest_execution_validation import audit_backtest_execution
+
+    result_path = _write_result(
+        tmp_path,
+        statistics={"End Equity": "801000", "Drawdown": "2.5%"},
+        events=[],
+        log_lines=[
+            "Debug: AShare execution account type: cash; short selling disabled.",
+            "ERROR:: Security.ExecuteWithTimeLimit(): Execution Security Error: Operation timed out.",
+            "Debug: 2026-07-13 03:00:00 Algorithm Id:(run) completed in 1 seconds.",
+            "TRACE:: PythonInitializer.Shutdown(): start",
+            "ERROR:: Program.Exit(): Failed to shutdown python System.TimeoutException.",
+        ],
+    )
+
+    audit = audit_backtest_execution(result_path, _parameters())
+    gate = next(item for item in audit["gates"] if item["name"] == "lean_log_errors")
+
+    assert audit["passed"] is False
+    assert gate["passed"] is False
+    assert gate["details"]["errorCount"] == 2
+    assert gate["details"]["ignoredErrorCodes"] == []
+
+
 def test_canonical_result_digest_excludes_run_local_snapshot_directory():
     from app.services.backtest_execution_validation import canonical_result_sha256
 

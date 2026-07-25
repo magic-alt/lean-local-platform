@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 import uuid
 from typing import Any
 
@@ -866,6 +868,73 @@ def list_reconciliations(session_id: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def list_checkpoints(
+    session_id: str,
+    *,
+    trade_date: str | None = None,
+    phase: str | None = None,
+) -> list[dict[str, Any]]:
+    filters = ["run.session_id=?"]
+    params: list[Any] = [session_id]
+    if trade_date:
+        filters.append("run.trade_date=?")
+        params.append(trade_date)
+    if phase:
+        filters.append("checkpoint.phase=?")
+        params.append(phase)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select checkpoint.*,run.trade_date,run.status as run_status
+            from paper_run_checkpoints checkpoint
+            join paper_walkforward_runs run on run.id=checkpoint.paper_run_id
+            where {" and ".join(filters)}
+            order by run.trade_date,checkpoint.created_at,checkpoint.phase
+            """,
+            tuple(params),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def _fault_pause_after_checkpoint(paper_run_id: str, phase: str) -> None:
+    if os.environ.get("LEAN_FAULT_INJECTION_ENABLED", "0") != "1":
+        return
+    configured = {
+        item.strip()
+        for item in os.environ.get(
+            "LEAN_PAPER_FAULT_PAUSE_PHASES",
+            ",".join(RUN_PHASES),
+        ).split(",")
+        if item.strip()
+    }
+    if phase not in configured:
+        return
+    raw_targets = os.environ.get("LEAN_PAPER_FAULT_PAUSE_TARGETS", "").strip()
+    if raw_targets:
+        with db() as connection:
+            run = connection.execute(
+                "select trade_date from paper_walkforward_runs where id=?",
+                (paper_run_id,),
+            ).fetchone()
+        target = f"{str(run['trade_date'])}:{phase}" if run else ""
+        configured_targets = {
+            item.strip()
+            for item in raw_targets.split(",")
+            if item.strip()
+        }
+        if target not in configured_targets:
+            return
+    try:
+        seconds = max(
+            0.0,
+            min(60.0, float(os.environ.get("LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS", "0"))),
+        )
+    except (TypeError, ValueError):
+        seconds = 0.0
+    if seconds:
+        time.sleep(seconds)
+
+
 def complete_checkpoint(
     paper_run_id: str,
     phase: str,
@@ -901,4 +970,6 @@ def complete_checkpoint(
             "select * from paper_run_checkpoints where id=?",
             (checkpoint_id,),
         ).fetchone()
-    return row_to_dict(row) or {}
+    item = row_to_dict(row) or {}
+    _fault_pause_after_checkpoint(paper_run_id, phase)
+    return item

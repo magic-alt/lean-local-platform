@@ -151,6 +151,11 @@ def detail(session_id: str):
             if session.get("mode") == "lean_walkforward_v2"
             else []
         ),
+        "checkpoints": (
+            paper_service.paper_order_pipeline.list_checkpoints(session_id)
+            if session.get("mode") == "lean_walkforward_v2"
+            else []
+        ),
         "dailyJobs": paper_scheduler.list_jobs(session_id),
     }
 
@@ -168,6 +173,24 @@ def delete(session_id: str):
 @router.get("/{session_id}/signals")
 def signals(session_id: str):
     return paper_service.list_signals(session_id)
+
+
+@router.get("/{session_id}/checkpoints")
+def checkpoints(
+    session_id: str,
+    tradeDate: str | None = None,
+    phase: str | None = None,
+):
+    session = paper_service.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Paper session not found.")
+    if session.get("mode") != "lean_walkforward_v2":
+        return []
+    return paper_service.paper_order_pipeline.list_checkpoints(
+        session_id,
+        trade_date=tradeDate,
+        phase=phase,
+    )
 
 
 @router.post("/{session_id}/signals")
