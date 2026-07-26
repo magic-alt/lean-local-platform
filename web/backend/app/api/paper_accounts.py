@@ -132,6 +132,11 @@ def get_account(account_id: str):
     return _call(service.get_account, account_id)
 
 
+@router.delete("/accounts/{account_id}")
+def delete_account(account_id: str):
+    return _call(service.delete_account, account_id)
+
+
 @router.patch("/accounts/{account_id}")
 def update_account(account_id: str, request: AccountUpdate):
     return _call(service.update_account, account_id, request.model_dump(exclude_none=True))

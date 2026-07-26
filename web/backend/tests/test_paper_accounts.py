@@ -438,3 +438,83 @@ def test_paper_account_api_validates_lifecycle() -> None:
     activate = client.post(f"/api/paper/accounts/{account_id}/activate")
     assert activate.status_code == 409
     assert "deployment" in activate.json()["detail"].lower()
+
+
+def test_paper_account_delete_cascades_stopped_account_records() -> None:
+    _init()
+    from app.db import db
+    from app.main import app
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/paper/accounts",
+        json={
+            "name": "Delete Account",
+            "initialCash": "1000000.00",
+            "marketScope": "china",
+            "baseCurrency": "CNY",
+            "benchmarkSymbol": "000300",
+            "riskConfig": {},
+        },
+    )
+    assert created.status_code == 201
+    account = created.json()
+
+    deleted = client.delete(f"/api/paper/accounts/{account['id']}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True, "id": account["id"]}
+    assert client.get(f"/api/paper/accounts/{account['id']}").status_code == 404
+
+    with db() as connection:
+        assert connection.execute(
+            "select count(*) as count from paper_sessions where id=?",
+            (account["shadow_session_id"],),
+        ).fetchone()["count"] == 0
+        assert connection.execute(
+            "select count(*) as count from paper_ledger_entries where paper_account_id=?",
+            (account["id"],),
+        ).fetchone()["count"] == 0
+
+
+def test_paper_account_delete_rejects_active_account() -> None:
+    _init()
+    from app.db import db, utc_now
+    from app.main import app
+
+    account = _account("Active Delete Account")
+    with db() as connection:
+        connection.execute(
+            "update paper_accounts set status='active',updated_at=? where id=?",
+            (utc_now(), account["id"]),
+        )
+
+    response = TestClient(app).delete(f"/api/paper/accounts/{account['id']}")
+    assert response.status_code == 409
+    assert "paused or archived" in response.json()["detail"]
+
+
+def test_paper_account_delete_cascades_deployment_and_terminal_cycle(tmp_path, monkeypatch) -> None:
+    _init()
+    from app.db import db
+    from app.services import paper_accounts
+
+    account = _account("Delete Account With History")
+    deployment = _deployment(account["id"], tmp_path, monkeypatch)
+    cycle = paper_accounts.ensure_cycle(deployment["id"], "2024-02-01")
+    paper_accounts.transition_cycle(
+        cycle["id"],
+        "failed",
+        event_type="test_terminal_failure",
+        expected={"scheduled"},
+        fields={"failure_code": "test", "failure_detail": "terminal test cycle"},
+    )
+
+    assert paper_accounts.delete_account(account["id"])["deleted"] is True
+    with db() as connection:
+        for table in (
+            "paper_execution_cycle_events",
+            "paper_execution_cycles",
+            "paper_strategy_deployments",
+            "paper_accounts",
+        ):
+            assert connection.execute(f"select count(*) as count from {table}").fetchone()["count"] == 0

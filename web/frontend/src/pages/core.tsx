@@ -995,6 +995,7 @@ function MarketDataDownloader({
 
 export function ProjectsPage() {
   const navigate = useNavigate();
+  const projectEditorRef = useRef<HTMLDivElement>(null);
   const [createForm] = Form.useForm();
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
@@ -1302,6 +1303,14 @@ export function ProjectsPage() {
       },
     });
   }
+
+  function openProject(project: Project) {
+    setSelectedProjectId(project.id);
+    window.requestAnimationFrame(() => {
+      projectEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   const projectRuns = runs.data.filter((run) => run.project_id === selectedProject?.id);
   const projectTasks = tasks.data.filter((task) => task.project_id === selectedProject?.id);
 
@@ -1345,7 +1354,7 @@ export function ProjectsPage() {
         </Form>
       </Card>
       {selectedProject && (
-        <>
+        <div ref={projectEditorRef}>
         <Card title="Project Configuration" style={{ marginTop: 16 }}>
           <div className="toolbar" style={{ marginBottom: 12 }}>
             <h2 className="page-title" style={{ margin: 0 }}>Current Project: {selectedProject.display_name || selectedProject.name}</h2>
@@ -1488,7 +1497,7 @@ export function ProjectsPage() {
             options={{ minimap: { enabled: false }, automaticLayout: true }}
           />
         </Card>
-        </>
+        </div>
       )}
       <Card title="Projects" style={{ marginTop: 16 }}>
         <Table
@@ -1513,7 +1522,7 @@ export function ProjectsPage() {
               width: 240,
               render: (_, project) => (
                 <Space>
-                  <Button size="small" type="primary" onClick={() => setSelectedProjectId(project.id)}>Open</Button>
+                  <Button size="small" type="primary" onClick={() => openProject(project)}>Open</Button>
                   <Button size="small" icon={<CopyOutlined />} onClick={() => duplicateProject(project)}>Duplicate</Button>
                   <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} />
                 </Space>
@@ -1606,9 +1615,21 @@ export function DataPage() {
     if (item.sync_policy === "on_demand") return "按需获取，不参与一键更新";
     if (item.permission_status === "denied") return "无权限，本次已跳过";
     if (item.permission_status === "retryable") return "接口限频或暂时不可用，本次暂缓";
-    if (item.permission_status === "empty") return "接口可访问，探测区间暂无数据";
+    if (item.permission_status === "empty") {
+      return item.syncItem?.status === "success"
+        ? "本轮同步已成功；权限探测区间无事件记录属于正常结果"
+        : "接口已验证可访问；探测区间无事件记录属于正常结果";
+    }
     if (item.permission_status === "available") return "已验证可访问";
     return "尚未验证";
+  }
+
+  function permissionDisplayStatus(item: typeof catalogRows[number]) {
+    // An empty entitlement probe proves that the endpoint is reachable and
+    // authorized. Event datasets such as suspend_d legitimately return no
+    // rows for quiet probe windows, so do not present that as a failure-like
+    // EMPTY state beside a successful synchronization.
+    return item.permission_status === "empty" ? "available" : item.permission_status;
   }
 
   function syncError(item: typeof catalogRows[number]) {
@@ -2006,7 +2027,9 @@ export function DataPage() {
                         {item.sync_policy === "on_demand" ? "按需" : "批量"}
                       </Tag>
                     </Tooltip>
-                    <Tooltip title="TuShare 接口权限"><span><StatusTag status={item.permission_status} /></span></Tooltip>
+                    <Tooltip title={permissionReason(item)}>
+                      <span><StatusTag status={permissionDisplayStatus(item)} /></span>
+                    </Tooltip>
                     {item.syncItem && (
                       <Tooltip title="本轮同步状态"><span><StatusTag status={item.syncItem.status} /></span></Tooltip>
                     )}

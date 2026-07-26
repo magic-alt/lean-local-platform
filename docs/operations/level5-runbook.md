@@ -90,6 +90,9 @@ web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py \
 `alert_deliveries` 已持久化成功记录时才输出 `EXTERNAL_WEBHOOK_PASS`。未配置、
 DNS/网络失败、非 2xx、loopback 或私网地址均 fail closed。
 
+需要把通用 LEAN JSON 转换并投递到飞书时，按
+[LEAN 告警转发到飞书](feishu-webhook-relay.md) 配置 Pipedream 或 Make。
+
 查看和处理告警：
 
 ```bash

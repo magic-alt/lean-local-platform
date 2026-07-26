@@ -588,6 +588,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  deletePaperAccount: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/paper/accounts/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    }),
   paperAccountAction: (id: string, action: "activate" | "pause" | "resume" | "archive") =>
     request<PaperAccount>(`/api/paper/accounts/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
   clonePaperAccount: (id: string, payload: { name?: string; initialCash?: string } = {}) =>

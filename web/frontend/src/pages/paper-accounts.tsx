@@ -12,6 +12,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Radio,
   Select,
   Space,
@@ -29,6 +30,7 @@ import {
   AppstoreOutlined,
   BarsOutlined,
   CopyOutlined,
+  DeleteOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -110,11 +112,13 @@ function Metric({
 function AccountCard({
   account,
   selected,
-  onSelect
+  onSelect,
+  onDelete
 }: {
   account: PaperAccount;
   selected: boolean;
   onSelect: (checked: boolean) => void;
+  onDelete: () => Promise<void>;
 }) {
   return (
     <Card
@@ -125,7 +129,27 @@ function AccountCard({
           <Link to={`/paper/accounts/${account.id}`}>{account.name}</Link>
         </Space>
       )}
-      extra={<StatusBadge value={account.status} />}
+      extra={(
+        <Space>
+          <StatusBadge value={account.status} />
+          <Popconfirm
+            title="删除 Paper 账户？"
+            description="账户、执行周期、订单、成交和账本记录将永久删除。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            disabled={account.status === "active"}
+            onConfirm={onDelete}
+          >
+            <Button
+              aria-label={`删除 ${account.name}`}
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              disabled={account.status === "active"}
+            />
+          </Popconfirm>
+        </Space>
+      )}
     >
       <div className="paper-account-card__metrics">
         <Metric title="总资产" value={account.total_equity} currency={account.base_currency} />
@@ -491,6 +515,16 @@ export function PaperAccountsPage() {
     setSelected((items) => checked ? [...new Set([...items, id])] : items.filter((item) => item !== id));
   }
 
+  async function deleteAccount(account: PaperAccount) {
+    try {
+      await api.deletePaperAccount(account.id);
+      message.success(`账户“${account.name}”已删除`);
+      await load();
+    } catch (error) {
+      message.error(`账户删除失败：${(error as Error).message}`);
+    }
+  }
+
   return (
     <>
       <div className="toolbar paper-toolbar">
@@ -544,6 +578,7 @@ export function PaperAccountsPage() {
                 account={account}
                 selected={selected.includes(account.id)}
                 onSelect={(checked) => select(account.id, checked)}
+                onDelete={() => deleteAccount(account)}
               />
             ))}
           </div>
@@ -564,7 +599,23 @@ export function PaperAccountsPage() {
               { title: "超额收益", dataIndex: "excess_return", render: percent },
               { title: "持仓", dataIndex: "position_count" },
               { title: "健康", dataIndex: "health_status", render: (value) => <StatusBadge value={value} /> },
-              { title: "最后运行", dataIndex: "last_successful_trading_date", render: (value) => value || "—" }
+              { title: "最后运行", dataIndex: "last_successful_trading_date", render: (value) => value || "—" },
+              {
+                title: "操作",
+                fixed: "right",
+                render: (_, account) => (
+                  <Popconfirm
+                    title="删除 Paper 账户？"
+                    description="账户、执行周期、订单、成交和账本记录将永久删除。"
+                    okText="删除"
+                    okButtonProps={{ danger: true }}
+                    disabled={account.status === "active"}
+                    onConfirm={() => deleteAccount(account)}
+                  >
+                    <Button danger size="small" disabled={account.status === "active"} icon={<DeleteOutlined />}>删除</Button>
+                  </Popconfirm>
+                )
+              }
             ]}
           />
         )}
@@ -596,54 +647,104 @@ export function PaperAccountDetailPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [positionDrawer, setPositionDrawer] = useState<PaperPosition | null>(null);
-  const requestVersion = useRef(0);
+  const loadedTabs = useRef(new Set<string>());
+  const activeAccountId = useRef(id);
   const navigate = useNavigate();
   const activeTab = searchParams.get("tab") || "overview";
 
-  const load = useCallback(async () => {
-    const version = ++requestVersion.current;
+  const loadOverview = useCallback(async () => {
     setLoading(true);
-    const entries = await Promise.allSettled([
-      api.paperAccountOverview(id),
-      api.paperDeployments(id),
-      api.paperAccountPositions(id),
-      api.paperAccountOrders(id),
-      api.paperAccountTrades(id),
-      api.paperAccountSignals(id),
-      api.paperAccountCycles(id),
-      api.paperAccountAudit(id),
-      api.paperAccountPerformance(id),
-      api.dependencyHealth()
-    ]);
-    if (version !== requestVersion.current) return;
-    const names = ["overview", "deployments", "positions", "orders", "trades", "signals", "cycles", "audit", "performance", "dependencies"];
-    const nextErrors: Record<string, string> = {};
-    entries.forEach((result, index) => {
-      if (result.status === "rejected") nextErrors[names[index]] = (result.reason as Error).message;
-    });
-    if (entries[0].status === "fulfilled") setOverview(entries[0].value);
-    if (entries[1].status === "fulfilled") setDeployments(entries[1].value);
-    if (entries[2].status === "fulfilled") setPositions(entries[2].value.items);
-    if (entries[3].status === "fulfilled") setOrders(entries[3].value.items);
-    if (entries[4].status === "fulfilled") setTrades(entries[4].value.items);
-    if (entries[5].status === "fulfilled") setSignals(entries[5].value.items);
-    if (entries[6].status === "fulfilled") setCycles(entries[6].value.items);
-    if (entries[7].status === "fulfilled") setAudit(entries[7].value.items);
-    if (entries[8].status === "fulfilled") setPerformance(entries[8].value.points);
-    if (entries[9].status === "fulfilled") {
-      const worker = entries[9].value.dependencies.find((item) => item.service === "backtest_worker");
-      setWorkerHealth(worker?.ok ? "healthy" : "error");
+    try {
+      const result = await api.paperAccountOverview(id);
+      if (activeAccountId.current !== id) return;
+      setOverview(result);
+      setDeployments(result.deployment ? [result.deployment] : []);
+      setErrors((current) => {
+        const next = { ...current };
+        delete next.overview;
+        return next;
+      });
+    } catch (error) {
+      if (activeAccountId.current === id) {
+        setErrors((current) => ({ ...current, overview: (error as Error).message }));
+      }
+    } finally {
+      if (activeAccountId.current === id) setLoading(false);
     }
-    setErrors(nextErrors);
-    setLoading(false);
   }, [id]);
 
+  const loadTab = useCallback(async (tab: string, force = false) => {
+    if (!force && loadedTabs.current.has(tab)) return;
+    const requests: Array<[string, Promise<unknown>]> = [];
+    if (tab === "overview") {
+      requests.push(["positions", api.paperAccountPositions(id)], ["performance", api.paperAccountPerformance(id)]);
+    } else if (tab === "positions") {
+      requests.push(["positions", api.paperAccountPositions(id)]);
+    } else if (tab === "orders") {
+      requests.push(["orders", api.paperAccountOrders(id)]);
+    } else if (tab === "trades") {
+      requests.push(["trades", api.paperAccountTrades(id)]);
+    } else if (tab === "signals") {
+      requests.push(["signals", api.paperAccountSignals(id)]);
+    } else if (tab === "performance") {
+      requests.push(["performance", api.paperAccountPerformance(id)]);
+    } else if (tab === "automation") {
+      requests.push(
+        ["deployments", api.paperDeployments(id)],
+        ["cycles", api.paperAccountCycles(id)],
+        ["dependencies", api.dependencyHealth()]
+      );
+    } else if (tab === "audit") {
+      requests.push(["audit", api.paperAccountAudit(id)]);
+    }
+    if (!requests.length) return;
+    const results = await Promise.allSettled(requests.map(([, request]) => request));
+    if (activeAccountId.current !== id) return;
+    const nextErrors: Record<string, string> = {};
+    results.forEach((result, index) => {
+      const name = requests[index][0];
+      if (result.status === "rejected") {
+        nextErrors[name] = (result.reason as Error).message;
+        return;
+      }
+      const value = result.value as any;
+      if (name === "positions") setPositions(value.items);
+      if (name === "orders") setOrders(value.items);
+      if (name === "trades") setTrades(value.items);
+      if (name === "signals") setSignals(value.items);
+      if (name === "cycles") setCycles(value.items);
+      if (name === "audit") setAudit(value.items);
+      if (name === "performance") setPerformance(value.points);
+      if (name === "deployments") setDeployments(value);
+      if (name === "dependencies") {
+        const worker = value.dependencies.find((item: { service: string }) => item.service === "backtest_worker");
+        setWorkerHealth(worker?.ok ? "healthy" : "error");
+      }
+    });
+    setErrors((current) => {
+      const next = { ...current };
+      requests.forEach(([name]) => delete next[name]);
+      return { ...next, ...nextErrors };
+    });
+    loadedTabs.current.add(tab);
+  }, [id]);
+
+  const load = useCallback(async () => {
+    loadedTabs.current.delete(activeTab);
+    await loadOverview();
+    await loadTab(activeTab, true);
+  }, [activeTab, loadOverview, loadTab]);
+
   useEffect(() => {
-    void load();
-    return () => {
-      requestVersion.current += 1;
-    };
-  }, [load]);
+    activeAccountId.current = id;
+    loadedTabs.current.clear();
+    setOverview(null);
+    void loadOverview();
+  }, [id, loadOverview]);
+
+  useEffect(() => {
+    void loadTab(activeTab);
+  }, [activeTab, loadTab]);
 
   async function accountAction(action: "activate" | "pause" | "resume" | "archive") {
     try {
@@ -925,6 +1026,24 @@ export function PaperAccountDetailPage() {
           {account.status === "paused" && <Button type="primary" onClick={() => void accountAction("resume")}>恢复账户</Button>}
           {account.status === "draft" && <Button type="primary" onClick={() => void accountAction("activate")}>激活账户</Button>}
           {["paused", "draft", "error"].includes(account.status) && <Button danger onClick={() => void accountAction("archive")}>归档</Button>}
+          <Popconfirm
+            title="永久删除 Paper 账户？"
+            description="账户、执行周期、订单、成交和账本记录将永久删除。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            disabled={account.status === "active"}
+            onConfirm={async () => {
+              try {
+                await api.deletePaperAccount(id);
+                message.success("Paper 账户已删除");
+                navigate("/paper");
+              } catch (error) {
+                message.error(`账户删除失败：${(error as Error).message}`);
+              }
+            }}
+          >
+            <Button danger icon={<DeleteOutlined />} disabled={account.status === "active"}>删除</Button>
+          </Popconfirm>
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         </Space>
       </div>

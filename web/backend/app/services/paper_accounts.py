@@ -430,6 +430,150 @@ def update_account(account_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return get_account(account_id)
 
 
+def delete_account(account_id: str) -> dict[str, Any]:
+    """Delete a stopped Paper account and all of its account-owned records."""
+    with db() as connection:
+        account = _account_row(connection, account_id)
+        if account["status"] == "active":
+            raise ValueError("Active Paper accounts must be paused or archived before deletion.")
+
+        active_cycle = connection.execute(
+            """
+            select id from paper_execution_cycles
+            where paper_account_id=?
+              and status in ('scheduled','waiting_data','queued','running','finalizing')
+            limit 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if active_cycle:
+            raise ValueError("This Paper account still has an active execution cycle.")
+
+        session_id = str(account["shadow_session_id"])
+        deployment_rows = connection.execute(
+            "select id from paper_strategy_deployments where paper_account_id=?",
+            (account_id,),
+        ).fetchall()
+        cycle_rows = connection.execute(
+            "select id,paper_run_id from paper_execution_cycles where paper_account_id=?",
+            (account_id,),
+        ).fetchall()
+        related_ids = [
+            account_id,
+            session_id,
+            *[str(item["id"]) for item in deployment_rows],
+            *[str(item["id"]) for item in cycle_rows],
+            *[str(item["paper_run_id"]) for item in cycle_rows if item["paper_run_id"]],
+        ]
+        placeholders = ",".join("?" for _ in related_ids)
+        active_task = connection.execute(
+            f"""
+            select id from tasks
+            where (id in ({placeholders}) or related_id in ({placeholders}))
+              and status in ('created','queued','running')
+            limit 1
+            """,
+            tuple(related_ids + related_ids),
+        ).fetchone()
+        if active_task:
+            raise ValueError("This Paper account still has an active task.")
+
+        connection.execute(
+            """
+            delete from paper_daily_job_events
+            where job_id in (select id from paper_daily_jobs where session_id=?)
+            """,
+            (session_id,),
+        )
+        connection.execute("delete from paper_daily_jobs where session_id=?", (session_id,))
+        connection.execute(
+            """
+            delete from paper_run_checkpoints
+            where paper_run_id in (select id from paper_walkforward_runs where session_id=?)
+            """,
+            (session_id,),
+        )
+        connection.execute(
+            """
+            delete from paper_constraint_decisions
+            where intent_id in (
+                select id from paper_order_intents
+                where paper_account_id=? or session_id=?
+            )
+            """,
+            (account_id, session_id),
+        )
+        connection.execute(
+            """
+            delete from paper_order_fills
+            where paper_account_id=? or intent_id in (
+                select id from paper_order_intents
+                where paper_account_id=? or session_id=?
+            )
+            """,
+            (account_id, account_id, session_id),
+        )
+        connection.execute(
+            """
+            delete from paper_order_transitions
+            where intent_id in (
+                select id from paper_order_intents
+                where paper_account_id=? or session_id=?
+            )
+            """,
+            (account_id, session_id),
+        )
+        connection.execute(
+            "delete from paper_ledger_entries where paper_account_id=? or session_id=?",
+            (account_id, session_id),
+        )
+        connection.execute(
+            "delete from paper_order_intents where paper_account_id=? or session_id=?",
+            (account_id, session_id),
+        )
+        connection.execute("delete from paper_reconciliation_records where session_id=?", (session_id,))
+
+        connection.execute(
+            """
+            delete from paper_execution_cycle_events
+            where cycle_id in (select id from paper_execution_cycles where paper_account_id=?)
+            """,
+            (account_id,),
+        )
+        for table in (
+            "paper_notification_outbox",
+            "paper_account_daily_reports",
+            "paper_strategy_signals",
+            "paper_account_checkpoints",
+            "paper_account_daily_snapshots",
+            "paper_account_position_projections",
+            "paper_account_projections",
+        ):
+            connection.execute(f"delete from {table} where paper_account_id=?", (account_id,))
+        connection.execute("delete from paper_execution_cycles where paper_account_id=?", (account_id,))
+        connection.execute("delete from paper_strategy_deployments where paper_account_id=?", (account_id,))
+        connection.execute("delete from paper_risk_profiles where paper_account_id=?", (account_id,))
+        connection.execute("delete from paper_account_generations where paper_account_id=?", (account_id,))
+
+        for table in (
+            "paper_lean_order_events",
+            "paper_walkforward_runs",
+            "paper_daily_reports",
+            "paper_portfolio_snapshots",
+            "paper_positions",
+            "paper_orders",
+            "paper_signals",
+        ):
+            connection.execute(f"delete from {table} where session_id=?", (session_id,))
+        connection.execute(
+            f"delete from tasks where id in ({placeholders}) or related_id in ({placeholders})",
+            tuple(related_ids + related_ids),
+        )
+        connection.execute("delete from paper_accounts where id=?", (account_id,))
+        connection.execute("delete from paper_sessions where id=?", (session_id,))
+    return {"deleted": True, "id": account_id}
+
+
 def transition_account(account_id: str, action: str) -> dict[str, Any]:
     transitions = {
         "activate": ({"draft", "paused", "error"}, "active"),
