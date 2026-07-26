@@ -5,12 +5,12 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker-cli git \
+    && apt-get install -y --no-install-recommends default-mysql-client docker-cli git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
-COPY web/backend/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --timeout 120 --retries 10 -r /tmp/requirements.txt
+COPY web/backend/requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --timeout 120 --retries 10 --require-hashes -r /tmp/requirements.lock
 
 COPY . /workspace
 WORKDIR /workspace/web/backend

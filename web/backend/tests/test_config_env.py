@@ -94,3 +94,9 @@ def test_sqlite_database_url_is_rejected_outside_test_gate(monkeypatch):
 
     with pytest.raises(RuntimeError, match="SQLite is disabled"):
         db_module.database_backend()
+
+
+def test_pipeline_v2_default_is_enabled():
+    from app.core import config
+
+    assert config.PAPER_ORDER_PIPELINE_V2_ENABLED is True

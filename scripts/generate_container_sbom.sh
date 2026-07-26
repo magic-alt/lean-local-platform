@@ -5,8 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-${ROOT_DIR}/web/runtime/audit/sbom}"
 COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 
-if ! docker sbom --help >/dev/null 2>&1; then
-  echo "docker sbom is unavailable; install/enable Docker Scout before this release gate." >&2
+if ! command -v syft >/dev/null 2>&1; then
+  echo "syft is unavailable; install it for local CycloneDX SBOM generation." >&2
+  exit 2
+fi
+if ! command -v trivy >/dev/null 2>&1; then
+  echo "trivy is unavailable; install it for local vulnerability-policy enforcement." >&2
   exit 2
 fi
 
@@ -49,11 +53,27 @@ while IFS= read -r image; do
   [[ -z "${image}" ]] && continue
   safe_name="$(printf '%s' "${image}" | tr '/:@' '____' | tr -cd 'A-Za-z0-9_.-')"
   output="${OUTPUT_DIR}/${safe_name}.cyclonedx.json"
-  docker sbom --format cyclonedx-json "${image}" >"${output}" 2>>"${warnings}"
+  syft "${image}" -o cyclonedx-json >"${output}" 2>>"${warnings}"
   test -s "${output}"
+  vulnerability_output="${OUTPUT_DIR}/${safe_name}.critical.sarif.json"
+  trivy image \
+    --scanners vuln \
+    --severity CRITICAL \
+    --exit-code 0 \
+    --format sarif \
+    --output "${vulnerability_output}" \
+    "${image}" 2>>"${warnings}"
+  test -s "${vulnerability_output}"
   digest="$(shasum -a 256 "${output}" | awk '{print $1}')"
-  printf '%s\t%s\t%s\n' "${image}" "$(basename "${output}")" "${digest}" >>"${manifest}"
+  vulnerability_digest="$(shasum -a 256 "${vulnerability_output}" | awk '{print $1}')"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "${image}" "$(basename "${output}")" "${digest}" \
+    "$(basename "${vulnerability_output}")" "${vulnerability_digest}" >>"${manifest}"
 done <<<"${images}"
 
-shasum -a 256 "${OUTPUT_DIR}"/*.cyclonedx.json "${manifest}" "${warnings}" >"${OUTPUT_DIR}/sha256sums.txt"
+shasum -a 256 \
+  "${OUTPUT_DIR}"/*.cyclonedx.json \
+  "${OUTPUT_DIR}"/*.critical.sarif.json \
+  "${manifest}" "${warnings}" >"${OUTPUT_DIR}/sha256sums.txt"
+"${ROOT_DIR}/scripts/sign_supply_chain_evidence.sh" "${OUTPUT_DIR}"
 printf 'sbom_dir=%s\nmanifest=%s\n' "${OUTPUT_DIR}" "${manifest}"

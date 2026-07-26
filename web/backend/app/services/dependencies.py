@@ -12,13 +12,17 @@ from ..core.config import (
     DATA_DIR,
     DEFAULT_DOCKER_IMAGE,
     GRAFANA_URL,
+    PAPER_ORDER_PIPELINE_V2_ENABLED,
     PROMETHEUS_URL,
     REDIS_URL,
     RUNS_DIR,
+    SCHEDULED_AUTOMATION_ENABLED,
 )
 from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
+from .alerts import external_alert_channel_configured
+from .source_gate import source_certification
 
 
 def _timed(service: str, check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
@@ -85,6 +89,65 @@ def check_results_dir() -> dict[str, Any]:
         except Exception:
             pass
     return {"service": "results_dir_writable", "ok": ok, "detail": str(RUNS_DIR)}
+
+
+def check_alert_channel() -> dict[str, Any]:
+    configured = external_alert_channel_configured()
+    ok = bool(configured or not SCHEDULED_AUTOMATION_ENABLED)
+    return {
+        "service": "external_alert_channel",
+        "ok": ok,
+        "detail": {
+            "configured": configured,
+            "scheduledAutomationEnabled": SCHEDULED_AUTOMATION_ENABLED,
+            "severity": None if ok else "critical",
+            "reason": None if ok else "scheduled_automation_requires_external_alert_channel",
+        },
+    }
+
+
+def check_paper_order_pipeline() -> dict[str, Any]:
+    return {
+        "service": "paper_order_pipeline_v2",
+        "ok": bool(PAPER_ORDER_PIPELINE_V2_ENABLED),
+        "detail": {
+            "enabled": bool(PAPER_ORDER_PIPELINE_V2_ENABLED),
+            "mode": "immutable_v2" if PAPER_ORDER_PIPELINE_V2_ENABLED else "legacy_degraded",
+        },
+    }
+
+
+def check_source_certifications() -> dict[str, Any]:
+    scopes = [
+        source_certification("tushare", asset_class="equity", market="china", venue="china"),
+        source_certification("tushare", asset_class="index", market="china", venue="china"),
+    ]
+    ready = [
+        bool(
+            item.get("isProduction")
+            and item.get("isCertified")
+            and item.get("environment") == "production"
+            and str(item.get("qaStatus") or "").lower() == "ok"
+        )
+        for item in scopes
+    ]
+    return {
+        "service": "source_certification",
+        "ok": all(ready),
+        "detail": {
+            "executable": all(ready),
+            "scopes": [
+                {
+                    "assetClass": scope,
+                    "datasetId": item.get("datasetId"),
+                    "datasetVersion": item.get("datasetVersion"),
+                    "certifiedAt": item.get("certifiedAt"),
+                    "certificationError": item.get("certificationError"),
+                }
+                for item, scope in zip(scopes, ("equity", "index"), strict=True)
+            ],
+        },
+    }
 
 
 def check_lean_runner() -> dict[str, Any]:
@@ -264,13 +327,27 @@ def dependency_health() -> dict[str, Any]:
         [
             _timed("lean_data_dir", check_data_dir),
             _timed("results_dir_writable", check_results_dir),
+            _timed("external_alert_channel", check_alert_channel),
+            _timed("paper_order_pipeline_v2", check_paper_order_pipeline),
+            _timed("source_certification", check_source_certifications),
         ]
     )
     critical = [
         item
         for item in checks
         if item["service"]
-        in {"database", "redis", "docker", "backtest_worker", "lean_data_dir", "results_dir_writable", "lean_runner"}
+        in {
+            "database",
+            "redis",
+            "docker",
+            "backtest_worker",
+            "lean_data_dir",
+            "results_dir_writable",
+            "lean_runner",
+            "external_alert_channel",
+            "paper_order_pipeline_v2",
+            "source_certification",
+        }
     ]
     status = "ok" if all(item["ok"] for item in critical) else "degraded"
     return {

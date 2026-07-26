@@ -113,14 +113,18 @@ Docker volumes             MySQL、Redis、ClickHouse 等持久卷
 ## 告警与自动 Paper
 
 - `LEAN_PAPER_WALKFORWARD_HOUR` / `LEAN_PAPER_WALKFORWARD_MINUTE`：Paper 自动逐日调度时间。
-- `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED`：允许创建统一 intent/constraint/matching/ledger 的整改版 LEAN Paper session；默认 `0`，完成新的 Level 5 认证前仅用于隔离验收。
-- `LEAN_ALERT_WEBHOOK_URL`：可选运维告警 Webhook；未配置时告警仍会持久化，但不会外发。
+- `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED`：允许创建统一 intent/constraint/matching/ledger 的 LEAN Paper session；默认 `1`。显式设为 `0` 会在依赖健康接口中标记 `legacy_degraded`。
+- `LEAN_SCHEDULED_AUTOMATION_ENABLED`：是否启用计划任务；默认 `1`。启用时必须配置外部告警通道，否则平台依赖健康状态为 Critical/degraded。
+- `LEAN_MYSQL_BACKUP_HOUR` / `LEAN_MYSQL_BACKUP_MINUTE`：每日 MySQL 逻辑备份时间，默认 `03:00`（Asia/Shanghai）。
+- `LEAN_ALERT_WEBHOOK_URL`：运维告警 Webhook；自动调度启用时为必需配置。未配置时告警仍会持久化，但平台不会报告 operational ready。
 - `LEAN_ALERT_WEBHOOK_BEARER_TOKEN`：Webhook Bearer 凭据，只能保存在本地环境或秘密管理器。
-- `LEAN_ALERT_MIN_SEVERITY`：外发最低等级，默认 `critical`。
+- `LEAN_ALERT_MIN_SEVERITY`：外发最低等级，默认 `error`；Paper `cycle_failed` 固定为 `critical`。
 - `LEAN_ALERT_ESCALATE_AFTER`：相同 Paper 调度警告累计到该次数后升级为 Critical，默认 `3`。
 - `LEAN_ALERT_COOLDOWN_SECONDS`：成功外发后的去重冷却时间，默认 `900` 秒。
 
-投递状态、尝试次数和错误可通过 `/api/alert-events` 查看。Webhook URL 的查询参数不会写入投递审计记录。
+投递状态、尝试次数和错误可通过 `/api/alert-events` 查看。只有外部通道返回
+2xx 才算 delivered；通道恢复后，Beat 会补投尚无成功 delivery 的 open alert。
+Webhook URL 的查询参数不会写入投递审计记录。
 
 数据库备份、Docker Desktop 内存、端口和安全配置见 [Deployment](../deployment.md)。
 

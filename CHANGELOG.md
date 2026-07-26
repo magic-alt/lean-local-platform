@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Close the nine Level 5 P0 remediation gaps: schedule hash-verified MySQL backups and evidence-producing isolated restore drills; make alert/Paper outbox delivery depend on external 2xx acknowledgements with fail-closed readiness and backfill; default to Paper v2 and enforce 21-day differentiated-capital acceptance; replace runner free-form Docker commands with a structure-only API; add exact/hash-locked Python dependencies, locally scanned signed SBOM evidence and expiring CVE exceptions; and automatically re-certify stale production datasets while exposing platform executability in health and the dashboard.
 - Close the Level 5 UI review findings by adding route-aware grouped navigation with a first-class Legacy Paper entry, consistent English labels, keyboard-accessible landmarks and icon controls, dedicated Paper risk-control and strategy-deployment tabs, and isolated Playwright coverage at 1280×800 and 768×1024.
 - Complete the Paper valuation remediation by certifying equity and index closes against their matching Source Gate scopes, requiring exact benchmark dates, failing daily snapshots closed when benchmark/checkpoint evidence is absent, and extending regression coverage for checkpoint and ledger sequence integrity.
 - Make Paper valuation point-in-time and source-bounded, compute benchmark and excess return in the canonical projection writer with missing data failing closed, and write account ledger context and Decimal amounts once at append time under a unique generation sequence.

@@ -1168,6 +1168,11 @@ def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]
     return certified_ids
 
 
+def certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]:
+    """Public recovery entrypoint; certification remains gated by persisted consistency evidence."""
+    return _certify_consistent_production_datasets(report)
+
+
 def rebuild_all_market_parquet(
     *,
     asset_class: str | None = None,

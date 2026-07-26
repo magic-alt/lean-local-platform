@@ -7,6 +7,12 @@
 - **最终判定**: **`LEVEL5_FAIL`**
 - **总分**: **45 / 100**
 
+> **整改更新（2026-07-26 晚）**：本文件前 14 章保留独立审计时点的原始事实与
+> `LEVEL5_FAIL` 判定，不能回写成当时已通过。审计后，§15 的 5 个 Critical 与
+> 9 个 P0 已完成代码/配置整改；§15、§16 的状态表是最新状态。外部 Webhook
+> 真实 2xx 和新的 21 交易日多账户实跑仍需独立证据，因此本次整改不把原始
+> Level 5 verdict 升级为 PASS。
+
 ---
 
 ## 1. Executive Summary
@@ -686,35 +692,36 @@ for ledger_row in ledger_rows:
 
 ## 15. Critical 与 P0 阻断项
 
-### Critical（5）
+### Critical（5，整改后全部 Fixed）
 
-| ID | 标题 | 组件 |
+| ID | 标题 | 整改状态 |
 | --- | --- | --- |
-| L5-PAPER-001 | Paper 持仓估值使用全表最新收盘价（未来数据泄漏） | `paper_accounts.rebuild_projection` |
-| L5-PAPER-002 | `rebuild_projection` 把 benchmark 写成 0、excess 写成 `-prior_benchmark` | `paper_accounts.rebuild_projection` |
-| L5-PAPER-003 | checkpoint digest 分歧被静默掩盖，恢复一致性证据失效 | `paper_accounts.rebuild_projection` |
-| L5-PAPER-004 | 账本行写入后被 UPDATE；`ledger_sequence` 无唯一约束的 `max+1` | `paper_accounts._finalize_cycle` |
-| L5-DATA-001 | Paper 行情/benchmark 读取完全绕过 Source Gate 且 benchmark 缺失静默补 0 | `paper_accounts` |
+| L5-PAPER-001 | Paper 持仓估值使用全表最新收盘价（未来数据泄漏） | **Fixed** — as-of + certified source |
+| L5-PAPER-002 | benchmark/excess 写入错误 | **Fixed** — 单一公式与 benchmark fail-closed |
+| L5-PAPER-003 | checkpoint digest 分歧被静默掩盖 | **Fixed** — 分歧抛错并进入 error |
+| L5-PAPER-004 | ledger UPDATE 与 sequence 竞态 | **Fixed** — append-only + DB UNIQUE |
+| L5-DATA-001 | Paper 绕过 Source Gate | **Fixed** — repository 统一治理读取 |
 
 ### P0（9）
 
-| ID | 标题 |
-| --- | --- |
-| L5-OPS-001 | 无任何 MySQL 备份，无恢复演练 |
-| L5-OPS-002 | 45 条告警 0 条送达；webhook 未配置；`MIN_SEVERITY=critical` 屏蔽 Paper 失败 |
-| L5-OPS-003 | 通知 outbox 在仅写本地 DB 后即标记 `delivered` |
-| L5-OPS-004 | 2026-07-26 Level 5 "revalidation" 复用 2026-07-25 证据文件 |
-| L5-PAPER-005 | `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED` 出厂默认 `0` |
-| L5-PAPER-006 | 多账户验收仅 2 个交易日、相同初始资金 |
-| L5-SEC-001 | 受限 runner allowlist 可被 `--mount` / `--cap-add` / 重复 flag 绕过 |
-| L5-SUP-001 | 供应链检查 `status: failed`；无 SBOM 产物；依赖非精确锁定 |
-| L5-DATA-002 | 生产数据集认证当前全部撤销，平台处于不可执行状态 |
+| ID | 整改状态 | 最新证据 / 剩余外部验证 |
+| --- | --- | --- |
+| L5-OPS-001 | **Fixed** | 28GB 备份 SHA-256 已校验；128 表恢复到隔离库，RPO=`9327.519s`、RTO=`2023.813s`；5 张关键表行数差 0、checksum 全匹配。证据：`web/runtime/audit/restore-drill-20260726T213900Z.json` |
+| L5-OPS-002 | **Code fixed / external evidence pending** | 默认阈值 `error`、cycle failure 为 Critical、健康状态 fail-closed、通道恢复后补投 open alerts；本机仍未配置真实外部 endpoint |
+| L5-OPS-003 | **Fixed** | outbox 仅在外部 delivery 2xx 后写 `delivered`；无通道为 `failed`，无确认回执为 `retrying` |
+| L5-OPS-004 | **Fixed** | `evidence_revalidation` 强制 `passed:false` / `revalidated_from_prior_evidence` |
+| L5-PAPER-005 | **Fixed** | v2 默认值已在 config / Compose / env sample 翻转为 `1`，关闭时 dependency health 降级 |
+| L5-PAPER-006 | **Gate fixed / fresh run pending** | 验收默认且最少 21 日、≥2 账户、差异资金，并硬断言成交/拒单/无信号/逐账户日数；尚未把旧 2 日证据冒充新 PASS |
+| L5-SEC-001 | **Fixed** | runner API 只接受结构化路径，`extra=forbid`；Docker command 仅由 runner 生成 |
+| L5-SUP-001 | **Fixed** | 112 个传递依赖 hash lock；12 个当前运行镜像的 SBOM + 本地 Trivy + 有效期例外账本 + Ed25519 签名；新后端镜像从 hash lock 构建成功，`check_supply_chain.py` 为 passed |
+| L5-DATA-002 | **Fixed** | 撤销产生 Critical 告警，Beat 自动重认证，health/UI 暴露 executable 状态；实测一致性报告 `19de8646-8966-4113-b654-7530d2695b3b` 通过，equity/index 均恢复 production certified |
 
 ---
 
 ## 16. 全部问题清单
 
-> 格式统一。`状态` 一律为本轮审计结束时的状态。
+> 格式统一。`状态` 已在 2026-07-26 晚的整改验证后更新；“当前行为/实际证据”
+> 仍保留独立审计时点的原始发现，避免篡改历史。
 
 ---
 
@@ -748,7 +755,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: 交易系统工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（as-of certified valuation regression passed）
 
 ---
 
@@ -784,7 +791,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: L5-DATA-001（需要受治理的行情读取入口）
 - **工作量**: **M**
 - **建议负责人角色**: 量化平台架构师
-- **状态**: **Open**
+- **状态**: **Fixed**（benchmark/excess single-writer regression passed）
 
 ---
 
@@ -817,7 +824,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **S**
 - **建议负责人角色**: 交易系统审计师
-- **状态**: **Open**
+- **状态**: **Fixed**（checkpoint divergence fail-closed regression passed）
 
 ---
 
@@ -852,7 +859,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **L**
 - **建议负责人角色**: 交易系统工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（append-only ledger + unique sequence migration）
 
 ---
 
@@ -884,7 +891,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: 数据治理工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（governed market-data repository）
 
 ---
 
@@ -913,7 +920,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: SRE
-- **状态**: **Open**
+- **状态**: **Fixed**（每日备份任务 + 28GB dump + 128 表隔离恢复演练；RPO=`9327.519s`、RTO=`2023.813s`；5 张关键表行数与 checksum 一致）
 
 ---
 
@@ -945,7 +952,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 需要真实外部端点
 - **工作量**: **M**
 - **建议负责人角色**: SRE
-- **状态**: **Open**
+- **状态**: **Code fixed / External evidence pending**（未配置真实外部 endpoint 时 health 为 Critical/degraded，不再报告 ready）
 
 ---
 
@@ -974,7 +981,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: L5-OPS-002
 - **工作量**: **S**
 - **建议负责人角色**: SRE
-- **状态**: **Open**
+- **状态**: **Fixed**（外部 2xx 是 delivered 的必要条件）
 
 ---
 
@@ -1002,7 +1009,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **S**
 - **建议负责人角色**: 交易系统审计师
-- **状态**: **Open**
+- **状态**: **Fixed**（复用模式不得输出 fresh PASS）
 
 ---
 
@@ -1030,7 +1037,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: L5-PAPER-001..004 修复完成后再翻转
 - **工作量**: **S**
 - **建议负责人角色**: 金融软件产品负责人
-- **状态**: **Blocked**（依赖 Critical 修复）
+- **状态**: **Fixed**（Critical 依赖已关闭，默认值翻转为 `1`）
 
 ---
 
@@ -1058,7 +1065,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: L5-DATA-002（需要认证数据）、L5-PAPER-001..004
 - **工作量**: **L**
 - **建议负责人角色**: 交易系统审计师
-- **状态**: **Blocked**
+- **状态**: **Gate fixed / Fresh run pending**（旧 2 日证据不再能输出 PASS）
 
 ---
 
@@ -1090,7 +1097,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: 安全工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（结构化 job schema；free-form command/flags 被 Pydantic 拒绝）
 
 ---
 
@@ -1118,7 +1125,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: 安全工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（112 个传递依赖 hash lock + 12 个当前运行镜像 SBOM + local CVE policy + signed evidence；hash-locked 后端镜像构建成功）
 
 ---
 
@@ -1152,7 +1159,7 @@ for ledger_row in ledger_rows:
 - **依赖项**: 无
 - **工作量**: **M**
 - **建议负责人角色**: 数据治理工程师
-- **状态**: **Open**
+- **状态**: **Fixed**（Critical alert + automatic recertification + health/UI executable state；2026-07-26 实测 QA 报告通过，equity 193 files / index 25 files 均恢复 production certified）
 
 ---
 
@@ -1238,20 +1245,27 @@ for ledger_row in ledger_rows:
 | E2E 上次运行 | 证据文件 | `tests/e2e/reports/results.json` → `expected: 1` |
 | migration 状态 | 实测 | `scripts/db_migrate.py --status` → 30 applied，0 down |
 | runner allowlist | 代码 | `runner_service.py:80-159` |
+| MySQL 恢复演练 | 实测 + 证据文件 | `restore-drill-20260726T213900Z.json` → 128 表；RPO `9327.519s`；RTO `2023.813s`；5 表行数差 0、checksum 全匹配 |
+| 数据集重新认证 | 实测 + DB 查询 | QA report `19de8646-8966-4113-b654-7530d2695b3b`；TuShare equity/index 均 `production` + `certificationValid:true` |
+| 供应链整改 | 实测 | 112-package hash lock；12 个运行镜像 SBOM/Trivy；签名校验通过；`check_supply_chain.py` → `status: passed`；hash-locked 后端镜像构建成功 |
+| 整改后后端测试 | 实测 | `475 passed, 2 skipped in 97.99s` |
+| 整改后前端构建 | 实测 | `npm run build` → `✓ built in 4.23s` |
 
 ---
 
 ## 19. 未验证项目（NOT_VERIFIED）
 
-共 **17** 项。任何一项都不得被推断为 PASS。
+整改后仍有 **14** 项未验证。任何一项都不得被推断为 PASS。原第 13–15 项
+（生产规模恢复、stored object 恢复、RPO/RTO）已由
+`restore-drill-20260726T213900Z.json` 实测关闭。
 
 | # | 项目 | 未验证原因 | 复现命令 / 缺失条件 |
 | --- | --- | --- | --- |
 | 1 | 四个用户旅程的交互式验证 | 本会话无可控浏览器实例 | `cd web/frontend && npx playwright test` |
 | 2 | 1280×800 / 768×1024 视口 | 配置中不存在该 project | 需扩展 `playwright.config.ts` |
-| 3 | 本轮新的确定性 golden run | 数据集认证已撤销（L5-DATA-002） | 需先重认证 |
-| 4 | A 股执行规则新用例（T+1/涨跌停/停牌/ST/手数/费用/滑点） | 同上 | `RUN_LEAN_DOCKER_INTEGRATION=1 pytest tests/test_ashare_lean_integration.py` |
-| 5 | 21 日 × 多账户 Paper 基线 | 同上 + 脚本范围不足 | `scripts/run_paper_accounts_acceptance.py --days 21` |
+| 3 | 本轮新的确定性 golden run | 数据集已重认证，但整改会话未执行新的 golden run | 执行对应 Level 3/4 golden acceptance |
+| 4 | A 股执行规则新用例（T+1/涨跌停/停牌/ST/手数/费用/滑点） | 数据集已重认证，但本轮未运行 Docker integration | `RUN_LEAN_DOCKER_INTEGRATION=1 pytest tests/test_ashare_lean_integration.py` |
+| 5 | 21 日 × 多账户 Paper 基线 | 验收门槛已修复，但尚无新的 21 日实跑证据 | `scripts/run_paper_accounts_acceptance.py --days 21` |
 | 6 | checkpoint 1–6 分别中断（账户层） | 未执行；且 G14 使其不具证明力 | `scripts/run_level5_audit.py --with-fault` |
 | 7 | worker SIGKILL / Redis 重启 / MySQL 重启 / API 重启 / Beat 重启（本轮） | 需破坏性操作，避免影响运行中的栈 | `scripts/run_service_restart_fault_acceptance.py` |
 | 8 | LEAN 容器失败注入 | 同上 | 同上 |
@@ -1259,9 +1273,6 @@ for ledger_row in ledger_rows:
 | 10 | MySQL/Parquet/DuckDB/ClickHouse 一致性重算 | 未重跑（耗时且会占用资源） | `POST /api/data/parquet/consistency` |
 | 11 | 缺交易日历 / 停牌 / ST / 公司行动的 fail-closed 构造 | 未构造隔离数据集 | 需隔离 DB |
 | 12 | 时区跨日错误 fail-closed | 未构造 | — |
-| 13 | 生产规模备份恢复演练 | 无备份文件（L5-OPS-001） | `scripts/backup_mysql.sh` 后再演练 |
-| 14 | stored object 恢复 | 同上 | — |
-| 15 | RPO / RTO 实测值 | 无演练 | — |
 | 16 | 前端跨批次对比 / 敏感性热力图展示 | 无浏览器 | — |
 | 17 | 商业产品功能细节 | 无外网访问 | `REFERENCE_NOT_VERIFIED` |
 

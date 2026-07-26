@@ -85,6 +85,37 @@ def test_outbox_not_delivered_without_channel(monkeypatch):
     assert row["last_error"] == "no_channel_configured"
 
 
+def test_outbox_requires_external_2xx_acknowledgement(monkeypatch):
+    _init_db()
+    from app.db import db
+    from app.services import alerts, paper_accounts
+
+    monkeypatch.setenv("LEAN_ALERT_WEBHOOK_URL", "https://alerts.example.test/notify")
+    monkeypatch.setenv("LEAN_ALERT_MIN_SEVERITY", "critical")
+    account = paper_accounts.create_account(
+        {"name": "Outbox Ack Account", "initialCash": "1000000", "benchmarkSymbol": "000300"}
+    )
+    with db() as connection:
+        paper_accounts._enqueue_notification(
+            connection,
+            account["id"],
+            None,
+            None,
+            "data_not_ready",
+            {"reason": "test"},
+        )
+    monkeypatch.setattr(alerts, "_send_webhook", lambda *args, **kwargs: 202)
+
+    result = paper_accounts.deliver_notifications()
+
+    assert result["delivered"] == []
+    assert len(result["failed"]) == 1
+    with db() as connection:
+        row = connection.execute("select status,last_error from paper_notification_outbox").fetchone()
+    assert row["status"] == "retrying"
+    assert "below_threshold" in row["last_error"]
+
+
 def test_repeated_warning_escalates_and_failed_delivery_is_recorded(monkeypatch):
     _init_db()
     from app.services import alerts
@@ -145,6 +176,27 @@ def test_critical_alert_uses_independent_escalation_channel(monkeypatch):
     deliveries = alerts.list_alert_events(status="open")[0]["deliveries"]
     assert deliveries[0]["channel"] == "escalation_webhook"
     assert "hidden" not in str(deliveries[0]["metadata"])
+
+
+def test_open_alerts_are_backfilled_after_channel_configuration(monkeypatch):
+    _init_db()
+    from app.services import alerts
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    opened = alerts.emit_alert(
+        "worker_down",
+        severity="critical",
+        dedupe_key="worker:backfill",
+    )
+    assert opened["delivery"]["status"] == "disabled"
+    monkeypatch.setenv("LEAN_ALERT_WEBHOOK_URL", "https://alerts.example.test/notify")
+    monkeypatch.setattr(alerts, "_send_webhook", lambda *args, **kwargs: 204)
+
+    result = alerts.redeliver_open_alerts()
+
+    assert result["attempted"] == [opened["id"]]
+    assert result["delivered"] == [opened["id"]]
+    assert alerts.list_alert_events(status="open")[0]["deliveries"][0]["status"] == "success"
 
 
 def test_resolution_bypasses_cooldown_and_notifies_operator(monkeypatch):

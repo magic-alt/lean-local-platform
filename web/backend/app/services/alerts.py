@@ -34,6 +34,8 @@ ALERT_TYPES = {
     "resource_disk_pressure",
     "resource_memory_pressure",
     "resource_queue_pressure",
+    "source_certification_revoked",
+    "mysql_backup_failed",
 }
 
 _SEVERITY_RANK = {
@@ -56,6 +58,15 @@ def external_alert_channel_configured() -> bool:
             "LEAN_ALERT_ESCALATION_WEBHOOK_URL",
         )
     )
+
+
+def delivery_succeeded(delivery: dict[str, Any] | None) -> bool:
+    """Return true only when an external channel recorded a 2xx acknowledgement."""
+    item = delivery or {}
+    if item.get("status") == "success":
+        return True
+    escalation = item.get("escalation")
+    return isinstance(escalation, dict) and escalation.get("status") == "success"
 
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -238,7 +249,7 @@ def dispatch_alert(
     else:
         delivery = {}
     severity = str(alert.get("severity") or "warning").lower()
-    minimum = str(os.environ.get("LEAN_ALERT_MIN_SEVERITY", "critical")).strip().lower()
+    minimum = str(os.environ.get("LEAN_ALERT_MIN_SEVERITY", "error")).strip().lower()
     if _SEVERITY_RANK.get(severity, 0) < _SEVERITY_RANK.get(minimum, 4):
         delivery = {
             "channel": "webhook",
@@ -293,10 +304,7 @@ def dispatch_alert(
             "afterCount": escalation_after,
         }
 
-    delivered = delivery.get("status") == "success" or (
-        isinstance(delivery.get("escalation"), dict)
-        and delivery["escalation"].get("status") == "success"
-    )
+    delivered = delivery_succeeded(delivery)
     if delivered and not force:
         cooldown_seconds = _env_int("LEAN_ALERT_COOLDOWN_SECONDS", 900, 0)
         cooldown = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)).isoformat()
@@ -477,6 +485,41 @@ def list_alert_events(status: str | None = None, limit: int = 100) -> list[dict[
     for item in alert_items:
         item["deliveries"] = deliveries.get(str(item["id"]), [])
     return alert_items
+
+
+def redeliver_open_alerts(limit: int = 100) -> dict[str, Any]:
+    """Backfill external delivery for persisted open alerts after channel recovery."""
+    if not external_alert_channel_configured():
+        return {"status": "blocked", "reason": "no_channel_configured", "attempted": [], "delivered": []}
+    with db() as connection:
+        rows = rows_to_dicts(
+            connection.execute(
+                """
+                select a.*
+                from alert_events a
+                where a.status in ('open','acknowledged')
+                  and not exists (
+                    select 1 from alert_deliveries d
+                    where d.alert_id=a.id and d.status='success'
+                  )
+                order by a.last_seen_at
+                limit ?
+                """,
+                (max(1, min(int(limit), 1000)),),
+            ).fetchall()
+        )
+    attempted: list[str] = []
+    delivered: list[str] = []
+    for item in rows:
+        attempted.append(str(item["id"]))
+        result = dispatch_alert(item, force=True)
+        if delivery_succeeded(result):
+            delivered.append(str(item["id"]))
+    return {
+        "status": "success",
+        "attempted": attempted,
+        "delivered": delivered,
+    }
 
 
 def update_alert_status(alert_id: str, status: str, *, actor: str = "api") -> dict[str, Any] | None:

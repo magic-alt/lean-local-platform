@@ -34,12 +34,17 @@ checkpoint、intent/fill/ledger bridge 和 projection 必须完全隔离。克�
 ```bash
 web/backend/.venv/bin/python scripts/run_paper_accounts_acceptance.py \
   --project-id <project-id> \
-  --source-backtest-id <trusted-backtest-id>
+  --source-backtest-id <trusted-backtest-id> \
+  --days 21 \
+  --accounts 2 \
+  --initial-cash 1000000,3000000
 ```
 
 默认 evidence 为 `web/runtime/audit/paper-accounts-acceptance.json`，必须包含 account、
 deployment、cycle、input/result digest、ledger reconciliation、duplicate Run now
-与前端 E2E 路径。通知 outbox 失败不能回滚 ledger；应单独检查并重投 delivery。
+与前端 E2E 路径；少于 21 个不同交易日、少于两个账户、初始资金不相同条件
+不满足、缺成交/拒单/无信号日时均输出 `PAPER_ACCOUNTS_FAIL`。通知 outbox 失败
+不能回滚 ledger；只有外部通道 2xx 才能回写 delivered。
 
 ## 值班入口与发布前检查
 
@@ -66,7 +71,7 @@ LEAN_ALERT_WEBHOOK_URL=https://primary.example/alerts
 LEAN_ALERT_WEBHOOK_BEARER_TOKEN=...
 LEAN_ALERT_ESCALATION_WEBHOOK_URL=https://oncall.example/escalate
 LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN=...
-LEAN_ALERT_MIN_SEVERITY=critical
+LEAN_ALERT_MIN_SEVERITY=error
 LEAN_ALERT_ESCALATE_AFTER=3
 LEAN_ALERT_ESCALATION_AFTER=1
 LEAN_ALERT_COOLDOWN_SECONDS=900
@@ -278,8 +283,9 @@ LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS=0
 
 ## 备份恢复与发布边界
 
-RPO 目标 15 分钟、RTO 目标 4 小时；生产规模 restore drill 仍是独立 P1
-任务。恢复必须使用独立主机/卷，禁止覆盖 `lean_market`。dump、stored object、
+RPO 目标 24 小时（每日逻辑备份）、RTO 目标 4 小时；生产规模 restore drill
+使用 `scripts/run_restore_drill.py` 输出机器可读实测值。恢复必须使用独立
+主机/卷，禁止覆盖 `lean_market`。dump、stored object、
 LEAN result、report、log、snapshot 和审计证据均需加密、带 SHA-256，并验证
 migration、表 count/checksum、业务不变量、API 启动和 Paper 引用。
 

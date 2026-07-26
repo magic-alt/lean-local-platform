@@ -6,6 +6,8 @@ from ..core.config import (
     ASHARE_TECH_REPORT_MINUTE,
     DERIVED_MAINTENANCE_HOUR,
     DERIVED_MAINTENANCE_MINUTE,
+    MYSQL_BACKUP_HOUR,
+    MYSQL_BACKUP_MINUTE,
     PAPER_WALKFORWARD_HOUR,
     PAPER_WALKFORWARD_MINUTE,
     REDIS_URL,
@@ -32,7 +34,10 @@ celery_app.conf.update(
         "lean_web.sync_all_data": {"queue": "data-bulk"},
         "lean_web.materialize_sync_data": {"queue": "data-demand"},
         "lean_web.maintain_derived_layers": {"queue": "data-demand"},
+        "lean_web.recover_source_certifications": {"queue": "default"},
+        "lean_web.redeliver_open_alerts": {"queue": "default"},
         "lean_web.recover_data_sync": {"queue": "default"},
+        "lean_web.backup_mysql": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
         "lean_web.optimize": {"queue": "backtest"},
         "lean_web.start_research": {"queue": "backtest"},
@@ -53,6 +58,13 @@ celery_app.conf.update(
             "task": "lean_web.recover_data_sync",
             "schedule": 60.0,
         },
+        "backup-mysql-daily": {
+            "task": "lean_web.backup_mysql",
+            "schedule": crontab(
+                minute=MYSQL_BACKUP_MINUTE,
+                hour=MYSQL_BACKUP_HOUR,
+            ),
+        },
         "maintain-derived-layers-after-close": {
             "task": "lean_web.maintain_derived_layers",
             "schedule": crontab(
@@ -60,6 +72,14 @@ celery_app.conf.update(
                 hour=DERIVED_MAINTENANCE_HOUR,
                 day_of_week="1-5",
             ),
+        },
+        "recover-source-certifications": {
+            "task": "lean_web.recover_source_certifications",
+            "schedule": 300.0,
+        },
+        "redeliver-open-alerts": {
+            "task": "lean_web.redeliver_open_alerts",
+            "schedule": 60.0,
         },
         "reconcile-experiment-batches": {
             "task": "lean_web.reconcile_experiment_batches",

@@ -26,6 +26,7 @@ export function Dashboard() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const runs = useAsyncData(api.backtests, []);
   const tasks = useAsyncData(api.tasks, []);
+  const dependencyHealth = useAsyncData(api.dependencyHealth, { status: "degraded", dependencies: [], urls: { prometheus: "", grafana: "" } });
   const latest = runs.data[0];
   const activeTasks = tasks.data.filter((task) => ["created", "queued", "running"].includes(task.status)).length;
   const finishedRuns = runs.data.filter((run) => ["success", "succeeded", "failed", "cancelled"].includes(run.status));
@@ -45,6 +46,21 @@ export function Dashboard() {
           <Button icon={<DeleteOutlined />} onClick={() => setHistoryOpen(true)}>Manage Local History</Button>
         </Space>
       </div>
+      {dependencyHealth.data.status !== "ok" && (
+        <Alert
+          type="error"
+          showIcon
+          message="Platform execution is blocked or degraded"
+          description={
+            dependencyHealth.data.dependencies
+              .filter((item) => !item.ok)
+              .map((item) => item.service)
+              .join(", ") || "Dependency readiness checks have not completed."
+          }
+          action={<Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Card className="workflow-card" style={{ marginBottom: 16 }}>
         <Space wrap>
           <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => navigate("/projects")}>New Project</Button>

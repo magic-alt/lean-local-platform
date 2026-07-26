@@ -151,7 +151,7 @@ Implemented:
   cycles, reports and audit APIs plus 2–10 account comparison.
 - Paper sessions sourced from a successful, validated, frozen backtest project.
 - Daily LEAN walk-forward execution, signals, orders, positions, snapshots and daily reports.
-- Feature-gated `lean_walkforward_v2` with immutable LEAN-sourced intents,
+- Default-enabled `lean_walkforward_v2` with immutable LEAN-sourced intents,
   legal 13-state transitions, the shared A-share/portfolio constraint layer,
   idempotent fills and ledger entries, ledger-derived cash/position read models,
   and six digest-protected checkpoints.
@@ -167,6 +167,8 @@ release gate remains explicit rather than inferred from unit tests.
 - Monitoring endpoints, Prometheus/Grafana stack and database-backed task recovery.
 - Persistent operational alerts with Webhook delivery, delivery audit records,
   cooldown deduplication and repeated Paper scheduling failure escalation.
+- External 2xx-gated Paper outbox state, fail-closed alert-channel readiness and
+  automatic backfill of open alerts after channel recovery.
 - Independent primary/escalation Webhooks, forced recovery notifications, and
   disk/memory/CPU/Celery-queue pressure alerts with automatic resolution.
 - Five accepted LEAN jobs under a two-active/three-queued budget, queued and
@@ -175,7 +177,10 @@ release gate remains explicit rather than inferred from unit tests.
   checkpoint/run probes, and terminal state only after all six v2 checkpoints.
 - Operational runbook for alert ownership, resource pressure, fault drills,
   recovery order, and release blocking.
-- Digest-pinned runtime/base images and a version-pinned Grafana datasource plugin.
+- Digest-pinned runtime/base images, exact hash-locked Python dependencies,
+  locally generated/scanned SBOMs and signed vulnerability-policy evidence.
+- Daily retained MySQL backups and an isolated restore-drill runner that records
+  measured RPO/RTO, sampled table row-count differences and checksums.
 
 Remaining work:
 
@@ -183,8 +188,8 @@ Remaining work:
   against production on-call endpoints; local dual-channel lifecycle tests pass.
 - Broker integration, reconciliation and secrets hardening before any live trading.
 - Industry/capacity risk limits, circuit breakers and cross-asset paper acceptance.
-- Production-scale restore drills; local resource budgets and alert thresholds
-  are now configured and exercised.
+- Stored-object/filesystem recovery on an independent host; the full-size local
+  MySQL restore drill is now automated and evidence-producing.
 
 ## Priority Work
 
@@ -204,7 +209,8 @@ Status: COMPLETE on 2026-07-25. Machine-readable evidence and checksums are in
 
 ### P1: Stability and operation
 
-1. Run scheduled production-scale MySQL backup/restore and stored-object recovery drills.
+1. COMPLETE for scheduled full-size MySQL backup/isolated restore; independent
+   stored-object/filesystem recovery remains required.
 2. COMPLETE — five-job concurrency, phase cancellation and Redis/MySQL/worker
    fault injection: `web/runtime/audit/p1-stability-2026-07-25.json`.
 3. COMPLETE — real 21-day LEAN Paper chain with interruption/idempotency:

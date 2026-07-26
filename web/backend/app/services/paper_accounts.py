@@ -16,7 +16,7 @@ from ..repositories.market_data_repository import (
     close_price,
 )
 from . import paper as legacy_paper
-from .alerts import emit_alert, external_alert_channel_configured
+from .alerts import delivery_succeeded, emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
 
@@ -2216,9 +2216,15 @@ def deliver_notifications(limit: int = 100) -> dict[str, Any]:
             failed.append(item["id"])
             continue
         try:
-            emit_alert(
+            alert = emit_alert(
                 "paper_schedule_failed" if item["event_type"] in {"cycle_failed", "data_not_ready"} else "paper_reject_spike",
-                severity="error" if item["event_type"] == "cycle_failed" else "info",
+                severity=(
+                    "critical"
+                    if item["event_type"] == "cycle_failed"
+                    else "error"
+                    if item["event_type"] == "data_not_ready"
+                    else "warning"
+                ),
                 title=f"Paper account event: {item['event_type']}",
                 message=json.dumps(item.get("payload") or {}, ensure_ascii=False, default=str),
                 source="paper_accounts",
@@ -2226,6 +2232,10 @@ def deliver_notifications(limit: int = 100) -> dict[str, Any]:
                 details=item.get("payload") or {},
                 dedupe_key=item["dedupe_key"],
             )
+            delivery = alert.get("delivery") if isinstance(alert, dict) else None
+            if not delivery_succeeded(delivery):
+                status = str((delivery or {}).get("status") or "external_delivery_not_acknowledged")
+                raise RuntimeError(f"external_delivery_not_acknowledged:{status}")
             with db() as connection:
                 connection.execute(
                     """

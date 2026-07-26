@@ -298,11 +298,11 @@ def invalidate_source_certification(
     market: str,
     venue: str | None,
     connection: Any | None = None,
-) -> None:
+) -> bool:
     """Revoke derived certification whenever canonical rows in its scope change."""
     normalized = normalize_source(source)
     if normalized not in PRODUCTION_SOURCES:
-        return
+        return False
     scope_venue = (venue or market).lower()
     parameters = (normalized, asset_class.lower(), market.lower(), scope_venue, scope_venue)
     sql = """
@@ -313,13 +313,14 @@ def invalidate_source_certification(
           and (is_production=1 or is_certified=1)
     """
     if connection is not None:
-        connection.execute(sql, parameters)
-        return
+        cursor = connection.execute(sql, parameters)
+        return bool(int(getattr(cursor, "rowcount", 0) or 0))
     with db() as owned_connection:
-        owned_connection.execute(
+        cursor = owned_connection.execute(
             sql,
             parameters,
         )
+    return bool(int(getattr(cursor, "rowcount", 0) or 0))
 
 
 def resolve_source_context(

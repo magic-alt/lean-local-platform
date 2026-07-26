@@ -54,14 +54,41 @@ class DockerRunner:
         token = self._runner_token()
         if not runner_url or not token:
             raise LeanPlatformError("restricted_runner_not_configured")
-        payload = json.dumps(
-            {
-                "runId": container_name.removeprefix("lean-"),
-                "command": command,
-                "containerName": container_name,
-                "timeoutSeconds": int(self.timeout_seconds or 3600),
-            }
-        ).encode("utf-8")
+        mounts: dict[str, str] = {}
+        for index, value in enumerate(command):
+            if value != "-v" or index + 1 >= len(command):
+                continue
+            raw = command[index + 1]
+            parts = raw.rsplit(":", 2)
+            if len(parts) == 3 and parts[-1] in {"ro", "rw"}:
+                source, target = parts[0], parts[1]
+            elif len(parts) >= 2:
+                source, target = ":".join(parts[:-1]), parts[-1]
+            else:
+                continue
+            mounts[target] = source
+        required_targets = {
+            "/Lean/Launcher/bin/Debug/config.json",
+            "/Lean/Data",
+            "/Lean/Results",
+            "/Lean/Launcher/bin/Debug/storage",
+            "/Lean/Project",
+        }
+        if not required_targets.issubset(mounts):
+            raise LeanPlatformError("restricted_runner_structured_mounts_incomplete")
+        payload_item = {
+            "runId": container_name.removeprefix("lean-"),
+            "image": command[-1],
+            "configPath": mounts["/Lean/Launcher/bin/Debug/config.json"],
+            "dataDir": mounts["/Lean/Data"],
+            "resultsDir": mounts["/Lean/Results"],
+            "storageDir": mounts["/Lean/Launcher/bin/Debug/storage"],
+            "projectDir": mounts["/Lean/Project"],
+            "timeoutSeconds": int(self.timeout_seconds or 3600),
+        }
+        if "/Lean/Run" in mounts:
+            payload_item["supportDir"] = mounts["/Lean/Run"]
+        payload = json.dumps(payload_item).encode("utf-8")
         request = urllib.request.Request(
             runner_url + "/v1/jobs/run",
             data=payload,

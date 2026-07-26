@@ -45,8 +45,10 @@ from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
 from ..services import derived_maintenance
+from ..services import mysql_backup
 from ..services import resource_pressure
-from ..services.alerts import emit_alert
+from ..services.alerts import emit_alert, redeliver_open_alerts, resolve_open_alert
+from ..services.source_gate import source_certification
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
 
 
@@ -73,6 +75,28 @@ def _record_backtest_metric(status: str) -> None:
 @celery_app.task(name="lean_web.monitor_operational_resources")
 def monitor_operational_resources_task():
     return resource_pressure.monitor_operational_resources()
+
+
+@celery_app.task(name="lean_web.redeliver_open_alerts")
+def redeliver_open_alerts_task():
+    return redeliver_open_alerts()
+
+
+@celery_app.task(name="lean_web.backup_mysql")
+def backup_mysql_task():
+    try:
+        return mysql_backup.create_backup()
+    except Exception as exc:
+        _emit_operational_alert(
+            "mysql_backup_failed",
+            severity="critical",
+            title="Scheduled MySQL backup failed",
+            message=str(exc),
+            source="mysql_backup",
+            details={"error": str(exc)},
+            dedupe_key="mysql_backup_failed:scheduled",
+        )
+        raise
 
 
 @celery_app.task(name="lean_web.generate_insight")
@@ -705,7 +729,60 @@ def maintain_derived_layers_task(run_id: str | None = None):
     run = derived_maintenance.maintenance_run(run_id) if run_id else None
     if run is None:
         run = derived_maintenance.create_maintenance_run(trigger_type="schedule" if run_id is None else "recovery")
-    return derived_maintenance.run_maintenance(str(run["id"]))
+    result = derived_maintenance.run_maintenance(str(run["id"]))
+    summary = result.get("summary") or {}
+    certified = ((summary.get("parquetConsistency") or {}).get("certifiedDatasetIds") or [])
+    if result.get("status") == "success" and certified:
+        for asset_class in ("equity", "index"):
+            resolve_open_alert(
+                f"source_certification_revoked:tushare:{asset_class}:china:china",
+                actor="automatic_recertification",
+            )
+    return result
+
+
+@celery_app.task(name="lean_web.recover_source_certifications")
+def recover_source_certifications_task():
+    certifications = [
+        source_certification("tushare", asset_class=asset_class, market="china", venue="china")
+        for asset_class in ("equity", "index")
+    ]
+    if all(item.get("isCertified") and item.get("isProduction") for item in certifications):
+        return {"status": "ready", "scheduled": False}
+    with db() as connection:
+        active_sync = connection.execute(
+            """
+            select id,status from data_sync_runs
+            where status in ('queued','running','cancelling')
+            order by created_at desc limit 1
+            """
+        ).fetchone()
+        active = connection.execute(
+            """
+            select id,status from derived_maintenance_runs
+            where status in ('queued','running')
+            order by created_at desc limit 1
+            """
+        ).fetchone()
+    if active_sync:
+        return {
+            "status": "waiting_for_data_sync",
+            "scheduled": False,
+            "dataSyncRunId": active_sync["id"],
+        }
+    if active:
+        return {"status": "recovery_in_progress", "scheduled": False, "runId": active["id"]}
+    run = derived_maintenance.create_maintenance_run(
+        layers=["parquet"],
+        trigger_type="source_recertification",
+    )
+    dispatched = maintain_derived_layers_task.apply_async(args=[run["id"]])
+    return {
+        "status": "recovery_scheduled",
+        "scheduled": True,
+        "runId": run["id"],
+        "taskId": dispatched.id,
+    }
 
 
 def _broker_contains_sync_run(client: Any, run_id: str) -> bool:

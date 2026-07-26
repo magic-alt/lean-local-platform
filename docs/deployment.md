@@ -133,7 +133,8 @@ and must remain in `.env` or a runtime secret manager. Delivery attempts and
 outcomes are persisted in `alert_deliveries`; query strings are removed from
 stored endpoint metadata.
 
-By default only `critical` events are delivered. Repeated Paper scheduling
+By default `error` and `critical` events are delivered. Paper cycle failures
+are always critical. Repeated Paper scheduling
 warnings escalate after three occurrences, successful delivery starts a
 15-minute cooldown, and a failed delivery remains visible through
 `GET /api/alert-events` without changing the underlying task result. Configure
@@ -152,9 +153,8 @@ Runtime service images and the backend Python base image are referenced by
 immutable RepoDigest, and the Grafana ClickHouse plugin uses an explicit
 version. Upgrades must update the human-readable version note, digest and
 `CHANGELOG.md` together, then run `docker compose config -q`, rebuild the
-backend image and execute the protected integration lanes. A digest pin proves
-which bytes are selected; SBOM generation, signature verification and the
-Python hash lock remain separate release gates.
+backend image and execute the protected integration lanes. Backend installation
+uses `requirements.lock` with `--require-hashes`; direct dependencies are exact.
 
 Generate CycloneDX documents for every local Compose image and a checksum
 manifest with:
@@ -165,10 +165,10 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
   --output web/runtime/audit/supply-chain.json
 ```
 
-The checker intentionally fails while direct Python dependencies use version
-ranges or any runtime image is mutable. SBOM generation does not prove that an
-image is trusted; publisher/release signature verification and an approved
-vulnerability policy remain mandatory independent gates.
+The checker fails on mutable images, dependency/hash drift, missing SBOM or
+local Trivy reports, unapproved/expired Critical findings, or an invalid
+Ed25519 release-evidence signature. Exceptions require a reason and expiry and
+remain visible in the signed evidence.
 
 `scripts/start_web_single_instance.sh` generates a runtime-only MySQL loader
 password and grants that account only the privileges required for rebuildable
@@ -309,6 +309,10 @@ Recommended logical backup:
 ./scripts/backup_mysql.sh
 ```
 
+Celery Beat also runs a daily logical backup at 03:00 Asia/Shanghai with a
+seven-day / fourteen-file retention policy. The container image installs the
+MySQL dump client and writes atomically under `web/runtime/backups/`.
+
 Restore only into an isolated database:
 
 ```bash
@@ -323,6 +327,15 @@ The restore command verifies the adjacent SHA-256 file and refuses
 is not itself production-scale DR evidence: RPO/RTO, encrypted off-host
 retention, full-size restore timing and object/Parquet recovery must be
 measured in a dedicated environment.
+
+Create machine-readable RPO/RTO, sampled row-count and table-checksum evidence:
+
+```bash
+LEAN_MYSQL_ROOT_PASSWORD=... scripts/run_restore_drill.py \
+  --backup web/runtime/backups/lean_market-TIMESTAMP.sql \
+  --target-database lean_restore_dr01 \
+  --confirm RESTORE_ISOLATED_DATABASE
+```
 
 Also back up:
 

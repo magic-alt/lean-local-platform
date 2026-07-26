@@ -37,6 +37,17 @@ def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeyp
         "check_results_dir",
         lambda: {"service": "results_dir_writable", "ok": True, "detail": "/runs"},
     )
+    for name in ("check_alert_channel", "check_paper_order_pipeline", "check_source_certifications"):
+        service = {
+            "check_alert_channel": "external_alert_channel",
+            "check_paper_order_pipeline": "paper_order_pipeline_v2",
+            "check_source_certifications": "source_certification",
+        }[name]
+        monkeypatch.setattr(
+            dependencies,
+            name,
+            lambda service=service: {"service": service, "ok": True, "detail": {}},
+        )
 
     result = dependencies.dependency_health()
     items = {item["service"]: item for item in result["dependencies"]}
@@ -46,3 +57,13 @@ def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeyp
     assert items["docker"]["ok"] is True
     assert items["docker"]["detail"]["localDockerSocket"] is False
     assert items["lean_runner"]["detail"]["mode"] == "delegated_to_backtest_worker"
+
+
+def test_scheduled_automation_without_alert_channel_is_degraded(monkeypatch):
+    monkeypatch.setattr(dependencies, "SCHEDULED_AUTOMATION_ENABLED", True)
+    monkeypatch.setattr(dependencies, "external_alert_channel_configured", lambda: False)
+
+    result = dependencies.check_alert_channel()
+
+    assert result["ok"] is False
+    assert result["detail"]["reason"] == "scheduled_automation_requires_external_alert_channel"

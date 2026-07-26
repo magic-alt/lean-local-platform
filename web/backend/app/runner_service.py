@@ -4,21 +4,25 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .core.config import (
     ALLOWED_LEAN_DOCKER_IMAGES,
+    DATA_DIR,
     HOST_DATA_DIR,
     HOST_PLATFORM_DIR,
     LEAN_DOCKER_CPUS,
     LEAN_DOCKER_MEMORY,
     LEAN_DOCKER_NETWORK,
     LEAN_DOCKER_PIDS_LIMIT,
+    LEAN_DOCKER_READ_ONLY,
+    PLATFORM_DIR,
 )
 from .db import db, json_dump, utc_now
 from .runners.docker_runner import DockerRunner
@@ -45,9 +49,16 @@ def recover_interrupted_runner_jobs() -> None:
 
 
 class RunnerJob(BaseModel):
-    runId: str = Field(min_length=1, max_length=128)
-    command: list[str] = Field(min_length=3, max_length=64)
-    containerName: str = Field(min_length=1, max_length=64)
+    model_config = ConfigDict(extra="forbid")
+
+    runId: str = Field(min_length=1, max_length=48, pattern=r"^[A-Za-z0-9._-]+$")
+    image: str = Field(min_length=1, max_length=512)
+    configPath: str = Field(min_length=1, max_length=4096)
+    dataDir: str = Field(min_length=1, max_length=4096)
+    resultsDir: str = Field(min_length=1, max_length=4096)
+    storageDir: str = Field(min_length=1, max_length=4096)
+    projectDir: str = Field(min_length=1, max_length=4096)
+    supportDir: str | None = Field(default=None, min_length=1, max_length=4096)
     timeoutSeconds: int = Field(ge=1, le=86400)
 
 
@@ -79,92 +90,116 @@ def _within(value: str, root: Path) -> bool:
     return value == root_text or value.startswith(root_text.rstrip("/") + "/")
 
 
-def _validate_job(job: RunnerJob) -> dict[str, Any]:
-    command = list(job.command)
-    if Path(command[0]).name != "docker" or command[1:3] != ["run", "--rm"]:
-        raise HTTPException(status_code=400, detail="runner_command_schema_invalid")
-    forbidden = {
-        "--privileged",
-        "--network=host",
-        "--pid=host",
-        "--ipc=host",
-        "--entrypoint",
-        "--device",
-        "--userns=host",
-    }
-    if any(part in forbidden or part.startswith("--entrypoint=") for part in command):
-        raise HTTPException(status_code=400, detail="runner_forbidden_option")
-    image_indexes = [
-        index
-        for index, value in enumerate(command)
-        if value in ALLOWED_LEAN_DOCKER_IMAGES
-    ]
-    if len(image_indexes) != 1 or image_indexes[0] != len(command) - 1:
-        raise HTTPException(status_code=400, detail="runner_image_or_entrypoint_invalid")
-    image = command[-1]
-    if "@sha256:" not in image:
-        raise HTTPException(status_code=400, detail="runner_image_not_pinned")
+def _validated_path(
+    value: str,
+    root: Path,
+    *,
+    visible_root: Path,
+    label: str,
+) -> str:
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts or not _within(str(path), root):
+        raise HTTPException(status_code=400, detail=f"runner_{label}_outside_allowlist")
+    relative = path.relative_to(root)
+    resolved_visible_root = visible_root.resolve()
+    resolved_visible = (visible_root / relative).resolve()
+    if not _within(str(resolved_visible), resolved_visible_root):
+        raise HTTPException(status_code=400, detail=f"runner_{label}_symlink_escape")
+    return str(path)
 
-    required_pairs = {
-        "--network": LEAN_DOCKER_NETWORK,
-        "--cpus": LEAN_DOCKER_CPUS,
-        "--memory": LEAN_DOCKER_MEMORY,
-        "--pids-limit": str(LEAN_DOCKER_PIDS_LIMIT),
-        "--cap-drop": "ALL",
-        "--security-opt": "no-new-privileges:true",
-    }
-    for flag, required_value in required_pairs.items():
-        try:
-            index = command.index(flag)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"runner_required_option_missing:{flag}") from exc
-        if index + 1 >= len(command) or command[index + 1] != required_value:
-            raise HTTPException(status_code=400, detail=f"runner_required_option_mismatch:{flag}")
+
+def _validate_job(job: RunnerJob) -> dict[str, Any]:
+    if job.image not in ALLOWED_LEAN_DOCKER_IMAGES:
+        raise HTTPException(status_code=400, detail="runner_image_or_entrypoint_invalid")
+    if "@sha256:" not in job.image:
+        raise HTTPException(status_code=400, detail="runner_image_not_pinned")
     if LEAN_DOCKER_NETWORK != "none":
         raise HTTPException(status_code=400, detail="runner_network_policy_must_be_none")
-
-    mounts: list[dict[str, Any]] = []
-    allowed_targets = {
-        "/Lean/Launcher/bin/Debug/config.json": "ro",
-        "/Lean/Data": "ro",
-        "/Lean/Results": "rw",
-        "/Lean/Launcher/bin/Debug/storage": "rw",
-        "/Lean/Project": "ro",
-        "/Lean/Run": "ro",
-    }
-    for index, value in enumerate(command):
-        if value != "-v":
-            continue
-        if index + 1 >= len(command):
-            raise HTTPException(status_code=400, detail="runner_mount_missing")
-        raw = command[index + 1]
-        parts = raw.split(":")
-        if len(parts) not in {2, 3}:
-            raise HTTPException(status_code=400, detail="runner_mount_invalid")
-        source, target = parts[0], parts[1]
-        mode = parts[2] if len(parts) == 3 else "rw"
-        if target not in allowed_targets or mode != allowed_targets[target]:
-            raise HTTPException(status_code=400, detail=f"runner_mount_target_invalid:{target}")
-        if not (_within(source, HOST_PLATFORM_DIR) or _within(source, HOST_DATA_DIR)):
-            raise HTTPException(status_code=400, detail="runner_mount_source_outside_allowlist")
-        if ".." in Path(source).parts:
-            raise HTTPException(status_code=400, detail="runner_mount_path_traversal")
-        mounts.append({"source": source, "target": target, "mode": mode})
-    if {item["target"] for item in mounts} < {
-        "/Lean/Launcher/bin/Debug/config.json",
-        "/Lean/Data",
-        "/Lean/Results",
-        "/Lean/Project",
-    }:
-        raise HTTPException(status_code=400, detail="runner_mount_set_incomplete")
+    config_path = _validated_path(
+        job.configPath, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="config_path"
+    )
+    data_dir = _validated_path(
+        job.dataDir, HOST_DATA_DIR, visible_root=DATA_DIR, label="data_dir"
+    )
+    results_dir = _validated_path(
+        job.resultsDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="results_dir"
+    )
+    storage_dir = _validated_path(
+        job.storageDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="storage_dir"
+    )
+    project_dir = _validated_path(
+        job.projectDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="project_dir"
+    )
+    support_dir = (
+        _validated_path(
+            job.supportDir,
+            HOST_PLATFORM_DIR,
+            visible_root=PLATFORM_DIR,
+            label="support_dir",
+        )
+        if job.supportDir
+        else None
+    )
+    if Path(storage_dir) != Path(results_dir) / "object-store":
+        raise HTTPException(status_code=400, detail="runner_storage_path_invalid")
+    container_name = f"lean-{job.runId}"[:60]
+    mounts = [
+        {"source": config_path, "target": "/Lean/Launcher/bin/Debug/config.json", "mode": "ro"},
+        {"source": data_dir, "target": "/Lean/Data", "mode": "ro"},
+        {"source": results_dir, "target": "/Lean/Results", "mode": "rw"},
+        {"source": storage_dir, "target": "/Lean/Launcher/bin/Debug/storage", "mode": "rw"},
+        {"source": project_dir, "target": "/Lean/Project", "mode": "ro"},
+    ]
+    if support_dir:
+        mounts.append({"source": support_dir, "target": "/Lean/Run", "mode": "ro"})
+    docker = shutil.which("docker")
+    if not docker:
+        raise HTTPException(status_code=503, detail="runner_docker_unavailable")
+    command = [
+        docker,
+        "run",
+        "--rm",
+        "--name",
+        container_name,
+        "--network",
+        LEAN_DOCKER_NETWORK,
+        "--cpus",
+        LEAN_DOCKER_CPUS,
+        "--memory",
+        LEAN_DOCKER_MEMORY,
+        "--pids-limit",
+        str(LEAN_DOCKER_PIDS_LIMIT),
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "-e",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=256m",
+    ]
+    if LEAN_DOCKER_READ_ONLY:
+        command.append("--read-only")
+    for mount in mounts:
+        suffix = ":ro" if mount["mode"] == "ro" else ""
+        command.extend(["-v", f"{mount['source']}:{mount['target']}{suffix}"])
+    command.append(job.image)
 
     spec = {
+        "schemaVersion": 2,
         "runId": job.runId,
-        "containerName": job.containerName,
+        "containerName": container_name,
         "command": command,
-        "image": image,
+        "image": job.image,
         "mounts": mounts,
-        "resources": required_pairs,
+        "resources": {
+            "cpus": LEAN_DOCKER_CPUS,
+            "memory": LEAN_DOCKER_MEMORY,
+            "pidsLimit": str(LEAN_DOCKER_PIDS_LIMIT),
+            "capDrop": "ALL",
+            "noNewPrivileges": True,
+            "readOnly": bool(LEAN_DOCKER_READ_ONLY),
+        },
         "network": LEAN_DOCKER_NETWORK,
         "timeoutSeconds": job.timeoutSeconds,
     }
@@ -234,9 +269,9 @@ def run_job(job: RunnerJob, authorization: str | None = Header(default=None)) ->
             )
     output: list[str] = []
     result = DockerRunner(job.timeoutSeconds, allow_remote=False).run(
-        job.command,
+        spec["command"],
         output.append,
-        container_name=job.containerName,
+        container_name=spec["containerName"],
     )
     with db() as connection:
         connection.execute(

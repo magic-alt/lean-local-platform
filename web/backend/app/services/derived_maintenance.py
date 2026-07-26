@@ -451,7 +451,12 @@ def _clickhouse_incremental(scope: dict[str, str], start_date: str | None) -> di
 
 
 def _run_locked(run_id: str) -> dict[str, Any]:
-    from .parquet_lake import _available_scopes, export_market_daily_bars, parquet_consistency_report
+    from .parquet_lake import (
+        _available_scopes,
+        certify_consistent_production_datasets,
+        export_market_daily_bars,
+        parquet_consistency_report,
+    )
 
     run = maintenance_run(run_id)
     if not run:
@@ -587,6 +592,22 @@ def _run_locked(run_id: str) -> dict[str, Any]:
             )
             if not consistency.get("passed"):
                 errors.append({"layer": "parquet", "scopeKey": "*", "error": "parquet_consistency_failed"})
+            else:
+                certified_ids = certify_consistent_production_datasets(consistency)
+                consistency["certifiedDatasetIds"] = certified_ids
+                production_dataset_ids = {
+                    str(item.get("datasetId"))
+                    for item in consistency.get("items") or []
+                    if (item.get("sourceLineage") or {}).get("passed")
+                }
+                if production_dataset_ids and not production_dataset_ids.issubset(set(certified_ids)):
+                    errors.append(
+                        {
+                            "layer": "parquet",
+                            "scopeKey": "*",
+                            "error": "production_source_recertification_incomplete",
+                        }
+                    )
         effective_errors = list(errors)
         status = "success" if not effective_errors else "partial" if results else "failed"
         summary = {

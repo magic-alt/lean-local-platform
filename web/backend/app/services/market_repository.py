@@ -5,11 +5,37 @@ from datetime import datetime
 from typing import Any
 
 from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from .alerts import emit_alert
 from .source_gate import invalidate_source_certification
 
 
 INSTRUMENT_NAMESPACE = uuid.UUID("ed487062-bcf1-47c6-8f1a-1973b5f9edb0")
 WRITE_BATCH_SIZE = 5_000
+
+
+def _record_certification_revocation(
+    *,
+    source: str,
+    asset_class: str,
+    market: str,
+    venue: str,
+) -> None:
+    emit_alert(
+        "source_certification_revoked",
+        severity="critical",
+        title="Production source certification revoked",
+        message=f"{source}:{asset_class}:{market}:{venue} requires derived-layer revalidation.",
+        source="source_gate",
+        related_id=f"{source}:{asset_class}:{market}:{venue}",
+        details={
+            "source": source,
+            "assetClass": asset_class,
+            "market": market,
+            "venue": venue,
+            "automaticRecovery": "lean_web.recover_source_certifications",
+        },
+        dedupe_key=f"source_certification_revoked:{source}:{asset_class}:{market}:{venue}",
+    )
 
 
 def _chunks(values: list[Any], size: int = WRITE_BATCH_SIZE) -> list[list[Any]]:
@@ -232,15 +258,23 @@ def upsert_market_daily_bars(
             created_at = excluded.created_at
     """
     connection_factory = bulk_db if bulk else db
+    certification_revoked = False
     with connection_factory() as connection:
         for chunk in _chunks(parameters):
             connection.executemany(sql, chunk)
-        invalidate_source_certification(
+        certification_revoked = invalidate_source_certification(
             source,
             asset_class=asset_class,
             market=market,
             venue=venue or market,
             connection=connection,
+        )
+    if certification_revoked:
+        _record_certification_revocation(
+            source=source,
+            asset_class=asset_class.lower(),
+            market=market.lower(),
+            venue=(venue or market).lower(),
         )
     return {"instrumentId": item_id, "count": len(parameters)}
 
@@ -317,15 +351,23 @@ def upsert_market_daily_bars_batch(
             adj_factor=excluded.adj_factor, batch_id=excluded.batch_id, created_at=excluded.created_at
     """
     connection_factory = bulk_db if bulk else db
+    certification_revoked = False
     with connection_factory() as connection:
         for chunk in _chunks(parameters):
             connection.executemany(sql, chunk)
-        invalidate_source_certification(
+        certification_revoked = invalidate_source_certification(
             source,
             asset_class=asset_class,
             market=market,
             venue=target_venue,
             connection=connection,
+        )
+    if certification_revoked:
+        _record_certification_revocation(
+            source=source,
+            asset_class=asset_class.lower(),
+            market=market.lower(),
+            venue=target_venue,
         )
     return {"count": len(parameters), "symbols": len(symbols)}
 

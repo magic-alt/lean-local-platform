@@ -29,5 +29,7 @@
   {"slug":"history-independent-audit-2026-07-22","source":"history/independent-audit-2026-07-22.md","group":"reference","category":"history","order":420,"summary":"2026-07-22 独立成熟度审计失败结论、修复范围和未关闭证据。","status":"historical"},
   {"slug":"history-independent-audit-remediation-2026-07-23","source":"history/independent-audit-remediation-2026-07-23.md","group":"reference","category":"history","order":430,"summary":"AUD-001 至 AUD-019 的当前整改状态、证据和待复验项。","status":"historical"},
   {"slug":"history-independent-audit-2026-07-24","source":"history/independent-audit-2026-07-24.md","group":"reference","category":"history","order":440,"summary":"2026-07-24 复审状态：更新当前Level 3评级、评分与未关闭缺口。","status":"historical"},
-  {"slug":"history-p0-trust-release-2026-07-25","source":"history/p0-trust-release-2026-07-25.md","group":"reference","category":"history","order":450,"summary":"2026-07-25 P0 trust 与数据覆盖发布验收历史快照。","status":"historical"}
+  {"slug":"history-p0-trust-release-2026-07-25","source":"history/p0-trust-release-2026-07-25.md","group":"reference","category":"history","order":450,"summary":"2026-07-25 P0 trust 与数据覆盖发布验收历史快照。","status":"historical"},
+  {"slug":"audit-level5-system-review-2026-07-26","source":"audit/level5-platform-system-review-2026-07-26.md","group":"reference","category":"history","order":460,"summary":"2026-07-26 Level 5 独立系统审查与整改后状态。","status":"historical"},
+  {"slug":"audit-level5-remediation-checklist-2026-07-26","source":"audit/level5-remediation-checklist-2026-07-26.md","group":"reference","category":"history","order":470,"summary":"2026-07-26 Level 5 整改任务、顺序和完成定义。","status":"historical"}
 ]

@@ -207,7 +207,13 @@ PAPER_WALKFORWARD_HOUR = int(os.environ.get("LEAN_PAPER_WALKFORWARD_HOUR", "18")
 PAPER_WALKFORWARD_MINUTE = int(os.environ.get("LEAN_PAPER_WALKFORWARD_MINUTE", "45"))
 DERIVED_MAINTENANCE_HOUR = int(os.environ.get("LEAN_DERIVED_MAINTENANCE_HOUR", "19"))
 DERIVED_MAINTENANCE_MINUTE = int(os.environ.get("LEAN_DERIVED_MAINTENANCE_MINUTE", "30"))
+MYSQL_BACKUP_HOUR = int(os.environ.get("LEAN_MYSQL_BACKUP_HOUR", "3"))
+MYSQL_BACKUP_MINUTE = int(os.environ.get("LEAN_MYSQL_BACKUP_MINUTE", "0"))
+SCHEDULED_AUTOMATION_ENABLED = os.environ.get(
+    "LEAN_SCHEDULED_AUTOMATION_ENABLED",
+    "1",
+).lower() in {"1", "true", "yes", "on"}
 PAPER_ORDER_PIPELINE_V2_ENABLED = os.environ.get(
     "LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED",
-    "0",
+    "1",
 ).lower() in {"1", "true", "yes", "on"}

@@ -25,6 +25,32 @@ from app.db import database_backend, db  # noqa: E402
 from app.services.paper_accounts import rebuild_projection  # noqa: E402
 
 
+MIN_TRADING_DAYS = 21
+MIN_ACCOUNTS = 2
+
+
+def _acceptance_contract(args: argparse.Namespace) -> dict[str, Any]:
+    days = int(args.days)
+    accounts = int(args.accounts)
+    cash_values = [item.strip() for item in str(args.initial_cash).split(",") if item.strip()]
+    if days < MIN_TRADING_DAYS:
+        raise ValueError(f"paper_acceptance_requires_at_least_{MIN_TRADING_DAYS}_trading_days")
+    if accounts < MIN_ACCOUNTS:
+        raise ValueError(f"paper_acceptance_requires_at_least_{MIN_ACCOUNTS}_accounts")
+    if len(cash_values) != accounts:
+        raise ValueError("initial_cash_count_must_equal_accounts")
+    normalized_cash = [str(int(item)) for item in cash_values]
+    if any(int(item) <= 0 for item in normalized_cash):
+        raise ValueError("initial_cash_must_be_positive")
+    if len(set(normalized_cash)) < MIN_ACCOUNTS:
+        raise ValueError("paper_acceptance_requires_distinct_initial_cash")
+    return {
+        "requiredTradingDays": days,
+        "requiredAccounts": accounts,
+        "initialCash": normalized_cash,
+    }
+
+
 def _token() -> str:
     configured = os.environ.get("LEAN_API_TOKEN", "").strip()
     if configured:
@@ -165,6 +191,7 @@ def _create_account(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    contract = _acceptance_contract(args)
     if database_backend() != "mysql":
         raise RuntimeError("mysql_required")
     health = _expect(*_api(args.base_url, "GET", "/api/health"), {200}, "health")
@@ -188,32 +215,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("trusted_candidate_unavailable")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    first = _create_account(
-        args.base_url,
-        f"Acceptance A {stamp}",
-        "1000000",
-        risk_config={
-            "maxPositions": 10,
-            "maxPositionWeight": "1",
-            "cashFloor": "0",
-            "maxOrderAmount": "2000000",
-            "maxDailyTurnover": "1",
-        },
-    )
-    second = _create_account(
-        args.base_url,
-        f"Acceptance B {stamp}",
-        "1000000",
-        risk_config={
-            "maxPositions": 10,
-            "maxPositionWeight": "0.2",
-            "cashFloor": "50000",
-            "maxOrderAmount": "1",
-            "maxDailyTurnover": "0.5",
-        },
-    )
+    accounts: list[dict[str, Any]] = []
+    for index, cash in enumerate(contract["initialCash"]):
+        risk_config = (
+            {
+                "maxPositions": 10,
+                "maxPositionWeight": "1",
+                "cashFloor": "0",
+                "maxOrderAmount": "2000000",
+                "maxDailyTurnover": "1",
+            }
+            if index == 0
+            else {
+                "maxPositions": 10,
+                "maxPositionWeight": "0.2",
+                "cashFloor": "50000",
+                "maxOrderAmount": "1",
+                "maxDailyTurnover": "0.5",
+            }
+        )
+        accounts.append(
+            _create_account(
+                args.base_url,
+                f"Acceptance {index + 1} {stamp}",
+                cash,
+                risk_config=risk_config,
+            )
+        )
     deployments: list[dict[str, Any]] = []
-    for index, account in enumerate((first, second), start=1):
+    for index, account in enumerate(accounts, start=1):
         status, deployment = _api(
             args.base_url,
             "POST",
@@ -239,9 +269,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     cycles: list[dict[str, Any]] = []
     idempotency: list[dict[str, Any]] = []
-    for account, deployment in zip((first, second), deployments, strict=True):
+    for account, deployment in zip(accounts, deployments, strict=True):
         trading_dates: list[str | None] = [args.trading_date]
-        for date_index in range(2):
+        for date_index in range(contract["requiredTradingDays"]):
             trading_date = trading_dates[date_index]
             payload = {"tradingDate": trading_date} if trading_date else {}
             first_status, first_dispatch = _api(
@@ -284,12 +314,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("successful_fill_evidence_missing")
     if not any(int(item["rejected_count"]) > 0 for item in cycles):
         raise RuntimeError("risk_rejection_evidence_missing")
+    if not any(int(item["signal_count"]) == 0 for item in cycles):
+        raise RuntimeError("no_signal_day_evidence_missing")
+    observed_dates = {str(item["trading_date"]) for item in cycles}
+    if len(observed_dates) < contract["requiredTradingDays"]:
+        raise RuntimeError("insufficient_distinct_trading_days")
+    for account in accounts:
+        account_cycles = [
+            item for item in cycles if str(item["paper_account_id"]) == str(account["id"])
+        ]
+        if len(account_cycles) < contract["requiredTradingDays"]:
+            raise RuntimeError(f"insufficient_account_trading_days:{account['id']}")
 
-    ledgers = {account["id"]: _ledger_evidence(account["id"]) for account in (first, second)}
-    if ledgers[first["id"]]["openingLedgerEntryId"] == ledgers[second["id"]]["openingLedgerEntryId"]:
+    ledgers = {account["id"]: _ledger_evidence(account["id"]) for account in accounts}
+    if len({item["openingLedgerEntryId"] for item in ledgers.values()}) != len(accounts):
         raise RuntimeError("account_opening_ledger_not_isolated")
     api_evidence: dict[str, Any] = {}
-    for account in (first, second):
+    for account in accounts:
         api_evidence[account["id"]] = {}
         for endpoint in ("overview", "positions", "orders", "trades", "signals", "daily-reports", "audit"):
             status, body = _api(
@@ -308,7 +349,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "GET",
             "/api/paper/accounts/compare?"
             + urllib.parse.urlencode(
-                [("accountId", first["id"]), ("accountId", second["id"])]
+                [("accountId", account["id"]) for account in accounts]
             ),
         ),
         {200},
@@ -325,7 +366,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "dependencies": dependencies,
         "strategyProjectFingerprints": [item["strategy_fingerprint"] for item in deployments],
         "datasetVersions": [item["dataset_version_id"] for item in deployments],
-        "accountIds": [first["id"], second["id"]],
+        "acceptanceScope": {
+            **contract,
+            "observedTradingDates": sorted(observed_dates),
+            "observedTradingDayCount": len(observed_dates),
+            "requiredScenarios": [
+                "fill",
+                "no_signal",
+                "risk_rejection",
+                "idempotent_duplicate_dispatch",
+                "account_isolation",
+            ],
+        },
+        "accountIds": [account["id"] for account in accounts],
         "deploymentIds": [item["id"] for item in deployments],
         "cycleIds": [item["id"] for item in cycles],
         "inputDigests": [item["input_fingerprint"] for item in cycles],
@@ -349,6 +402,9 @@ def main() -> int:
     parser.add_argument("--project-id", default=os.environ.get("PAPER_ACCEPTANCE_PROJECT_ID"))
     parser.add_argument("--source-backtest-id", default=os.environ.get("PAPER_ACCEPTANCE_BACKTEST_ID"))
     parser.add_argument("--trading-date", default=os.environ.get("PAPER_ACCEPTANCE_TRADING_DATE"))
+    parser.add_argument("--days", type=int, default=MIN_TRADING_DAYS)
+    parser.add_argument("--accounts", type=int, default=MIN_ACCOUNTS)
+    parser.add_argument("--initial-cash", default="1000000,3000000")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument(
         "--evidence",
