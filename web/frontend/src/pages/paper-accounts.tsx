@@ -277,8 +277,23 @@ function AccountWizard({
       title: "账户",
       content: (
         <div className="paper-wizard-grid">
-          <Form.Item name="name" label="账户名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="description" label="说明"><Input.TextArea rows={2} /></Form.Item>
+          <Form.Item
+            name="name"
+            label="账户名称"
+            rules={[
+              { required: true, whitespace: true, message: "请输入账户名称" },
+              { max: 191, message: "账户名称不能超过 191 个字符" }
+            ]}
+          >
+            <Input maxLength={191} showCount />
+          </Form.Item>
+          <Form.Item
+            name="description"
+            label="说明"
+            rules={[{ max: 1024, message: "说明不能超过 1024 个字符" }]}
+          >
+            <Input.TextArea rows={2} maxLength={1024} showCount />
+          </Form.Item>
           <Form.Item name="marketScope" label="市场" rules={[{ required: true }]}>
             <Select options={[{ value: "china", label: "中国 A 股（日线）" }]} />
           </Form.Item>
