@@ -13,7 +13,8 @@
     "test:e2e:report": "NODE_PATH=./node_modules playwright show-report ../../tests/e2e/reports/html",
     "test:e2e:smoke": "NODE_PATH=./node_modules playwright test --project=chromium --grep @smoke",
     "test:e2e:backtest": "NODE_PATH=./node_modules playwright test --project=chromium --grep @backtest",
-    "test:e2e:compat": "NODE_PATH=./node_modules playwright test --project=chromium-1920",
+    "test:e2e:compat": "NODE_PATH=./node_modules playwright test --project=chromium-1920 --project=chromium-1280 --project=chromium-tablet",
+    "test:e2e:ui-audit": "E2E_UI_ONLY=1 NODE_PATH=./node_modules playwright test 15-ui-audit.spec.ts --project=chromium-1280 --project=chromium-tablet",
     "docs:screenshots": "UPDATE_DOC_SCREENSHOTS=1 NODE_PATH=./node_modules playwright test 11-docs-screenshots.spec.ts --project=chromium"
   },
   "dependencies": {

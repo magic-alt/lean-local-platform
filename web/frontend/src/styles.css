@@ -9,6 +9,23 @@ body {
   box-sizing: border-box;
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 1100;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+  transform: translateY(-160%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .app-layout {
   min-height: 100vh;
 }
@@ -104,6 +121,12 @@ body {
   margin-bottom: 16px;
 }
 
+.paper-risk-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+}
+
 .paper-account-tabs .ant-tabs-content-holder {
   min-width: 0;
 }
@@ -115,7 +138,8 @@ body {
   }
 
   .paper-account-card__metrics,
-  .paper-summary-metrics {
+  .paper-summary-metrics,
+  .paper-risk-metrics {
     grid-template-columns: repeat(2, minmax(100px, 1fr));
   }
 
@@ -1539,7 +1563,7 @@ body {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 991px) {
   .app-sidebar {
     display: none !important;
   }
@@ -1610,6 +1634,10 @@ body {
 }
 
 @media (max-width: 640px) {
+  .paper-risk-metrics {
+    grid-template-columns: 1fr;
+  }
+
   .grid {
     grid-template-columns: 1fr;
   }

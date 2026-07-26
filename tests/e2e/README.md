@@ -31,12 +31,17 @@ npm run test:e2e:smoke
 npm run test:e2e:backtest
 npm run test:e2e
 npm run test:e2e:compat
+npm run test:e2e:ui-audit
 npm run test:e2e:report
 ```
 
 By default global setup starts the Docker infrastructure services `mysql`, `redis`, and `clickhouse`, then starts the FastAPI API and Celery worker locally from `web/backend/.venv`. Vite is started through the Playwright `webServer`.
 
-`test:e2e:compat` currently runs only the `chromium-1920` desktop project. Mobile, Firefox, and WebKit projects were skipped for this round by request.
+`test:e2e:compat` runs the responsive and smoke cases at 1920×1080 plus the dedicated
+shell audit at 1280×800 and 768×1024. Use `test:e2e:ui-audit` for the two required
+audit viewports only; that command isolates API calls with route mocks and does not
+start or seed the backend stack. Firefox and WebKit are not part of the current
+compatibility matrix.
 
 To force the API and worker to run through the compose app profile:
 

@@ -93,6 +93,14 @@ async function writeEnvironmentReport(stackStarted: boolean) {
 
 async function globalSetup() {
   ensureE2EDirs();
+  if (process.env.E2E_UI_ONLY === "1") {
+    fs.writeFileSync(reportPath("environment.json"), JSON.stringify({
+      uiOnly: true,
+      stackStarted: false,
+      baseURL: process.env.PW_BASE_URL || "http://127.0.0.1:15173"
+    }, null, 2), "utf-8");
+    return;
+  }
   stopPreviousLocalProcesses();
   const composeEnv = {
     ...process.env,

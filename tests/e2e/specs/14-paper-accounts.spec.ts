@@ -110,7 +110,7 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
           id: `deployment-${accountId}`,
           paper_account_id: accountId,
           version: 1,
-          name: payload.name,
+          name: payload.name || `${accountId} primary strategy`,
           status: "active",
           is_primary: 1,
           project_id: payload.projectId,
@@ -201,6 +201,7 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
         json: {
           account,
           deployment: deployments.get("account-1")?.[0],
+          dataTrust: { valuationTrusted: true, reason: null },
           latestCycle: {
             id: "cycle-1",
             paper_account_id: "account-1",
@@ -244,7 +245,17 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
       });
     });
     await page.route("**/api/paper/accounts/account-1/orders", async (route) => {
-      await route.fulfill({ json: { items: [{ id: "order-1", symbol: "510300", side: "buy", status: "FILLED" }], count: 1, limit: 50, offset: 0 } });
+      await route.fulfill({
+        json: {
+          items: [
+            { id: "order-1", symbol: "510300", side: "buy", status: "FILLED" },
+            { id: "order-2", symbol: "000001", side: "buy", status: "REJECTED", reject_reason: "insufficient_cash", trade_date: "2024-07-08" }
+          ],
+          count: 2,
+          limit: 50,
+          offset: 0
+        }
+      });
     });
     await page.route("**/api/paper/accounts/account-1/trades", async (route) => {
       await route.fulfill({ json: { items: [{ id: "fill-1", symbol: "510300", side: "buy", precise_quantity: "10000", precise_price: "4.0" }], count: 1, limit: 50, offset: 0 } });
@@ -277,6 +288,13 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
     await expect(page.getByRole("columnheader", { name: "最新认证价格" })).toBeVisible();
     await page.getByRole("tab", { name: "Signals" }).click();
     await expect(page.getByRole("cell", { name: "no_signal", exact: true }).first()).toBeVisible();
+    await page.getByRole("tab", { name: "Risk Controls" }).click();
+    await expect(page.getByText("风控页只展示已持久化的拒单与阻断证据")).toBeVisible();
+    await expect(page.getByText("拒绝 / 阻断信号")).toBeVisible();
+    await expect(page.getByRole("cell", { name: "insufficient_cash" })).toBeVisible();
+    await page.getByRole("tab", { name: "Deployments" }).click();
+    await expect(page.getByRole("button", { name: /Run now/ })).toBeVisible();
+    await expect(page.getByRole("rowheader", { name: "Checkpoint" })).toBeVisible();
     await page.getByRole("tab", { name: "Audit" }).click();
     await expect(page.getByText("审计 局部加载失败")).toBeVisible();
     await expect(page.locator(".app-content")).not.toBeEmpty();

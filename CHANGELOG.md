@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Close the Level 5 UI review findings by adding route-aware grouped navigation with a first-class Legacy Paper entry, consistent English labels, keyboard-accessible landmarks and icon controls, dedicated Paper risk-control and strategy-deployment tabs, and isolated Playwright coverage at 1280×800 and 768×1024.
 - Complete the Paper valuation remediation by certifying equity and index closes against their matching Source Gate scopes, requiring exact benchmark dates, failing daily snapshots closed when benchmark/checkpoint evidence is absent, and extending regression coverage for checkpoint and ledger sequence integrity.
 - Make Paper valuation point-in-time and source-bounded, compute benchmark and excess return in the canonical projection writer with missing data failing closed, and write account ledger context and Decimal amounts once at append time under a unique generation sequence.
 - Pause runnable Paper accounts while Level 5 remediation addresses untrusted look-ahead valuation, surface a non-dismissible valuation-trust warning and machine-readable `dataTrust` flag across Paper account performance APIs, and mark notification outbox records as failed when no external channel is configured instead of falsely reporting delivery.

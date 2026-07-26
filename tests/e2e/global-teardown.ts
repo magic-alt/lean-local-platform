@@ -22,6 +22,14 @@ function stopLocalProcesses() {
 }
 
 async function globalTeardown() {
+  if (process.env.E2E_UI_ONLY === "1") {
+    fs.writeFileSync(reportPath("teardown.json"), JSON.stringify({
+      completedAt: new Date().toISOString(),
+      uiOnly: true,
+      stoppedStack: false
+    }, null, 2), "utf-8");
+    return;
+  }
   if (process.env.E2E_STOP_LOCAL_SERVICES !== "0") {
     stopLocalProcesses();
   }

@@ -570,21 +570,23 @@ export function PaperAccountsPage() {
         <Space wrap>
           <Input.Search
             allowClear
+            aria-label="搜索 Paper 账户"
             placeholder="搜索账户或说明"
             onSearch={setKeyword}
             style={{ width: 260 }}
           />
           <Select
             allowClear
+            aria-label="筛选账户状态"
             placeholder="账户状态"
             style={{ width: 160 }}
             onChange={setStatus}
             options={["draft", "active", "paused", "error", "archived"].map((value) => ({ value, label: value }))}
           />
-          <Select value="china" disabled style={{ width: 150 }} options={[{ value: "china", label: "中国 A 股" }]} />
-          <Radio.Group value={view} onChange={(event) => setView(event.target.value)}>
-            <Radio.Button value="cards"><AppstoreOutlined /></Radio.Button>
-            <Radio.Button value="table"><BarsOutlined /></Radio.Button>
+          <Select aria-label="市场范围" value="china" disabled style={{ width: 150 }} options={[{ value: "china", label: "中国 A 股" }]} />
+          <Radio.Group aria-label="账户展示方式" value={view} onChange={(event) => setView(event.target.value)}>
+            <Radio.Button aria-label="卡片视图" value="cards"><AppstoreOutlined /></Radio.Button>
+            <Radio.Button aria-label="表格视图" value="table"><BarsOutlined /></Radio.Button>
           </Radio.Group>
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         </Space>
@@ -670,7 +672,8 @@ export function PaperAccountDetailPage() {
   const loadedTabs = useRef(new Set<string>());
   const activeAccountId = useRef(id);
   const navigate = useNavigate();
-  const activeTab = searchParams.get("tab") || "overview";
+  const requestedTab = searchParams.get("tab") || "overview";
+  const activeTab = requestedTab === "automation" ? "deployments" : requestedTab;
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -708,7 +711,13 @@ export function PaperAccountDetailPage() {
       requests.push(["signals", api.paperAccountSignals(id)]);
     } else if (tab === "performance") {
       requests.push(["performance", api.paperAccountPerformance(id)]);
-    } else if (tab === "automation") {
+    } else if (tab === "risk") {
+      requests.push(
+        ["orders", api.paperAccountOrders(id)],
+        ["signals", api.paperAccountSignals(id)],
+        ["cycles", api.paperAccountCycles(id)]
+      );
+    } else if (tab === "deployments") {
       requests.push(
         ["deployments", api.paperDeployments(id)],
         ["cycles", api.paperAccountCycles(id)],
@@ -804,6 +813,28 @@ export function PaperAccountDetailPage() {
     String(item.tradingDate || item.trading_date || ""),
     Number(item.cumulativeReturn || item.cumulative_return || 0)
   ]);
+  const rejectedOrders = orders.filter((item) => {
+    const status = String(item.status || "").toLowerCase();
+    return status.includes("reject") || Boolean(item.reject_reason);
+  });
+  const blockedSignals = signals.filter((item) => {
+    const disposition = String(item.disposition || "").toLowerCase();
+    return disposition.includes("reject") || disposition.includes("block");
+  });
+  const rejectedCycleCount = cycles.reduce((total, item) => total + Number(item.rejected_count || 0), 0);
+  const riskEvidence: Array<Record<string, unknown>> = [
+    ...rejectedOrders.map((item) => ({
+      ...item,
+      kind: "order",
+      reason: item.reject_reason
+    })),
+    ...blockedSignals.map((item) => ({
+      ...item,
+      kind: "signal",
+      reason: item.no_trade_reason,
+      status: item.disposition
+    }))
+  ];
 
   const positionColumns = [
     { title: "证券代码", dataIndex: "symbol", fixed: "left" as const, render: (value: string, row: PaperPosition) => <Button type="link" onClick={() => setPositionDrawer(row)}>{value}</Button> },
@@ -950,8 +981,48 @@ export function PaperAccountDetailPage() {
       ]} />
     },
     {
-      key: "automation",
-      label: "Automation",
+      key: "risk",
+      label: "Risk Controls",
+      children: (
+        <>
+          <DataError label="风险委托" error={errors.orders} />
+          <DataError label="风险信号" error={errors.signals} />
+          <DataError label="风险周期" error={errors.cycles} />
+          <Alert
+            type="info"
+            showIcon
+            message="风控页只展示已持久化的拒单与阻断证据"
+            description="约束判断以订单、信号和执行周期记录为准；没有拒绝记录不等同于绕过风控。"
+            style={{ marginBottom: 16 }}
+          />
+          <div className="paper-risk-metrics">
+            <Card size="small"><Statistic title="拒绝委托" value={rejectedOrders.length} /></Card>
+            <Card size="small"><Statistic title="拒绝 / 阻断信号" value={blockedSignals.length} /></Card>
+            <Card size="small"><Statistic title="周期拒绝计数" value={rejectedCycleCount} /></Card>
+          </div>
+          <Card title="拒绝与阻断证据" style={{ marginTop: 16 }}>
+            {rejectedOrders.length || blockedSignals.length ? (
+              <Table<Record<string, unknown>>
+                rowKey={(row) => `${String(row.kind)}-${String(row.id)}`}
+                pagination={false}
+                scroll={{ x: 900 }}
+                dataSource={riskEvidence}
+                columns={[
+                  { title: "类型", dataIndex: "kind", fixed: "left", render: (value) => <Tag>{String(value).toUpperCase()}</Tag> },
+                  { title: "标的", dataIndex: "symbol", render: (value) => value || "—" },
+                  { title: "状态", dataIndex: "status", render: (value) => <StatusBadge value={String(value)} /> },
+                  { title: "原因", dataIndex: "reason", render: (value) => value || "—" },
+                  { title: "交易日", render: (_, row) => String(row.trade_date || row.intended_execution_date || "—") }
+                ]}
+              />
+            ) : <Empty description="当前加载范围内没有拒绝或阻断记录" />}
+          </Card>
+        </>
+      )
+    },
+    {
+      key: "deployments",
+      label: "Deployments",
       children: (
         <>
           <DataError label="运行周期" error={errors.cycles} />

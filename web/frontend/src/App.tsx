@@ -14,7 +14,7 @@ import {
   UnorderedListOutlined,
   MenuOutlined
 } from "@ant-design/icons";
-import { HashRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { lazy, Suspense, useMemo, useState } from "react";
 
 const loadDashboardPage = () => import("./pages/dashboard");
@@ -58,24 +58,81 @@ function navigationLink(to: string, label: string, preload: () => Promise<unknow
 
 function AppShell() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const location = useLocation();
+  const selectedMenuKey = useMemo(() => {
+    const pathname = location.pathname;
+    if (pathname.startsWith("/paper/legacy")) return "/paper/legacy";
+    if (pathname.startsWith("/paper")) return "/paper";
+    if (pathname.startsWith("/runs/") || pathname.startsWith("/backtests")) return "/backtests";
+    if (pathname.startsWith("/docs")) return "/docs";
+    if (pathname.startsWith("/optimization") || pathname.startsWith("/compare")) return "/optimization";
+    if (pathname.startsWith("/research") || pathname.startsWith("/ashare-research")) return "/research";
+    const directMatch = [
+      "/projects",
+      "/data",
+      "/reports",
+      "/insights",
+      "/tasks",
+      "/monitoring",
+      "/settings"
+    ].find((key) => pathname === key || pathname.startsWith(`${key}/`));
+    return pathname === "/" ? "/" : directMatch;
+  }, [location.pathname]);
   const menuItems = useMemo(() => [
-    { key: "/", icon: <AppstoreOutlined />, label: navigationLink("/", "Dashboard", loadDashboardPage) },
-    { key: "/projects", icon: <FolderOpenOutlined />, label: navigationLink("/projects", "Projects", loadCorePages) },
-    { key: "/data", icon: <DatabaseOutlined />, label: navigationLink("/data", "Data", loadCorePages) },
-    { key: "/backtests", icon: <PlayCircleOutlined />, label: navigationLink("/backtests", "Backtests", loadCorePages) },
-    { key: "/optimization", icon: <SlidersOutlined />, label: navigationLink("/optimization", "Optimization", loadCorePages) },
-    { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper", loadPaperAccountPages) },
-    { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "Research", loadResearchPages) },
-    { key: "/docs", icon: <ReadOutlined />, label: navigationLink("/docs", "文档", loadDocsPages) },
-    { key: "/reports", icon: <FileTextOutlined />, label: navigationLink("/reports", "Reports", loadOperationsPages) },
-    { key: "/insights", icon: <BulbOutlined />, label: navigationLink("/insights", "Insights", loadInsightsPages) },
-    { key: "/tasks", icon: <UnorderedListOutlined />, label: navigationLink("/tasks", "Tasks", loadOperationsPages) },
-    { key: "/monitoring", icon: <DashboardOutlined />, label: navigationLink("/monitoring", "Monitoring", loadOperationsPages) },
-    { key: "/settings", icon: <SettingOutlined />, label: navigationLink("/settings", "Settings", loadOperationsPages) }
+    {
+      type: "group" as const,
+      label: "Workspace",
+      children: [
+        { key: "/", icon: <AppstoreOutlined />, label: navigationLink("/", "Dashboard", loadDashboardPage) }
+      ]
+    },
+    {
+      type: "group" as const,
+      label: "Build & Validate",
+      children: [
+        { key: "/projects", icon: <FolderOpenOutlined />, label: navigationLink("/projects", "Projects", loadCorePages) },
+        { key: "/data", icon: <DatabaseOutlined />, label: navigationLink("/data", "Data", loadCorePages) },
+        { key: "/backtests", icon: <PlayCircleOutlined />, label: navigationLink("/backtests", "Backtests", loadCorePages) },
+        { key: "/optimization", icon: <SlidersOutlined />, label: navigationLink("/optimization", "Optimization", loadCorePages) }
+      ]
+    },
+    {
+      type: "group" as const,
+      label: "Research & Execution",
+      children: [
+        { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "Research", loadResearchPages) },
+        { key: "/insights", icon: <BulbOutlined />, label: navigationLink("/insights", "Insights", loadInsightsPages) },
+        { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper Accounts", loadPaperAccountPages) },
+        { key: "/paper/legacy", icon: <ExperimentOutlined />, label: navigationLink("/paper/legacy", "Legacy Paper", loadOperationsPages) }
+      ]
+    },
+    {
+      type: "group" as const,
+      label: "Operations",
+      children: [
+        { key: "/reports", icon: <FileTextOutlined />, label: navigationLink("/reports", "Reports", loadOperationsPages) },
+        { key: "/tasks", icon: <UnorderedListOutlined />, label: navigationLink("/tasks", "Tasks", loadOperationsPages) },
+        { key: "/monitoring", icon: <DashboardOutlined />, label: navigationLink("/monitoring", "Monitoring", loadOperationsPages) }
+      ]
+    },
+    {
+      type: "group" as const,
+      label: "Platform",
+      children: [
+        { key: "/docs", icon: <ReadOutlined />, label: navigationLink("/docs", "Docs", loadDocsPages) },
+        { key: "/settings", icon: <SettingOutlined />, label: navigationLink("/settings", "Settings", loadOperationsPages) }
+      ]
+    }
   ], []);
   return (
     <Layout className="app-layout">
-      <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0"><div className="app-logo">LEAN Local</div><Menu theme="dark" mode="inline" items={menuItems} /></Sider>
+      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0">
+        <div className="app-logo">LEAN Local</div>
+        <nav aria-label="Primary navigation">
+          <Menu theme="dark" mode="inline" items={menuItems} selectedKeys={selectedMenuKey ? [selectedMenuKey] : []} />
+        </nav>
+      </Sider>
       <Layout>
         <Header className="app-header">
           <Space className="app-header__content">
@@ -89,7 +146,7 @@ function AppShell() {
             <span className="app-header__badges"><Tag color="blue">docker</Tag><Tag color="green">multi-asset</Tag><Tag color="purple">paper</Tag></span>
           </Space>
         </Header>
-        <Content className="app-content">
+        <Content id="main-content" className="app-content" role="main" tabIndex={-1}>
           <Suspense fallback={<div className="route-loading"><Spin size="large" /></div>}>
             <Routes>
               <Route path="/" element={<Dashboard />} />
@@ -133,7 +190,14 @@ function AppShell() {
         open={mobileNavigationOpen}
         onClose={() => setMobileNavigationOpen(false)}
       >
-        <Menu mode="inline" items={menuItems} onClick={() => setMobileNavigationOpen(false)} />
+        <nav aria-label="Mobile navigation">
+          <Menu
+            mode="inline"
+            items={menuItems}
+            selectedKeys={selectedMenuKey ? [selectedMenuKey] : []}
+            onClick={() => setMobileNavigationOpen(false)}
+          />
+        </nav>
       </Drawer>
     </Layout>
   );

@@ -1529,7 +1529,13 @@ export function ProjectsPage() {
                 <Space>
                   <Button size="small" type="primary" onClick={() => openProject(project)}>Open</Button>
                   <Button size="small" icon={<CopyOutlined />} onClick={() => duplicateProject(project)}>Duplicate</Button>
-                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteProject(project)} />
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    aria-label={`Delete ${project.display_name || project.name}`}
+                    onClick={() => deleteProject(project)}
+                  />
                 </Space>
               )
             }

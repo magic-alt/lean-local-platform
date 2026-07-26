@@ -344,7 +344,13 @@ export function BatchWorkbench({
           { title: "操作", render: (_, row) => <Space wrap>
             <Button size="small" onClick={() => open(row)}>详情</Button>
             <Popconfirm title="删除这个批次记录？" description="仅删除批次清单和批次快照；批次已经产生的回测/优化结果仍在各自页面管理。" okText="删除" okButtonProps={{ danger: true }} disabled={["queued", "running"].includes(row.status)} onConfirm={async () => { try { await api.deleteExperimentBatch(row.id); if (selected?.id === row.id) setSelected(undefined); message.success("批次记录已删除"); await reload(); } catch (error) { message.error((error as Error).message); } }}>
-              <Button size="small" danger icon={<DeleteOutlined />} disabled={["queued", "running"].includes(row.status)} />
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                aria-label={`删除批次 ${row.name || row.id}`}
+                disabled={["queued", "running"].includes(row.status)}
+              />
             </Popconfirm>
           </Space> }
         ]} />
