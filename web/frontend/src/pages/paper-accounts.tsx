@@ -47,6 +47,7 @@ import type {
   PaperAccountComparison,
   PaperAccountOverview,
   PaperBacktestCandidate,
+  PaperDataTrust,
   PaperDeployment,
   PaperExecutionCycle,
   PaperPosition,
@@ -508,12 +509,14 @@ export function PaperAccountsPage() {
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState<string>();
+  const [dataTrust, setDataTrust] = useState<PaperDataTrust | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const result = await api.paperAccounts({ keyword, status });
       setAccounts(result.items);
+      setDataTrust(result.dataTrust || null);
       setSelected((ids) => ids.filter((id) => result.items.some((account) => account.id === id)));
     } catch (error) {
       message.error(`账户列表加载失败：${(error as Error).message}`);
@@ -554,13 +557,15 @@ export function PaperAccountsPage() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setWizardOpen(true)}>新建模拟账户</Button>
         </Space>
       </div>
-      <Alert
-        showIcon
-        type="error"
-        message="净值与超额收益当前不可信（L5-PAPER-001/002），已暂停自动执行"
-        description="当前 Paper 账户的估值存在前视风险；请勿据此做交易或绩效判断，直至修复完成并重新认证。"
-        style={{ marginBottom: 16 }}
-      />
+      {dataTrust && !dataTrust.valuationTrusted ? (
+        <Alert
+          showIcon
+          type="error"
+          message="历史净值与超额收益待重新认证，自动执行仍暂停"
+          description="前视估值与 benchmark/excess 计算路径已修复；正式库完成迁移、历史重算和 Source Gate 重新认证前，请勿使用旧绩效数据做交易判断。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
       <Card className="paper-filter-card">
         <Space wrap>
           <Input.Search
@@ -1020,13 +1025,15 @@ export function PaperAccountDetailPage() {
 
   return (
     <>
-      <Alert
-        type="error"
-        showIcon
-        message="净值与超额收益当前不可信（L5-PAPER-001/002），已暂停自动执行"
-        description="当前 Paper 账户的估值存在前视风险；请勿据此做交易或绩效判断，直至修复完成并重新认证。"
-        style={{ marginBottom: 16 }}
-      />
+      {!overview.dataTrust.valuationTrusted ? (
+        <Alert
+          type="error"
+          showIcon
+          message="历史净值与超额收益待重新认证，自动执行仍暂停"
+          description="前视估值与 benchmark/excess 计算路径已修复；正式库完成迁移、历史重算和 Source Gate 重新认证前，请勿使用旧绩效数据做交易判断。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
       <div className="toolbar paper-toolbar">
         <div>
           <Space>

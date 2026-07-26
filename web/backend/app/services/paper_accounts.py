@@ -75,7 +75,7 @@ RATE_FIELDS = {
 
 PAPER_ACCOUNT_DATA_TRUST = {
     "valuationTrusted": False,
-    "reason": "lookahead_valuation",
+    "reason": "historical_recertification_pending",
 }
 
 
@@ -2079,6 +2079,14 @@ def rebuild_current_projection(account_id: str) -> dict[str, Any]:
 def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, Any]:
     cycle = get_cycle(cycle_id)
     account_projection = dict(projection.get("account") or {})
+    benchmark_symbol = str(account_projection.get("benchmark_symbol") or "").strip().upper()
+    benchmark_return = account_projection.get("benchmark_return")
+    source_ledger_sequence = account_projection.get("source_ledger_sequence")
+    source_checkpoint_digest = account_projection.get("source_checkpoint_digest")
+    if not benchmark_symbol or benchmark_return is None:
+        raise CanonicalStateDivergence(f"benchmark_projection_missing:{cycle['paper_account_id']}:{cycle_id}")
+    if source_ledger_sequence is None or not source_checkpoint_digest:
+        raise CanonicalStateDivergence(f"checkpoint_projection_missing:{cycle['paper_account_id']}:{cycle_id}")
     payload = {
         "accountId": cycle["paper_account_id"],
         "deploymentId": cycle["deployment_id"],
@@ -2137,9 +2145,9 @@ def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, 
                 cycle["trading_date"],
                 json_dump(account_projection),
                 benchmark_symbol,
-                account_projection.get("benchmark_return") or "0",
-                account_projection.get("source_ledger_sequence") or 0,
-                account_projection.get("source_checkpoint_digest") or cycle["account_checkpoint_digest"],
+                benchmark_return,
+                source_ledger_sequence,
+                source_checkpoint_digest,
                 utc_now(),
             ),
         )
@@ -2646,11 +2654,20 @@ def performance(account_id: str, start_date: str | None = None, end_date: str | 
                 tuple(params),
             ).fetchall()
         )
+    missing_benchmark_dates = [
+        str(item["trading_date"])
+        for item in rows
+        if item.get("benchmark_return") is None
+    ]
+    if missing_benchmark_dates:
+        raise CanonicalStateDivergence(
+            f"benchmark_snapshot_missing:{account_id}:{','.join(missing_benchmark_dates)}"
+        )
     points = [
         {
             "tradingDate": item["trading_date"],
             **(item.get("projection") or {}),
-            "benchmarkReturn": format(Decimal(str(item.get("benchmark_return") or 0)), "f"),
+            "benchmarkReturn": format(Decimal(str(item["benchmark_return"])), "f"),
         }
         for item in rows
     ]
@@ -2704,6 +2721,8 @@ def compare_accounts(account_ids: list[str], start_date: str | None = None, end_
     common_valuation = min(valuations) if valuations else None
     rows = []
     for account in accounts:
+        if account.get("benchmark_return") is None:
+            raise CanonicalStateDivergence(f"benchmark_projection_missing:{account['id']}")
         cycles = list_cycles(account["id"], start_date=start_date, end_date=end_date, limit=200)["items"]
         trades = list_trades(account["id"], start_date=start_date, end_date=end_date, limit=200)["items"]
         rejected = sum(int(item.get("rejected_count") or 0) for item in cycles)
@@ -2715,7 +2734,7 @@ def compare_accounts(account_ids: list[str], start_date: str | None = None, end_
                 "benchmarkSymbol": account["benchmark_symbol"],
                 "valuationDate": common_valuation,
                 "cumulativeReturn": account.get("cumulative_return") or "0",
-                "benchmarkReturn": account.get("benchmark_return") or "0",
+                "benchmarkReturn": account["benchmark_return"],
                 "excessReturn": account.get("excess_return") or "0",
                 "maxDrawdown": None,
                 "volatility": None,

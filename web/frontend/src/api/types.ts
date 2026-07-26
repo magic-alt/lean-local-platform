@@ -996,7 +996,7 @@ export interface PagedResponse<T> {
 
 export interface PaperDataTrust {
   valuationTrusted: boolean;
-  reason: "lookahead_valuation";
+  reason: "historical_recertification_pending" | null;
 }
 
 export interface PaperAccount {

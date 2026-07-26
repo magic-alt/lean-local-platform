@@ -25,15 +25,19 @@ def close_price(
     *,
     source: str | None,
     allow_research_source: bool = False,
+    asset_class: str = "equity",
     market: str = "china",
 ) -> dict[str, Any]:
     as_of_date = _date(as_of, "as_of")
+    normalized_asset_class = str(asset_class).strip().lower()
+    if normalized_asset_class not in {"equity", "index"}:
+        raise ValueError(f"Unsupported daily close asset class: {asset_class}")
     try:
         context = resolve_source_context(
             {},
             source=source,
             allow_research_source=allow_research_source,
-            asset_class="equity",
+            asset_class=normalized_asset_class,
             market=market,
             venue=market,
         )
@@ -45,12 +49,18 @@ def close_price(
             select symbol,trade_date,close,source,asset_class
             from market_daily_bars
             where symbol=? and market=? and source=?
-              and asset_class in ('equity','index')
+              and asset_class=?
               and resolution='daily' and data_type='trade' and adjust='raw'
               and trade_date<=? and close is not null
             order by trade_date desc limit 1
             """,
-            (str(symbol).upper(), market, context["source"], as_of_date),
+            (
+                str(symbol).upper(),
+                market,
+                context["source"],
+                normalized_asset_class,
+                as_of_date,
+            ),
         ).fetchone()
     if row is None:
         raise MarketDataUnavailable(
@@ -89,6 +99,7 @@ def benchmark_return(
         start_date,
         source=source,
         allow_research_source=allow_research_source,
+        asset_class="index",
         market=market,
     )
     closing = close_price(
@@ -96,8 +107,17 @@ def benchmark_return(
         end_date,
         source=source,
         allow_research_source=allow_research_source,
+        asset_class="index",
         market=market,
     )
+    if opening["tradeDate"] != start_date:
+        raise MarketDataUnavailable(
+            f"benchmark_data_unavailable:{str(symbol).upper()}:{start_date}:{opening['source']}"
+        )
+    if closing["tradeDate"] != end_date:
+        raise MarketDataUnavailable(
+            f"benchmark_data_unavailable:{str(symbol).upper()}:{end_date}:{closing['source']}"
+        )
     value = closing["close"] / opening["close"] - Decimal("1")
     return {
         "symbol": str(symbol).upper(),

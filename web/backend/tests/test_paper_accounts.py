@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
@@ -249,6 +250,139 @@ def test_benchmark_missing_fails_closed() -> None:
             allow_research_source=True,
             benchmark_start_date="2024-01-02",
         )
+
+
+def test_market_data_repository_gates_equity_and_index_scopes_separately(monkeypatch) -> None:
+    _init()
+    from app.db import db, utc_now
+    from app.repositories import market_data_repository
+
+    with db() as connection:
+        for symbol, asset_class, trade_date, close in (
+            ("600519", "equity", "2024-01-03", 10),
+            ("000300", "index", "2024-01-02", 100),
+            ("000300", "index", "2024-01-03", 110),
+        ):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
+                     data_type,close,adjust,source,created_at)
+                values (?,?,?,?,?,?,'daily','trade',?,'raw','unit',?)
+                """,
+                (
+                    f"{asset_class}:{symbol}",
+                    symbol,
+                    asset_class,
+                    "china",
+                    "china",
+                    trade_date,
+                    close,
+                    utc_now(),
+                ),
+            )
+
+    gated_asset_classes: list[str] = []
+
+    def resolve_source_context(*_args, asset_class: str, **_kwargs) -> dict:
+        gated_asset_classes.append(asset_class)
+        return {"source": "unit", "datasetVersion": f"{asset_class}-v1"}
+
+    monkeypatch.setattr(
+        market_data_repository,
+        "resolve_source_context",
+        resolve_source_context,
+    )
+    market_data_repository.close_price("600519", "2024-01-03", source="unit")
+    result = market_data_repository.benchmark_return(
+        "000300",
+        "2024-01-02",
+        "2024-01-03",
+        source="unit",
+    )
+
+    assert gated_asset_classes == ["equity", "index", "index"]
+    assert result["return"] == Decimal("0.1")
+
+
+def test_checkpoint_divergence_raises() -> None:
+    _init()
+    from app.db import db
+    from app.services.paper_accounts import CanonicalStateDivergence, rebuild_projection
+
+    account = _account("Diverged checkpoint account", "100000")
+    with db() as connection:
+        connection.execute(
+            """
+            update paper_ledger_entries
+            set precise_amount=precise_amount-100
+            where paper_account_id=? and ledger_sequence=1
+            """,
+            (account["id"],),
+        )
+
+    with pytest.raises(CanonicalStateDivergence, match="checkpoint_divergence"):
+        rebuild_projection(account["id"], "2024-01-03")
+
+    with db() as connection:
+        status = connection.execute(
+            "select status from paper_accounts where id=?",
+            (account["id"],),
+        ).fetchone()
+    assert status["status"] == "error"
+
+
+def test_ledger_sequence_is_unique_per_account_generation() -> None:
+    _init()
+    from app.db import db, utc_now
+
+    account = _account("Unique sequence account")
+    with pytest.raises(sqlite3.IntegrityError):
+        with db() as connection:
+            connection.execute(
+                """
+                insert into paper_ledger_entries
+                    (id,session_id,intent_id,entry_type,asset,quantity,amount,currency,
+                     idempotency_key,created_at,paper_account_id,account_generation,
+                     ledger_sequence,precise_quantity,precise_amount)
+                values ('duplicate-sequence',?,'duplicate-sequence','COMMISSION','cash',
+                        0,-1,'CNY','duplicate-sequence',?,?,1,1,0,-1)
+                """,
+                (account["shadow_session_id"], utc_now(), account["id"]),
+            )
+
+
+def test_daily_report_persists_projection_benchmark_without_zero_fallback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _init()
+    from app.db import db
+    from app.services import paper_accounts
+
+    account = _account("Daily report benchmark account")
+    deployment = _deployment(account["id"], tmp_path, monkeypatch)
+    cycle = paper_accounts.ensure_cycle(deployment["id"], "2024-02-01")
+    projection = paper_accounts.get_overview(account["id"])
+
+    paper_accounts._write_daily_report(cycle["id"], projection)
+
+    with db() as connection:
+        snapshot = connection.execute(
+            """
+            select benchmark_symbol,benchmark_return,source_ledger_sequence,
+                   source_checkpoint_digest
+            from paper_account_daily_snapshots
+            where paper_account_id=? and generation=1 and trading_date='2024-02-01'
+            """,
+            (account["id"],),
+        ).fetchone()
+    assert snapshot["benchmark_symbol"] == "000300"
+    assert Decimal(str(snapshot["benchmark_return"])) == Decimal(
+        projection["account"]["benchmark_return"]
+    )
+    assert snapshot["source_ledger_sequence"] == projection["account"]["source_ledger_sequence"]
+    assert snapshot["source_checkpoint_digest"] == projection["account"]["source_checkpoint_digest"]
 
 
 def test_ledger_is_append_only() -> None:
@@ -641,7 +775,10 @@ def test_paused_accounts_expose_data_trust_flag() -> None:
     second = _account("Trust Account B")
     paused = pause_accounts_for_data_trust()
     assert paused["pausedCount"] == 2
-    assert paused["dataTrust"] == {"valuationTrusted": False, "reason": "lookahead_valuation"}
+    assert paused["dataTrust"] == {
+        "valuationTrusted": False,
+        "reason": "historical_recertification_pending",
+    }
 
     client = TestClient(app)
     listed = client.get("/api/paper/accounts")
@@ -651,7 +788,10 @@ def test_paused_accounts_expose_data_trust_flag() -> None:
 
     for response in (listed, overview, performance, comparison):
         assert response.status_code == 200
-        assert response.json()["dataTrust"] == {"valuationTrusted": False, "reason": "lookahead_valuation"}
+        assert response.json()["dataTrust"] == {
+            "valuationTrusted": False,
+            "reason": "historical_recertification_pending",
+        }
     assert all(item["status"] == "paused" for item in listed.json()["items"])
 
 
