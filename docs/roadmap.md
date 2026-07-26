@@ -1,6 +1,6 @@
 # Roadmap
 
-Last reviewed: 2026-07-25. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), the [2026-07-25 P0 trust release](history/p0-trust-release-2026-07-25.md), and the [history index](history/README.md).
+Last reviewed: 2026-07-26. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), the [2026-07-25 P0 trust release](history/p0-trust-release-2026-07-25.md), and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
@@ -34,12 +34,16 @@ Remaining acceptance work:
 
 ## Level 4: Data, Experiments and Reproducibility
 
-Status: FAIL. The 2026-07-24 production-like execution completed 17 real LEAN
-children (9 parameter-grid, 3 rolling, 4 legacy walk-forward and 1 dynamic PIT),
-but the strict validator correctly rejected the then-current train/test-only
-walk-forward. The code now expands train/validation/OOS with stable lineage and
-adds failed-only retry plus cancelled-batch restart; this does not change the
-status until the production-like matrix is independently rerun.
+Status: FAIL, with the non-browser real-stack execution matrix now PASS. On
+2026-07-26 the MySQL/Celery/Docker LEAN audit passed the 3x3 parameter grid,
+three rolling folds, train/validation/OOS walk-forward with validation-only
+selection, and dynamic PIT execution with CSV evidence. A separate destructive
+audit passed three-child failed-only retry and five-child cancel/restart while
+preserving the successful child's attempt count. Level 4 remains FAIL because
+this audit session exposed no controllable browser instance, four offered
+universes still lack immutable launch-to-first-licensed-snapshot history, and
+the real catalog has not yet populated or recertified all cross-asset datasets
+under the new fail-closed quality rules.
 The scripted closure path exists via:
 
 - `web/backend/.venv/bin/python scripts/run_level4_audit.py`
@@ -65,19 +69,35 @@ Implemented:
 - Failed-only batch retry and cancelled-batch restart that preserve successful
   child runs.
 - Structured HTML reports, Markdown export and archived report objects.
+- PDF, CSV and versioned JSON report exports from the same canonical payload.
+- Cross-batch ranking/comparison, parameter-sensitivity heatmaps and
+  Train/Validation/OOS visualizations.
+- Dataset-completion quality gates for ETF, convertible-bond, futures and
+  options identity, lifecycle, trading terms and daily-market invariants.
+- Per-universe launch-aware PIT certification with immutable bundle/digest
+  evidence; CSI500, CSI1000, SSE50 and STAR50 licensed histories are imported
+  but correctly remain partial where their source begins after launch.
+- Weekday incremental Parquet/ClickHouse maintenance with independent
+  scope/source watermarks, advisory locking, bounded date-count drift repair
+  and visible run history. The 2026-07-26 real maintenance run completed four
+  ready scope/layer watermarks through 2026-07-22 with Parquet consistency PASS.
 - Searchable in-app documentation.
 
 Remaining work:
 
-- Independently execute the new train/validation/OOS, failed-child retry,
-  cancel/restart recovery and complete Level 4 browser matrix against real
-  MySQL/Celery/Docker LEAN.
-- PDF, CSV and JSON report export formats; Markdown is already implemented.
-- Richer cross-batch ranking, sensitivity heatmaps and comparison dashboards.
-- Complete ETF, convertible-bond, futures and options data-quality gates.
-- Full historical PIT coverage for every offered universe beyond the now
-  complete official CSI300 launch-to-current chain.
-- Scheduled incremental Parquet/ClickHouse maintenance with visible independent watermarks.
+- Complete the Level 4 interactive browser matrix when an in-app Browser or
+  Chrome control instance is available. The API/worker/LEAN matrix is complete;
+  a frontend production build is not a substitute for UI interaction evidence.
+- Populate the real ETF, convertible-bond, futures and options datasets and
+  recertify their manifests under `cross-asset-quality-v1`. On 2026-07-26 the
+  fail-closed ledger correctly reported nine missing datasets and two legacy
+  successful manifests without the new asset-quality evidence.
+- Close immutable official/licensed launch-date gaps for CSI500
+  (`2007-01-15..2007-01-30`), CSI1000
+  (`2014-10-17..2015-03-30`), SSE50
+  (`2004-01-02..2009-04-29`) and STAR50
+  (`2020-07-22..2020-07-30`). Current or later snapshots must not be
+  substituted to manufacture a pass.
 
 ### Current verification path
 
@@ -87,7 +107,10 @@ Remaining work:
 
 - Evidence output:
 
-  `web/runtime/audit/level4-*.json`
+  `web/runtime/audit/level4-real-core-20260726.json`,
+  `web/runtime/audit/level4-real-dynamic-pit-20260726.json`,
+  `web/runtime/audit/level4-real-recovery-20260726.json`, and
+  `web/runtime/audit/level4-derived-maintenance-20260726.json`.
 
 ## Level 5: Paper and Operational Safety
 

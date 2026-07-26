@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **265** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **270** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -72,6 +72,8 @@
 | `GET` | `/api/data/coverage/benchmark/{symbol}` | Data Coverage Benchmark | `symbol` (path, required)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
 | `GET` | `/api/data/coverage/symbol/{symbol}` | Data Coverage Symbol | `symbol` (path, required)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
 | `GET` | `/api/data/dataset-preview/{dataset}` | Preview Dataset | `dataset` (path, required)<br>`keyword` (query)<br>`startDate` (query)<br>`endDate` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
+| `POST` | `/api/data/derived/maintenance` | Start Derived Layer Maintenance | body `DerivedMaintenanceRequest` | `200` - |
+| `GET` | `/api/data/derived/watermarks` | Derived Layer Watermarks | - | `200` - |
 | `POST` | `/api/data/fetch` | Fetch Data | body `DataFetchRequest` | `200` - |
 | `POST` | `/api/data/fetch-alpha-vantage` | Fetch Alpha Vantage | body `AlphaVantageRequest` | `200` - |
 | `POST` | `/api/data/fetch-batch` | Fetch Batch | body `BatchDataFetchRequest` | `200` - |
@@ -92,6 +94,7 @@
 | `GET` | `/api/data/providers/availability` | Data Provider Availability | `provider` (query) | `200` - |
 | `POST` | `/api/data/quality/ashare/daily/compare` | Compare Ashare Daily Data | body `AshareDailyCompareRequest` | `200` - |
 | `POST` | `/api/data/quality/ashare/daily/compare-batch` | Compare Ashare Daily Data Batch | body `AshareDailyCompareBatchRequest` | `200` - |
+| `GET` | `/api/data/quality/cross-asset` | Cross Asset Quality Status | - | `200` - |
 | `GET` | `/api/data/quality/reports` | Data Quality Reports | `limit` (query) | `200` - |
 | `GET` | `/api/data/query` | Query Data | `symbol` (query, required)<br>`assetClass` (query)<br>`venue` (query)<br>`market` (query)<br>`resolution` (query)<br>`dataType` (query)<br>`source` (query)<br>`providerSource` (query)<br>`providerMode` (query)<br>`allowResearchSource` (query)<br>`adjust` (query)<br>`startDate` (query)<br>`endDate` (query)<br>`limit` (query) | `200` - |
 | `GET` | `/api/data/sync-runs` | Data Sync Runs | `limit` (query) | `200` - |
@@ -279,6 +282,7 @@
 | `GET` | `/api/paper/accounts` | List Accounts | `status` (query)<br>`market` (query)<br>`strategy` (query)<br>`keyword` (query)<br>`hasActiveDeployment` (query)<br>`health` (query)<br>`sort` (query)<br>`direction` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/paper/accounts` | Create Account | body `AccountCreate` | `201` - |
 | `GET` | `/api/paper/accounts/compare` | Compare Accounts | `accountId` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
+| `DELETE` | `/api/paper/accounts/{account_id}` | Delete Account | `account_id` (path, required) | `200` - |
 | `GET` | `/api/paper/accounts/{account_id}` | Get Account | `account_id` (path, required) | `200` - |
 | `PATCH` | `/api/paper/accounts/{account_id}` | Update Account | `account_id` (path, required)<br>body `AccountUpdate` | `200` - |
 | `POST` | `/api/paper/accounts/{account_id}/activate` | Activate Account | `account_id` (path, required) | `200` - |
@@ -317,6 +321,7 @@
 | `POST` | `/api/pit/index-members` | Import Index Members | body `IndexMemberImport` | `200` - |
 | `GET` | `/api/pit/index-members/{universe_code}/as-of/{as_of_date}` | Index Members As Of | `universe_code` (path, required)<br>`as_of_date` (path, required) | `200` - |
 | `GET` | `/api/pit/index-members/{universe_code}/as-of/{as_of_date}/tushare` | Index Members Tushare As Of | `universe_code` (path, required)<br>`as_of_date` (path, required)<br>`lookbackDays` (query) | `200` - |
+| `GET` | `/api/pit/universes/coverage` | Offered Universe Coverage | - | `200` - |
 
 ## portfolios
 

@@ -11,8 +11,15 @@ from ..lean_engine.symbols import normalize_symbol, parse_date
 from .ashare_repository import tradable_universe_as_of, universe_as_of, upsert_security, upsert_universe_membership
 
 
-CSI300_OFFICIAL_COVERAGE_START = "2017-12-08"
-INDEX_OFFICIAL_COVERAGE_STARTS = {"CSI300": CSI300_OFFICIAL_COVERAGE_START}
+CSI300_OFFICIAL_COVERAGE_START = "2005-04-08"
+INDEX_OFFICIAL_COVERAGE_STARTS = {
+    "CSI300": CSI300_OFFICIAL_COVERAGE_START,
+    "CSI500": "2007-01-15",
+    "CSI1000": "2014-10-17",
+    "SSE50": "2004-01-02",
+    "STAR50": "2020-07-22",
+    "ALL_A": "1990-12-19",
+}
 
 
 def _date(value: Any, field: str) -> str:
@@ -49,18 +56,11 @@ def assert_pit_dates(record: dict[str, Any], as_of_date: str) -> None:
 
 
 def index_coverage_gap(index_code: str, as_of_date: str) -> dict[str, Any] | None:
+    from .universe_coverage import coverage_gap
+
     code = str(index_code or "").strip().upper()
     as_of = _date(as_of_date, "as_of_date")
-    coverage_start = INDEX_OFFICIAL_COVERAGE_STARTS.get(code)
-    if not coverage_start or as_of >= coverage_start:
-        return None
-    return {
-        "coverageStatus": "coverage_gap",
-        "coverageStart": coverage_start,
-        "missingHistoryBefore": coverage_start,
-        "isOfficialHistoryComplete": False,
-        "reason": f"{code} official PIT history before {coverage_start} has not been imported.",
-    }
+    return coverage_gap(code, as_of)
 
 
 def index_members_as_of_payload(
@@ -83,9 +83,20 @@ def index_members_as_of_payload(
     else:
         items = universe_as_of(code, as_of)
     payload = {"universe": code, "requestedUniverse": requested, "asOfDate": as_of, "items": items, "count": len(items)}
-    coverage_start = INDEX_OFFICIAL_COVERAGE_STARTS.get(code)
-    if coverage_start:
-        payload.update({"coverageStatus": "ok", "coverageStart": coverage_start, "isOfficialHistoryComplete": False})
+    from .universe_coverage import universe_coverage
+
+    coverage = universe_coverage(code)
+    if coverage:
+        payload.update(
+            {
+                "coverageStatus": "ok" if coverage.get("coverage_status") == "complete" else "partial",
+                "coverageStart": coverage.get("coverage_start"),
+                "coverageEnd": coverage.get("coverage_end"),
+                "coverageCertification": coverage.get("coverage_status"),
+                "isOfficialHistoryComplete": coverage.get("coverage_status") == "complete"
+                and str(coverage.get("source") or "").startswith(("csindex:", "sse:")),
+            }
+        )
     return payload
 
 
@@ -362,6 +373,25 @@ def import_index_members(records: list[dict[str, Any]], source: str = "manual") 
             effective_date=effective_date,
         )
         imported += 1
+    from .universe_coverage import OFFERED_UNIVERSES, record_universe_coverage
+
+    touched = sorted(
+        {
+            str(record.get("universe_code") or record.get("universeCode") or "").strip().upper()
+            for record in records
+        }
+    )
+    for code in touched:
+        if code in OFFERED_UNIVERSES:
+            record_universe_coverage(
+                code,
+                coverage_start=None,
+                coverage_end=None,
+                status="partial",
+                source=source,
+                batch_id=batch_id,
+                validation={"importMode": "ad_hoc_index_members"},
+            )
     return {"batchId": batch_id, "count": imported}
 
 

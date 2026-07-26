@@ -109,7 +109,9 @@ GET /api/reports/{report_id}/objects/{object_id}
 GET /api/reports/{report_id}/export?format=html|markdown
 ```
 
-Report file responses disable browser/proxy caching. HTML and Markdown are supported export formats; raw result/summary objects remain available for reproducibility.
+Report file responses disable browser/proxy caching. HTML, Markdown, PDF, CSV
+and versioned JSON are supported export formats; raw result/summary objects
+remain available for reproducibility.
 
 ## Metrics
 

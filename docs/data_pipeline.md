@@ -107,6 +107,15 @@ LEAN consumes files from `LEAN_DATA_DIR`. Before a run, required files can be re
 
 ClickHouse is optional and mirrors committed MySQL data. Health/table checks should occur at task/batch scope, writes should be accumulated, and mirror failure must have an independent retry/watermark rather than rolling back authoritative MySQL data.
 
+Weekday post-close maintenance incrementally rewrites only affected Parquet
+years and mirrors ClickHouse from its own last successful boundary. The two
+layers persist independent scope/source watermarks and run history; one layer
+can fail or lag without promoting the other or changing MySQL.
+When an existing ClickHouse scope has no persisted watermark, bootstrap compares
+deduplicated row counts by trading date and replays only deficient dates. It
+refuses to hide surplus derived rows behind a successful watermark; those
+require an explicit governed rebuild.
+
 ## Disk Safety and Size Reporting
 
 - One-click sync has no database-size ceiling.
@@ -119,13 +128,17 @@ ClickHouse is optional and mirrors committed MySQL data. Health/table checks sho
 
 Trusted China-equity runs require canonical daily bars, a real benchmark, trading calendar and applicable execution status. The helper enforces T+1 selling, suspension and limit blocks, lot rounding, cash buffer, fees and slippage. The run stores fingerprint, validation and experiment snapshots plus normalized strategy/dataset version links.
 
-Known limitations remain: intraday auction mechanics are incomplete; board-specific rules depend on imported reference quality; ETF, convertible bond and futures acceptance are not yet exchange-grade.
+Known limitations remain: intraday auction mechanics are incomplete and
+board-specific rules depend on imported reference quality. Dataset completion
+now runs asset-specific ETF, convertible-bond, futures and options gates for
+identity, lifecycle, trading terms, OHLC, settlement and open interest.
 
 ## Remaining Data Work
 
 - Maintain the immutable CSI300 bundle and record any official corrections
   without substituting the `CSI300_TUSHARE` shadow universe.
-- PIT coverage reports for every offered research universe.
-- Full ETF, convertible-bond, futures/options and factor quality gates.
-- Scheduled incremental Parquet and ClickHouse maintenance with visible watermarks.
+- Close the certified launch-date gaps for CSI500, CSI1000, SSE50 and STAR50
+  using immutable official/licensed evidence; partial TuShare snapshots remain
+  queryable but cannot be promoted as complete.
+- Extend cross-asset gates to factor inputs and exchange-specific microstructure.
 - Cross-asset adjustment, continuous-contract and corporate-action acceptance.

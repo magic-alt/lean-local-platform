@@ -49,9 +49,11 @@ from ..services.source_gate import (
 from ..services.security_search import search_securities as search_security_catalog
 from ..services.security_profile import security_profile
 from ..services.dataset_preview import dataset_preview
+from ..services.cross_asset_quality import latest_cross_asset_quality_status
+from ..services import derived_maintenance
 from ..services.tasks import create_task
 from ..services import data_sync
-from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, sync_all_data_task
+from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, maintain_derived_layers_task, sync_all_data_task
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -175,6 +177,10 @@ class IntradayImportRequest(BaseModel):
     adjust: str = "raw"
     source: str = "manual"
     records: list[dict[str, Any]] = Field(min_length=1)
+
+
+class DerivedMaintenanceRequest(BaseModel):
+    layers: list[str] = Field(default_factory=lambda: ["parquet", "clickhouse"])
 
 
 class DataSyncRequest(BaseModel):
@@ -584,6 +590,21 @@ def parquet_consistency(request: ParquetConsistencyRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/data/derived/watermarks")
+def derived_layer_watermarks():
+    return derived_maintenance.watermarks()
+
+
+@router.post("/data/derived/maintenance")
+def start_derived_layer_maintenance(request: DerivedMaintenanceRequest):
+    try:
+        run = derived_maintenance.create_maintenance_run(layers=request.layers, trigger_type="manual")
+        maintain_derived_layers_task.apply_async(args=[run["id"]], queue="data-demand")
+        return run
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/data/quality/ashare/daily/compare")
 def compare_ashare_daily_data(request: AshareDailyCompareRequest):
     try:
@@ -624,6 +645,11 @@ def compare_ashare_daily_data_batch(request: AshareDailyCompareBatchRequest):
 @router.get("/data/quality/reports")
 def data_quality_reports(limit: int = 100):
     return {"items": list_quality_reports(limit=limit)}
+
+
+@router.get("/data/quality/cross-asset")
+def cross_asset_quality_status():
+    return latest_cross_asset_quality_status()
 
 
 @router.get("/data/coverage/ashare")

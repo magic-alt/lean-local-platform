@@ -104,24 +104,34 @@ Use the dedicated acceptance scripts before each review cycle:
 
 ```bash
 # 1) Level 4: 3x3 grid + rolling-window + walk-forward + dynamic PIT evidence
-cd web/backend
-.venv/bin/python scripts/run_level4_audit.py \
+web/backend/.venv/bin/python scripts/run_level4_audit.py \
   --project-id PROJECT_ID \
   --base-url http://127.0.0.1:8000 \
   --cases parameter_grid,rolling,walk_forward,dynamic_pit \
   --execute \
   --require-csv \
+  --dataset-version CERTIFIED_DATASET_VERSION \
+  --universe-version IMMUTABLE_UNIVERSE_SHA256 \
+  --feature-pipeline-version FEATURE_PIPELINE_VERSION \
   --timeout 1800 \
   --poll-seconds 2 \
   --evidence-out web/runtime/audit/level4-reproducibility.json
 
 # Or preview-only to validate expansion, limits and scheduling preconditions
-.venv/bin/python scripts/run_level4_audit.py \
+web/backend/.venv/bin/python scripts/run_level4_audit.py \
   --project-id PROJECT_ID \
   --base-url http://127.0.0.1:8000 \
   --cases rolling \
   --preview-only \
   --evidence-out web/runtime/audit/level4-rolling-preview.json
+
+# Destructive local acceptance: stop/recover the dedicated runner, retry only
+# failed children, then cancel/restart a second batch while preserving success.
+web/backend/.venv/bin/python scripts/run_level4_recovery_audit.py \
+  --project-id PROJECT_ID \
+  --base-url http://127.0.0.1:8000 \
+  --confirm RUN_LEVEL4_RECOVERY_AUDIT \
+  --evidence-out web/runtime/audit/level4-recovery.json
 ```
 
 ```bash
@@ -304,7 +314,10 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
 
 ## Test Gaps
 
-- The repository has a browser E2E area, but coverage is not yet a required full release gate for every page.
+- The Level 4 API/worker/LEAN matrix has real-stack evidence, but the complete
+  interactive browser matrix still requires a session with a controllable
+  in-app Browser or Chrome instance; a production frontend build alone does
+  not close that gate.
 - No frontend component tests yet.
 - No formal benchmark golden files for all templates yet.
 - No full exchange-grade A-share matching acceptance test yet.

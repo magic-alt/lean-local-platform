@@ -119,6 +119,43 @@ export interface DataSyncRun {
   items?: DataSyncItem[];
 }
 
+export interface DerivedLayerWatermarks {
+  items: Array<{
+    layer_key: "parquet" | "clickhouse";
+    scope_key: string;
+    source: string;
+    status: string;
+    canonical_start?: string | null;
+    canonical_end?: string | null;
+    materialized_start?: string | null;
+    materialized_end?: string | null;
+    row_count: number;
+    error?: string | null;
+    updated_at: string;
+  }>;
+  count: number;
+  layers: Record<string, {
+    count: number;
+    ready: number;
+    failed: number;
+    watermark?: string | null;
+  }>;
+  runs: Array<{
+    id: string;
+    trigger_type: string;
+    status: string;
+    created_at: string;
+    finished_at?: string | null;
+    error?: string | null;
+  }>;
+  schedule: {
+    timezone: string;
+    days: string;
+    defaultTime: string;
+  };
+  asOfDate: string;
+}
+
 export interface DataSyncCatalog {
   provider: string;
   entitlementPoints: number;

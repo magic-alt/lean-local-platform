@@ -580,6 +580,8 @@ def _api_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
 
 def _validate_dataset_rows(spec: DatasetSpec, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Apply the critical/warning gate shared by every registry dataset."""
+    from .cross_asset_quality import validate_cross_asset_rows
+
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -606,12 +608,16 @@ def _validate_dataset_rows(spec: DatasetSpec, rows: list[dict[str, Any]]) -> dic
         seen.add(key)
         if len(errors) >= 50:
             break
+    asset_quality = validate_cross_asset_rows(spec.key, rows)
+    errors.extend(asset_quality.get("criticalErrors") or [])
+    warnings.extend(asset_quality.get("warnings") or [])
     result = {
         "status": "failed" if errors else "warning" if warnings else "passed",
         "criticalErrors": errors[:50],
         "warnings": warnings[:50],
         "checkedRows": len(rows),
         "rejectedRows": len({item["row"] for item in errors}),
+        "assetQuality": asset_quality,
         # Reuse the key digest in the ingestion manifest. Previously every
         # successful batch hashed every natural key a second time during the
         # metadata transaction.
@@ -3396,6 +3402,17 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
             where provider='tushare' and dataset_key=?
             """,
             (aggregate["count"], aggregate["first_date"], aggregate["last_date"], utc_now(), spec.key),
+        )
+    if spec.key == "stock_basic" and int(aggregate["count"] or 0) > 0:
+        from .universe_coverage import record_universe_coverage
+
+        record_universe_coverage(
+            "ALL_A",
+            coverage_start=aggregate["first_date"],
+            coverage_end=date.today().isoformat(),
+            status="complete",
+            source="tushare:stock_basic",
+            validation={"securityMasterRows": int(aggregate["count"] or 0), "listStatuses": ["L", "D", "P"]},
         )
 
 

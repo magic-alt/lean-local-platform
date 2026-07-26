@@ -1012,6 +1012,10 @@ def materialize_membership_intervals(
     source: str = DEFAULT_SOURCE,
     batch_id: str | None = None,
     replace: bool = False,
+    coverage_start: str | None = None,
+    coverage_end: str | None = None,
+    coverage_status: str | None = None,
+    bundle_sha256: str | None = None,
 ) -> int:
     batch = batch_id or str(uuid.uuid4())
     if replace:
@@ -1040,6 +1044,19 @@ def materialize_membership_intervals(
             effective_date=interval.get("effective_date") or interval["start_date"],
         )
         imported += 1
+    if coverage_status:
+        from .universe_coverage import record_universe_coverage
+
+        record_universe_coverage(
+            index_code,
+            coverage_start=coverage_start,
+            coverage_end=coverage_end,
+            status=coverage_status,
+            source=source,
+            batch_id=batch,
+            bundle_sha256=bundle_sha256,
+            validation={"materializedIntervals": imported},
+        )
     return imported
 
 

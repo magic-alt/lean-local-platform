@@ -60,6 +60,7 @@ import type {
   DataProvider,
   DataSyncCatalog,
   DataSyncRun,
+  DerivedLayerWatermarks,
   OnDemandStorageTarget,
   DatabaseHealth,
   DependencyHealth,
@@ -1546,6 +1547,14 @@ export function DataPage() {
     activeRun: null, latestRun: null, hasCompletedInitialSync: false, recommendedMode: "initial_full"
   }, false);
   const [syncRun, setSyncRun] = useState<DataSyncRun>();
+  const derivedWatermarks = useAsyncData<DerivedLayerWatermarks>(api.derivedLayerWatermarks, {
+    items: [],
+    count: 0,
+    layers: {},
+    runs: [],
+    schedule: { timezone: "Asia/Shanghai", days: "Monday-Friday", defaultTime: "19:30" },
+    asOfDate: ""
+  }, false);
   const [syncActionLoading, setSyncActionLoading] = useState(false);
   const loadOnDemandStorageTargets = useCallback(
     () => api.onDemandStorageTargets().then((result) => result.items),
@@ -1852,7 +1861,7 @@ export function DataPage() {
         title="Local MySQL · TuShare Pro 全库更新"
         style={{ marginBottom: 16 }}
         extra={<Space>
-          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); if (currentSync) api.dataSyncRun(currentSync.id).then(setSyncRun); }}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); derivedWatermarks.reload(); if (currentSync) api.dataSyncRun(currentSync.id).then(setSyncRun); }}>刷新</Button>
           {activeSync
             ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
             : currentSync && ["failed", "cancelled", "partial"].includes(currentSync.status)
@@ -1887,6 +1896,28 @@ export function DataPage() {
           message="实际接口探测优先于积分推断"
           description={`一键更新只保留 A 股执行数据、基准指数及 CFFEX/SSE 期货期权合约目录。具体合约行情、财务、基金、港美股、宏观及特色数据仅在 Preview、项目、研究或回测实际使用时查询。当前有 ${syncProgress.denied} 个无权限数据集、${syncProgress.onDemand} 个按需数据集、${syncProgress.retryable} 个暂时限频数据集。`}
         />
+        <Card
+          size="small"
+          title="独立派生层水位"
+          style={{ marginBottom: 12 }}
+          extra={<span className="data-catalog-meta">{derivedWatermarks.data.schedule.days} {derivedWatermarks.data.schedule.defaultTime} {derivedWatermarks.data.schedule.timezone}</span>}
+        >
+          <Space wrap>
+            {(["parquet", "clickhouse"] as const).map((layer) => {
+              const state = derivedWatermarks.data.layers[layer];
+              return (
+                <Tag key={layer} color={!state ? "default" : state.failed ? "error" : state.ready === state.count ? "success" : "warning"}>
+                  {layer} · {state?.watermark || "未建立水位"} · ready {state?.ready || 0}/{state?.count || 0}
+                </Tag>
+              );
+            })}
+            {derivedWatermarks.data.runs[0] && (
+              <span className="data-catalog-meta">
+                最近维护 {derivedWatermarks.data.runs[0].status} · {derivedWatermarks.data.runs[0].created_at}
+              </span>
+            )}
+          </Space>
+        </Card>
         {currentSync && (
           <Card size="small" style={{ marginBottom: 12 }}>
             <Space direction="vertical" style={{ width: "100%" }} size={4}>

@@ -174,12 +174,13 @@ GET    /api/reports/{report_id}
 GET    /api/reports/{report_id}/objects
 GET    /api/reports/{report_id}/objects/{object_id}
 GET    /api/reports/{report_id}/file
-GET    /api/reports/{report_id}/export?format=html|markdown
+GET    /api/reports/{report_id}/export?format=html|markdown|pdf|csv|json
 ```
 
 Backtest reports are synthesized from `backtest_runs`, `backtest_results`, and `stored_objects`. They include `fingerprint`, `validation`, `experiment`, and all archived backtest artifacts when available.
 
-Report file responses use `Cache-Control: no-store`. HTML and Markdown export are implemented; PDF, CSV and JSON report exports are not yet supported.
+Report file responses use `Cache-Control: no-store`. HTML, Markdown, PDF, CSV
+and JSON exports are generated from the same canonical report payload.
 
 ## Data
 
@@ -216,7 +217,11 @@ POST   /api/data/parquet/rebuild
 POST   /api/data/parquet/consistency
 POST   /api/data/quality/ashare/daily/compare
 POST   /api/data/quality/ashare/daily/compare-batch
+GET    /api/data/quality/cross-asset
 GET    /api/data/quality/reports
+GET    /api/data/derived/watermarks
+POST   /api/data/derived/maintenance
+GET    /api/pit/universes/coverage
 ```
 
 ## A-Share Reference Data

@@ -576,7 +576,7 @@ def _validate_case_result(name: str, config: dict[str, Any], detail: dict[str, A
         _validate_dynamic_pit(items, config, detail, failures, warnings)
 
     summary = detail.get("summary")
-    if isinstance(summary, dict):
+    if isinstance(summary, dict) and "runs" in summary:
         runs = summary.get("runs")
         if _to_int(runs, default=0) == 0:
             warnings.append("summary_runs_zero")

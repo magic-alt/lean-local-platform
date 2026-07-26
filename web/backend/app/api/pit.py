@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..services import pit_data
+from ..services.universe_coverage import universe_coverage_overview
 from ..services.tushare_adapter import TushareAdapter
 
 router = APIRouter(prefix="/api/pit", tags=["pit-data"])
@@ -89,6 +90,11 @@ class IndexMemberRecord(BaseModel):
 class IndexMemberImport(BaseModel):
     source: str = "manual"
     records: list[IndexMemberRecord] = Field(min_length=1)
+
+
+@router.get("/universes/coverage")
+def offered_universe_coverage():
+    return universe_coverage_overview()
 
 
 @router.post("/financials")

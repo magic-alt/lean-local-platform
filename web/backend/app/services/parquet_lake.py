@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -792,20 +793,47 @@ def export_market_daily_bars(
     start_date: str | None = None,
     end_date: str | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    incremental: bool = False,
 ) -> dict[str, Any]:
     if pl is None:
         raise RuntimeError("polars is required to export Parquet datasets.")
     scope = _normalize_scope(asset_class, market, venue, resolution, data_type, adjust, source)
-    row_stats = _market_row_count(scope, start_date, end_date)
+    requested_stats = _market_row_count(scope, start_date, end_date)
+    row_stats = _market_row_count(scope) if incremental else requested_stats
     root = _dataset_root(scope)
     root.mkdir(parents=True, exist_ok=True)
     files: list[dict[str, Any]] = []
+    retained_files: list[dict[str, Any]] = []
+    affected_start_year = int(start_date[:4]) if incremental and start_date else None
+    affected_end_year = int(end_date[:4]) if incremental and end_date else date.today().year
+    if incremental and affected_start_year is not None:
+        dataset_id = _dataset_id(_dataset_key(**scope))
+        for item in _parquet_files_for_dataset(dataset_id):
+            partition = item.get("partition") or {}
+            year = int(partition.get("year") or str(item.get("first_timestamp") or "")[:4] or 0)
+            if affected_start_year <= year <= affected_end_year:
+                continue
+            filename = Path(str(item.get("file_path") or "")).name
+            physical_path = root / f"year={year}" / filename
+            if not physical_path.exists():
+                continue
+            retained_files.append(
+                {
+                    "path": physical_path,
+                    "partition": {"year": year},
+                    "row_count": int(item.get("row_count") or 0),
+                    "first_timestamp": item.get("first_timestamp"),
+                    "last_timestamp": item.get("last_timestamp"),
+                    "sha256": item.get("sha256"),
+                    "size": int(item.get("size") or 0),
+                }
+            )
     part_counts: dict[int, int] = {}
     partition_buffers: dict[int, list[Any]] = {}
     partition_buffer_rows: dict[int, int] = {}
     partition_target_rows = PARQUET_PARTITION_ROWS
     exported_rows = 0
-    expected_rows = int(row_stats.get("rowCount") or 0)
+    expected_rows = int(requested_stats.get("rowCount") or 0)
 
     def flush_year(year: int) -> None:
         frames = partition_buffers.pop(year, [])
@@ -859,9 +887,19 @@ def export_market_daily_bars(
             f"parquet_export_row_count_mismatch: expected={expected_rows} exported={exported_rows}"
         )
     expected_paths = {item["path"].resolve() for item in files}
-    for existing in root.glob("year=*/*.parquet"):
+    existing_candidates = (
+        (
+            existing
+            for year in range(affected_start_year, affected_end_year + 1)
+            for existing in (root / f"year={year}").glob("*.parquet")
+        )
+        if incremental and affected_start_year is not None
+        else root.glob("year=*/*.parquet")
+    )
+    for existing in existing_candidates:
         if existing.resolve() not in expected_paths:
             existing.unlink()
+    all_files = [*retained_files, *files]
     metadata = {
         "exported_from": "market_daily_bars",
         "compression": PARQUET_COMPRESSION,
@@ -870,8 +908,9 @@ def export_market_daily_bars(
         "read_batch": "streaming_cursor_100000_rows",
         "partition_write_target_rows": partition_target_rows,
         "source_order": "instrument_id_trade_date",
+        "maintenance_mode": "incremental_year_rewrite" if incremental else "full_rebuild",
     }
-    return _upsert_dataset(scope, root, row_stats, files, metadata)
+    return _upsert_dataset(scope, root, row_stats, all_files, metadata)
 
 
 def _parquet_files_for_dataset(dataset_id: str) -> list[dict[str, Any]]:

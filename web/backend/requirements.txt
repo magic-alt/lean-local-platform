@@ -16,6 +16,7 @@ prometheus-client>=0.21,<1
 pytdx>=1.72,<2
 pypinyin>=0.50,<1
 pypdf>=6,<7
+reportlab>=4.2,<5
 pymysql>=1.1,<2
 pytest>=8,<9
 python-multipart>=0.0.20,<1

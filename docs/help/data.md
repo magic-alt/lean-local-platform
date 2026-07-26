@@ -112,6 +112,21 @@ POST /api/data/import-csv
 现已从 2005-04-08 起完整重建；生产清单保存逐源 URL/哈希和 bundle SHA，离线
 重放会验证历史链条及各年抽样日均为 300 只。
 
+`GET /api/pit/universes/coverage` 独立列出每个已提供 universe 的发布日、实际
+覆盖范围、来源、bundle 哈希和 `complete/partial/missing/failed` 认证。CSI500、
+CSI1000、SSE50 和 STAR50 已导入可获得的 TuShare 月度历史，但发布日至首个
+快照之间的缺口仍保持 `partial`，不得用当前成员回填。
+
+## 跨资产质量和派生水位
+
+ETF、可转债、期货和期权同步完成前会执行各自的数据质量门，包括合约/证券身份、
+上市到期生命周期、转股与赎回条款、乘数和最小变动价位、OHLC、结算价、成交量
+及持仓量。Critical 错误会阻止 manifest 晋级。
+
+Parquet 和 ClickHouse 在工作日收盘后独立增量维护。Data 页面和
+`GET /api/data/derived/watermarks` 分别显示 canonical 范围、各层已物化范围、
+状态、行数和最后一次维护运行；MySQL 始终是事实来源。
+
 ## 容量和磁盘安全
 
 - 一键同步没有数据库大小上限。
@@ -132,5 +147,9 @@ POST /api/data/import-csv
 | `POST` | `/api/data/sync-runs/{id}/resume` | 从 checkpoint 恢复 |
 | `GET` | `/api/data/dataset-preview/{dataset}` | 数据集感知 Preview |
 | `POST` | `/api/data/on-demand/downloads` | 创建按需下载 |
+| `GET` | `/api/data/quality/cross-asset` | 跨资产最新质量门状态 |
+| `GET` | `/api/data/derived/watermarks` | Parquet/ClickHouse 独立水位 |
+| `POST` | `/api/data/derived/maintenance` | 创建派生层增量维护 |
+| `GET` | `/api/pit/universes/coverage` | 所有已提供 universe 的 PIT 覆盖认证 |
 
 更完整的数据模型、归档和派生层说明见 [数据管线](../data_pipeline.md)。

@@ -140,7 +140,7 @@ def test_pit_tushare_endpoint_imports_csi1000_members(tmp_path, monkeypatch):
     assert payload["items"][0]["weight"] == 2.3
 
 
-def test_csi300_pit_api_returns_gap_before_official_coverage_start(tmp_path, monkeypatch):
+def test_csi300_pit_api_marks_ad_hoc_history_partial(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from fastapi.testclient import TestClient
@@ -167,13 +167,14 @@ def test_csi300_pit_api_returns_gap_before_official_coverage_start(tmp_path, mon
     assert response.status_code == 200
     payload = response.json()
     assert payload["universe"] == "CSI300"
-    assert payload["coverageStatus"] == "coverage_gap"
-    assert payload["coverageStart"] == "2017-12-08"
-    assert payload["count"] == 0
-    assert payload["items"] == []
+    assert payload["coverageStatus"] == "partial"
+    assert payload["coverageStart"] == "2006-01-01"
+    assert payload["coverageCertification"] == "partial"
+    assert payload["count"] == 1
+    assert payload["items"][0]["symbol"] == "600519"
 
 
-def test_ashare_universe_interfaces_return_gap_before_csi300_official_coverage(tmp_path, monkeypatch):
+def test_ashare_universe_interfaces_expose_partial_csi300_coverage(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from fastapi.testclient import TestClient
@@ -200,7 +201,7 @@ def test_ashare_universe_interfaces_return_gap_before_csi300_official_coverage(t
 
     assert universe.status_code == 200
     assert tradable.status_code == 200
-    assert universe.json()["coverageStatus"] == "coverage_gap"
-    assert universe.json()["count"] == 0
-    assert tradable.json()["coverageStatus"] == "coverage_gap"
-    assert tradable.json()["count"] == 0
+    assert universe.json()["coverageStatus"] == "partial"
+    assert universe.json()["count"] == 1
+    assert tradable.json()["coverageStatus"] == "partial"
+    assert tradable.json()["count"] == 1

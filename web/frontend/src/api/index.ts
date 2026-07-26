@@ -5,6 +5,7 @@ import type {
   DataProvider,
   DataSyncCatalog,
   DataSyncRun,
+  DerivedLayerWatermarks,
   OnDemandStorageTarget,
   MarketInfo,
   AssetClassInfo,
@@ -273,6 +274,13 @@ export const api = {
   }),
   dataSyncRuns: () => request<{ items: DataSyncRun[]; limit: number }>("/api/data/sync-runs"),
   dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
+  derivedLayerWatermarks: () => request<DerivedLayerWatermarks>("/api/data/derived/watermarks"),
+  startDerivedMaintenance: (layers: Array<"parquet" | "clickhouse"> = ["parquet", "clickhouse"]) =>
+    request<{ id: string; status: string }>("/api/data/derived/maintenance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layers })
+    }),
   createDataSyncRun: (datasets?: string[], mode: "auto" | "incremental" | "full_rebuild" = "auto") =>
     request<DataSyncRun>("/api/data/sync-runs", {
       method: "POST",
@@ -497,7 +505,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  reportExportUrl: (id: string, format: "html" | "markdown") =>
+  reportExportUrl: (id: string, format: "html" | "markdown" | "pdf" | "csv" | "json") =>
     `/api/reports/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}&view=report-layout-v2`,
   objectStoreItems: () => request<ObjectStoreItem[]>("/api/object-store"),
   uploadObjectStoreItem: (key: string, formData: FormData) =>

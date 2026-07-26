@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import sys
 import urllib.request
@@ -288,6 +289,12 @@ def main() -> int:
             source=source,
             batch_id=batch_id,
             replace=args.replace_universe,
+            coverage_start=str(manifest.get("coverage_start") or _initial_date(manifest, "initial_effective_date", "as_of_date")),
+            coverage_end=str(manifest.get("coverage_end") or date.today().isoformat()),
+            coverage_status="complete",
+            bundle_sha256=content_hash(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ),
         )
 
     print(f"database={json.dumps(database_descriptor(), ensure_ascii=False)}")

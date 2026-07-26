@@ -13,7 +13,7 @@ CLI；回测、优化、Research 和 Paper Replay 均以版本化项目策略运
   原始响应使用轻量索引及压缩批次归档，不重复逐行保存完整 JSON。
 - Backtests、Optimization 和 Research 提供策略案例、批量实验、参数网格、
   滚动窗口和动态 PIT 股票池工作流。
-- 报告使用统一的 `report-layout-v2` HTML/Markdown 格式，并保留运行指纹、
+- 报告使用统一的 `report-layout-v2` HTML/Markdown/PDF/CSV/JSON 格式，并保留运行指纹、
   原始结果、日志、校验和对象归档。
 - 数据预览覆盖股票、交易日历、指数、期货和期权；应用内 Docs 页面支持搜索。
 

@@ -435,6 +435,9 @@ export function ReportsPage() {
                   <Space>
                     <a href={api.reportExportUrl(report.id, "html")} target="_blank" rel="noreferrer">HTML</a>
                     <a href={api.reportExportUrl(report.id, "markdown")} target="_blank" rel="noreferrer">MD</a>
+                    <a href={api.reportExportUrl(report.id, "pdf")} target="_blank" rel="noreferrer">PDF</a>
+                    <a href={api.reportExportUrl(report.id, "csv")} target="_blank" rel="noreferrer">CSV</a>
+                    <a href={api.reportExportUrl(report.id, "json")} target="_blank" rel="noreferrer">JSON</a>
                   </Space>
                 </Tooltip>
               )

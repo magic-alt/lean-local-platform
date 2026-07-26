@@ -1,6 +1,6 @@
 # 回测结果、比较与报告
 
-Run Detail 用于检查单次运行的结构化结果；Compare 横向比较多个运行；Reports 生成统一、可分享的 HTML/Markdown 研究报告。
+Run Detail 用于检查单次运行的结构化结果；Compare 横向比较多个运行；Reports 生成统一、可分享的 HTML/Markdown/PDF/CSV/JSON 研究报告。
 
 ![Reports 的报告生成、预览和导出列表](assets/reports-library.png)
 
@@ -46,10 +46,12 @@ GET  /api/reports
 POST /api/reports
 GET  /api/reports/{report_id}
 GET  /api/reports/{report_id}/file
-GET  /api/reports/{report_id}/export?format=html|markdown
+GET  /api/reports/{report_id}/export?format=html|markdown|pdf|csv|json
 ```
 
-当前支持 HTML 和 Markdown。PDF、CSV 和 JSON 报告导出尚未实现，不应在页面显示为可用操作。
+HTML 和 Markdown 适合阅读与分享；PDF 使用 Unicode 字体生成固定版式，CSV
+输出摘要、指标、门禁和 artifact 台账，JSON 输出带 schema/layout 版本的完整
+规范 payload。所有格式均使用 `Cache-Control: no-store`。
 
 ## 为什么仍看到旧报告
 

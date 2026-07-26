@@ -44,6 +44,7 @@ from ..services import paper as paper_service
 from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
+from ..services import derived_maintenance
 from ..services import resource_pressure
 from ..services.alerts import emit_alert
 from ..core.config import ASHARE_TECH_RETRY_MINUTES
@@ -693,6 +694,18 @@ def sync_all_data_task(task_id: str, run_id: str):
 )
 def materialize_sync_data_task(run_id: str):
     return data_sync.materialize_daily_run(run_id)
+
+
+@celery_app.task(
+    name="lean_web.maintain_derived_layers",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def maintain_derived_layers_task(run_id: str | None = None):
+    run = derived_maintenance.maintenance_run(run_id) if run_id else None
+    if run is None:
+        run = derived_maintenance.create_maintenance_run(trigger_type="schedule" if run_id is None else "recovery")
+    return derived_maintenance.run_maintenance(str(run["id"]))
 
 
 def _broker_contains_sync_run(client: Any, run_id: str) -> bool:

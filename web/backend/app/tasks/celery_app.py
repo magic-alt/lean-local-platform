@@ -4,6 +4,8 @@ from celery.schedules import crontab
 from ..core.config import (
     ASHARE_TECH_REPORT_HOUR,
     ASHARE_TECH_REPORT_MINUTE,
+    DERIVED_MAINTENANCE_HOUR,
+    DERIVED_MAINTENANCE_MINUTE,
     PAPER_WALKFORWARD_HOUR,
     PAPER_WALKFORWARD_MINUTE,
     REDIS_URL,
@@ -29,6 +31,7 @@ celery_app.conf.update(
         "lean_web.download_on_demand_dataset": {"queue": "data-demand"},
         "lean_web.sync_all_data": {"queue": "data-bulk"},
         "lean_web.materialize_sync_data": {"queue": "data-demand"},
+        "lean_web.maintain_derived_layers": {"queue": "data-demand"},
         "lean_web.recover_data_sync": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
         "lean_web.optimize": {"queue": "backtest"},
@@ -49,6 +52,14 @@ celery_app.conf.update(
         "recover-orphaned-data-sync": {
             "task": "lean_web.recover_data_sync",
             "schedule": 60.0,
+        },
+        "maintain-derived-layers-after-close": {
+            "task": "lean_web.maintain_derived_layers",
+            "schedule": crontab(
+                minute=DERIVED_MAINTENANCE_MINUTE,
+                hour=DERIVED_MAINTENANCE_HOUR,
+                day_of_week="1-5",
+            ),
         },
         "reconcile-experiment-batches": {
             "task": "lean_web.reconcile_experiment_batches",

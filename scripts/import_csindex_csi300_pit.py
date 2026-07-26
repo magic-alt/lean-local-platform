@@ -995,6 +995,10 @@ def main() -> int:
             source=OFFICIAL_SOURCE,
             batch_id=batch_id,
             replace=True,
+            coverage_start=INITIAL_EFFECTIVE_DATE,
+            coverage_end=date.today().isoformat(),
+            coverage_status="complete",
+            bundle_sha256=bundle.get("bundleSha256"),
         )
         write_manifest(
             Path(args.manifest_out),

@@ -228,10 +228,23 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
     assert "Report run-a" in html.text
     assert html.headers["content-disposition"].startswith("inline;")
     assert 'filename="backtest-report-run-a.html"' in html.headers["content-disposition"]
-    for unsupported in ("pdf", "csv", "json"):
-        response = client.get("/api/reports/backtest:run-a/export", params={"format": unsupported})
-        assert response.status_code == 400
-        assert response.json()["detail"] == "Unsupported report export format."
+    structured = client.get("/api/reports/backtest:run-a/export", params={"format": "json"})
+    assert structured.status_code == 200
+    assert structured.json()["layoutVersion"] == "report-layout-v2"
+    assert structured.json()["metrics"]["Sharpe Ratio"] == "1"
+    assert 'filename="backtest-report-run-a.json"' in structured.headers["content-disposition"]
+
+    csv_export = client.get("/api/reports/backtest:run-a/export", params={"format": "csv"})
+    assert csv_export.status_code == 200
+    assert "section,key,value" in csv_export.text
+    assert "metric,Sharpe Ratio,1" in csv_export.text
+    assert 'filename="backtest-report-run-a.csv"' in csv_export.headers["content-disposition"]
+
+    pdf = client.get("/api/reports/backtest:run-a/export", params={"format": "pdf"})
+    assert pdf.status_code == 200
+    assert pdf.content.startswith(b"%PDF")
+    assert len(pdf.content) > 1_000
+    assert 'filename="backtest-report-run-a.pdf"' in pdf.headers["content-disposition"]
 
 
 def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch):

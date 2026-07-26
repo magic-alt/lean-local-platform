@@ -10,7 +10,7 @@ from .common import dispatch_task
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..core.errors import NotFoundError
 from ..services.db_object_store import get_object, read_bytes
-from ..services.report_export import markdown_report, report_payload
+from ..services.report_export import csv_report, json_report, markdown_report, pdf_report, report_payload
 from ..services.history_resources import delete_generated_report
 from ..services.tasks import create_task
 from ..tasks.worker import generate_report_task
@@ -359,6 +359,41 @@ def export_report(report_id: str, format: str = "html"):
             headers={
                 "Content-Disposition": f'inline; filename="{filename_base}.md"',
                 "X-Content-Type-Options": "nosniff",
+                **REPORT_FILE_CACHE_HEADERS,
+            },
+        )
+    if export_format == "json":
+        return Response(
+            json_report(payload),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename_base}.json"',
+                "X-Content-Type-Options": "nosniff",
+                **REPORT_FILE_CACHE_HEADERS,
+            },
+        )
+    if export_format == "csv":
+        return Response(
+            csv_report(payload),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename_base}.csv"',
+                "X-Content-Type-Options": "nosniff",
+                **REPORT_FILE_CACHE_HEADERS,
+            },
+        )
+    if export_format == "pdf":
+        try:
+            content = pdf_report(payload)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename_base}.pdf"',
+                "X-Content-Type-Options": "nosniff",
+                **REPORT_FILE_CACHE_HEADERS,
             },
         )
     raise HTTPException(status_code=400, detail="Unsupported report export format.")

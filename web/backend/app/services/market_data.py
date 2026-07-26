@@ -370,6 +370,60 @@ def replace_china_equity_symbols_from_canonical(symbols: list[str]) -> dict[str,
     }
 
 
+def scope_stats(scope: dict[str, str]) -> dict[str, Any]:
+    """Return deduplicated materialization coverage for one canonical scope."""
+    if not enabled():
+        return {"enabled": False, "rowCount": 0, "firstDate": None, "lastDate": None}
+    ensure_schema()
+    predicates = [
+        f"asset_class = {_literal(scope['asset_class'])}",
+        f"venue = {_literal(scope['venue'])}",
+        f"resolution = {_literal(scope['resolution'])}",
+        f"data_type = {_literal(scope['data_type'])}",
+        f"source = {_literal(scope['source'])}",
+    ]
+    row = _client(timeout=300).query(
+        f"""
+        select count(),min(date),max(date)
+        from {_table()} FINAL
+        where {" and ".join(predicates)}
+        """
+    ).result_rows[0]
+    return {
+        "enabled": True,
+        "rowCount": int(row[0] or 0),
+        "firstDate": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1] or "") or None,
+        "lastDate": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2] or "") or None,
+    }
+
+
+def scope_date_counts(scope: dict[str, str]) -> dict[str, int]:
+    """Return deduplicated row counts by date for bounded drift repair."""
+    if not enabled():
+        return {}
+    ensure_schema()
+    predicates = [
+        f"asset_class = {_literal(scope['asset_class'])}",
+        f"venue = {_literal(scope['venue'])}",
+        f"resolution = {_literal(scope['resolution'])}",
+        f"data_type = {_literal(scope['data_type'])}",
+        f"source = {_literal(scope['source'])}",
+    ]
+    rows = _client(timeout=300).query(
+        f"""
+        select date,count()
+        from {_table()} FINAL
+        where {" and ".join(predicates)}
+        group by date
+        order by date
+        """
+    ).result_rows
+    return {
+        item_date.isoformat() if hasattr(item_date, "isoformat") else str(item_date): int(row_count)
+        for item_date, row_count in rows
+    }
+
+
 def _literal(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
