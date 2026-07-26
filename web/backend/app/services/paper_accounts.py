@@ -10,6 +10,11 @@ from zoneinfo import ZoneInfo
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..repositories.backtest_repository import get_backtest
+from ..repositories.market_data_repository import (
+    MarketDataUnavailable,
+    benchmark_return as market_benchmark_return,
+    close_price,
+)
 from . import paper as legacy_paper
 from .alerts import emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
@@ -72,6 +77,10 @@ PAPER_ACCOUNT_DATA_TRUST = {
     "valuationTrusted": False,
     "reason": "lookahead_valuation",
 }
+
+
+class CanonicalStateDivergence(RuntimeError):
+    """Raised when an immutable ledger checkpoint no longer reproduces."""
 
 
 def _data_trust() -> dict[str, Any]:
@@ -285,6 +294,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             "positions": [],
             "sourceLedgerSequence": 1,
         }
+        checkpoint_digest = _digest(checkpoint_payload)
         connection.execute(
             """
             insert into paper_account_checkpoints
@@ -292,7 +302,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                  checkpoint_json,created_at)
             values (?,?,1,null,1,?,?,?)
             """,
-            (checkpoint_id, account_id, opening_digest, json_dump(checkpoint_payload), now),
+            (checkpoint_id, account_id, checkpoint_digest, json_dump(checkpoint_payload), now),
         )
         connection.execute(
             """
@@ -304,7 +314,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                  source_checkpoint_digest,health_status,updated_at)
             values (?,1,?,?,0,0,?,0,0,0,0,0,0,0,0,0,0,?,null,1,?,'healthy',?)
             """,
-            (account_id, initial_cash, initial_cash, initial_cash, now, opening_digest, now),
+            (account_id, initial_cash, initial_cash, initial_cash, now, checkpoint_digest, now),
         )
     return get_account(account_id)
 
@@ -1460,65 +1470,19 @@ def finalize_cycle(cycle_id: str) -> dict[str, Any]:
         intent_ids = [str(item["id"]) for item in intents]
         if intent_ids:
             placeholders = ",".join("?" for _ in intent_ids)
-            connection.execute(
+            missing_context = connection.execute(
                 f"""
-                update paper_order_intents
-                set paper_account_id=?,deployment_id=?,execution_cycle_id=?,
-                    account_generation=?,precise_quantity=quantity,
-                    precise_requested_price=requested_price
-                where id in ({placeholders})
-                """,
-                tuple(
-                    [
-                        cycle["paper_account_id"],
-                        cycle["deployment_id"],
-                        cycle_id,
-                        cycle["account_generation"],
-                    ]
-                    + intent_ids
-                ),
-            )
-            connection.execute(
-                f"""
-                update paper_order_fills fill
-                set paper_account_id=?,execution_cycle_id=?,precise_quantity=quantity,
-                    precise_price=price,commission=fee,stamp_duty=tax,
-                    transfer_fee=0,precise_slippage=slippage
-                where fill.intent_id in ({placeholders})
-                """,
-                tuple([cycle["paper_account_id"], cycle_id] + intent_ids),
-            )
-            ledger_rows = connection.execute(
-                f"""
-                select id from paper_ledger_entries
-                where intent_id in ({placeholders}) order by created_at,id
+                select count(*) as count from paper_ledger_entries
+                where intent_id in ({placeholders})
+                  and (paper_account_id is null or account_generation is null
+                       or execution_cycle_id is null or ledger_sequence is null
+                       or precise_quantity is null or precise_amount is null)
                 """,
                 tuple(intent_ids),
-            ).fetchall()
-            sequence_row = connection.execute(
-                """
-                select max(ledger_sequence) as sequence from paper_ledger_entries
-                where paper_account_id=? and account_generation=?
-                """,
-                (cycle["paper_account_id"], cycle["account_generation"]),
             ).fetchone()
-            sequence = int(sequence_row["sequence"] or 0)
-            for ledger_row in ledger_rows:
-                sequence += 1
-                connection.execute(
-                    """
-                    update paper_ledger_entries
-                    set paper_account_id=?,account_generation=?,execution_cycle_id=?,
-                        ledger_sequence=?,precise_quantity=quantity,precise_amount=amount
-                    where id=?
-                    """,
-                    (
-                        cycle["paper_account_id"],
-                        cycle["account_generation"],
-                        cycle_id,
-                        sequence,
-                        ledger_row["id"],
-                    ),
+            if int(missing_context["count"] or 0):
+                raise CanonicalStateDivergence(
+                    f"ledger_context_missing:{cycle['paper_account_id']}:{cycle_id}"
                 )
         fills = rows_to_dicts(
             connection.execute(
@@ -1547,7 +1511,13 @@ def finalize_cycle(cycle_id: str) -> dict[str, Any]:
             signals = _signals_from_signal_only_events(connection, cycle, events)
         else:
             signals = _signals_from_intents(connection, cycle, intents)
-    projection = rebuild_projection(cycle["paper_account_id"])
+    deployment_parameters = dict(deployment.get("parameters") or {})
+    projection = rebuild_projection(
+        cycle["paper_account_id"],
+        cycle["trading_date"],
+        source=deployment_parameters.get("source"),
+        allow_research_source=bool(deployment_parameters.get("allowResearchSource")),
+    )
     report = _write_daily_report(cycle_id, projection)
     executable_signal_count = sum(
         1 for item in signals if item.get("signal_type") != "no_signal"
@@ -1805,7 +1775,15 @@ def _signals_from_signal_only_events(
     return created
 
 
-def rebuild_projection(account_id: str) -> dict[str, Any]:
+def rebuild_projection(
+    account_id: str,
+    as_of_date: str,
+    *,
+    source: str | None = None,
+    allow_research_source: bool = False,
+    benchmark_start_date: str | None = None,
+) -> dict[str, Any]:
+    valuation_date = date.fromisoformat(str(as_of_date)[:10]).isoformat()
     account = get_account(account_id)
     generation = int(account["current_generation"])
     with db() as connection:
@@ -1825,6 +1803,16 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                 (account_id,),
             ).fetchone()
         ) or {}
+        if benchmark_start_date is None:
+            first_cycle = connection.execute(
+                """
+                select min(trading_date) as trading_date from paper_execution_cycles
+                where paper_account_id=? and account_generation=? and trading_date<=?
+                  and status not in ('skipped','failed')
+                """,
+                (account_id, generation, valuation_date),
+            ).fetchone()
+            benchmark_start_date = str(first_cycle["trading_date"]) if first_cycle["trading_date"] else None
     cash = sum(
         _decimal(item.get("precise_amount", item.get("amount")))
         for item in entries
@@ -1845,20 +1833,19 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
     quote_timestamp: str | None = None
     rows: list[dict[str, Any]] = []
     market_value = Decimal("0")
-    with db() as connection:
+    try:
         for symbol, quantity in sorted(positions.items()):
             if quantity == 0:
                 continue
-            quote = connection.execute(
-                """
-                select close,trade_date from market_daily_bars
-                where symbol=? and market='china' and close is not null
-                order by trade_date desc limit 1
-                """,
-                (symbol,),
-            ).fetchone()
-            price = _decimal(quote["close"]) if quote else Decimal("0")
-            quote_date = str(quote["trade_date"]) if quote else None
+            quote = close_price(
+                symbol,
+                valuation_date,
+                source=source,
+                allow_research_source=allow_research_source,
+                market=str(account["market_scope"]),
+            )
+            price = _decimal(quote["close"])
+            quote_date = str(quote["tradeDate"])
             quote_timestamp = max(filter(None, [quote_timestamp, quote_date]), default=None)
             value = quantity * price
             market_value += value
@@ -1873,12 +1860,79 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                     "marketValue": value,
                     "unrealizedPnl": value - costs.get(symbol, Decimal("0")),
                     "quoteDate": quote_date,
-                    "dataStatus": "certified_close" if quote else "missing",
+                    "dataStatus": "certified_close",
                 }
             )
-        equity = cash + market_value
-        initial = _decimal(account["initial_cash"])
-        cumulative = (equity / initial - Decimal("1")) if initial else Decimal("0")
+        if benchmark_start_date:
+            benchmark = market_benchmark_return(
+                str(account["benchmark_symbol"]),
+                benchmark_start_date,
+                valuation_date,
+                source=source,
+                allow_research_source=allow_research_source,
+                market=str(account["market_scope"]),
+            )
+            benchmark_value = _decimal(benchmark["return"])
+        else:
+            benchmark_value = _decimal(prior.get("benchmark_return"))
+    except MarketDataUnavailable:
+        with db() as connection:
+            connection.execute(
+                """
+                update paper_account_projections
+                set health_status='degraded',updated_at=? where paper_account_id=?
+                """,
+                (utc_now(), account_id),
+            )
+        raise
+    equity = cash + market_value
+    initial = _decimal(account["initial_cash"])
+    cumulative = (equity / initial - Decimal("1")) if initial else Decimal("0")
+    excess = cumulative - benchmark_value
+    sequence = max((int(item.get("ledger_sequence") or 0) for item in entries), default=0)
+    checkpoint_payload = {
+        "paperAccountId": account_id,
+        "generation": generation,
+        "cash": format(cash, "f"),
+        "positions": [
+            {"symbol": row["symbol"], "quantity": format(row["quantity"], "f")}
+            for row in rows
+        ],
+        "sourceLedgerSequence": sequence,
+    }
+    checkpoint_digest = _digest(checkpoint_payload)
+    with db() as connection:
+        existing_checkpoint = connection.execute(
+            """
+            select id,digest from paper_account_checkpoints
+            where paper_account_id=? and generation=? and source_ledger_sequence=?
+            """,
+            (account_id, generation, sequence),
+        ).fetchone()
+    if existing_checkpoint and str(existing_checkpoint["digest"]) != checkpoint_digest:
+        with db() as connection:
+            connection.execute(
+                "update paper_accounts set status='error',updated_at=? where id=?",
+                (utc_now(), account_id),
+            )
+            connection.execute(
+                """
+                update paper_account_projections
+                set health_status='error',updated_at=? where paper_account_id=?
+                """,
+                (utc_now(), account_id),
+            )
+        emit_alert(
+            "paper_schedule_failed",
+            severity="critical",
+            title="Paper immutable ledger checkpoint divergence",
+            message=f"Account {account_id} generation {generation} sequence {sequence} diverged.",
+            source="paper_accounts",
+        )
+        raise CanonicalStateDivergence(
+            f"checkpoint_divergence:{account_id}:{generation}:{sequence}"
+        )
+    with db() as connection:
         for row in rows:
             weight = row["marketValue"] / equity if equity else Decimal("0")
             connection.execute(
@@ -1928,25 +1982,6 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                 "delete from paper_account_position_projections where paper_account_id=? and generation=?",
                 (account_id, generation),
             )
-        sequence = max((int(item.get("ledger_sequence") or 0) for item in entries), default=0)
-        checkpoint_payload = {
-            "paperAccountId": account_id,
-            "generation": generation,
-            "cash": format(cash, "f"),
-            "positions": [
-                {"symbol": row["symbol"], "quantity": format(row["quantity"], "f")}
-                for row in rows
-            ],
-            "sourceLedgerSequence": sequence,
-        }
-        checkpoint_digest = _digest(checkpoint_payload)
-        existing_checkpoint = connection.execute(
-            """
-            select id,digest from paper_account_checkpoints
-            where paper_account_id=? and generation=? and source_ledger_sequence=?
-            """,
-            (account_id, generation, sequence),
-        ).fetchone()
         if not existing_checkpoint:
             connection.execute(
                 """
@@ -1966,8 +2001,6 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                     utc_now(),
                 ),
             )
-        else:
-            checkpoint_digest = str(existing_checkpoint["digest"])
         unrealized = sum((row["unrealizedPnl"] for row in rows), Decimal("0"))
         available = cash
         gross = market_value / equity if equity else Decimal("0")
@@ -1980,7 +2013,7 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                  benchmark_return,excess_return,position_count,gross_exposure,net_exposure,
                  turnover,last_valuation_at,quote_data_timestamp,source_ledger_sequence,
                  source_checkpoint_digest,health_status,updated_at)
-            values (?,?,?,?,0,?,?,0,?,0,?,0,?, ?,?,?,0,?,?,?,?,'healthy',?)
+            values (?,?,?,?,0,?,?,0,?,0,?,?,?,?,?,?,0,?,?,?,?,?,?)
             on conflict(paper_account_id) do update set
                 generation=excluded.generation,cash=excluded.cash,
                 available_cash=excluded.available_cash,frozen_cash=excluded.frozen_cash,
@@ -2005,7 +2038,8 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                 equity,
                 unrealized,
                 cumulative,
-                -_decimal(prior.get("benchmark_return")),
+                benchmark_value,
+                excess,
                 len(rows),
                 gross,
                 gross,
@@ -2013,51 +2047,38 @@ def rebuild_projection(account_id: str) -> dict[str, Any]:
                 quote_timestamp,
                 sequence,
                 checkpoint_digest,
+                "healthy",
                 now,
             ),
         )
     return get_overview(account_id)
 
 
+def rebuild_current_projection(account_id: str) -> dict[str, Any]:
+    with db() as connection:
+        deployment_row = connection.execute(
+            """
+            select id,last_successful_trading_date from paper_strategy_deployments
+            where paper_account_id=? and is_primary=1
+            order by version desc limit 1
+            """,
+            (account_id,),
+        ).fetchone()
+    if deployment_row is None:
+        return rebuild_projection(account_id, date.today().isoformat())
+    deployment = get_deployment(str(deployment_row["id"]))
+    parameters = dict(deployment.get("parameters") or {})
+    return rebuild_projection(
+        account_id,
+        str(deployment_row["last_successful_trading_date"] or date.today().isoformat()),
+        source=parameters.get("source"),
+        allow_research_source=bool(parameters.get("allowResearchSource")),
+    )
+
+
 def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, Any]:
     cycle = get_cycle(cycle_id)
     account_projection = dict(projection.get("account") or {})
-    deployment = get_deployment(cycle["deployment_id"])
-    benchmark_symbol = str(account_projection.get("benchmark_symbol") or "000300")
-    source_end = str((deployment.get("parameters") or {}).get("end") or cycle["trading_date"])
-    with db() as connection:
-        opening_bar = connection.execute(
-            """
-            select close from market_daily_bars
-            where symbol=? and market='china' and trade_date<=? and close is not null
-            order by trade_date desc limit 1
-            """,
-            (benchmark_symbol, source_end),
-        ).fetchone()
-        current_bar = connection.execute(
-            """
-            select close from market_daily_bars
-            where symbol=? and market='china' and trade_date<=? and close is not null
-            order by trade_date desc limit 1
-            """,
-            (benchmark_symbol, cycle["trading_date"]),
-        ).fetchone()
-    benchmark_return = Decimal("0")
-    if opening_bar and current_bar and _decimal(opening_bar["close"]) > 0:
-        benchmark_return = _decimal(current_bar["close"]) / _decimal(opening_bar["close"]) - Decimal("1")
-    cumulative_return = Decimal(str(account_projection.get("cumulative_return") or 0))
-    excess_return = cumulative_return - benchmark_return
-    account_projection["benchmark_return"] = format(benchmark_return.quantize(Decimal("0.000000000001")), "f")
-    account_projection["excess_return"] = format(excess_return.quantize(Decimal("0.000000000001")), "f")
-    with db() as connection:
-        connection.execute(
-            """
-            update paper_account_projections
-            set benchmark_return=?,excess_return=?,updated_at=?
-            where paper_account_id=?
-            """,
-            (benchmark_return, excess_return, utc_now(), cycle["paper_account_id"]),
-        )
     payload = {
         "accountId": cycle["paper_account_id"],
         "deploymentId": cycle["deployment_id"],

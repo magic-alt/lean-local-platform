@@ -303,11 +303,11 @@ def recover_orphaned_paper_cycles_task():
 @celery_app.task(name="lean_web.refresh_paper_account_projections")
 def refresh_paper_account_projections_task(account_id: str | None = None):
     if account_id:
-        return {"accounts": [paper_accounts.rebuild_projection(account_id)]}
+        return {"accounts": [paper_accounts.rebuild_current_projection(account_id)]}
     page = paper_accounts.list_accounts(limit=200)
     return {
         "accounts": [
-            paper_accounts.rebuild_projection(str(item["id"]))
+            paper_accounts.rebuild_current_projection(str(item["id"]))
             for item in page["items"]
             if item.get("status") != "archived"
         ]

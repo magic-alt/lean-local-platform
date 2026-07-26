@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Make Paper valuation point-in-time and source-bounded, compute benchmark and excess return in the canonical projection writer with missing data failing closed, and write account ledger context and Decimal amounts once at append time under a unique generation sequence.
 - Pause runnable Paper accounts while Level 5 remediation addresses untrusted look-ahead valuation, surface a non-dismissible valuation-trust warning and machine-readable `dataTrust` flag across Paper account performance APIs, and mark notification outbox records as failed when no external channel is configured instead of falsely reporting delivery.
 - Mark Level 5 evidence reuse as `revalidated_from_prior_evidence` rather than a passing certification, and withdraw the obsolete Level 5 Paper-interruption PASS claim from the roadmap.
 

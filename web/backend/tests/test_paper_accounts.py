@@ -113,7 +113,7 @@ def test_account_creation_writes_only_opening_ledger_and_projection() -> None:
     assert generation["opening_ledger_entry_id"] == ledger[0]["id"]
     assert Decimal(str(shadow["cash"])) == Decimal("0")
     assert Decimal(str(shadow["equity"])) == Decimal("0")
-    rebuilt = rebuild_projection(account["id"])
+    rebuilt = rebuild_projection(account["id"], "2026-07-26")
     assert rebuilt["account"]["cash"] == get_account(account["id"])["cash"]
 
 
@@ -136,10 +136,202 @@ def test_accounts_are_ledger_and_projection_isolated() -> None:
             """,
             (first["shadow_session_id"], utc_now(), first["id"]),
         )
-    first_projection = rebuild_projection(first["id"])["account"]
-    second_projection = rebuild_projection(second["id"])["account"]
+    first_projection = rebuild_projection(first["id"], "2026-07-26")["account"]
+    second_projection = rebuild_projection(second["id"], "2026-07-26")["account"]
     assert first_projection["cash"] == "99900.00000000"
     assert second_projection["cash"] == "250000.00000000"
+
+
+def test_valuation_uses_as_of_price_not_latest() -> None:
+    _init()
+    from app.db import db, utc_now
+    from app.services.paper_accounts import rebuild_projection
+
+    account = _account("Point in time account", "100000")
+    with db() as connection:
+        connection.execute(
+            """
+            insert into paper_ledger_entries
+                (id,session_id,intent_id,entry_type,asset,symbol,quantity,amount,currency,
+                 idempotency_key,created_at,paper_account_id,account_generation,
+                 ledger_sequence,precise_quantity,precise_amount)
+            values ('pit-position',?,'pit','POSITION_INCREASE','equity','600519',10,100,
+                    'CNY','pit-position',?,?,1,2,10,100)
+            """,
+            (account["shadow_session_id"], utc_now(), account["id"]),
+        )
+        for symbol, asset_class, trade_date, close in (
+            ("600519", "equity", "2024-01-02", 10),
+            ("600519", "equity", "2024-01-03", 100),
+            ("000300", "index", "2024-01-02", 100),
+        ):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
+                     data_type,close,adjust,source,created_at)
+                values (?,?,?,?,?,?,'daily','trade',?,'raw','unit',?)
+                """,
+                (
+                    f"{asset_class}:{symbol}",
+                    symbol,
+                    asset_class,
+                    "china",
+                    "china",
+                    trade_date,
+                    close,
+                    utc_now(),
+                ),
+            )
+    rebuild_projection(
+        account["id"],
+        "2024-01-02",
+        source="unit",
+        allow_research_source=True,
+        benchmark_start_date="2024-01-02",
+    )
+    with db() as connection:
+        position = connection.execute(
+            """
+            select certified_price,quote_data_timestamp
+            from paper_account_position_projections
+            where paper_account_id=? and symbol='600519'
+            """,
+            (account["id"],),
+        ).fetchone()
+    assert Decimal(str(position["certified_price"])) == Decimal("10")
+    assert position["quote_data_timestamp"] == "2024-01-02"
+
+
+def test_excess_equals_cumulative_minus_benchmark() -> None:
+    _init()
+    from app.db import db, utc_now
+    from app.services.paper_accounts import rebuild_projection
+
+    account = _account("Benchmark account", "100000")
+    with db() as connection:
+        for trade_date, close in (("2024-01-02", 100), ("2024-01-03", 110)):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
+                     data_type,close,adjust,source,created_at)
+                values ('index:000300','000300','index','china','china',?,'daily',
+                        'trade',?,'raw','unit',?)
+                """,
+                (trade_date, close, utc_now()),
+            )
+    projection = rebuild_projection(
+        account["id"],
+        "2024-01-03",
+        source="unit",
+        allow_research_source=True,
+        benchmark_start_date="2024-01-02",
+    )["account"]
+    cumulative = Decimal(projection["cumulative_return"])
+    benchmark = Decimal(projection["benchmark_return"])
+    excess = Decimal(projection["excess_return"])
+    assert benchmark == Decimal("0.1")
+    assert excess == cumulative - benchmark
+
+
+def test_benchmark_missing_fails_closed() -> None:
+    _init()
+    from app.repositories.market_data_repository import MarketDataUnavailable
+    from app.services.paper_accounts import rebuild_projection
+
+    account = _account("Missing benchmark account")
+    with pytest.raises(MarketDataUnavailable, match="market_data_unavailable"):
+        rebuild_projection(
+            account["id"],
+            "2024-01-03",
+            source="unit",
+            allow_research_source=True,
+            benchmark_start_date="2024-01-02",
+        )
+
+
+def test_ledger_is_append_only() -> None:
+    _init()
+    from app.db import db
+    from app.services.paper_order_pipeline import (
+        append_transition,
+        record_fill_and_ledger,
+        record_intent,
+    )
+
+    account = _account("Append only account")
+    with db() as connection:
+        opening_before = dict(
+            connection.execute(
+                """
+                select * from paper_ledger_entries
+                where paper_account_id=? and ledger_sequence=1
+                """,
+                (account["id"],),
+            ).fetchone()
+        )
+    intent = record_intent(
+        session_id=account["shadow_session_id"],
+        paper_run_id="append-only-run",
+        backtest_run_id="append-only-backtest",
+        event_key="append-only-order",
+        trade_date="2024-01-03",
+        symbol="600519",
+        side="buy",
+        quantity=10,
+        requested_price=10,
+        raw_intent={},
+        paper_account_id=account["id"],
+        deployment_id="append-only-deployment",
+        execution_cycle_id="append-only-cycle",
+        account_generation=1,
+    )
+    for state, event in (
+        ("VALIDATION_PENDING", "validation"),
+        ("ACCEPTED", "accepted"),
+        ("MATCHING", "matching"),
+    ):
+        append_transition(
+            intent["id"],
+            state,
+            event_type=event,
+            idempotency_key=event,
+        )
+    record_fill_and_ledger(
+        intent["id"],
+        external_fill_key="append-only-fill",
+        trade_date="2024-01-03",
+        quantity=Decimal("10"),
+        price=Decimal("10"),
+        fee=Decimal("1"),
+        paper_account_id=account["id"],
+        account_generation=1,
+        execution_cycle_id="append-only-cycle",
+    )
+    with db() as connection:
+        opening_after = dict(
+            connection.execute(
+                "select * from paper_ledger_entries where id=?",
+                (opening_before["id"],),
+            ).fetchone()
+        )
+        appended = connection.execute(
+            """
+            select account_generation,execution_cycle_id,ledger_sequence,
+                   precise_quantity,precise_amount
+            from paper_ledger_entries
+            where paper_account_id=? and ledger_sequence>1
+            order by ledger_sequence
+            """,
+            (account["id"],),
+        ).fetchall()
+    assert opening_after == opening_before
+    assert [row["ledger_sequence"] for row in appended] == [2, 3, 4]
+    assert all(row["account_generation"] == 1 for row in appended)
+    assert all(row["execution_cycle_id"] == "append-only-cycle" for row in appended)
+    assert all(row["precise_quantity"] is not None for row in appended)
+    assert all(row["precise_amount"] is not None for row in appended)
 
 
 def test_deployment_is_frozen_versioned_and_cycle_is_idempotent(tmp_path, monkeypatch) -> None:

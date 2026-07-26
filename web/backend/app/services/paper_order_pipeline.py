@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
@@ -42,6 +43,39 @@ LEGAL_TRANSITIONS = {
     "RECONCILED": set(),
     "RECONCILIATION_FAILED": set(),
 }
+
+
+def _account_context(
+    connection: Any,
+    *,
+    session_id: str,
+    paper_run_id: str,
+    trade_date: str,
+) -> dict[str, Any]:
+    row = connection.execute(
+        """
+        select cycle.paper_account_id,cycle.deployment_id,cycle.id as execution_cycle_id,
+               cycle.account_generation
+        from paper_execution_cycles cycle
+        where cycle.paper_run_id=?
+        limit 1
+        """,
+        (paper_run_id,),
+    ).fetchone()
+    if row is None:
+        row = connection.execute(
+            """
+            select cycle.paper_account_id,cycle.deployment_id,cycle.id as execution_cycle_id,
+                   cycle.account_generation
+            from paper_execution_cycles cycle
+            join paper_accounts account on account.id=cycle.paper_account_id
+            where account.shadow_session_id=? and cycle.trading_date=?
+              and cycle.status in ('running','finalizing')
+            order by cycle.created_at desc limit 1
+            """,
+            (session_id, trade_date),
+        ).fetchone()
+    return row_to_dict(row) or {}
 
 RUN_PHASES = (
     "intent_capture",
@@ -84,6 +118,10 @@ def record_intent(
     dataset_version: str | None = None,
     universe_version: str | None = None,
     constraint_version: str = "paper-constraints-v2",
+    paper_account_id: str | None = None,
+    deployment_id: str | None = None,
+    execution_cycle_id: str | None = None,
+    account_generation: int | None = None,
 ) -> dict[str, Any]:
     normalized_payload = {
         "symbol": str(symbol).upper(),
@@ -107,6 +145,16 @@ def record_intent(
     )
     correlation_id = f"{session_id}:{paper_run_id}"
     with db() as connection:
+        context = _account_context(
+            connection,
+            session_id=session_id,
+            paper_run_id=paper_run_id,
+            trade_date=trade_date,
+        )
+        resolved_account_id = paper_account_id or context.get("paper_account_id")
+        resolved_deployment_id = deployment_id or context.get("deployment_id")
+        resolved_cycle_id = execution_cycle_id or context.get("execution_cycle_id")
+        resolved_generation = account_generation or context.get("account_generation")
         existing = connection.execute(
             """
             select * from paper_order_intents
@@ -125,8 +173,10 @@ def record_intent(
                  requested_price,raw_intent_json,created_at,lean_run_id,lean_order_id,
                  project_snapshot_id,project_snapshot_hash,strategy_fingerprint,order_type,
                  limit_price,stop_price,signal_time,requested_execution_time,dataset_version,
-                 universe_version,constraint_version)
-            values (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 universe_version,constraint_version,paper_account_id,deployment_id,
+                 execution_cycle_id,account_generation,precise_quantity,
+                 precise_requested_price)
+            values (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 intent_id,
@@ -157,6 +207,12 @@ def record_intent(
                 dataset_version,
                 universe_version,
                 constraint_version,
+                resolved_account_id,
+                resolved_deployment_id,
+                resolved_cycle_id,
+                resolved_generation,
+                Decimal(str(abs(quantity))),
+                Decimal(str(requested_price)) if requested_price is not None else None,
             ),
         )
     append_transition(
@@ -388,15 +444,18 @@ def record_fill_and_ledger(
     *,
     external_fill_key: str,
     trade_date: str,
-    quantity: float,
-    price: float,
-    fee: float,
-    tax: float = 0.0,
-    slippage: float = 0.0,
+    quantity: Decimal | float | str,
+    price: Decimal | float | str,
+    fee: Decimal | float | str,
+    tax: Decimal | float | str = Decimal("0"),
+    slippage: Decimal | float | str = Decimal("0"),
     fee_model_version: str = "paper-fees-v1",
     matching_contract: str = "next_open-v1",
     payload: dict[str, Any] | None = None,
     currency: str = "CNY",
+    paper_account_id: str | None = None,
+    account_generation: int | None = None,
+    execution_cycle_id: str | None = None,
 ) -> dict[str, Any]:
     intent = get_intent(intent_id)
     if not intent:
@@ -404,6 +463,16 @@ def record_fill_and_ledger(
     state = current_state(intent_id)
     if state not in {"MATCHING", "PARTIALLY_FILLED"}:
         raise ValueError(f"Paper fill requires MATCHING state, got {state or 'null'}.")
+    precise_quantity = Decimal(str(quantity))
+    precise_price = Decimal(str(price))
+    precise_fee = Decimal(str(fee))
+    precise_tax = Decimal(str(tax))
+    precise_slippage = Decimal(str(slippage))
+    resolved_account_id = paper_account_id or intent.get("paper_account_id")
+    resolved_generation = account_generation or intent.get("account_generation")
+    resolved_cycle_id = execution_cycle_id or intent.get("execution_cycle_id")
+    if resolved_account_id and (resolved_generation is None or not resolved_cycle_id):
+        raise ValueError("Account ledger context is incomplete.")
     with db() as connection:
         existing = connection.execute(
             """
@@ -419,11 +488,11 @@ def record_fill_and_ledger(
             {
                 "intentId": intent_id,
                 "tradeDate": trade_date,
-                "quantity": quantity,
-                "price": price,
-                "fee": fee,
-                "tax": tax,
-                "slippage": slippage,
+                "quantity": precise_quantity,
+                "price": precise_price,
+                "fee": precise_fee,
+                "tax": precise_tax,
+                "slippage": precise_slippage,
                 "feeModelVersion": fee_model_version,
                 "matchingContract": matching_contract,
             }
@@ -432,35 +501,49 @@ def record_fill_and_ledger(
             """
             insert into paper_order_fills
                 (id,intent_id,external_fill_key,trade_date,quantity,price,fee,payload_json,
-                 created_at,tax,slippage,fee_model_version,matching_contract,fill_fingerprint)
-            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 created_at,tax,slippage,fee_model_version,matching_contract,fill_fingerprint,
+                 paper_account_id,execution_cycle_id,precise_quantity,precise_price,
+                 commission,stamp_duty,transfer_fee,precise_slippage)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 fill_id,
                 intent_id,
                 external_fill_key,
                 trade_date,
-                quantity,
-                price,
-                fee,
+                precise_quantity,
+                precise_price,
+                precise_fee,
                 json_dump(payload or {}),
                 utc_now(),
-                tax,
-                slippage,
+                precise_tax,
+                precise_slippage,
                 fee_model_version,
                 matching_contract,
                 fill_fingerprint,
+                resolved_account_id,
+                resolved_cycle_id,
+                precise_quantity,
+                precise_price,
+                precise_fee,
+                precise_tax,
+                Decimal("0"),
+                precise_slippage,
             ),
         )
-        signed_quantity = quantity if intent["side"] == "buy" else -quantity
-        principal_amount = -(quantity * price) if intent["side"] == "buy" else quantity * price
+        signed_quantity = precise_quantity if intent["side"] == "buy" else -precise_quantity
+        principal_amount = (
+            -(precise_quantity * precise_price)
+            if intent["side"] == "buy"
+            else precise_quantity * precise_price
+        )
         entries = [
             (
                 "POSITION_INCREASE" if intent["side"] == "buy" else "POSITION_DECREASE",
                 "equity",
                 intent["symbol"],
                 signed_quantity,
-                quantity * price,
+                precise_quantity * precise_price,
                 f"POSITION:{intent['symbol']}" if intent["side"] == "buy" else "TRADE_CLEARING",
                 "TRADE_CLEARING" if intent["side"] == "buy" else f"POSITION:{intent['symbol']}",
             ),
@@ -473,20 +556,36 @@ def record_fill_and_ledger(
                 "TRADE_CLEARING" if intent["side"] == "buy" else "CASH",
                 "CASH" if intent["side"] == "buy" else "TRADE_CLEARING",
             ),
-            ("COMMISSION", "cash", None, 0.0, -fee, "COMMISSION_EXPENSE", "CASH"),
+            ("COMMISSION", "cash", None, Decimal("0"), -precise_fee, "COMMISSION_EXPENSE", "CASH"),
         ]
-        if tax:
-            entries.append(("STAMP_DUTY", "cash", None, 0.0, -tax, "STAMP_DUTY_EXPENSE", "CASH"))
-        if slippage:
-            entries.append(("SLIPPAGE", "cash", None, 0.0, -slippage, "SLIPPAGE_EXPENSE", "CASH"))
+        if precise_tax:
+            entries.append(
+                ("STAMP_DUTY", "cash", None, Decimal("0"), -precise_tax, "STAMP_DUTY_EXPENSE", "CASH")
+            )
+        if precise_slippage:
+            entries.append(
+                ("SLIPPAGE", "cash", None, Decimal("0"), -precise_slippage, "SLIPPAGE_EXPENSE", "CASH")
+            )
+        sequence = 0
+        if resolved_account_id:
+            sequence_row = connection.execute(
+                """
+                select max(ledger_sequence) as sequence from paper_ledger_entries
+                where paper_account_id=? and account_generation=?
+                """,
+                (resolved_account_id, resolved_generation),
+            ).fetchone()
+            sequence = int(sequence_row["sequence"] or 0)
         for entry_type, asset, symbol, entry_quantity, amount, debit_account, credit_account in entries:
+            sequence += 1
             connection.execute(
                 """
                 insert into paper_ledger_entries
                     (id,session_id,intent_id,fill_id,entry_type,asset,symbol,quantity,
                      amount,currency,idempotency_key,created_at,event_id,trade_date,
-                     debit_account,credit_account)
-                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     debit_account,credit_account,paper_account_id,account_generation,
+                     execution_cycle_id,ledger_sequence,precise_quantity,precise_amount)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -505,6 +604,12 @@ def record_fill_and_ledger(
                     trade_date,
                     debit_account,
                     credit_account,
+                    resolved_account_id,
+                    resolved_generation,
+                    resolved_cycle_id,
+                    sequence if resolved_account_id else None,
+                    entry_quantity,
+                    amount,
                 ),
             )
         row = connection.execute(
@@ -517,9 +622,13 @@ def record_fill_and_ledger(
 def ensure_opening_ledger(
     *,
     session_id: str,
-    cash: float,
+    cash: Decimal | float | str,
     positions: list[dict[str, Any]],
     currency: str = "CNY",
+    paper_account_id: str | None = None,
+    account_generation: int | None = None,
+    execution_cycle_id: str | None = None,
+    ledger_sequence: int = 0,
 ) -> None:
     """Write the immutable opening balances once before a v2 session is projected.
 
@@ -544,14 +653,15 @@ def ensure_opening_ledger(
             return
         now = utc_now()
         opening_intent_id = f"opening:{session_id}"
+        sequence = ledger_sequence + 1
         connection.execute(
             """
             insert into paper_ledger_entries
                 (id,session_id,intent_id,fill_id,entry_type,asset,symbol,quantity,
-                 amount,currency,idempotency_key,created_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?)
-            on conflict(session_id,idempotency_key) do update set
-                idempotency_key=excluded.idempotency_key
+                 amount,currency,idempotency_key,created_at,paper_account_id,
+                 account_generation,execution_cycle_id,ledger_sequence,
+                 precise_quantity,precise_amount)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(uuid.uuid4()),
@@ -562,34 +672,41 @@ def ensure_opening_ledger(
                 "cash",
                 None,
                 0.0,
-                float(cash),
+                Decimal(str(cash)),
                 currency,
                 "opening:cash",
                 now,
+                paper_account_id,
+                account_generation,
+                execution_cycle_id,
+                sequence if paper_account_id else None,
+                Decimal("0"),
+                Decimal(str(cash)),
             ),
         )
         for position in positions:
-            quantity = float(position.get("quantity") or 0)
+            quantity = Decimal(str(position.get("quantity") or 0))
             if not quantity:
                 continue
-            price = float(
+            price = Decimal(str(
                 position.get("average_price")
                 or position.get("averagePrice")
                 or position.get("market_price")
                 or position.get("marketPrice")
                 or 0
-            )
+            ))
             symbol = str(position.get("symbol") or "").upper()
             if not symbol:
                 raise ValueError("Opening position is missing a symbol.")
+            sequence += 1
             connection.execute(
                 """
                 insert into paper_ledger_entries
                     (id,session_id,intent_id,fill_id,entry_type,asset,symbol,quantity,
-                     amount,currency,idempotency_key,created_at)
-                values (?,?,?,?,?,?,?,?,?,?,?,?)
-                on conflict(session_id,idempotency_key) do update set
-                    idempotency_key=excluded.idempotency_key
+                     amount,currency,idempotency_key,created_at,paper_account_id,
+                     account_generation,execution_cycle_id,ledger_sequence,
+                     precise_quantity,precise_amount)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -604,6 +721,12 @@ def ensure_opening_ledger(
                     currency,
                     f"opening:position:{symbol}",
                     now,
+                    paper_account_id,
+                    account_generation,
+                    execution_cycle_id,
+                    sequence if paper_account_id else None,
+                    quantity,
+                    quantity * price,
                 ),
             )
 

@@ -110,7 +110,7 @@ def test_mysql_paper_accounts_decimal_foreign_keys_and_isolation() -> None:
     _assert_isolated_database()
 
     from app.db import db, init_db
-    from app.services.paper_accounts import create_account, rebuild_projection
+    from app.services.paper_accounts import CanonicalStateDivergence, create_account, rebuild_projection
 
     init_db()
     first = create_account({"name": "MySQL Account A", "initialCash": "1000000.12345678"})
@@ -149,8 +149,9 @@ def test_mysql_paper_accounts_decimal_foreign_keys_and_isolation() -> None:
     assert normalized_column["precision_value"] == 28
     assert normalized_column["scale_value"] == 8
     assert foreign_keys["count"] >= 4
-    assert rebuild_projection(first["id"])["account"]["cash"] == "999900.12345678"
-    assert rebuild_projection(second["id"])["account"]["cash"] == "250000.00000001"
+    with pytest.raises(CanonicalStateDivergence, match="checkpoint_divergence"):
+        rebuild_projection(first["id"], "2026-07-26")
+    assert rebuild_projection(second["id"], "2026-07-26")["account"]["cash"] == "250000.00000001"
 
 
 def test_mysql_concurrent_cycle_creation_is_idempotent() -> None:
