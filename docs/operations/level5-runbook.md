@@ -79,6 +79,17 @@ LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS=5
 - 指标恢复正常或人工 resolve 时，强制发送一条恢复通知，不受 cooldown 阻挡。
 - 每个通道分别持久化 attempt count、响应码、最后错误和安全脱敏后的 endpoint。
 
+发布前的外部终端认证必须使用真实公开 webhook；outbox 入库或本地 mock 不能替代：
+
+```bash
+web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py \
+  --evidence web/runtime/audit/external-webhook-acceptance.json
+```
+
+脚本默认读取 `LEAN_ALERT_WEBHOOK_URL`。只有公开 HTTP(S) 终端实际返回 2xx 且
+`alert_deliveries` 已持久化成功记录时才输出 `EXTERNAL_WEBHOOK_PASS`。未配置、
+DNS/网络失败、非 2xx、loopback 或私网地址均 fail closed。
+
 查看和处理告警：
 
 ```bash
@@ -185,6 +196,27 @@ web/backend/.venv/bin/python scripts/run_level5_audit.py \
   --evidence-dir web/runtime/audit/level5 \
   --api-url http://127.0.0.1:8000
 ```
+
+历史 session 已按 retention 清理时，可对完整、不可变的基线/故障链证据做离线
+复核；这表示 `evidence_revalidation`，不是新的 21 日执行：
+
+```bash
+web/backend/.venv/bin/python scripts/run_level5_audit.py \
+  --project-id PROJECT_ID \
+  --source-backtest-id BACKTEST_ID \
+  --start-date YYYY-MM-DD --days 21 \
+  --session-overrides-json '{"blacklist":["SYMBOL"]}' \
+  --require-reject-reason \
+  --with-fault --fault-mode combined \
+  --reuse-no-fault-evidence web/runtime/audit/level5/level5-replay-no-fault.json \
+  --reuse-combined-fault-evidence web/runtime/audit/level5/level5-replay-combined-six-phase.json \
+  --evidence-dir web/runtime/audit/level5-revalidation
+```
+
+复核会校验文件 SHA-256、project/backtest/mode/date/override 范围、验收阈值、
+21/21 daily-job、checkpoint、六阶段注入、worker SIGKILL 和 canonical digest。
+旧版 baseline 文件未内嵌 daily-job coverage 时，只接受同目录中范围与 digest
+完全一致且已通过的 `level5-audit.json`；不会要求已清理 session 继续在线。
 
 `LEAN_PAPER_FAULT_PAUSE_TARGETS` 中的六个日期必须与 `--fault-scenarios` 日期
 一致；定点暂停避免让所有 21×6 个 checkpoint 都等待。combined 模式在不同

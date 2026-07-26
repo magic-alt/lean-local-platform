@@ -195,6 +195,10 @@ def main() -> int:
     parser.add_argument("--min-trading-days", type=int, default=10)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--with-frontend", action="store_true")
+    parser.add_argument(
+        "--evidence-out",
+        help="Optional path for the complete machine-readable Level 3 aggregate.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -328,7 +332,12 @@ def main() -> int:
         "warnings": warnings,
         "errors": errors,
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    if args.evidence_out:
+        evidence_path = Path(args.evidence_out).expanduser().resolve()
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(encoded + "\n", encoding="utf-8")
+    print(encoded)
     return 0 if decision == "LEVEL3_PASS" else (1 if decision == "LEVEL3_CANDIDATE" else 2)
 
 

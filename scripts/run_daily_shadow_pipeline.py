@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,83 @@ def _backtest_smoke(
     end: str,
     execution_policy: str,
 ) -> dict[str, Any]:
+    project_status, project = _api(
+        api_url,
+        "GET",
+        f"/api/projects/{urllib.parse.quote(project_id)}",
+        timeout=30,
+    )
+    project_config = (
+        project.get("config") or {}
+        if project_status == 200 and isinstance(project, dict)
+        else {}
+    )
+    project_defaults = (
+        project_config.get("exampleDefaults") or {}
+        if isinstance(project_config, dict)
+        else {}
+    )
+    template_key = str(project_config.get("templateKey") or "")
+    universe_code = str(
+        project_config.get("universeCode")
+        or project_defaults.get("universeCode")
+        or ""
+    ).strip().upper()
+    dynamic_universe = bool(
+        template_key == "dynamic_universe"
+        or project_config.get("dynamicUniverse") is True
+        or project_defaults.get("dynamicUniverse") is True
+    )
+    strategy_parameters = dict(project_config.get("parameters") or {})
+    universe_schedule: list[dict[str, Any]] = []
+    if dynamic_universe:
+        if not universe_code:
+            return {
+                "status": "critical",
+                "error": "dynamic_universe_code_missing",
+                "httpStatus": project_status,
+            }
+        with db() as connection:
+            rows = connection.execute(
+                """
+                select symbol,start_date,end_date,effective_date,weight
+                from universe_membership
+                where universe_code=? and start_date<=? and (end_date is null or end_date>=?)
+                  and (announce_date is null or announce_date<=coalesce(effective_date,start_date))
+                order by start_date,symbol
+                """,
+                (universe_code, end, start),
+            ).fetchall()
+        universe_schedule = [
+            {
+                "symbol": str(row["symbol"]).upper(),
+                "startDate": max(str(row["effective_date"] or row["start_date"]), start),
+                "endDate": min(str(row["end_date"]), end) if row["end_date"] else None,
+                "weight": row["weight"],
+            }
+            for row in rows
+            if str(row["effective_date"] or row["start_date"]) <= end
+        ]
+        if not universe_schedule:
+            return {
+                "status": "critical",
+                "error": f"dynamic_universe_schedule_missing:{universe_code}:{start}:{end}",
+                "httpStatus": project_status,
+            }
+        strategy_parameters.update(
+            {
+                "universeCode": universe_code,
+                "dynamicUniverse": True,
+                "universeSchedule": json.dumps(
+                    universe_schedule,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                "universeSymbols": sorted(
+                    {item["symbol"] for item in universe_schedule}
+                ),
+            }
+        )
     payload = {
         "projectId": project_id,
         "symbol": symbol,
@@ -166,6 +244,7 @@ def _backtest_smoke(
         "source": source,
         "benchmarkSymbol": benchmark,
         "executionPolicy": execution_policy,
+        "parameters": strategy_parameters,
     }
     status, body = _api(api_url, "POST", "/api/backtests", payload, timeout=60)
     if status >= 400:
@@ -187,6 +266,9 @@ def _backtest_smoke(
         "httpStatus": status,
         "fingerprint": fingerprint,
         "result": result.get("result") if status == 200 else result,
+        "smokeMode": "dynamic_universe" if dynamic_universe else "single_symbol",
+        "universeCode": universe_code or None,
+        "universeScheduleRows": len(universe_schedule),
     }
 
 
@@ -445,6 +527,9 @@ def main() -> int:
         "error": backtest.get("error"),
         "final": backtest.get("final"),
         "fingerprintPresent": bool((backtest.get("fingerprint") or {}).get("parametersHash")),
+        "smokeMode": backtest.get("smokeMode"),
+        "universeCode": backtest.get("universeCode"),
+        "universeScheduleRows": backtest.get("universeScheduleRows"),
     }
     add_step("backtest_smoke", backtest["status"], backtest_details, step_errors=["backtest_smoke_failed"] if backtest["status"] != "ok" else [], started=started)
     if backtest["status"] != "ok":

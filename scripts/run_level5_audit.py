@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -264,6 +265,130 @@ def _case_status(case_result: dict[str, Any]) -> str:
     return "failed"
 
 
+def _daily_job_coverage_passed(
+    coverage: Any,
+    trade_dates: list[str],
+) -> bool:
+    if not isinstance(coverage, dict):
+        return False
+    total_days = len(trade_dates)
+    return bool(
+        coverage.get("passed") is True
+        and int(coverage.get("completedDays") or 0) >= total_days
+        and int(coverage.get("totalDays") or 0) == total_days
+    )
+
+
+def _same_replay_evidence(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    keys = (
+        "projectId",
+        "sourceBacktestId",
+        "paperMode",
+        "sessionId",
+        "canonicalStateSha256",
+    )
+    return bool(
+        all(left.get(key) == right.get(key) for key in keys)
+        and list(left.get("tradeDates") or []) == list(right.get("tradeDates") or [])
+    )
+
+
+def _requirements_cover(
+    result: dict[str, Any],
+    *,
+    require_fill: bool,
+    require_reject: bool,
+    require_reject_reason: bool,
+    min_fill: int,
+    min_reject: int,
+) -> bool:
+    evidence = result.get("evidence") or {}
+    return bool(
+        (not require_fill or evidence.get("requireFill") is True)
+        and (not require_reject or evidence.get("requireReject") is True)
+        and (
+            not require_reject_reason
+            or evidence.get("requireRejectReason") is True
+        )
+        and int(evidence.get("minFill") or 0) >= min_fill
+        and int(evidence.get("minReject") or 0) >= min_reject
+    )
+
+
+def _revalidate_reused_daily_job_coverage(
+    *,
+    no_fault_result: dict[str, Any],
+    reuse_path: Path,
+    api_url: str,
+    api_timeout: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    trade_dates = [str(item) for item in no_fault_result.get("tradeDates") or []]
+    embedded = no_fault_result.get("dailyJobCoverage")
+    if _daily_job_coverage_passed(embedded, trade_dates):
+        return dict(embedded), {
+            "source": "reused_no_fault_evidence",
+            "path": str(reuse_path),
+            "sha256": hashlib.sha256(reuse_path.read_bytes()).hexdigest(),
+        }
+
+    companion_path = reuse_path.with_name("level5-audit.json")
+    if companion_path.is_file():
+        try:
+            companion = json.loads(companion_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            companion = {}
+        companion_case = (
+            (companion.get("cases") or {}).get("walkforward_no_fault") or {}
+            if isinstance(companion, dict)
+            else {}
+        )
+        companion_coverage = companion_case.get("dailyJobCoverage")
+        if (
+            companion.get("passed") is True
+            and companion.get("status") == "passed"
+            and _same_replay_evidence(no_fault_result, companion_case)
+            and _daily_job_coverage_passed(companion_coverage, trade_dates)
+        ):
+            return dict(companion_coverage), {
+                "source": "companion_level5_audit",
+                "path": str(companion_path),
+                "sha256": hashlib.sha256(companion_path.read_bytes()).hexdigest(),
+            }
+
+    session_id = str(no_fault_result.get("sessionId") or "")
+    status, detail = _api(
+        api_url,
+        "GET",
+        f"/api/paper/{session_id}",
+        timeout=api_timeout,
+    )
+    completed_job_dates = (
+        {
+            str(item.get("trade_date") or item.get("tradeDate") or "")
+            for item in (detail.get("dailyJobs") or [])
+            if isinstance(item, dict) and item.get("state") == "COMPLETED"
+        }
+        if status < 400 and isinstance(detail, dict)
+        else set()
+    )
+    coverage = {
+        "completedDays": len(set(trade_dates) & completed_job_dates),
+        "totalDays": len(trade_dates),
+        "passed": set(trade_dates) <= completed_job_dates,
+    }
+    if not _daily_job_coverage_passed(coverage, trade_dates):
+        raise RuntimeError(
+            "no_fault_daily_job_coverage_unverifiable:"
+            f"session_http_status={status}:"
+            "provide evidence with dailyJobCoverage or its passed companion level5-audit.json"
+        )
+    return coverage, {
+        "source": "live_session",
+        "sessionId": session_id,
+        "httpStatus": status,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Level 5 replay acceptance bundle")
     parser.add_argument("--project-id", required=True)
@@ -390,6 +515,15 @@ def main() -> int:
             "workers enable checkpoint pauses without slowing the clean baseline."
         ),
     )
+    parser.add_argument(
+        "--reuse-combined-fault-evidence",
+        default="",
+        help=(
+            "Reuse a previously passed combined six-phase fault-chain JSON after "
+            "validating scope, coverage, fault actions, and canonical equivalence. "
+            "Use with --with-fault --fault-mode combined."
+        ),
+    )
     args = parser.parse_args()
 
     args.days = _require_int_arg("days", args.days, 1)
@@ -397,6 +531,12 @@ def main() -> int:
     args.min_fill = _require_int_arg("min-fill", args.min_fill, 0)
     args.min_reject = _require_int_arg("min-reject", args.min_reject, 0)
     args.api_timeout = _require_int_arg("api-timeout", args.api_timeout, 1)
+    if args.reuse_combined_fault_evidence and not (
+        args.with_fault and args.fault_mode == "combined"
+    ):
+        parser.error(
+            "--reuse-combined-fault-evidence requires --with-fault --fault-mode combined"
+        )
 
     if args.with_fault and not args.fault_scenarios.strip():
         args.fault_scenarios = (
@@ -448,6 +588,11 @@ def main() -> int:
         "walkforwardMatrix": [],
         "sessionOverrides": session_overrides,
         "faultMode": args.fault_mode,
+        "certificationMode": (
+            "evidence_revalidation"
+            if args.reuse_no_fault_evidence or args.reuse_combined_fault_evidence
+            else "fresh_execution"
+        ),
     }
 
     no_fault_out = evidence_dir / "level5-replay-no-fault.json"
@@ -480,28 +625,24 @@ def main() -> int:
         if (
             no_fault_result.get("status") != "passed"
             or no_fault_result.get("level5ReplayRequirementsPassed") is not True
+            or not _requirements_cover(
+                no_fault_result,
+                require_fill=args.require_fill,
+                require_reject=args.require_reject,
+                require_reject_reason=args.require_reject_reason,
+                min_fill=args.min_fill,
+                min_reject=args.min_reject,
+            )
         ):
             raise RuntimeError("no_fault_evidence_not_passed")
-        session_id = str(no_fault_result.get("sessionId") or "")
-        status, detail = _api(
-            args.api_url,
-            "GET",
-            f"/api/paper/{session_id}",
-            timeout=args.api_timeout,
+        coverage, coverage_revalidation = _revalidate_reused_daily_job_coverage(
+            no_fault_result=no_fault_result,
+            reuse_path=reuse_path,
+            api_url=args.api_url,
+            api_timeout=args.api_timeout,
         )
-        completed_job_dates = {
-            str(item.get("trade_date") or item.get("tradeDate") or "")
-            for item in (detail.get("dailyJobs") or [])
-            if isinstance(item, dict) and item.get("state") == "COMPLETED"
-        } if status < 400 and isinstance(detail, dict) else set()
-        baseline_dates = set(no_fault_result.get("tradeDates") or [])
-        no_fault_result["dailyJobCoverage"] = {
-            "completedDays": len(baseline_dates & completed_job_dates),
-            "totalDays": len(baseline_dates),
-            "passed": baseline_dates <= completed_job_dates,
-        }
-        if no_fault_result["dailyJobCoverage"]["passed"] is not True:
-            raise RuntimeError("no_fault_daily_job_coverage_incomplete")
+        no_fault_result["dailyJobCoverage"] = coverage
+        no_fault_result["dailyJobCoverageRevalidation"] = coverage_revalidation
         summary["reusedNoFaultEvidence"] = str(reuse_path)
     else:
         no_fault_result = _run_walkforward_case(
@@ -535,33 +676,78 @@ def main() -> int:
 
     if args.with_fault and fault_cases and args.fault_mode == "combined":
         tag = "combined-six-phase"
-        print(f"[LEVEL5] running combined fault scenario: {tag}", flush=True)
+        action = "revalidating" if args.reuse_combined_fault_evidence else "running"
+        print(f"[LEVEL5] {action} combined fault scenario: {tag}", flush=True)
         fault_out = evidence_dir / f"level5-replay-{tag}.json"
         case: dict[str, Any] = {
             "scenarios": fault_cases,
             "matrixTag": tag,
         }
         try:
-            case["result"] = _run_walkforward_case(
-                api_url=args.api_url,
-                project_id=args.project_id,
-                source_backtest_id=resolved_source_backtest_id,
-                docker_project=args.compose_project,
-                start_date=args.start_date,
-                days=args.days,
-                evidence_path=fault_out,
-                scenarios=fault_cases,
-                execute_timeout=base_timeout,
-                require_fill=args.require_fill,
-                require_reject=args.require_reject,
-                require_reject_reason=args.require_reject_reason,
-                min_fill=args.min_fill,
-                min_reject=args.min_reject,
-                timeout_per_day=args.timeout_per_day,
-                api_timeout=args.api_timeout,
-                paper_mode=args.paper_mode,
-                session_overrides_json=normalized_session_overrides,
-            )
+            if args.reuse_combined_fault_evidence:
+                reuse_fault_path = (
+                    Path(args.reuse_combined_fault_evidence).expanduser().resolve()
+                )
+                try:
+                    case["result"] = json.loads(
+                        reuse_fault_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"combined_fault_evidence_unavailable:{reuse_fault_path}:{exc}"
+                    ) from exc
+                expected_fault_scope = {
+                    "projectId": args.project_id,
+                    "sourceBacktestId": resolved_source_backtest_id,
+                    "paperMode": args.paper_mode,
+                    "tradeDatesCount": args.days,
+                    "sessionOverrides": session_overrides,
+                }
+                actual_fault_scope = {
+                    "projectId": case["result"].get("projectId"),
+                    "sourceBacktestId": case["result"].get("sourceBacktestId"),
+                    "paperMode": case["result"].get("paperMode"),
+                    "tradeDatesCount": len(case["result"].get("tradeDates") or []),
+                    "sessionOverrides": case["result"].get("sessionOverrides") or {},
+                }
+                if (
+                    expected_fault_scope != actual_fault_scope
+                    or list(case["result"].get("tradeDates") or [])[:1]
+                    != [args.start_date]
+                ):
+                    raise RuntimeError(
+                        "combined_fault_evidence_scope_mismatch:"
+                        f"expected={expected_fault_scope}:actual={actual_fault_scope}"
+                    )
+                case["evidenceRevalidation"] = {
+                    "source": "combined_fault_evidence",
+                    "path": str(reuse_fault_path),
+                    "sha256": hashlib.sha256(
+                        reuse_fault_path.read_bytes()
+                    ).hexdigest(),
+                }
+                summary["reusedCombinedFaultEvidence"] = str(reuse_fault_path)
+            else:
+                case["result"] = _run_walkforward_case(
+                    api_url=args.api_url,
+                    project_id=args.project_id,
+                    source_backtest_id=resolved_source_backtest_id,
+                    docker_project=args.compose_project,
+                    start_date=args.start_date,
+                    days=args.days,
+                    evidence_path=fault_out,
+                    scenarios=fault_cases,
+                    execute_timeout=base_timeout,
+                    require_fill=args.require_fill,
+                    require_reject=args.require_reject,
+                    require_reject_reason=args.require_reject_reason,
+                    min_fill=args.min_fill,
+                    min_reject=args.min_reject,
+                    timeout_per_day=args.timeout_per_day,
+                    api_timeout=args.api_timeout,
+                    paper_mode=args.paper_mode,
+                    session_overrides_json=normalized_session_overrides,
+                )
             case["canonicalEquivalent"] = bool(
                 case["result"].get("canonicalStateSha256")
                 and case["result"].get("canonicalStateSha256")
@@ -571,6 +757,15 @@ def main() -> int:
                 str(item.get("phase") or "")
                 for item in case["result"].get("faultInjections") or []
             }
+            observed_scenarios = [
+                {
+                    "service": str(item.get("service") or ""),
+                    "day": int(item.get("day") or 0),
+                    "phase": str(item.get("phase") or ""),
+                }
+                for item in case["result"].get("faultInjections") or []
+            ]
+            scenario_scope_matches = observed_scenarios == fault_cases
             six_phase_covered = {
                 "intent_capture",
                 "constraint_validation",
@@ -592,10 +787,27 @@ def main() -> int:
             case["passed"] = bool(
                 _case_status(case["result"]) == "passed"
                 and case["result"].get("level5ReplayRequirementsPassed") is True
+                and _requirements_cover(
+                    case["result"],
+                    require_fill=args.require_fill,
+                    require_reject=args.require_reject,
+                    require_reject_reason=args.require_reject_reason,
+                    min_fill=args.min_fill,
+                    min_reject=args.min_reject,
+                )
+                and _daily_job_coverage_passed(
+                    case["result"].get("dailyJobCoverage"),
+                    list(case["result"].get("tradeDates") or []),
+                )
+                and (case["result"].get("checkpointCoverage") or {}).get("passed")
+                is True
+                and case["result"].get("interruptionRecoveryPassed") is True
+                and scenario_scope_matches
                 and case["canonicalEquivalent"]
                 and six_phase_covered
                 and worker_loss_injected
             )
+            case["scenarioScopeMatches"] = scenario_scope_matches
             case["failedReason"] = (
                 None
                 if case["passed"]

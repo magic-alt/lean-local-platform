@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
 from pathlib import Path
 from types import ModuleType
 
@@ -102,6 +103,76 @@ def test_daily_shadow_backtest_requires_governed_project(monkeypatch):
     assert captured["payload"]["symbol"] == "600519"
 
 
+def test_daily_shadow_backtest_supplies_dynamic_universe_schedule(monkeypatch):
+    module = _load_script(
+        "audit_daily_shadow_dynamic_contract",
+        "scripts/run_daily_shadow_pipeline.py",
+    )
+    calls = []
+
+    class _Connection:
+        def execute(self, _sql, params):
+            assert params == ("CSI300", "2023-06-30", "2023-01-03")
+            return self
+
+        def fetchall(self):
+            return [
+                {
+                    "symbol": "600519",
+                    "start_date": "2020-01-01",
+                    "end_date": None,
+                    "effective_date": "2020-01-01",
+                    "weight": None,
+                }
+            ]
+
+    class _Db:
+        def __enter__(self):
+            return _Connection()
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_api(_base_url, method, path, payload=None, timeout=300):
+        calls.append((method, path, payload, timeout))
+        if method == "GET" and path.startswith("/api/projects/"):
+            return 200, {
+                "config": {
+                    "templateKey": "dynamic_universe",
+                    "parameters": {"weighting": "equal"},
+                    "exampleDefaults": {"universeCode": "CSI300"},
+                }
+            }
+        return 400, {"detail": "contract probe"}
+
+    monkeypatch.setattr(module, "db", _Db)
+    monkeypatch.setattr(module, "_api", fake_api)
+    result = module._backtest_smoke(
+        "http://localhost",
+        "dynamic-project",
+        "600519",
+        "000300",
+        "tushare",
+        "2023-01-03",
+        "2023-06-30",
+        "next_open",
+    )
+
+    assert result["status"] == "critical"
+    submitted = calls[-1][2]
+    assert submitted["parameters"]["dynamicUniverse"] is True
+    assert submitted["parameters"]["universeCode"] == "CSI300"
+    assert json.loads(submitted["parameters"]["universeSchedule"]) == [
+        {
+            "symbol": "600519",
+            "startDate": "2023-01-03",
+            "endDate": None,
+            "weight": None,
+        }
+    ]
+    assert submitted["parameters"]["weighting"] == "equal"
+
+
 def test_level3_audit_redacts_compose_secrets():
     module = _load_script("audit_level3_redaction", "scripts/run_level3_shadow_audit.py")
     rendered = module._redact_text(
@@ -114,6 +185,121 @@ def test_level3_audit_redacts_compose_secrets():
     assert "mysql://secret" not in rendered
     assert rendered.count("<redacted>") == 2
     assert "NORMAL_SETTING: visible" in rendered
+
+
+def test_level5_reuses_companion_daily_job_coverage_after_session_cleanup(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_script(
+        "audit_level5_reuse_contract",
+        "scripts/run_level5_audit.py",
+    )
+    replay = {
+        "status": "passed",
+        "projectId": "retired-project",
+        "sourceBacktestId": "retired-backtest",
+        "paperMode": "lean_walkforward_v2",
+        "sessionId": "retired-session",
+        "tradeDates": ["2024-01-02", "2024-01-03"],
+        "canonicalStateSha256": "canonical-digest",
+        "level5ReplayRequirementsPassed": True,
+    }
+    reuse_path = tmp_path / "level5-replay-no-fault.json"
+    reuse_path.write_text(json.dumps(replay), encoding="utf-8")
+    companion = {
+        "status": "passed",
+        "passed": True,
+        "cases": {
+            "walkforward_no_fault": {
+                **replay,
+                "dailyJobCoverage": {
+                    "completedDays": 2,
+                    "totalDays": 2,
+                    "passed": True,
+                },
+            }
+        },
+    }
+    (tmp_path / "level5-audit.json").write_text(
+        json.dumps(companion),
+        encoding="utf-8",
+    )
+
+    def fail_live_lookup(*_args, **_kwargs):
+        raise AssertionError("passed companion evidence should avoid a retired session lookup")
+
+    monkeypatch.setattr(module, "_api", fail_live_lookup)
+    coverage, revalidation = module._revalidate_reused_daily_job_coverage(
+        no_fault_result=replay,
+        reuse_path=reuse_path,
+        api_url="http://localhost",
+        api_timeout=1,
+    )
+
+    assert coverage == {"completedDays": 2, "totalDays": 2, "passed": True}
+    assert revalidation["source"] == "companion_level5_audit"
+    assert revalidation["sha256"]
+
+
+def test_external_webhook_acceptance_requires_public_endpoint(monkeypatch):
+    module = _load_script(
+        "audit_external_webhook_contract",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+
+    monkeypatch.setattr(
+        module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("127.0.0.1", 443),
+            )
+        ],
+    )
+
+    try:
+        module._assert_external_endpoint("https://localhost.example/hook")
+    except ValueError as exc:
+        assert str(exc).startswith("webhook_endpoint_is_not_external:")
+    else:
+        raise AssertionError("private webhook endpoint should not certify")
+
+
+def test_external_webhook_acceptance_requires_persisted_2xx(monkeypatch):
+    module = _load_script(
+        "audit_external_webhook_delivery_contract",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+    monkeypatch.setattr(module, "_assert_external_endpoint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "init_db", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "emit_alert",
+        lambda *_args, **_kwargs: {
+            "id": "alert-1",
+            "delivery": {
+                "id": "delivery-1",
+                "channel": "webhook",
+                "status": "success",
+                "response_code": 202,
+                "attempt_count": 1,
+            },
+        },
+    )
+
+    result = module.run(
+        "https://notifications.example.test/lean",
+        probe_id="probe-1",
+    )
+
+    assert result["status"] == "EXTERNAL_WEBHOOK_PASS"
+    assert result["responseCode"] == 202
+    assert result["endpoint"] == "https://notifications.example.test/lean"
 
 
 def test_level4_audit_authenticates_json_and_csv_requests(tmp_path, monkeypatch):
