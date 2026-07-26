@@ -47,6 +47,17 @@ _ALERT_NAMESPACE = uuid.UUID("86d16cc7-5c13-49c7-a151-7ab940f4cb81")
 _DELIVERY_NAMESPACE = uuid.UUID("c3f681a1-03ad-4271-8579-760308a76a03")
 
 
+def external_alert_channel_configured() -> bool:
+    """Return whether an alert can reach an external notification channel."""
+    return any(
+        str(os.environ.get(variable, "")).strip()
+        for variable in (
+            "LEAN_ALERT_WEBHOOK_URL",
+            "LEAN_ALERT_ESCALATION_WEBHOOK_URL",
+        )
+    )
+
+
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
         return max(minimum, int(os.environ.get(name, str(default))))

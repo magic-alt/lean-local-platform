@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..repositories.backtest_repository import get_backtest
 from . import paper as legacy_paper
-from .alerts import emit_alert
+from .alerts import emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
 
@@ -67,6 +67,16 @@ RATE_FIELDS = {
     "previous_weight",
     "confidence",
 }
+
+PAPER_ACCOUNT_DATA_TRUST = {
+    "valuationTrusted": False,
+    "reason": "lookahead_valuation",
+}
+
+
+def _data_trust() -> dict[str, Any]:
+    """Return a fresh response payload so callers cannot mutate shared state."""
+    return dict(PAPER_ACCOUNT_DATA_TRUST)
 
 
 def _decimal(value: Any, *, positive: bool = False, default: str = "0") -> Decimal:
@@ -394,7 +404,9 @@ def list_accounts(
             """,
             tuple(params + [limit, offset]),
         ).fetchall()
-    return _paged(rows_to_dicts(rows), total=int(total_row["count"] or 0), limit=limit, offset=offset)
+    result = _paged(rows_to_dicts(rows), total=int(total_row["count"] or 0), limit=limit, offset=offset)
+    result["dataTrust"] = _data_trust()
+    return result
 
 
 def update_account(account_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -620,6 +632,50 @@ def transition_account(account_id: str, action: str) -> dict[str, Any]:
                 (now, account["shadow_session_id"]),
             )
     return get_account(account_id)
+
+
+def pause_accounts_for_data_trust() -> dict[str, Any]:
+    """Pause runnable Paper accounts while their valuation is untrusted.
+
+    Archived accounts remain archived. Draft accounts are included so they
+    cannot be activated without an explicit recovery decision.
+    """
+    now = utc_now()
+    with db() as connection:
+        rows = rows_to_dicts(
+            connection.execute(
+                """
+                select id,shadow_session_id from paper_accounts
+                where status in ('draft','active','error')
+                """
+            ).fetchall()
+        )
+        account_ids = [str(row["id"]) for row in rows]
+        session_ids = [str(row["shadow_session_id"]) for row in rows if row.get("shadow_session_id")]
+        if account_ids:
+            placeholders = ",".join("?" for _ in account_ids)
+            connection.execute(
+                f"""
+                update paper_accounts
+                set status='paused',version=version+1,updated_at=?,paused_at=?
+                where id in ({placeholders})
+                """,
+                tuple([now, now] + account_ids),
+            )
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            connection.execute(
+                f"""
+                update paper_sessions set status='paused',auto_advance=0,updated_at=?
+                where id in ({placeholders})
+                """,
+                tuple([now] + session_ids),
+            )
+    return {
+        "pausedAccountIds": account_ids,
+        "pausedCount": len(account_ids),
+        "dataTrust": _data_trust(),
+    }
 
 
 def clone_account(account_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2118,6 +2174,18 @@ def deliver_notifications(limit: int = 100) -> dict[str, Any]:
     delivered: list[str] = []
     failed: list[str] = []
     for item in rows:
+        if not external_alert_channel_configured():
+            with db() as connection:
+                connection.execute(
+                    """
+                    update paper_notification_outbox
+                    set status='failed',attempt=attempt+1,last_error='no_channel_configured',updated_at=?
+                    where id=?
+                    """,
+                    (utc_now(), item["id"]),
+                )
+            failed.append(item["id"])
+            continue
         try:
             emit_alert(
                 "paper_schedule_failed" if item["event_type"] in {"cycle_failed", "data_not_ready"} else "paper_reject_spike",
@@ -2332,6 +2400,7 @@ def get_overview(account_id: str) -> dict[str, Any]:
             "watermark": watermark,
             "qa": qa,
         },
+        "dataTrust": _data_trust(),
     }
 
 
@@ -2572,6 +2641,7 @@ def performance(account_id: str, start_date: str | None = None, end_date: str | 
         "valuationDate": points[-1]["tradingDate"] if points else None,
         "missingDates": [],
         "points": points,
+        "dataTrust": _data_trust(),
     }
 
 
@@ -2656,6 +2726,7 @@ def compare_accounts(account_ids: list[str], start_date: str | None = None, end_
         "valuationDate": common_valuation,
         "missingData": [item["id"] for item in accounts if not item.get("last_valuation_at")],
         "accounts": rows,
+        "dataTrust": _data_trust(),
     }
 
 

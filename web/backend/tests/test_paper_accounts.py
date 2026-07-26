@@ -440,6 +440,29 @@ def test_paper_account_api_validates_lifecycle() -> None:
     assert "deployment" in activate.json()["detail"].lower()
 
 
+def test_paused_accounts_expose_data_trust_flag() -> None:
+    _init()
+    from app.main import app
+    from app.services.paper_accounts import pause_accounts_for_data_trust
+
+    first = _account("Trust Account A")
+    second = _account("Trust Account B")
+    paused = pause_accounts_for_data_trust()
+    assert paused["pausedCount"] == 2
+    assert paused["dataTrust"] == {"valuationTrusted": False, "reason": "lookahead_valuation"}
+
+    client = TestClient(app)
+    listed = client.get("/api/paper/accounts")
+    overview = client.get(f"/api/paper/accounts/{first['id']}/overview")
+    performance = client.get(f"/api/paper/accounts/{first['id']}/performance")
+    comparison = client.get("/api/paper/accounts/compare", params=[("accountId", first["id"]), ("accountId", second["id"])])
+
+    for response in (listed, overview, performance, comparison):
+        assert response.status_code == 200
+        assert response.json()["dataTrust"] == {"valuationTrusted": False, "reason": "lookahead_valuation"}
+    assert all(item["status"] == "paused" for item in listed.json()["items"])
+
+
 def test_paper_account_delete_cascades_stopped_account_records() -> None:
     _init()
     from app.db import db

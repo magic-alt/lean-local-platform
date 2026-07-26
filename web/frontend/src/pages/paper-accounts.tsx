@@ -556,10 +556,10 @@ export function PaperAccountsPage() {
       </div>
       <Alert
         showIcon
-        type="info"
-        message="每日自动运行是正式 Paper Execution Cycle，不是会覆写账户的普通全量 Backtest。无信号仍是成功，有信号也可能因风险或市场规则不成交。"
+        type="error"
+        message="净值与超额收益当前不可信（L5-PAPER-001/002），已暂停自动执行"
+        description="当前 Paper 账户的估值存在前视风险；请勿据此做交易或绩效判断，直至修复完成并重新认证。"
         style={{ marginBottom: 16 }}
-        action={<Link to="/paper/legacy">查看 Legacy Sessions</Link>}
       />
       <Card className="paper-filter-card">
         <Space wrap>
@@ -1020,6 +1020,13 @@ export function PaperAccountDetailPage() {
 
   return (
     <>
+      <Alert
+        type="error"
+        showIcon
+        message="净值与超额收益当前不可信（L5-PAPER-001/002），已暂停自动执行"
+        description="当前 Paper 账户的估值存在前视风险；请勿据此做交易或绩效判断，直至修复完成并重新认证。"
+        style={{ marginBottom: 16 }}
+      />
       <div className="toolbar paper-toolbar">
         <div>
           <Space>

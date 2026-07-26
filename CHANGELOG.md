@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Pause runnable Paper accounts while Level 5 remediation addresses untrusted look-ahead valuation, surface a non-dismissible valuation-trust warning and machine-readable `dataTrust` flag across Paper account performance APIs, and mark notification outbox records as failed when no external channel is configured instead of falsely reporting delivery.
+
 - Add PDF, CSV and versioned JSON report exports; enforce ETF, convertible-bond, futures and options dataset quality gates; add launch-aware PIT coverage ledgers and licensed history import for every offered A-share universe; schedule independent incremental Parquet/ClickHouse maintenance with visible per-layer watermarks and bounded date-count drift repair; and add real-stack Level 4 train/validation/OOS plus failed-child retry and cancel/restart recovery evidence.
 - Make the Backtests cumulative-return chart derive its vertical range from valid strategy and benchmark values, ignore zero-valued benchmark placeholders that falsely appeared as a 100% loss, and rebuild historical reports with the same placeholder filtering so small fluctuations remain visible.
 - Redesign backtest results around performance, trades, research quality, and run details; compare strategy and benchmark on rebased cumulative returns and treat admission as an optional promotion workflow.

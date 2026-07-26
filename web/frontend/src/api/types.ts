@@ -991,6 +991,12 @@ export interface PagedResponse<T> {
   count: number;
   limit: number;
   offset: number;
+  dataTrust?: PaperDataTrust;
+}
+
+export interface PaperDataTrust {
+  valuationTrusted: boolean;
+  reason: "lookahead_valuation";
 }
 
 export interface PaperAccount {
@@ -1092,6 +1098,7 @@ export interface PaperAccountOverview {
       created_at?: string;
     } | null;
   };
+  dataTrust: PaperDataTrust;
 }
 
 export interface PaperPosition {
@@ -1138,6 +1145,7 @@ export interface PaperAccountComparison {
   comparisonStart?: string | null;
   valuationDate?: string | null;
   missingData: string[];
+  dataTrust: PaperDataTrust;
   accounts: Array<{
     accountId: string;
     name: string;

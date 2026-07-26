@@ -56,6 +56,35 @@ def test_alert_webhook_delivery_is_persisted_and_cooled_down(monkeypatch):
     assert "secret" not in serialized
 
 
+def test_outbox_not_delivered_without_channel(monkeypatch):
+    _init_db()
+    from app.db import db
+    from app.services import paper_accounts
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("LEAN_ALERT_ESCALATION_WEBHOOK_URL", raising=False)
+    account = paper_accounts.create_account(
+        {"name": "Outbox Account", "initialCash": "1000000", "benchmarkSymbol": "000300"}
+    )
+    with db() as connection:
+        paper_accounts._enqueue_notification(
+            connection,
+            account["id"],
+            None,
+            None,
+            "cycle_failed",
+            {"reason": "test"},
+        )
+
+    result = paper_accounts.deliver_notifications()
+    assert result["delivered"] == []
+    assert len(result["failed"]) == 1
+    with db() as connection:
+        row = connection.execute("select status,last_error from paper_notification_outbox").fetchone()
+    assert row["status"] == "failed"
+    assert row["last_error"] == "no_channel_configured"
+
+
 def test_repeated_warning_escalates_and_failed_delivery_is_recorded(monkeypatch):
     _init_db()
     from app.services import alerts

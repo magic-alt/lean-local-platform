@@ -46,6 +46,7 @@ import type {
   PaperBacktestCandidate,
   PaperWalkforwardRun,
   PaperAccount,
+  PaperDataTrust,
   PaperAccountOverview,
   PaperAccountComparison,
   PaperDeployment,
@@ -625,7 +626,7 @@ export const api = {
   paperAccountAudit: (id: string) =>
     request<PagedResponse<Record<string, unknown>>>(`/api/paper/accounts/${encodeURIComponent(id)}/audit`),
   paperAccountPerformance: (id: string) =>
-    request<{ points: Array<Record<string, unknown>>; benchmarkSymbol: string; currency: string }>(
+    request<{ points: Array<Record<string, unknown>>; benchmarkSymbol: string; currency: string; dataTrust: PaperDataTrust }>(
       `/api/paper/accounts/${encodeURIComponent(id)}/performance`
     ),
   paperDeployments: (accountId: string) =>
