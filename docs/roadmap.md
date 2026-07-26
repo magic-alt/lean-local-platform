@@ -114,11 +114,14 @@ Remaining work:
 
 ## Level 5: Paper and Operational Safety
 
-Status: local production-like Paper interruption acceptance PASS; overall
-operational release remains NOT READY. On 2026-07-25 a real 21-day LEAN Paper
-v2 baseline and a second 21-day six-phase fault chain passed with identical
-canonical state. This does not close production-scale restore, credential,
-restricted-runner, supply-chain, or live-broker gates.
+Status: **LEVEL5_FAIL** — see the [2026-07-26 platform system
+review](audit/level5-platform-system-review-2026-07-26.md) and its
+[remediation checklist](audit/level5-remediation-checklist-2026-07-26.md).
+The prior “local production-like Paper interruption acceptance PASS” statement
+is withdrawn: it reused prior evidence and cannot establish current canonical
+state correctness. Level 5 remains blocked by untrusted Paper valuation and
+benchmark accounting, mutable ledger handling, unverified recovery, failed
+notification delivery, absent backup evidence, and restricted-runner gaps.
 
 Current verification path is implemented in:
 
@@ -131,7 +134,8 @@ Current verification path is implemented in:
 `--source-backtest-id <backtest-id>` 锁定复现目标。
 
 The script performs 21-day LEAN Paper, duplicate-call idempotency, optional
-service-fault matrix and constraint coverage checks.
+service-fault matrix and constraint coverage checks. Evidence reuse is reported
+as `revalidated_from_prior_evidence`, never as a passing certification.
 
 Implemented:
 

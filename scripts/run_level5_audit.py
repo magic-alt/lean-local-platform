@@ -389,6 +389,13 @@ def _revalidate_reused_daily_job_coverage(
     }
 
 
+def _apply_certification_mode(summary: dict[str, Any]) -> None:
+    """Prevent reused evidence from being represented as fresh certification."""
+    if summary.get("certificationMode") == "evidence_revalidation":
+        summary["status"] = "revalidated_from_prior_evidence"
+        summary["passed"] = False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Level 5 replay acceptance bundle")
     parser.add_argument("--project-id", required=True)
@@ -924,6 +931,7 @@ def main() -> int:
     summary["constraints_passed"] = constraints_passed
     summary["passed"] = bool(no_fault_passed and with_fault_passed and constraints_passed)
     summary["status"] = "passed" if summary["passed"] else "failed"
+    _apply_certification_mode(summary)
 
     evidence = evidence_dir / "level5-audit.json"
     evidence.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

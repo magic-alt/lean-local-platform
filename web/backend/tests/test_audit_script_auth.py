@@ -242,6 +242,23 @@ def test_level5_reuses_companion_daily_job_coverage_after_session_cleanup(
     assert revalidation["sha256"]
 
 
+def test_level5_revalidation_cannot_report_a_fresh_pass():
+    module = _load_script(
+        "audit_level5_revalidation_status",
+        "scripts/run_level5_audit.py",
+    )
+    summary = {
+        "certificationMode": "evidence_revalidation",
+        "passed": True,
+        "status": "passed",
+    }
+
+    module._apply_certification_mode(summary)
+
+    assert summary["passed"] is False
+    assert summary["status"] == "revalidated_from_prior_evidence"
+
+
 def test_external_webhook_acceptance_requires_public_endpoint(monkeypatch):
     module = _load_script(
         "audit_external_webhook_contract",
