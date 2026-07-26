@@ -50,7 +50,15 @@ function validationDetailSummary(details: unknown): string | undefined {
 }
 
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, options);
+  const method = String(options?.method || "GET").toUpperCase();
+  const headers = new Headers(options?.headers);
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && !headers.has("Idempotency-Key")) {
+    headers.set(
+      "Idempotency-Key",
+      globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+  }
+  const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
     let message = response.statusText;
     let errorCode: string | undefined;

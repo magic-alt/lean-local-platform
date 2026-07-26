@@ -125,7 +125,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
-      LEAN_API_TOKEN_FILE: /workspace/web/runtime/secrets/api_token
+      LEAN_API_TOKEN_FILE: /run/secrets/lean_api_token
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
@@ -195,10 +195,15 @@ services:
       LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
       LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
     volumes:
-      - .:/workspace
+      - .:/workspace:ro
+      - ./web/runtime:/workspace/web/runtime
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
+    secrets:
+      - lean_api_token
+    tmpfs:
+      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     depends_on:
       redis:
         condition: service_healthy
@@ -299,10 +304,13 @@ services:
       LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
       LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
     volumes:
-      - .:/workspace
+      - .:/workspace:ro
+      - ./web/runtime:/workspace/web/runtime
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
+    tmpfs:
+      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     depends_on:
       redis:
         condition: service_healthy
@@ -330,12 +338,15 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
     environment:
       LEAN_RUNNER_URL: http://lean-runner:8010
-      LEAN_RUNNER_TOKEN_FILE: /workspace/web/runtime/secrets/runner_token
+      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
     volumes:
-      - .:/workspace
+      - .:/workspace:ro
+      - ./web/runtime:/workspace/web/runtime
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
+    secrets:
+      - lean_runner_token
     depends_on:
       lean-runner:
         condition: service_healthy
@@ -349,7 +360,7 @@ services:
     command: uvicorn app.runner_service:app --host 0.0.0.0 --port 8010
     environment:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
-      LEAN_RUNNER_TOKEN_FILE: /workspace/web/runtime/secrets/runner_token
+      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
       LEAN_DOCKER_NETWORK: none
@@ -361,9 +372,12 @@ services:
       - .:/workspace:ro
       - ${LEAN_DATA_DIR:-../Data}:/workspace/Data:ro
       - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - lean_runner_token
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     cap_drop:
       - ALL
     security_opt:
@@ -415,7 +429,9 @@ services:
       LEAN_INSIGHTS_LLM_MODEL: ${LEAN_INSIGHTS_LLM_MODEL:-}
       LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS: ${LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS:-60}
     volumes:
-      - .:/workspace
+      - .:/workspace:ro
+    tmpfs:
+      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     depends_on:
       redis:
         condition: service_healthy
@@ -455,3 +471,9 @@ volumes:
   clickhouse-data:
   prometheus-data:
   grafana-data:
+
+secrets:
+  lean_api_token:
+    file: ${LEAN_API_TOKEN_SOURCE_FILE:-./web/runtime/secrets/api_token}
+  lean_runner_token:
+    file: ${LEAN_RUNNER_TOKEN_SOURCE_FILE:-./web/runtime/secrets/runner_token}

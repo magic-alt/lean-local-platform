@@ -4,6 +4,7 @@ from celery import chain
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from .common import paged_items
 from ..services import paper as paper_service
 from ..core.errors import NotFoundError
 from ..services.history_resources import delete_paper_session
@@ -32,10 +33,12 @@ class PaperSessionCreate(BaseModel):
     dataType: str = "trade"
     cash: float = Field(default=100000, gt=0)
     executionPolicy: str | None = None
-    allowSameDayClose: bool = False
     benchmarkSymbol: str | None = None
     maxPositions: int | None = Field(default=None, ge=0)
     maxPositionWeight: float | None = Field(default=None, ge=0, le=1)
+    maxIndustryWeight: float | None = Field(default=None, gt=0, le=1)
+    maxVolumeParticipation: float | None = Field(default=None, gt=0, le=1)
+    circuitBreakerDrawdown: float | None = Field(default=None, gt=0, le=1)
     minCash: float | None = Field(default=None, ge=0)
     blacklist: list[str] | str | None = None
     watchlist: list[str] | str | None = None
@@ -74,13 +77,29 @@ class PaperReplayRequest(BaseModel):
 
 
 @router.get("")
-def list_sessions():
-    return paper_service.list_sessions()
+def list_sessions(limit: int = 100, offset: int = 0, paged: bool = True):
+    return paged_items(paper_service.list_sessions(), limit=limit, offset=offset, paged=paged)
 
 
 @router.post("")
 def create_session(request: PaperSessionCreate):
     try:
+        legacy_same_close = str(request.executionPolicy or "").strip().lower() in {
+            "same_close",
+            "sameclose",
+            "same-day-close",
+        }
+        legacy_override = bool((request.model_extra or {}).get("allowSameDayClose"))
+        if legacy_same_close or legacy_override:
+            raise HTTPException(
+                status_code=410,
+                detail={
+                    "message": "same_close execution was permanently removed.",
+                    "code": "SAME_CLOSE_REMOVED",
+                    "field": "executionPolicy" if legacy_same_close else "allowSameDayClose",
+                    "retryable": False,
+                },
+            )
         payload = request.model_dump()
         requested_mode = str(request.mode or "").strip().lower()
         if requested_mode not in {"", "lean_walkforward", "lean_walkforward_v2", "signal_simulation"}:
@@ -94,6 +113,8 @@ def create_session(request: PaperSessionCreate):
         else:
             payload["mode"] = "signal_simulation"
         return paper_service.create_session(payload)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

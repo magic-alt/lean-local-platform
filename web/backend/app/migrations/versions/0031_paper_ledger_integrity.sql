@@ -1,5 +1,5 @@
 -- description: Enforce immutable Paper account ledger sequence identity
--- compatibility: additive unique index; existing duplicate sequences must be reconciled before migration
+-- compatibility: additive unique index, with existing duplicate sequences reconciled before migration
 -- rollback: drop index uq_paper_account_ledger_sequence
 
 create unique index if not exists uq_paper_account_ledger_sequence

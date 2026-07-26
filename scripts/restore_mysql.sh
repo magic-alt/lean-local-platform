@@ -9,6 +9,8 @@ MYSQL_PASSWORD="${LEAN_MYSQL_ROOT_PASSWORD:-}"
 BACKUP_PATH=""
 TARGET_DATABASE=""
 CONFIRM=""
+SOURCE_DATABASE="${LEAN_MYSQL_DATABASE:-lean_market}"
+VERIFY_TABLES=("schema_migrations" "paper_accounts" "paper_ledger_entries" "stored_objects")
 
 usage() {
   cat <<'EOF'
@@ -17,7 +19,8 @@ Usage:
     --confirm RESTORE_ISOLATED_DATABASE
 
 The target must begin with "lean_restore_". The script refuses to restore over
-lean_market. It verifies FILE.sha256 before creating the isolated database.
+lean_market. It verifies FILE.sha256, then compares exact row counts and MySQL
+table checksums for critical source/target tables.
 EOF
 }
 
@@ -33,6 +36,17 @@ while (($#)); do
       ;;
     --confirm)
       CONFIRM="${2:-}"
+      shift 2
+      ;;
+    --source-database)
+      SOURCE_DATABASE="${2:-}"
+      shift 2
+      ;;
+    --verify-table)
+      if [[ "${VERIFY_TABLES[*]}" == "schema_migrations paper_accounts paper_ledger_entries stored_objects" ]]; then
+        VERIFY_TABLES=()
+      fi
+      VERIFY_TABLES+=("${2:-}")
       shift 2
       ;;
     --help|-h)
@@ -63,6 +77,10 @@ if [[ ! "${TARGET_DATABASE}" =~ ^[A-Za-z0-9_]+$ ]]; then
   echo "Unsafe target database name." >&2
   exit 2
 fi
+if [[ ! "${SOURCE_DATABASE}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "Unsafe source database name." >&2
+  exit 2
+fi
 if [[ "${CONFIRM}" != "RESTORE_ISOLATED_DATABASE" ]]; then
   echo "Explicit --confirm RESTORE_ISOLATED_DATABASE is required." >&2
   exit 2
@@ -90,6 +108,64 @@ table_count="$(
     mysql --user="${MYSQL_USER}" -Nse \
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${TARGET_DATABASE}'"
 )"
+verification_count=0
+verification_failures=0
+verification_output=""
+for table_name in "${VERIFY_TABLES[@]}"; do
+  if [[ ! "${table_name}" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "Unsafe verification table name: ${table_name}" >&2
+    exit 2
+  fi
+  source_exists="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse \
+      "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${SOURCE_DATABASE}' AND table_name='${table_name}'"
+  )"
+  target_exists="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse \
+      "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${TARGET_DATABASE}' AND table_name='${table_name}'"
+  )"
+  if [[ "${source_exists}" != "1" || "${target_exists}" != "1" ]]; then
+    verification_output+="${table_name}:missing_source_or_target"$'\n'
+    verification_failures=$((verification_failures + 1))
+    continue
+  fi
+  source_rows="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse "SELECT COUNT(*) FROM \`${SOURCE_DATABASE}\`.\`${table_name}\`"
+  )"
+  target_rows="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse "SELECT COUNT(*) FROM \`${TARGET_DATABASE}\`.\`${table_name}\`"
+  )"
+  source_checksum="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse "CHECKSUM TABLE \`${SOURCE_DATABASE}\`.\`${table_name}\`" | awk '{print $2}'
+  )"
+  target_checksum="$(
+    docker compose --project-directory "${ROOT_DIR}" -p "${COMPOSE_PROJECT_NAME}" \
+      exec -T -e "MYSQL_PWD=${MYSQL_PASSWORD}" "${MYSQL_SERVICE}" \
+      mysql --user="${MYSQL_USER}" -Nse "CHECKSUM TABLE \`${TARGET_DATABASE}\`.\`${table_name}\`" | awk '{print $2}'
+  )"
+  passed="true"
+  if [[ "${source_rows}" != "${target_rows}" || -z "${source_checksum}" || "${source_checksum}" != "${target_checksum}" ]]; then
+    passed="false"
+    verification_failures=$((verification_failures + 1))
+  fi
+  verification_count=$((verification_count + 1))
+  verification_output+="${table_name}:rows=${source_rows}/${target_rows}:checksum=${source_checksum}/${target_checksum}:passed=${passed}"$'\n'
+done
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf 'status=restored\nstarted_at=%s\ncompleted_at=%s\ntarget_database=%s\ntable_count=%s\n' \
-  "${started_at}" "${completed_at}" "${TARGET_DATABASE}" "${table_count}"
+printf 'status=%s\nstarted_at=%s\ncompleted_at=%s\ntarget_database=%s\ntable_count=%s\nverification_count=%s\nverification_failures=%s\n%s' \
+  "$([[ "${verification_failures}" == "0" ]] && printf restored_verified || printf verification_failed)" \
+  "${started_at}" "${completed_at}" "${TARGET_DATABASE}" "${table_count}" \
+  "${verification_count}" "${verification_failures}" "${verification_output}"
+if [[ "${verification_failures}" != "0" ]]; then
+  exit 1
+fi

@@ -1,5 +1,6 @@
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import before_task_publish, task_postrun, task_prerun
 
 from ..core.config import (
     ASHARE_TECH_REPORT_HOUR,
@@ -12,6 +13,41 @@ from ..core.config import (
     PAPER_WALKFORWARD_MINUTE,
     REDIS_URL,
 )
+from ..core.request_context import (
+    current_trace_id,
+    current_workflow_id,
+    reset_request_context,
+    set_request_context,
+)
+
+
+_task_context_tokens: dict[str, tuple] = {}
+
+
+@before_task_publish.connect
+def attach_request_context(headers=None, **_kwargs) -> None:
+    if headers is None:
+        return
+    if trace_id := current_trace_id():
+        headers["x-trace-id"] = trace_id
+    if workflow_id := current_workflow_id():
+        headers["x-workflow-id"] = workflow_id
+
+
+@task_prerun.connect
+def restore_request_context(task_id=None, task=None, **_kwargs) -> None:
+    headers = getattr(getattr(task, "request", None), "headers", None) or {}
+    trace_id = headers.get("x-trace-id")
+    workflow_id = headers.get("x-workflow-id") or trace_id
+    if task_id and (trace_id or workflow_id):
+        _task_context_tokens[str(task_id)] = set_request_context(trace_id, workflow_id)
+
+
+@task_postrun.connect
+def clear_request_context(task_id=None, **_kwargs) -> None:
+    tokens = _task_context_tokens.pop(str(task_id), None)
+    if tokens:
+        reset_request_context(tokens)
 
 
 celery_app = Celery(

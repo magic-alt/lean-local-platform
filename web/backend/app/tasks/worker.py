@@ -41,6 +41,7 @@ from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import paper as paper_service
+from ..services.trading_calendar import next_trade_date
 from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
@@ -360,7 +361,7 @@ def schedule_paper_walkforward_task(self):
             continue
         next_date = session.get("start_date")
         if session.get("last_processed_date"):
-            next_date = paper_service._next_trade_date(
+            next_date = next_trade_date(
                 str(session.get("venue") or "china"),
                 str(session["last_processed_date"]),
             )

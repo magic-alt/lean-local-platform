@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
+from .common import paged_items
 from ..core.errors import LeanWebError, NotFoundError
 from ..services import projects as project_service
 
@@ -36,8 +37,8 @@ class ProjectClone(BaseModel):
 
 
 @router.get("")
-def list_projects():
-    return project_service.list_projects()
+def list_projects(limit: int = 100, offset: int = 0, paged: bool = True):
+    return paged_items(project_service.list_projects(), limit=limit, offset=offset, paged=paged)
 
 
 @router.post("")

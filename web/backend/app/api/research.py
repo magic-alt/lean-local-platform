@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .common import dispatch_task
+from .common import dispatch_task, paged_items
 from ..core.config import RESEARCH_DIR
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.research import (
@@ -82,10 +82,15 @@ def _reconcile(item: dict) -> dict:
 
 
 @router.get("")
-def list_sessions():
+def list_sessions(limit: int = 100, offset: int = 0, paged: bool = True):
     with db() as connection:
         rows = connection.execute("select * from research_sessions order by created_at desc").fetchall()
-    return [_reconcile(item) for item in rows_to_dicts(rows)]
+    return paged_items(
+        [_reconcile(item) for item in rows_to_dicts(rows)],
+        limit=limit,
+        offset=offset,
+        paged=paged,
+    )
 
 
 @router.post("")

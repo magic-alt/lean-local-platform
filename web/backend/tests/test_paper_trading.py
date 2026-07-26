@@ -212,7 +212,7 @@ def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeyp
     assert reports[-1]["positionWeights"][0]["symbol"] == "600519"
 
 
-def test_paper_session_rejects_same_close_without_explicit_allow(tmp_path, monkeypatch):
+def test_paper_session_rejects_same_close_and_removed_override(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows()
 
@@ -221,17 +221,16 @@ def test_paper_session_rejects_same_close_without_explicit_allow(tmp_path, monke
     with pytest.raises(ValueError, match="same_close"):
         create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "executionPolicy": "same_close"})
 
-    session = create_session(
-        {
-            "symbol": "600519",
-            "assetClass": "equity",
-            "market": "china",
-            "executionPolicy": "same_close",
-            "allowSameDayClose": True,
-        }
-    )
-
-    assert session["parameters"]["executionPolicy"] == "same_close"
+    with pytest.raises(ValueError, match="no longer supported"):
+        create_session(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "executionPolicy": "next_open",
+                "allowSameDayClose": True,
+            }
+        )
 
 
 def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_status(tmp_path, monkeypatch):

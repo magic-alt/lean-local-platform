@@ -29,7 +29,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/backtests` | Backtests | `status` (query)<br>`projectId` (query)<br>`symbol` (query)<br>`fromDate` (query)<br>`toDate` (query) | `200` - |
+| `GET` | `/api/backtests` | Backtests | `status` (query)<br>`projectId` (query)<br>`symbol` (query)<br>`fromDate` (query)<br>`toDate` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/backtests` | Create Backtest | body `BacktestRequest` | `200` - |
 | `POST` | `/api/backtests/preflight` | Preflight Backtest | body `BacktestRequest` | `200` - |
 | `DELETE` | `/api/backtests/{run_id}` | Delete | `run_id` (path, required) | `200` - |
@@ -38,7 +38,7 @@
 | `GET` | `/api/backtests/{run_id}/artifacts/{name}` | Artifact | `run_id` (path, required)<br>`name` (path, required) | `200` - |
 | `POST` | `/api/backtests/{run_id}/cancel` | Cancel | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required) | `200` - |
-| `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required) | `200` - |
+| `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/result` | Result | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/results` | Results | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/status` | Status | `run_id` (path, required) | `200` - |
@@ -120,7 +120,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/experiment-batches` | Batches | - | `200` - |
+| `GET` | `/api/experiment-batches` | Batches | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/experiment-batches` | Create | body `ExperimentBatchRequest` | `200` - |
 | `POST` | `/api/experiment-batches/compare` | Compare | body `ExperimentBatchCompareRequest` | `200` - |
 | `POST` | `/api/experiment-batches/preview` | Preview | body `ExperimentBatchRequest` | `200` - |
@@ -241,7 +241,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/optimize` | List Optimizations | - | `200` - |
+| `GET` | `/api/optimize` | List Optimizations | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/optimize` | Create Optimization | body `OptimizationRequest` | `200` - |
 | `DELETE` | `/api/optimize/{optimization_id}` | Delete | `optimization_id` (path, required) | `200` - |
 | `GET` | `/api/optimize/{optimization_id}` | Detail | `optimization_id` (path, required) | `200` - |
@@ -250,7 +250,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/paper` | List Sessions | - | `200` - |
+| `GET` | `/api/paper` | List Sessions | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/paper` | Create Session | body `PaperSessionCreate` | `200` - |
 | `GET` | `/api/paper/candidates` | Candidates | `projectId` (query, required) | `200` - |
 | `DELETE` | `/api/paper/{session_id}` | Delete | `session_id` (path, required) | `200` - |
@@ -333,7 +333,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/projects` | List Projects | - | `200` - |
+| `GET` | `/api/projects` | List Projects | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/projects` | Create Project | body `ProjectCreate` | `200` - |
 | `DELETE` | `/api/projects/{project_id}` | Delete Project | `project_id` (path, required) | `200` - |
 | `GET` | `/api/projects/{project_id}` | Get Project | `project_id` (path, required) | `200` - |
@@ -361,7 +361,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/research` | List Sessions | - | `200` - |
+| `GET` | `/api/research` | List Sessions | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/research` | Start Session | body `ResearchRequest` | `200` - |
 | `DELETE` | `/api/research/{session_id}` | Delete Session | `session_id` (path, required)<br>`purgeWorkspace` (query) | `200` - |
 | `GET` | `/api/research/{session_id}` | Detail | `session_id` (path, required) | `200` - |
@@ -398,12 +398,12 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/tasks` | Tasks | - | `200` - |
+| `GET` | `/api/tasks` | Tasks | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `DELETE` | `/api/tasks/{task_id}` | Delete | `task_id` (path, required) | `200` - |
 | `GET` | `/api/tasks/{task_id}` | Task Detail | `task_id` (path, required) | `200` - |
 | `DELETE` | `/api/tasks/{task_id}/` | Delete | `task_id` (path, required) | `200` - |
 | `POST` | `/api/tasks/{task_id}/cancel` | Cancel | `task_id` (path, required) | `200` - |
-| `GET` | `/api/tasks/{task_id}/logs` | Logs | `task_id` (path, required) | `200` - |
+| `GET` | `/api/tasks/{task_id}/logs` | Logs | `task_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 
 ## universes
 

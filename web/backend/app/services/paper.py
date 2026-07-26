@@ -18,6 +18,7 @@ from .data_coverage import ashare_coverage
 from .experiments import get_experiment_versions
 from .source_gate import apply_source_context, resolve_source_context
 from .trading_config import ashare_trading_config, hk_trading_config
+from .trading_calendar import next_trade_date
 from .run_paths import run_directory
 from . import paper_order_pipeline
 
@@ -86,7 +87,7 @@ def _session_api_item(item: dict[str, Any]) -> dict[str, Any]:
     item["auto_advance"] = bool(item.get("auto_advance"))
     if _is_lean_mode(item["mode"]):
         item["next_trade_date"] = (
-            _next_trade_date(str(item["venue"]), str(item["last_processed_date"]))
+            next_trade_date(str(item["venue"]), str(item["last_processed_date"]))
             if item.get("last_processed_date")
             else item.get("start_date")
         )
@@ -208,26 +209,6 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
     return candidates
 
 
-def _next_trade_date(market: str, value: str) -> str:
-    current = parse_date(value)
-    market_value = str(market or "china").lower()
-    with db() as connection:
-        row = connection.execute(
-            """
-            select trade_date from trade_calendar
-            where market = ? and is_open = 1 and trade_date > ?
-            order by trade_date asc limit 1
-            """,
-            (market_value, current.isoformat()),
-        ).fetchone()
-    if row:
-        return str(row["trade_date"])
-    candidate = current + timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    return candidate.isoformat()
-
-
 def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     requested_mode = str(parameters.get("mode") or "lean_walkforward")
     if requested_mode == "lean_walkforward_v2" and not PAPER_ORDER_PIPELINE_V2_ENABLED:
@@ -294,7 +275,7 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     )
     initial_cash = max(0.0, source_equity - source_market_value) if mode == "lean_walkforward_v2" else cash
     initial_equity = source_equity if mode == "lean_walkforward_v2" else cash
-    start_date = str(parameters.get("startDate") or _next_trade_date(request.venue, str(source_parameters["end"])))
+    start_date = str(parameters.get("startDate") or next_trade_date(request.venue, str(source_parameters["end"])))
     if parse_date(start_date) <= parse_date(str(source_parameters["end"])):
         raise ValueError("Paper startDate must be after the source backtest end date.")
     session_id = str(uuid.uuid4())
@@ -694,7 +675,7 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
     if date_value < str(session.get("start_date") or ""):
         raise ValueError("tradeDate is before the Paper start date.")
     last_date = session.get("last_processed_date")
-    expected = str(session.get("start_date")) if not last_date else _next_trade_date(str(session.get("venue") or "china"), str(last_date))
+    expected = str(session.get("start_date")) if not last_date else next_trade_date(str(session.get("venue") or "china"), str(last_date))
     if date_value != expected:
         raise ValueError(f"The next eligible Paper trade date is {expected}.")
     with db() as connection:
@@ -850,6 +831,7 @@ def _lean_intent_rejection(
     side = str(order.get("side") or "").lower()
     quantity = abs(float(order.get("quantity") or 0))
     price = float(order.get("price") or order.get("fillPrice") or 0)
+    bar: dict[str, Any] | None = None
     if side not in {"buy", "sell"}:
         return "invalid_side"
     if quantity <= 0:
@@ -921,6 +903,15 @@ def _lean_intent_rejection(
             projected_weight = ((current_quantity + quantity) * price) / float(session["equity"])
             if projected_weight - cap > 1e-12:
                 return "max_position_weight"
+        risk_reason = _projected_risk_rejection(
+            session,
+            symbol=symbol,
+            incremental_quantity=quantity,
+            price=price,
+            bar=bar,
+        )
+        if risk_reason:
+            return risk_reason
         fee = _fee(quantity, price, side, session)
         min_cash = _parameter_float(
             _session_parameters(session),
@@ -2048,20 +2039,19 @@ def _normalize_execution_policy(policy: str | None) -> str:
         "nextclose": "next_close",
         "next-vwap": "next_vwap",
         "nextvwap": "next_vwap",
-        "sameclose": "same_close",
-        "same-day-close": "same_close",
     }
     value = aliases.get(value, value)
-    if value not in {"next_open", "next_close", "next_vwap", "same_close"}:
-        raise ValueError("executionPolicy must be next_open, next_close, next_vwap, or same_close.")
+    if value in {"same_close", "sameclose", "same-day-close"}:
+        raise ValueError("same_close executionPolicy is prohibited.")
+    if value not in {"next_open", "next_close", "next_vwap"}:
+        raise ValueError("executionPolicy must be next_open, next_close, or next_vwap.")
     return value
 
 
 def _validate_execution_policy_parameters(parameters: dict[str, Any]) -> str:
-    policy = _normalize_execution_policy(parameters.get("executionPolicy") or parameters.get("execution_policy"))
-    if policy == "same_close" and not _parameter_bool(parameters, "allowSameDayClose", False):
-        raise ValueError("same_close executionPolicy is disabled unless allowSameDayClose is true.")
-    return policy
+    if _parameter_bool(parameters, "allowSameDayClose", False):
+        raise ValueError("allowSameDayClose is no longer supported.")
+    return _normalize_execution_policy(parameters.get("executionPolicy") or parameters.get("execution_policy"))
 
 
 def _execution_policy(session: dict[str, Any]) -> str:
@@ -2227,6 +2217,17 @@ def _portfolio_constraint_rejection(
     watchlist = _parameter_list(parameters, "watchlist", "watchlistSymbols", "observableSymbols")
     if watchlist and symbol not in watchlist:
         return "not_in_watchlist"
+    circuit_breaker = _parameter_float(
+        parameters,
+        "circuitBreakerDrawdown",
+        "circuit_breaker_drawdown",
+        "maxDrawdown",
+    )
+    initial_equity, current_equity = _risk_equity_baseline(session)
+    if circuit_breaker is not None and initial_equity > 0:
+        drawdown = max(0.0, (initial_equity - current_equity) / initial_equity)
+        if drawdown + 1e-12 >= circuit_breaker:
+            return "circuit_breaker"
     if not _parameter_bool(parameters, "allowStBuy", False):
         status = _status_for(symbol, execution_date)
         if status and status.get("is_st"):
@@ -2236,6 +2237,105 @@ def _portfolio_constraint_rejection(
         current_positions = [position for position in list_positions(session["id"]) if float(position.get("quantity") or 0) > 0]
         if len(current_positions) >= max_positions:
             return "max_positions"
+    return None
+
+
+def _risk_equity_baseline(session: dict[str, Any]) -> tuple[float, float]:
+    parameters = _session_parameters(session)
+    account_id = str(parameters.get("paperAccountId") or "").strip()
+    if account_id:
+        with db() as connection:
+            row = connection.execute(
+                """
+                select account.initial_cash,projection.total_equity
+                from paper_accounts account
+                left join paper_account_projections projection
+                  on projection.paper_account_id=account.id
+                where account.id=?
+                """,
+                (account_id,),
+            ).fetchone()
+        if row:
+            return (
+                float(row["initial_cash"] or 0),
+                float(
+                    row["total_equity"]
+                    if row["total_equity"] is not None
+                    else session.get("equity") or 0
+                ),
+            )
+    initial = float(
+        parameters.get("cash")
+        or parameters.get("initialCash")
+        or parameters.get("initial_cash")
+        or session.get("initial_cash")
+        or session.get("cash")
+        or session.get("equity")
+        or 0
+    )
+    return initial, float(session.get("equity") or 0)
+
+
+def _security_industry(symbol: str, market: str) -> str | None:
+    with db() as connection:
+        row = connection.execute(
+            """
+            select industry from securities
+            where symbol=? and market=? and industry is not null
+            order by updated_at desc limit 1
+            """,
+            (symbol, market),
+        ).fetchone()
+    return str(row["industry"]).strip() if row and str(row["industry"] or "").strip() else None
+
+
+def _projected_risk_rejection(
+    session: dict[str, Any],
+    *,
+    symbol: str,
+    incremental_quantity: float,
+    price: float,
+    bar: dict[str, Any] | None,
+) -> str | None:
+    parameters = _session_parameters(session)
+    capacity_limit = _parameter_float(
+        parameters,
+        "maxVolumeParticipation",
+        "max_volume_participation",
+        "capacityParticipation",
+    )
+    if capacity_limit is not None:
+        volume = float((bar or {}).get("volume") or 0)
+        if volume <= 0:
+            return "capacity_data_unavailable"
+        if incremental_quantity / volume - capacity_limit > 1e-12:
+            return "capacity_limit"
+
+    industry_limit = _parameter_float(
+        parameters,
+        "maxIndustryWeight",
+        "max_industry_weight",
+        "industryConcentrationLimit",
+    )
+    if industry_limit is None:
+        return None
+    equity = float(session.get("equity") or 0)
+    if equity <= 0:
+        return "industry_limit"
+    market = str(session.get("venue") or "china")
+    target_industry = _security_industry(symbol, market)
+    if not target_industry:
+        return "industry_unknown"
+    industry_value = 0.0
+    for position in list_positions(str(session["id"])):
+        if float(position.get("quantity") or 0) <= 0:
+            continue
+        position_symbol = str(position.get("symbol") or "").upper()
+        if _security_industry(position_symbol, market) == target_industry:
+            industry_value += float(position.get("market_value") or 0)
+    projected_weight = (industry_value + incremental_quantity * price) / equity
+    if projected_weight - industry_limit > 1e-12:
+        return "industry_concentration"
     return None
 
 
@@ -2412,6 +2512,30 @@ def match_daily_orders(
             if quantity <= 0:
                 reason = "cash_floor" if available_cash <= 0 else "insufficient_cash"
                 orders.append(_record_order(session_id, signal, side, 0, date_value, price, None, 0, "rejected", reason))
+                _update_signal(signal["id"], "rejected")
+                continue
+            risk_reason = _projected_risk_rejection(
+                session,
+                symbol=str(signal["symbol"]).upper(),
+                incremental_quantity=quantity,
+                price=price,
+                bar=bar,
+            )
+            if risk_reason:
+                orders.append(
+                    _record_order(
+                        session_id,
+                        signal,
+                        side,
+                        0,
+                        date_value,
+                        price,
+                        None,
+                        0,
+                        "rejected",
+                        risk_reason,
+                    )
+                )
                 _update_signal(signal["id"], "rejected")
                 continue
         else:

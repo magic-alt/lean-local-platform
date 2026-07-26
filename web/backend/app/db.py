@@ -175,6 +175,7 @@ LONG_TEXT_COLUMNS = {
     "evidence_json",
     "error",
     "error_message",
+    "response_body",
 }
 PATH_TEXT_COLUMNS = {
     "lean_file",

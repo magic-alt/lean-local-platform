@@ -19,6 +19,7 @@ from . import paper as legacy_paper
 from .alerts import delivery_succeeded, emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
+from .trading_calendar import next_trade_date
 
 
 ACCOUNT_STATES = {"draft", "active", "paused", "error", "archived"}
@@ -797,6 +798,9 @@ def create_deployment(account_id: str, payload: dict[str, Any]) -> dict[str, Any
     risk_parameters = {
         "maxPositions": risk_config.get("maxPositions"),
         "maxPositionWeight": risk_config.get("maxPositionWeight"),
+        "maxIndustryWeight": risk_config.get("maxIndustryWeight"),
+        "maxVolumeParticipation": risk_config.get("maxVolumeParticipation"),
+        "circuitBreakerDrawdown": risk_config.get("circuitBreakerDrawdown"),
         "minCash": risk_config.get("cashFloor", "0"),
         "maxOrderAmount": risk_config.get("maxOrderAmount"),
         "maxDailyTurnover": risk_config.get("maxDailyTurnover"),
@@ -863,7 +867,7 @@ def create_deployment(account_id: str, payload: dict[str, Any]) -> dict[str, Any
         }
     )
     start = str(parameters.get("end") or date.today().isoformat())
-    next_date = legacy_paper._next_trade_date(account["market_scope"], start)
+    next_date = next_trade_date(account["market_scope"], start)
     now = utc_now()
     signal_shadow_session_id = str(uuid.uuid4()) if signal_mode == "signal_only" else None
     deployment_parameters = {
@@ -1302,7 +1306,7 @@ def run_now(deployment_id: str, trading_date: str | None = None) -> dict[str, An
     if trading_date is None:
         trading_date = str(
             deployment.get("last_successful_trading_date")
-            and legacy_paper._next_trade_date("china", deployment["last_successful_trading_date"])
+            and next_trade_date("china", deployment["last_successful_trading_date"])
             or (legacy_paper.get_session(account["shadow_session_id"]) or {}).get("start_date")
             or date.today().isoformat()
         )
@@ -1563,7 +1567,7 @@ def finalize_cycle(cycle_id: str) -> dict[str, Any]:
             """,
             (
                 cycle["trading_date"],
-                _next_market_close(legacy_paper._next_trade_date("china", cycle["trading_date"])),
+                _next_market_close(next_trade_date("china", cycle["trading_date"])),
                 now,
                 cycle["deployment_id"],
             ),
@@ -1648,7 +1652,7 @@ def _signals_from_intents(
                 cycle["id"],
                 f"{cycle['id']}:no_signal",
                 f"{cycle['trading_date']}T15:01:00+08:00",
-                legacy_paper._next_trade_date("china", cycle["trading_date"]),
+                next_trade_date("china", cycle["trading_date"]),
                 json_dump({"reason": "LEAN produced no executable order for the certified trading day."}),
                 cycle.get("lean_run_id"),
                 f"{cycle['trading_date']}T15:00:00+08:00",
@@ -1700,7 +1704,7 @@ def _signals_from_intents(
                 str(intent["side"]).lower(),
                 intent["symbol"],
                 intent.get("signal_time") or utc_now(),
-                legacy_paper._next_trade_date("china", cycle["trading_date"]),
+                next_trade_date("china", cycle["trading_date"]),
                 intent.get("precise_quantity") or intent["quantity"],
                 Decimal("0"),
                 json_dump(intent.get("rawIntent") or {}),
@@ -1754,7 +1758,7 @@ def _signals_from_signal_only_events(
                 side,
                 symbol,
                 str(evidence.get("signalTime") or evidence.get("time") or f"{cycle['trading_date']}T15:01:00+08:00"),
-                legacy_paper._next_trade_date("china", cycle["trading_date"]),
+                next_trade_date("china", cycle["trading_date"]),
                 evidence.get("quantity"),
                 json_dump(evidence),
                 "observed",
@@ -2283,7 +2287,7 @@ def schedule_due_deployments(now: datetime | None = None) -> dict[str, Any]:
         account = get_account(deployment["paper_account_id"])
         session = legacy_paper.get_session(account["shadow_session_id"]) or {}
         next_date = (
-            legacy_paper._next_trade_date("china", deployment["last_successful_trading_date"])
+            next_trade_date("china", deployment["last_successful_trading_date"])
             if deployment.get("last_successful_trading_date")
             else session.get("start_date")
         )
@@ -2850,7 +2854,7 @@ def next_runs(deployment_id: str, count: int = 5) -> dict[str, Any]:
     if not deployment.get("last_successful_trading_date"):
         dates.append(current)
     while len(dates) < max(1, min(int(count), 20)):
-        current = legacy_paper._next_trade_date("china", current)
+        current = next_trade_date("china", current)
         dates.append(current)
     return {
         "deploymentId": deployment_id,

@@ -35,6 +35,8 @@ Browser
        metadata, canonical market data, PIT data, results, stored objects
   -> Celery / Redis
        default, data, data-demand and backtest queues; beat coordination
+  -> restricted lean-runner
+       structure-only jobs, pinned images and allowlisted mount roots
   -> LEAN / Research Docker containers
        digest allowlists, bounded resources, reduced mounts and isolated runs
 
@@ -70,7 +72,9 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0029.
+  Ordered MySQL schema migrations. The current latest migration is 0032; every
+  migration has a compensating or explicit irreversible recovery policy in
+  `migrations/rollback_policy.json`. Applied SQL files remain checksum-immutable.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.
@@ -95,6 +99,7 @@ Project/template selection (projectId required)
   -> persist task, run and version metadata
   -> acquire database scheduler lease
   -> Celery run_backtest_task -> repeat the fail-closed gates
+  -> propagate trace/workflow context to the restricted runner and LEAN
   -> prepare isolated web/runtime/runs/<run_id>
   -> restore or rebuild required LEAN cache from MySQL/object archive
   -> run pinned LEAN Docker image

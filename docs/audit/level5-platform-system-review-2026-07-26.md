@@ -12,6 +12,10 @@
 > 9 个 P0 已完成代码/配置整改；§15、§16 的状态表是最新状态。外部 Webhook
 > 真实 2xx 和新的 21 交易日多账户实跑仍需独立证据，因此本次整改不把原始
 > Level 5 verdict 升级为 PASS。
+>
+> **P1 整改更新（2026-07-26）**：P1 简表中的 11 项已完成代码和回归整改；
+> `L5-ARCH-002` 的 Paper 全域 repository 下沉为 XL 级重构，保留
+> **In Progress**，不得由已有的行情 repository 边界推断为完成。
 
 ---
 
@@ -1167,18 +1171,26 @@ for ledger_row in ledger_rows:
 
 | ID | 标题 | 位置 | 证据 | 建议 | 工作量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| L5-ARCH-001 | `paper_accounts` 运行时依赖 legacy `paper` 私有函数 | `paper_accounts.py`（8 处 `legacy_paper._next_trade_date`） | grep | 抽出共享 `trading_calendar` 服务 | M | Open |
-| L5-ARCH-002 | repository 层名存实亡，服务层内联 ~60 处 SQL | `repositories/` 仅 1 文件 | ls | 按 §5.4 分层 | XL | Open |
-| L5-API-001 | 9/12 列表端点返回裸数组，无分页 | 实测 | 统一 `{items,count,limit,offset}` + 兼容期 | M | Open |
-| L5-API-002 | 全 API 无 `Idempotency-Key` | grep = 0 | 对写端点引入幂等键表 | M | Open |
-| L5-API-003 | 日志只能取尾部，无游标 | `backtests.py:244`、`tasks.py:24` | 增加 `offset`/`cursor`/`limit` | S | Open |
-| L5-API-004 | 顶层与 details 的 `retryable` 矛盾；错误不定位字段 | 实测响应 | 统一错误契约，增加 `field` | S | Open |
-| L5-OBS-001 | Trace ID 不进入 worker / LEAN / artifact | grep = 0 | 通过 Celery header 传递并写入 run 目录 | M | Open |
-| L5-PAPER-007 | `same_close` 仍可通过参数开启 | `paper.py:2055,2062` | 移出枚举，或改为编译期 feature flag | S | Open |
-| L5-OPS-005 | 30 个 migration，0 个 rollback | `migrations/versions/` | 为每个 migration 提供 down 或显式不可逆声明 | M | Open |
-| L5-SEC-002 | 所有 worker 以读写方式挂载含 secrets 的 `/workspace` | `docker-compose.yml:302` | secrets 改用 Docker secret / tmpfs | M | Open |
-| L5-OPS-006 | restore 脚本仅输出 `table_count`，无一致性证明 | `restore_mysql.sh` | 增加抽样行数与 checksum 比对 | S | Open |
-| L5-RISK-001 | 无行业/容量风险限额、无熔断 | `paper_constraint_decisions` | 增加行业集中度与容量约束 | L | Open |
+| L5-ARCH-001 | `paper_accounts` 运行时依赖 legacy `paper` 私有函数 | `paper_accounts.py`（8 处 `legacy_paper._next_trade_date`） | grep | 抽出共享 `trading_calendar` 服务 | M | **Fixed**（共享 `trading_calendar.next_trade_date`；legacy 私有调用为 0） |
+| L5-ARCH-002 | repository 层名存实亡，服务层内联 ~60 处 SQL | `paper_accounts.py` 当前仍有 124 处 `connection.execute` | grep | 按 §5.4 分层 | XL | **In Progress**（行情已走强制 source/as-of repository；Paper 事务 SQL 尚未下沉） |
+| L5-API-001 | 9/12 列表端点返回裸数组，无分页 | 9 个主列表 | 统一 `{items,count,limit,offset}` + 兼容期 | M | **Fixed**（默认统一 envelope；`paged=false` 保留有界数组兼容） |
+| L5-API-002 | 全 API 无 `Idempotency-Key` | `0032_api_idempotency_keys.sql` | 对写端点引入幂等键表 | M | **Fixed**（写请求持久化、并发冲突、payload drift 与完成响应 replay） |
+| L5-API-003 | 日志只能取尾部，无游标 | Backtest / Task logs | 增加 `offset`/`cursor`/`limit` | S | **Fixed**（字节游标、总长、next cursor 与 hasMore） |
+| L5-API-004 | 顶层与 details 的 `retryable` 矛盾；错误不定位字段 | `core/errors.py` / `main.py` | 统一错误契约，增加 `field` | S | **Fixed**（顶层唯一语义；首个验证字段提升到 `field`） |
+| L5-OBS-001 | Trace ID 不进入 worker / LEAN / artifact | request context / Celery / runner | 通过 Celery header 传递并写入 run 目录 | M | **Fixed**（Celery headers、LEAN env/config、`trace-context.json` 与 manifest） |
+| L5-PAPER-007 | `same_close` 仍可通过参数开启 | `paper.py` / Paper schema | 移出枚举，或改为编译期 feature flag | S | **Fixed**（从 schema/枚举移除；旧 override 亦 fail closed） |
+| L5-OPS-005 | 30 个 migration，0 个 rollback | 32 个 migration + `rollback_policy.json` | 为每个 migration 提供 down 或显式不可逆声明 | M | **Fixed**（32/32 有 compensating 或显式不可逆恢复声明，且不改写已应用 SQL checksum） |
+| L5-SEC-002 | 所有 worker 以读写方式挂载含 secrets 的 `/workspace` | `docker-compose.yml` | secrets 改用 Docker secret / tmpfs | M | **Fixed**（workspace 只读；runtime 单独可写；secrets 使用 `/run/secrets` + tmpfs 遮蔽） |
+| L5-OPS-006 | restore 脚本仅输出 `table_count`，无一致性证明 | `restore_mysql.sh` | 增加抽样行数与 checksum 比对 | S | **Fixed**（关键表精确行数 + `CHECKSUM TABLE` 不一致即失败） |
+| L5-RISK-001 | 无行业/容量风险限额、无熔断 | Paper v2 constraint path / UI | 增加行业集中度与容量约束 | L | **Fixed**（行业权重、成交量参与率、回撤熔断；决策沿既有不可变约束证据持久化） |
+
+P1 整改验证入口：
+
+- `cd web/backend && .venv/bin/python -m pytest -q tests/test_level5_p1_controls.py`
+- `cd web/backend && .venv/bin/python -m pytest -q`
+- `cd web/frontend && npm run build`
+- `docker compose config --quiet && bash -n scripts/restore_mysql.sh`
+- `python3 scripts/generate_help_api_reference.py --check --json`
 
 ### P2 问题（简表）
 
@@ -1243,13 +1255,13 @@ for ledger_row in ledger_rows:
 | 后端测试 | 实测 | `453 passed, 2 skipped in 67.66s` |
 | 前端构建 | 实测 | `✓ built in 3.36s` |
 | E2E 上次运行 | 证据文件 | `tests/e2e/reports/results.json` → `expected: 1` |
-| migration 状态 | 实测 | `scripts/db_migrate.py --status` → 30 applied，0 down |
+| migration 状态 | 实测 + 代码 | `db_migrate.py --apply --json` → 32 applied / 0 pending / 0 mismatch；`rollback_policy.json` 覆盖 32/32 |
 | runner allowlist | 代码 | `runner_service.py:80-159` |
 | MySQL 恢复演练 | 实测 + 证据文件 | `restore-drill-20260726T213900Z.json` → 128 表；RPO `9327.519s`；RTO `2023.813s`；5 表行数差 0、checksum 全匹配 |
 | 数据集重新认证 | 实测 + DB 查询 | QA report `19de8646-8966-4113-b654-7530d2695b3b`；TuShare equity/index 均 `production` + `certificationValid:true` |
 | 供应链整改 | 实测 | 112-package hash lock；12 个运行镜像 SBOM/Trivy；签名校验通过；`check_supply_chain.py` → `status: passed`；hash-locked 后端镜像构建成功 |
-| 整改后后端测试 | 实测 | `475 passed, 2 skipped in 97.99s` |
-| 整改后前端构建 | 实测 | `npm run build` → `✓ built in 4.23s` |
+| 整改后后端测试 | 实测 | P1 波次 `487 passed, 2 skipped in 51.88s` |
+| 整改后前端构建 | 实测 | P1 波次 `npm run build` → `✓ built in 3.31s` |
 
 ---
 
@@ -1280,7 +1292,7 @@ for ledger_row in ledger_rows:
 
 ## 20. 审计限制
 
-1. **审计取证阶段未修改生产代码、数据库结构、正式配置或历史审计文件。**其后的整改阶段已修改 Paper 服务代码并新增待应用的 migration `0031`；本机正式库未执行该 migration，历史审计证据未删除或覆盖。
+1. **审计取证阶段未修改生产代码、数据库结构、正式配置或历史审计文件。**其后的整改阶段已修改 Paper/API/运维代码并应用 migration `0031`、`0032`；历史审计证据未删除或覆盖。
 2. **未删除或覆盖 `docs/history/` 中的任何历史证据**，也未修改任何既有审计结论。
 3. **未使用 synthetic mock 代替真实依赖**：所有运行时结论均来自在线的 MySQL 8.4 / Redis 7 / Celery / Docker / FastAPI 实例。
 4. **工作树含未提交修改**：审计开始时 `git status` 显示 37 个修改文件、7 个新增文件，以及 4 个 `audit-output/` 文件被删除（`baseline-maturity-assessment.md`、`current-score.json`、`historical-audit-delta.csv`、`open-defect-ledger.csv`）。本审计针对**工作树当前状态**，与 `3c40b53` 的提交内容可能存在差异。

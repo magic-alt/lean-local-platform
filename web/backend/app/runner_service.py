@@ -60,6 +60,8 @@ class RunnerJob(BaseModel):
     projectDir: str = Field(min_length=1, max_length=4096)
     supportDir: str | None = Field(default=None, min_length=1, max_length=4096)
     timeoutSeconds: int = Field(ge=1, le=86400)
+    traceId: str | None = Field(default=None, min_length=1, max_length=128)
+    workflowId: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def _runner_token() -> str:
@@ -178,6 +180,10 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
     ]
+    if job.traceId:
+        command.extend(["-e", f"LEAN_TRACE_ID={job.traceId}"])
+    if job.workflowId:
+        command.extend(["-e", f"LEAN_WORKFLOW_ID={job.workflowId}"])
     if LEAN_DOCKER_READ_ONLY:
         command.append("--read-only")
     for mount in mounts:
@@ -202,6 +208,8 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
         },
         "network": LEAN_DOCKER_NETWORK,
         "timeoutSeconds": job.timeoutSeconds,
+        "traceId": job.traceId,
+        "workflowId": job.workflowId,
     }
     spec["digest"] = hashlib.sha256(
         json.dumps(spec, sort_keys=True, separators=(",", ":")).encode("utf-8")

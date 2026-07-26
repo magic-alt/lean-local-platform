@@ -6,17 +6,27 @@ token from `LEAN_API_TOKEN` or the 0600 runtime token file; the frontend proxy
 uses the same protected local session. Disabling authentication is permitted
 only in explicitly isolated tests.
 
-Last reviewed: 2026-07-24. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
+Last reviewed: 2026-07-26. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
 
 ## Common Behavior
 
 - JSON request/response by default.
-- Expected domain errors return structured JSON with `detail`, `message`, `error_code`, `category`, and `retryable`.
+- Expected domain errors return structured JSON with `detail`, `message`, `error_code`, `category`, and one authoritative `retryable`; validation failures also expose the first affected `field`.
 - Missing resources return HTTP 404 with `error_code=NOT_FOUND`.
 - Redis/Celery dispatch failure returns HTTP 503 with `error_code=SERVICE_UNAVAILABLE` and `retryable=true`.
 - Temporary MySQL connection failure returns HTTP 503 with `error_code=DATABASE_UNAVAILABLE` and `retryable=true` after bounded connection retries.
-- Some list endpoints return arrays directly; newer endpoints may return `{items, count, limit, offset}`.
-- Backtest logs currently return the latest tail, not a cursor-based stream.
+- The primary history lists (`projects`, `backtests`, `tasks`, `reports`,
+  `experiment-batches`, `paper`, `optimize`, `research`, and `data-assets`)
+  return `{items, count, limit, offset}` and accept bounded `limit`/`offset`.
+  During the compatibility period, `paged=false` returns the bounded legacy
+  array.
+- Write requests may send `Idempotency-Key`. A completed identical request is
+  replayed with `Idempotent-Replayed: true`; payload drift or an in-flight
+  duplicate returns 409. The Web client adds a key to every write.
+- Backtest and task logs accept byte `offset` or `cursor` plus bounded `limit`;
+  responses include `nextOffset`, `nextCursor`, `total`, and `hasMore`.
+- `X-Trace-ID` and `X-Workflow-ID` propagate through Celery headers into LEAN
+  configuration and the run-local `trace-context.json`/artifact manifest.
 
 ## Backtests
 

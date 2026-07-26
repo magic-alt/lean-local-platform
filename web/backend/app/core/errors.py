@@ -51,6 +51,21 @@ def error_payload(
     trace_id: str | None = None,
     workflow_id: str | None = None,
 ) -> dict[str, Any]:
+    normalized_details = details
+    field: str | None = None
+    if isinstance(details, dict):
+        normalized_details = dict(details)
+        normalized_details.pop("retryable", None)
+        candidate = normalized_details.get("field")
+        if candidate:
+            field = str(candidate)
+    elif isinstance(details, list) and details:
+        first = details[0]
+        if isinstance(first, dict):
+            location = first.get("loc")
+            if isinstance(location, (list, tuple)):
+                parts = [str(item) for item in location if str(item) not in {"body", "query", "path", "header"}]
+                field = ".".join(parts) or None
     payload = {
         "detail": message,
         "message": message,
@@ -58,8 +73,10 @@ def error_payload(
         "category": category,
         "retryable": retryable,
     }
-    if details is not None:
-        payload["details"] = details
+    if normalized_details is not None:
+        payload["details"] = normalized_details
+    if field:
+        payload["field"] = field
     if trace_id:
         payload["trace_id"] = trace_id
     if workflow_id:

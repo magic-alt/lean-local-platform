@@ -5,6 +5,27 @@ from ..tasks.celery_app import celery_app
 from ..services.tasks import update_task
 
 
+def paged_items(
+    items: list,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    paged: bool = False,
+) -> list | dict:
+    """Return the shared page envelope or the bounded legacy array."""
+    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_offset = max(0, int(offset))
+    window = items[bounded_offset : bounded_offset + bounded_limit]
+    if not paged:
+        return window
+    return {
+        "items": window,
+        "count": len(items),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
+
+
 def http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 

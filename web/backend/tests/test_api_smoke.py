@@ -60,7 +60,7 @@ def test_backtests_empty_list_with_temp_db(tmp_path, monkeypatch):
     response = client.get("/api/backtests")
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"items": [], "count": 0, "limit": 100, "offset": 0}
 
 
 def test_api_errors_include_structured_code(tmp_path, monkeypatch):

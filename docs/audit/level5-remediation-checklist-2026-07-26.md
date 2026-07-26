@@ -246,17 +246,17 @@ cd web/backend && .venv/bin/python -m pytest -q tests/test_alert_delivery.py tes
 
 | # | 任务 | 涉及文件 |
 | --- | --- | --- |
-| 3.1 | 从 `paper.py` 抽出 `services/trading_calendar.py`（`next_trade_date` / `is_open_trading_day`），`paper_accounts` 改依赖公共模块，消除对 `legacy_paper._*` 私有函数的 8 处调用 | 新增 + `services/paper.py`、`services/paper_accounts.py` |
-| 3.2 | 从 `executionPolicy` 枚举中移除 `same_close`；`allowSameDayClose` 参数下线并在 API 层对历史请求返回 `410 same_close_removed` | `services/paper.py:2044-2063` |
+| 3.1 | **完成**：抽出 `services/trading_calendar.py::next_trade_date`，`paper_accounts` 与 scheduler 改依赖公共模块，消除 8 处 `legacy_paper._next_trade_date` 调用 | 新增 + `services/paper.py`、`services/paper_accounts.py`、`tasks/worker.py` |
+| 3.2 | **完成**：从 `executionPolicy` 枚举中移除 `same_close`；`allowSameDayClose` 参数下线并在 API 层对历史请求返回 `410 SAME_CLOSE_REMOVED` | `services/paper.py`、`api/paper.py` |
 | 3.3 | `run_paper_accounts_acceptance.py` 增加 `--days`（默认 21，最小 21）与 `--initial-cash a,b` 必选差异化资金；`PAPER_ACCOUNTS_PASS` 增加硬断言：`tradingDays>=21 and distinct(initialCash)>=2 and hasFillDay and hasNoSignalDay and hasRejectDay and hasWaitingDataDay` | `scripts/run_paper_accounts_acceptance.py` |
 | 3.4 | 账户层六检查点中断/恢复：为 `paper_accounts` 执行周期增加与 `LEAN_PAPER_FAULT_PAUSE_PHASES` 对齐的注入点，并在恢复后比较 **ledger digest**（而非 checkpoint digest） | `services/paper_accounts.py`、`scripts/run_paper_accounts_acceptance.py` |
 | 3.5 | 多账户并发执行验收：≥2 账户同一交易日并发 finalize，断言 ledger sequence 无重复、无跨账户串扰 | `scripts/run_paper_accounts_acceptance.py` |
-| 3.6 | 风控扩展：行业集中度上限、单标的容量上限（按当日成交额比例）、日内亏损熔断 | `services/paper_order_pipeline.py`、migration `0032_paper_risk_limits.sql` |
+| 3.6 | **完成**：行业集中度上限、成交量参与率容量上限、账户回撤熔断；配置冻结进 deployment，拒绝原因进入既有不可变 constraint decision | `services/paper.py`、`services/paper_accounts.py`、`pages/paper-accounts.tsx` |
 | 3.7 | Wave 1 全部关闭且 3.3/3.4/3.5 通过后，把 `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED` 默认翻转为 `1`；`0` 时在启动日志与 `/api/health/dependencies` 标注降级 | `.env.example`、`docker-compose.yml`、`core/config.py` |
 
 ### migration / API 影响
 
-- **migration `0032`**：新增风控限额表/列，附 down；
+- 风控字段存入既有版本化 `config_json`，无需破坏性 schema 变更；
 - **API 破坏性**：`executionPolicy=same_close` 返回 410（需在 `docs/api.md` 与 CHANGELOG 记录）。
 
 ### 测试
@@ -535,27 +535,27 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 - [ ] L5-PAPER-004 金额链路全程 Decimal，precise_* 成为权威列
 - [ ] L5-PAPER-004 migration 0031 增加两条 UNIQUE 约束（含 down）
 - [ ] L5-SEC-001 runner 改为结构化参数，内部构造 docker 命令行
-- [ ] L5-SEC-002 runner_token 移出共享 /workspace 挂载
+- [x] L5-SEC-002 runner_token 移出共享 /workspace 挂载
 - [ ] 一次性重算历史投影 / 快照 / 日报
 
 ### Wave 2 — 可靠性和恢复
 - [ ] L5-OPS-001 Beat 每日备份任务 + 保留策略
 - [ ] L5-OPS-001 run_restore_drill.py 输出 RPO/RTO 与一致性证明
-- [ ] L5-OPS-006 restore 增加抽样行数与 checksum 比对
+- [x] L5-OPS-006 restore 增加抽样行数与 checksum 比对
 - [ ] L5-OPS-002 启动自检：调度启用而告警未配置则 degraded + Critical alert
 - [ ] L5-OPS-002 MIN_SEVERITY 默认降为 error，Paper cycle_failed 升级为 critical
 - [ ] L5-DATA-002 认证撤销发 Critical alert + 自动重认证 + Dashboard 状态条
-- [ ] L5-OPS-005 为 30 个 migration 补齐 down 或不可逆标注
-- [ ] L5-OBS-001 Trace ID 贯穿 API → Celery → runner → run 目录
+- [x] L5-OPS-005 为全部 migration 补齐 down 或不可逆标注
+- [x] L5-OBS-001 Trace ID 贯穿 API → Celery → runner → run 目录
 - [ ] L5-SUP-001 requirements.lock + SBOM 归档 + 供应链门禁
 
 ### Wave 3 — Paper 与订单账本
-- [ ] L5-ARCH-001 抽出 trading_calendar，消除对 legacy_paper 私有函数的依赖
-- [ ] L5-PAPER-007 移除 same_close 执行策略
+- [x] L5-ARCH-001 抽出 trading_calendar，消除对 legacy_paper 私有函数的依赖
+- [x] L5-PAPER-007 移除 same_close 执行策略
 - [ ] L5-PAPER-006 验收脚本强制 21 日 + 差异化初始资金 + 场景日覆盖
 - [ ] L5-PAPER-006 账户层六检查点中断/恢复，按 ledger digest 比对
 - [ ] L5-PAPER-006 多账户并发执行验收
-- [ ] L5-RISK-001 行业集中度 / 容量上限 / 日内熔断（migration 0032）
+- [x] L5-RISK-001 行业集中度 / 容量上限 / 回撤熔断
 - [ ] L5-PAPER-005 把 PAPER_ORDER_PIPELINE_V2 默认翻转为 1
 
 ### Wave 4 — 数据和回测可信度
@@ -568,10 +568,10 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 - [ ] 填充并重认证 ETF / 可转债 / 期货 / 期权数据集
 
 ### Wave 5 — API 与架构收敛
-- [ ] L5-API-001 12 个列表端点统一 {items,count,limit,offset}
-- [ ] L5-API-002 引入 Idempotency-Key（migration 0033）
-- [ ] L5-API-003 日志端点游标分页
-- [ ] L5-API-004 统一错误契约，校验错误定位到字段
+- [x] L5-API-001 主历史列表统一 {items,count,limit,offset}，保留 paged=false 兼容
+- [x] L5-API-002 引入 Idempotency-Key（migration 0032）
+- [x] L5-API-003 日志端点游标分页
+- [x] L5-API-004 统一错误契约，校验错误定位到字段
 - [ ] L5-API-005 下线 /results 别名，合并 insights 三套命名空间
 - [ ] L5-API-006 fingerprint_json 键名统一为 camelCase
 - [ ] L5-API-007 /metrics 增加认证

@@ -417,8 +417,8 @@ def test_paper_scheduler_advances_from_last_processed_date_with_market_calendar(
     )
     monkeypatch.setattr(worker.paper_scheduler, "recover_orphaned_jobs", lambda: [])
     monkeypatch.setattr(
-        worker.paper_service,
-        "_next_trade_date",
+        worker,
+        "next_trade_date",
         lambda market, trade_date: (
             captured_dates.append((market, trade_date)) or "2099-01-01"
         ),

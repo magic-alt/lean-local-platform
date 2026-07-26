@@ -67,9 +67,67 @@ def append_log(task_id: str, line: str) -> None:
 
 def task_logs(task_id: str, limit: int = 120000) -> str:
     path = Path(get_task(task_id)["log_path"])
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    return log_window(path, limit=limit)["logs"]
+
+
+def log_window(
+    path: Path,
+    *,
+    offset: int | None = None,
+    cursor: str | None = None,
+    limit: int = 65536,
+) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 1_000_000))
+    if not path.is_file():
+        return {
+            "logs": "",
+            "offset": 0,
+            "nextOffset": 0,
+            "cursor": "0",
+            "nextCursor": None,
+            "limit": bounded_limit,
+            "total": 0,
+            "hasMore": False,
+        }
+    total = path.stat().st_size
+    if cursor not in (None, ""):
+        try:
+            requested_offset = int(str(cursor))
+        except ValueError as exc:
+            raise ValueError("cursor must be a non-negative byte offset.") from exc
+    elif offset is not None:
+        requested_offset = int(offset)
+    else:
+        requested_offset = max(0, total - bounded_limit)
+    if requested_offset < 0:
+        raise ValueError("offset must be non-negative.")
+    start = min(requested_offset, total)
+    with path.open("rb") as file:
+        file.seek(start)
+        raw = file.read(bounded_limit)
+    next_offset = start + len(raw)
+    has_more = next_offset < total
+    return {
+        "logs": raw.decode("utf-8", errors="replace"),
+        "offset": start,
+        "nextOffset": next_offset,
+        "cursor": str(start),
+        "nextCursor": str(next_offset) if has_more else None,
+        "limit": bounded_limit,
+        "total": total,
+        "hasMore": has_more,
+    }
+
+
+def task_log_window(
+    task_id: str,
+    *,
+    offset: int | None = None,
+    cursor: str | None = None,
+    limit: int = 65536,
+) -> dict[str, Any]:
+    path = Path(get_task(task_id)["log_path"])
+    return log_window(path, offset=offset, cursor=cursor, limit=limit)
 
 
 def _revoke_celery(task: dict[str, Any]) -> None:

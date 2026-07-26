@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.config import REPO_ROOT
+from ..core.request_context import current_trace_id, current_workflow_id
 from ..lean_engine.errors import LeanPlatformError
 
 
@@ -85,6 +86,8 @@ class DockerRunner:
             "storageDir": mounts["/Lean/Launcher/bin/Debug/storage"],
             "projectDir": mounts["/Lean/Project"],
             "timeoutSeconds": int(self.timeout_seconds or 3600),
+            "traceId": current_trace_id(),
+            "workflowId": current_workflow_id(),
         }
         if "/Lean/Run" in mounts:
             payload_item["supportDir"] = mounts["/Lean/Run"]

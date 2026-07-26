@@ -2,7 +2,7 @@
 
 This project is designed for local or single-host deployment first. Distributed scheduling and broker connectivity are later-stage work.
 
-Last reviewed: 2026-07-22.
+Last reviewed: 2026-07-26.
 
 ## Local API authentication
 
@@ -18,6 +18,12 @@ HttpOnly, SameSite=Strict browser session cookie. Direct API clients must send
 `LEAN_API_AUTH_REQUIRED=1` is the production default. If authentication is
 enabled but `LEAN_API_TOKEN` is empty, business APIs fail closed with HTTP 503.
 Only isolated pytest runs should set `LEAN_API_AUTH_REQUIRED=0`.
+
+Compose exposes API and runner tokens only through `/run/secrets`. The
+repository root is mounted read-only in API/worker containers, writable
+runtime paths are mounted separately, and a private tmpfs masks
+`/workspace/web/runtime/secrets`. Use `LEAN_API_TOKEN_SOURCE_FILE` and
+`LEAN_RUNNER_TOKEN_SOURCE_FILE` only to select host-side Compose secret files.
 
 ## Local Development
 
@@ -254,14 +260,15 @@ DuckDB is used only as a query engine over Parquet exports under `LEAN_PARQUET_D
 
 ## Docker Socket
 
-Only the dedicated `backtest-worker` mounts:
+Only the narrow `lean-runner` service mounts:
 
 ```text
 /var/run/docker.sock:/var/run/docker.sock
 ```
 
-The API, default worker and data workers do not receive the Docker socket. The
-backtest worker remains privileged infrastructure and must stay loopback-only.
+The API and all Celery workers do not receive the Docker socket. The
+`backtest-worker` sends a structure-only authenticated job to `lean-runner`;
+free-form Docker flags and mounts are not accepted.
 The API dependency endpoint verifies the dedicated Celery backtest worker and
 reports Docker/LEAN execution as delegated; it does not require local Docker
 access inside the API container.
@@ -269,13 +276,11 @@ Every LEAN child uses a digest allowlist, a per-run writable object directory,
 `network=none`, a read-only root filesystem, dropped capabilities, no-new-privileges,
 and bounded CPU, memory and PID settings.
 
-This is not a multi-tenant security boundary. A process that compromises the
-backtest worker can control the host Docker daemon through the raw socket.
-Production or untrusted-strategy operation therefore remains prohibited until
-the worker is replaced by a narrow, separately authenticated runner on a
-dedicated/rootless daemon (or an authorization layer that also constrains bind
-mount sources). A generic socket proxy that still permits arbitrary container
-creation and bind mounts is not sufficient evidence.
+This remains a single-host boundary: compromising `lean-runner` can control
+the host Docker daemon. Keep that service read-only, capability-free,
+loopback/internal-only and limited to pinned images and allowlisted host
+paths; use a dedicated/rootless daemon before treating the platform as a
+multi-tenant service.
 
 ## Data Directories
 
@@ -322,10 +327,12 @@ scripts/restore_mysql.sh \
   --confirm RESTORE_ISOLATED_DATABASE
 ```
 
-The restore command verifies the adjacent SHA-256 file and refuses
-`lean_market` or any target not prefixed `lean_restore_`. This safe entrypoint
-is not itself production-scale DR evidence: RPO/RTO, encrypted off-host
-retention, full-size restore timing and object/Parquet recovery must be
+The restore command verifies the adjacent SHA-256 file, refuses `lean_market`
+or any target not prefixed `lean_restore_`, and fails unless exact row counts
+and `CHECKSUM TABLE` values match for the critical sampled tables. Repeated
+`--verify-table NAME` selects an explicit sample set. This safe entrypoint is
+not itself production-scale DR evidence: RPO/RTO, encrypted off-host
+retention, full-size restore timing and object/Parquet recovery must still be
 measured in a dedicated environment.
 
 Create machine-readable RPO/RTO, sampled row-count and table-checksum evidence:

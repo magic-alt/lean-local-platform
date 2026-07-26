@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .common import dispatch_task
+from .common import dispatch_task, paged_items
 from ..core.config import DEFAULT_DOCKER_IMAGE
 from ..core.errors import NotFoundError
 from ..lean_engine.results import extract_chart_data, infer_holdings_from_orders
@@ -26,7 +26,7 @@ from ..services.result_service import result_for_job
 from ..services.run_paths import run_directory, run_file
 from ..services.projects import get_project
 from ..services.strategy_admission import admission_for_run
-from ..services.tasks import task_logs
+from ..services.tasks import log_window, task_log_window
 from ..tasks.worker import run_backtest_task
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -66,8 +66,11 @@ def backtests(
     symbol: str | None = None,
     fromDate: str | None = None,
     toDate: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    paged: bool = True,
 ):
-    return query_backtests(
+    items = query_backtests(
         {
             "status": status,
             "project_id": projectId,
@@ -76,6 +79,7 @@ def backtests(
             "to_date": toDate,
         }
     )
+    return paged_items(items, limit=limit, offset=offset, paged=paged)
 
 
 @router.post("")
@@ -236,12 +240,19 @@ def cancel(run_id: str):
 
 
 @router.get("/{run_id}/logs")
-def logs(run_id: str):
+def logs(run_id: str, offset: int | None = None, cursor: str | None = None, limit: int = 65536):
     run = detail(run_id)
-    if run.get("task_id"):
-        return {"logs": task_logs(run["task_id"])}
-    path = Path(run.get("log_path") or "")
-    return {"logs": path.read_text(encoding="utf-8", errors="replace")[-120000:] if path.exists() else ""}
+    try:
+        if run.get("task_id"):
+            return task_log_window(run["task_id"], offset=offset, cursor=cursor, limit=limit)
+        return log_window(
+            Path(run.get("log_path") or ""),
+            offset=offset,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc), "field": "cursor"}) from exc
 
 
 @router.get("/{run_id}/chart-data")

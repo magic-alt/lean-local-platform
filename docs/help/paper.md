@@ -29,7 +29,8 @@ Opening Ledger、持仓、收益、风险配置、策略部署、执行 checkpoi
 2. 账户步骤填写名称、CNY 初始资金和 benchmark。
 3. 策略步骤从 `/api/paper/candidates` 选择成功、认证、验证通过且冻结的 Backtest。
 4. 执行步骤选择自动运行、`Asia/Shanghai`、`paper_execute` 和 next-open。
-5. 风险步骤确认最大持仓、单标的权重、现金下限、订单金额、日换手和 blacklist。
+5. 风险步骤确认最大持仓、单标的/单行业权重、成交量参与率、回撤熔断、
+   现金下限、订单金额、日换手和 blacklist。
 6. 确认页核对冻结 fingerprint 后创建。第二个账户会生成独立 shadow session、
    opening ledger、generation、risk profile 和 checkpoint，不共享任何现金或订单。
 
@@ -51,7 +52,8 @@ Beat -> due deployment -> 交易日/数据/QA/PIT/reference/benchmark gate
 
 交易日 T 的收盘数据完成并认证后，策略在 T 收盘后计算信号。需要交易的 Intent
 标记下一交易日执行，并按 T+1 认证开盘价匹配。停牌、涨跌停、现金不足、现金
-下限、最大持仓、持仓上限和 T+1 不可卖都会保留原始信号与明确原因。`hold`、
+下限、最大持仓、单标的/行业上限、容量上限、回撤熔断和 T+1 不可卖都会保留
+原始信号与明确原因。`hold`、
 `observe_only` 和 `no_signal` 不会变成可成交 Intent。
 
 无信号代表策略成功检查了该交易日，因此 cycle 是 `succeeded`，同时保存
@@ -129,9 +131,16 @@ Create Paper Session 只展示当前模式需要的字段：LEAN Walk-forward �
   "cash": 300000,
   "benchmarkSymbol": "000300",
   "maxPositionWeight": 0.2,
+  "maxIndustryWeight": 0.4,
+  "maxVolumeParticipation": 0.1,
+  "circuitBreakerDrawdown": 0.15,
   "minCash": 20000
 }
 ```
+
+`same_close` 与旧 `allowSameDayClose` override 已永久下线；历史请求返回
+HTTP 410 `SAME_CLOSE_REMOVED`。Paper 只允许 next-open、next-close 或
+next-vwap，其中账户级正式执行固定为 next-open。
 
 ## 逐日运行
 

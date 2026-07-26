@@ -155,7 +155,7 @@ def _backtest_report(report_id: str) -> dict[str, Any] | None:
 def list_reports(
     limit: int = 500,
     offset: int = 0,
-    paged: bool = False,
+    paged: bool = True,
     source: str | None = None,
     status: str | None = None,
     runId: str | None = None,

@@ -227,7 +227,7 @@ def data_assets(
     includeSuperseded: bool = True,
     limit: int = 500,
     offset: int = 0,
-    paged: bool = False,
+    paged: bool = True,
 ):
     clauses = []
     values: list[Any] = []

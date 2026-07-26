@@ -109,7 +109,7 @@ export const api = {
     request<{ example: WorkflowExample; project: Project; launch: { route: string; defaults: Record<string, unknown> } }>(`/api/examples/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/instantiate`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),
-  experimentBatches: () => request<ExperimentBatch[]>("/api/experiment-batches"),
+  experimentBatches: () => request<ExperimentBatch[]>("/api/experiment-batches?paged=false&limit=1000"),
   compareExperimentBatches: (payload: { batchIds: string[]; metric?: string; xParameter?: string; yParameter?: string }) =>
     request<ExperimentBatchComparison>("/api/experiment-batches/compare", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
@@ -136,7 +136,7 @@ export const api = {
     request<IndexMembersResult & { source?: string; fetchedDate?: string; imported?: Record<string, unknown> }>(
       `/api/pit/index-members/${encodeURIComponent(universeCode)}/as-of/${encodeURIComponent(asOfDate)}/tushare`
     ),
-  projects: () => request<Project[]>("/api/projects"),
+  projects: () => request<Project[]>("/api/projects?paged=false&limit=1000"),
   createProject: (payload: {
     name: string;
     language: "Python" | "CSharp";
@@ -212,7 +212,7 @@ export const api = {
     request<{ symbol: string; items: Array<Record<string, unknown>>; count: number }>(
       `/api/data/identifiers/${encodeURIComponent(symbol)}`
     ),
-  dataAssets: () => request<DataAsset[]>("/api/data-assets"),
+  dataAssets: () => request<DataAsset[]>("/api/data-assets?paged=false&limit=1000"),
   dataFiles: (assetClass?: string, venue?: string) =>
     request<{ items: LocalDataFile[]; count: number }>(
       `/api/data/files?assetClass=${encodeURIComponent(assetClass ?? "")}&venue=${encodeURIComponent(venue ?? "")}`
@@ -353,7 +353,9 @@ export const api = {
     Object.entries(filters ?? {}).forEach(([key, value]) => {
       if (value) query.set(key, String(value));
     });
-    const suffix = query.toString() ? `?${query.toString()}` : "";
+    query.set("paged", "false");
+    query.set("limit", "1000");
+    const suffix = `?${query.toString()}`;
     return request<BacktestRun[]>(`/api/backtests${suffix}`);
   },
   preflightBacktest: (payload: {
@@ -426,12 +428,12 @@ export const api = {
     request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
   chartData: (id: string) =>
     request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data`),
-  tasks: () => request<Task[]>("/api/tasks"),
+  tasks: () => request<Task[]>("/api/tasks?paged=false&limit=1000"),
   task: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  optimizations: () => request<OptimizationRun[]>("/api/optimize"),
+  optimizations: () => request<OptimizationRun[]>("/api/optimize?paged=false&limit=1000"),
   deleteOptimization: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/optimize/${encodeURIComponent(id)}`, { method: "DELETE" }),
   createOptimization: (payload: {
@@ -473,7 +475,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  researchSessions: () => request<ResearchSession[]>("/api/research"),
+  researchSessions: () => request<ResearchSession[]>("/api/research?paged=false&limit=1000"),
   startResearch: (payload: { projectId: string; port?: number }) =>
     request<ResearchSession>("/api/research", {
       method: "POST",
@@ -497,7 +499,7 @@ export const api = {
       `/api/research/${encodeURIComponent(id)}?purgeWorkspace=${purgeWorkspace ? "true" : "false"}`,
       { method: "DELETE" }
     ),
-  reports: () => request<ReportRecord[]>("/api/reports"),
+  reports: () => request<ReportRecord[]>("/api/reports?paged=false&limit=1000"),
   deleteReport: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/reports/${encodeURIComponent(id)}`, { method: "DELETE" }),
   createReport: (payload: { runId: string }) =>
@@ -516,7 +518,7 @@ export const api = {
     }),
   deleteObjectStoreItem: (key: string) =>
     request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
-  paperSessions: () => request<PaperSession[]>("/api/paper"),
+  paperSessions: () => request<PaperSession[]>("/api/paper?paged=false&limit=1000"),
   deletePaperSession: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/paper/${encodeURIComponent(id)}`, { method: "DELETE" }),
   paperSession: (id: string) => request<PaperSession>(`/api/paper/${encodeURIComponent(id)}`),
@@ -534,10 +536,12 @@ export const api = {
     dataType?: string;
     cash?: number;
     executionPolicy?: string;
-    allowSameDayClose?: boolean;
     benchmarkSymbol?: string;
     maxPositions?: number;
     maxPositionWeight?: number;
+    maxIndustryWeight?: number;
+    maxVolumeParticipation?: number;
+    circuitBreakerDrawdown?: number;
     minCash?: number;
     blacklist?: string;
     watchlist?: string;

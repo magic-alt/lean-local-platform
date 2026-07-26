@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from .common import paged_items
 from ..core.errors import LeanWebError, NotFoundError
 from ..services import experiment_batches
 from ..services.history_resources import delete_experiment_batch
@@ -39,8 +40,8 @@ def preview(request: ExperimentBatchRequest):
 
 
 @router.get("")
-def batches():
-    return experiment_batches.list_batches()
+def batches(limit: int = 100, offset: int = 0, paged: bool = True):
+    return paged_items(experiment_batches.list_batches(), limit=limit, offset=offset, paged=paged)
 
 
 @router.post("/compare")

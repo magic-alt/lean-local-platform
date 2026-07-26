@@ -219,7 +219,16 @@ function AccountWizard({
       ["name", "marketScope", "baseCurrency", "initialCash", "benchmarkSymbol"],
       ["projectId", "sourceBacktestId"],
       ["automatic", "marketTimezone", "signalMode"],
-      ["maxPositions", "maxPositionWeight", "cashFloor", "maxOrderAmount", "maxDailyTurnover"]
+      [
+        "maxPositions",
+        "maxPositionWeight",
+        "maxIndustryWeight",
+        "maxVolumeParticipation",
+        "circuitBreakerDrawdown",
+        "cashFloor",
+        "maxOrderAmount",
+        "maxDailyTurnover"
+      ]
     ][step];
     if (stepFields) await form.validateFields(stepFields);
     setStep((value) => Math.min(value + 1, 4));
@@ -239,6 +248,9 @@ function AccountWizard({
         riskConfig: {
           maxPositions: values.maxPositions,
           maxPositionWeight: String(values.maxPositionWeight),
+          maxIndustryWeight: String(values.maxIndustryWeight),
+          maxVolumeParticipation: String(values.maxVolumeParticipation),
+          circuitBreakerDrawdown: String(values.circuitBreakerDrawdown),
           cashFloor: String(values.cashFloor),
           maxOrderAmount: String(values.maxOrderAmount),
           maxDailyTurnover: String(values.maxDailyTurnover),
@@ -374,6 +386,9 @@ function AccountWizard({
         <div className="paper-wizard-grid">
           <Form.Item name="maxPositions" label="最大持仓数" rules={[{ required: true }]}><InputNumber min={1} /></Form.Item>
           <Form.Item name="maxPositionWeight" label="单标的最大权重" rules={[{ required: true }]}><InputNumber min={0} max={1} step={0.01} /></Form.Item>
+          <Form.Item name="maxIndustryWeight" label="单行业最大权重" rules={[{ required: true }]}><InputNumber min={0} max={1} step={0.01} /></Form.Item>
+          <Form.Item name="maxVolumeParticipation" label="成交量参与上限" rules={[{ required: true }]}><InputNumber min={0} max={1} step={0.01} /></Form.Item>
+          <Form.Item name="circuitBreakerDrawdown" label="回撤熔断阈值" rules={[{ required: true }]}><InputNumber min={0} max={1} step={0.01} /></Form.Item>
           <Form.Item name="cashFloor" label="现金下限" rules={[{ required: true }]}><InputNumber min={0} stringMode /></Form.Item>
           <Form.Item name="maxOrderAmount" label="最大订单金额" rules={[{ required: true }]}><InputNumber min={1} stringMode /></Form.Item>
           <Form.Item name="maxDailyTurnover" label="最大日换手" rules={[{ required: true }]}><InputNumber min={0} max={5} step={0.05} /></Form.Item>
@@ -433,6 +448,9 @@ function AccountWizard({
           signalMode: "paper_execute",
           maxPositions: 10,
           maxPositionWeight: 0.2,
+          maxIndustryWeight: 0.4,
+          maxVolumeParticipation: 0.1,
+          circuitBreakerDrawdown: 0.15,
           cashFloor: "50000",
           maxOrderAmount: "200000",
           maxDailyTurnover: 0.5,

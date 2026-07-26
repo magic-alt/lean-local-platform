@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.config import DEFAULT_DOCKER_IMAGE, JOB_TIMEOUT_SECONDS
+from ..core.request_context import current_trace_id, current_workflow_id
 from ..lean_engine.config import base_config
 from ..lean_engine.docker import docker_command
 from ..lean_engine.errors import LeanPlatformError
@@ -78,7 +79,12 @@ class LeanRunner:
         artifacts: list[dict[str, Any]] = []
         if config_path.exists():
             artifacts.append(item(config_path, "input-config"))
-        for support_name in ("ashare_execution.py", "ashare_trade_status.json", "hk_execution.py"):
+        for support_name in (
+            "ashare_execution.py",
+            "ashare_trade_status.json",
+            "hk_execution.py",
+            "trace-context.json",
+        ):
             support_path = run_dir / support_name
             if support_path.exists():
                 artifacts.append(item(support_path, "input-support"))
@@ -92,6 +98,8 @@ class LeanRunner:
             "exitCode": exit_code,
             "timedOut": timed_out,
             "error": error,
+            "traceId": current_trace_id(),
+            "workflowId": current_workflow_id(),
             "artifacts": artifacts,
         }
 
@@ -121,15 +129,27 @@ class LeanRunner:
         if not algorithm_path.is_file():
             raise LeanPlatformError(f"Project algorithm not found: {algorithm_path}")
         algorithm_container_path = f"/Lean/Project/{relative_algorithm_path.as_posix()}"
+        config = base_config(
+            run_id,
+            parameters,
+            algorithm_class=algorithm_class,
+            algorithm_location=algorithm_container_path,
+            language=language,
+        )
+        config["lean-platform-trace-id"] = current_trace_id()
+        config["lean-platform-workflow-id"] = current_workflow_id()
         config_path.write_text(
+            json.dumps(config, indent=2),
+            encoding="utf-8",
+        )
+        (run_dir / "trace-context.json").write_text(
             json.dumps(
-                base_config(
-                    run_id,
-                    parameters,
-                    algorithm_class=algorithm_class,
-                    algorithm_location=algorithm_container_path,
-                    language=language,
-                ),
+                {
+                    "schemaVersion": 1,
+                    "runId": run_id,
+                    "traceId": current_trace_id(),
+                    "workflowId": current_workflow_id(),
+                },
                 indent=2,
             ),
             encoding="utf-8",

@@ -1,13 +1,14 @@
 from fastapi import APIRouter, HTTPException
 
-from ..services.tasks import cancel_task, delete_task, get_task, list_tasks, task_logs
+from .common import paged_items
+from ..services.tasks import cancel_task, delete_task, get_task, list_tasks, task_log_window
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
 @router.get("")
-def tasks():
-    return list_tasks()
+def tasks(limit: int = 100, offset: int = 0, paged: bool = True):
+    return paged_items(list_tasks(), limit=limit, offset=offset, paged=paged)
 
 
 @router.get("/{task_id}")
@@ -19,11 +20,13 @@ def task_detail(task_id: str):
 
 
 @router.get("/{task_id}/logs")
-def logs(task_id: str):
+def logs(task_id: str, offset: int | None = None, cursor: str | None = None, limit: int = 65536):
     try:
-        return {"logs": task_logs(task_id)}
+        return task_log_window(task_id, offset=offset, cursor=cursor, limit=limit)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Task not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc), "field": "cursor"}) from exc
 
 
 @router.post("/{task_id}/cancel")

@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .common import dispatch_task
+from .common import dispatch_task, paged_items
 from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
 from ..core.errors import NotFoundError
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
@@ -41,10 +41,10 @@ class OptimizationRequest(BaseModel):
 
 
 @router.get("")
-def list_optimizations():
+def list_optimizations(limit: int = 100, offset: int = 0, paged: bool = True):
     with db() as connection:
         rows = connection.execute("select * from optimization_runs order by created_at desc").fetchall()
-    return rows_to_dicts(rows)
+    return paged_items(rows_to_dicts(rows), limit=limit, offset=offset, paged=paged)
 
 
 @router.post("")

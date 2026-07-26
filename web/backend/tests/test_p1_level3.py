@@ -159,7 +159,7 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
     reports = client.get("/api/reports")
     assert reports.status_code == 200
     payload = reports.json()
-    item = next(report for report in payload if report["id"] == "backtest:run-1")
+    item = next(report for report in payload["items"] if report["id"] == "backtest:run-1")
     assert item["type"] == "backtest"
     assert item["source"] == "backtest_run"
     assert item["dataSource"] == "akshare"
@@ -171,7 +171,9 @@ def test_reports_api_exposes_backtest_result_and_stored_objects(tmp_path, monkey
 
     full_reports = client.get("/api/reports", params={"detail": True})
     assert full_reports.status_code == 200
-    full_item = next(report for report in full_reports.json() if report["id"] == "backtest:run-1")
+    full_item = next(
+        report for report in full_reports.json()["items"] if report["id"] == "backtest:run-1"
+    )
     assert full_item["result"]["summary_metrics"]["Alpha"] == "0.1"
     assert {stored["id"] for stored in full_item["storedObjects"]} == {raw_object["id"], summary_object["id"], order_events_object["id"]}
 
