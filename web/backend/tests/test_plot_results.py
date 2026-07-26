@@ -1,6 +1,6 @@
 import json
 
-from app.reporting.html_report import REPORT_LAYOUT_VERSION, build_report
+from app.reporting.html_report import REPORT_LAYOUT_VERSION, build_report, series_points
 
 
 def test_report_file_responses_disable_browser_caching():
@@ -47,6 +47,25 @@ def test_report_header_structures_run_metadata_and_chart_names():
     assert "Charts available:" not in report
     assert f'data-report-layout="{REPORT_LAYOUT_VERSION}"' in report
     assert f'<meta name="report-layout" content="{REPORT_LAYOUT_VERSION}">' in report
+
+
+def test_report_benchmark_series_ignores_zero_placeholders():
+    chart = {
+        "series": {
+            "Benchmark": {
+                "values": [
+                    [1704067200, 0],
+                    [1704153600, 500],
+                    [1704240000, 525],
+                ]
+            }
+        }
+    }
+
+    assert series_points(chart, "Benchmark", ignore_zero_values=True) == [
+        (1704153600.0, 500.0),
+        (1704240000.0, 525.0),
+    ]
 
 
 def test_report_regeneration_discovers_main_result_and_uses_canonical_layout(tmp_path):

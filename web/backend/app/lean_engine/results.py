@@ -100,29 +100,35 @@ def _has_moving_values(points: list[dict[str, Any]]) -> bool:
     return len(values) > 1
 
 
-def _cumulative_return_series(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _cumulative_return_series(
+    points: list[dict[str, Any]],
+    *,
+    ignore_zero_values: bool = False,
+) -> list[dict[str, Any]]:
     """Rebase a value curve to decimal cumulative returns starting at zero."""
-    base = next(
+    base_item = next(
         (
-            float(point["value"])
-            for point in points
+            (index, float(point["value"]))
+            for index, point in enumerate(points)
             if point.get("value") is not None
             and math.isfinite(float(point["value"]))
             and float(point["value"]) != 0
         ),
         None,
     )
-    if base is None:
+    if base_item is None:
         return []
+    base_index, base = base_item
     return [
         {
             "time": point["time"],
             "value": (float(point["value"]) / base) - 1.0,
         }
-        for point in points
+        for point in points[base_index:]
         if point.get("time")
         and point.get("value") is not None
         and math.isfinite(float(point["value"]))
+        and (not ignore_zero_values or float(point["value"]) != 0)
     ]
 
 
@@ -363,7 +369,7 @@ def extract_chart_data(
     equity_series = point_series(equity, "Equity")
     cumulative_return_series = _cumulative_return_series(equity_series)
     benchmark_return_series = (
-        _cumulative_return_series(benchmark_series)
+        _cumulative_return_series(benchmark_series, ignore_zero_values=True)
         if _has_moving_values(benchmark_series)
         else []
     )

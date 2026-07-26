@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Make the Backtests cumulative-return chart derive its vertical range from valid strategy and benchmark values, ignore zero-valued benchmark placeholders that falsely appeared as a 100% loss, and rebuild historical reports with the same placeholder filtering so small fluctuations remain visible.
 - Redesign backtest results around performance, trades, research quality, and run details; compare strategy and benchmark on rebased cumulative returns and treat admission as an optional promotion workflow.
 - Fix the backtest-detail white screen caused by invalid cumulative-return label precision crashing ECharts during tab changes; normalize malformed historical chart and ledger collections, isolate all four detail panels, and rebuild local parsed results and HTML reports with canonical `report-layout-v2`.
 

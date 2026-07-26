@@ -78,12 +78,25 @@ def test_extract_chart_data_rebases_equity_and_benchmark_for_comparison(tmp_path
                 "charts": {
                     "Strategy Equity": {
                         "series": {
-                            "Equity": {"values": [[1704153600, 100000], [1704240000, 110000]]}
+                            "Equity": {
+                                "values": [
+                                    [1704067200, 0],
+                                    [1704153600, 100000],
+                                    [1704240000, 110000],
+                                ]
+                            }
                         }
                     },
                     "Benchmark": {
                         "series": {
-                            "Benchmark": {"values": [[1704153600, 500], [1704240000, 525]]}
+                            "Benchmark": {
+                                "values": [
+                                    [1704067200, 0],
+                                    [1704153600, 500],
+                                    [1704196800, 0],
+                                    [1704240000, 525],
+                                ]
+                            }
                         }
                     },
                 },

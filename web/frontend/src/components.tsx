@@ -70,21 +70,56 @@ export function lineOption(title: string, datasets: Array<{ name: string; points
   };
 }
 
-function cumulativeReturnSeries(points: Array<{ time: string; value: number }>) {
-  const base = points.find((point) => Number.isFinite(point.value) && point.value !== 0)?.value;
-  if (base == null) return [];
+function cumulativeReturnSeries(
+  points: Array<{ time: string; value: number }>,
+  ignoreZeroValues = false,
+) {
+  const baseIndex = points.findIndex((point) => Number.isFinite(point.value) && point.value !== 0);
+  if (baseIndex < 0) return [];
+  const base = points[baseIndex].value;
   return points
+    .slice(baseIndex)
     .filter((point) => Number.isFinite(point.value))
+    .filter((point) => !ignoreZeroValues || point.value !== 0)
     .map((point) => ({ time: point.time, value: (point.value / base) - 1 }));
+}
+
+function cumulativeReturnAxisRange(
+  datasets: Array<{ name: string; points: { time: string; value: number }[] }>,
+) {
+  let dataMin = Number.POSITIVE_INFINITY;
+  let dataMax = Number.NEGATIVE_INFINITY;
+  for (const dataset of datasets) {
+    for (const point of dataset.points) {
+      if (!Number.isFinite(point.value)) continue;
+      dataMin = Math.min(dataMin, point.value);
+      dataMax = Math.max(dataMax, point.value);
+    }
+  }
+  if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) return {};
+
+  const span = dataMax - dataMin;
+  const padding = span > 0
+    ? span * 0.08
+    : Math.max(Math.abs(dataMin) * 0.08, 0.001);
+
+  return {
+    min: dataMin - padding,
+    max: dataMax + padding,
+  };
 }
 
 function cumulativeReturnOption(datasets: Array<{ name: string; points: { time: string; value: number }[] }>) {
   const option: any = lineOption("Cumulative Return", datasets);
+  const axisRange = cumulativeReturnAxisRange(datasets);
   option.color = ["#1677ff", "#8c8c8c"];
   option.tooltip.valueFormatter = (value: unknown) => formatPercent(value);
   option.yAxis.axisLabel.formatter = (value: unknown) => formatPercent(value, 1);
   option.yAxis.name = "Return";
   option.yAxis.nameTextStyle = { color: "#64748b" };
+  option.yAxis.min = axisRange.min;
+  option.yAxis.max = axisRange.max;
+  option.yAxis.splitNumber = 5;
   option.series = option.series.map((series: Record<string, unknown>, index: number) => ({
     ...series,
     lineStyle: { width: index === 0 ? 2.5 : 1.8, type: index === 0 ? "solid" : "dashed" },
@@ -266,7 +301,7 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
     : cumulativeReturnSeries(equity);
   const benchmarkReturns = Array.isArray(series.benchmarkReturn)
     ? chartPoints(series.benchmarkReturn)
-    : cumulativeReturnSeries(benchmark);
+    : cumulativeReturnSeries(benchmark, true);
   const normalizedChartData: ChartData = {
     ...chartData,
     candles,

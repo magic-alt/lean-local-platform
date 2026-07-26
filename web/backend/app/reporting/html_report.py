@@ -26,7 +26,7 @@ def iso_to_date(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%Y-%m-%d")
 
 
-def series_points(chart, series_name):
+def series_points(chart, series_name, *, ignore_zero_values=False):
     series = (chart.get("series") or {}).get(series_name) or {}
     points = []
     for row in series.get("values", []):
@@ -34,7 +34,11 @@ def series_points(chart, series_name):
             continue
         timestamp = float(row[0])
         y_value = float(row[-1])
-        if math.isfinite(timestamp) and math.isfinite(y_value):
+        if (
+            math.isfinite(timestamp)
+            and math.isfinite(y_value)
+            and (not ignore_zero_values or y_value != 0)
+        ):
             points.append((timestamp, y_value))
     return points
 
@@ -358,6 +362,7 @@ def build_report(data, source_path):
     ema_chart = get_chart(data, "EMA")
     benchmark_chart = get_chart(data, "Benchmark")
     equity_points = series_points(equity_chart, "Equity")
+    benchmark_points = series_points(benchmark_chart, "Benchmark", ignore_zero_values=True)
     pnl_rows = profit_loss_rows(data)
 
     body = [
@@ -446,7 +451,7 @@ th { color: #475569; font-weight: 700; }
         ),
         make_svg(
             "Benchmark",
-            {"Benchmark": series_points(benchmark_chart, "Benchmark")},
+            {"Benchmark": benchmark_points},
         ),
         f'<section class="orders"><h2>Orders</h2>{orders_table(markers)}</section>',
         returns_table("Monthly Returns", period_returns(equity_points, "month")),
