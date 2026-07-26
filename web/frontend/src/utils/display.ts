@@ -16,19 +16,26 @@ function numericText(value: string) {
     : null;
 }
 
+function safeFractionDigits(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 20
+    ? value
+    : fallback;
+}
+
 export function formatNumber(value: unknown, maximumFractionDigits = 4) {
+  const precision = safeFractionDigits(maximumFractionDigits, 4);
   const number = typeof value === "number"
     ? value
     : typeof value === "string"
       ? numericText(value)?.number
       : Number.NaN;
   if (typeof number !== "number" || !Number.isFinite(number)) return "-";
-  const threshold = 10 ** -maximumFractionDigits;
-  if (maximumFractionDigits > 0 && number !== 0 && Math.abs(number) < threshold) {
-    return `${number < 0 ? "-" : ""}<${threshold.toFixed(maximumFractionDigits)}`;
+  const threshold = 10 ** -precision;
+  if (precision > 0 && number !== 0 && Math.abs(number) < threshold) {
+    return `${number < 0 ? "-" : ""}<${threshold.toFixed(precision)}`;
   }
   return number.toLocaleString(undefined, {
-    maximumFractionDigits,
+    maximumFractionDigits: precision,
     minimumFractionDigits: 0,
   });
 }
@@ -49,17 +56,18 @@ export function formatCurrency(value: unknown, currency = "USD") {
 }
 
 export function formatPercent(value: unknown, maximumFractionDigits = 2) {
+  const precision = safeFractionDigits(maximumFractionDigits, 2);
   const parsed = typeof value === "string" ? numericText(value) : null;
   const number = typeof value === "number" ? value : parsed?.number;
   if (number == null || !Number.isFinite(number)) return "-";
   const percentage = parsed?.percent ? number : number * 100;
-  const threshold = 10 ** -maximumFractionDigits;
+  const threshold = 10 ** -precision;
   if (percentage !== 0 && Math.abs(percentage) < threshold) {
-    return `${percentage < 0 ? "-" : ""}<${threshold.toFixed(maximumFractionDigits)}%`;
+    return `${percentage < 0 ? "-" : ""}<${threshold.toFixed(precision)}%`;
   }
   return `${percentage.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits,
+    minimumFractionDigits: Math.min(2, precision),
+    maximumFractionDigits: precision,
   })}%`;
 }
 
@@ -104,7 +112,16 @@ export function shortValue(value: unknown, max = 72) {
       return `${parsed.currency}${formatted}${parsed.percent ? "%" : ""}`;
     }
   }
-  const text = typeof value === "string" ? value : JSON.stringify(value);
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value) ?? String(value);
+    } catch {
+      text = String(value);
+    }
+  }
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 

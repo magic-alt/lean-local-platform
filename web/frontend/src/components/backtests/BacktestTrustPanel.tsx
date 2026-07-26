@@ -1,7 +1,7 @@
 import { Alert, Card, Space, Statistic, Table, Tag, Tooltip } from "antd";
 
 import type { BacktestAdmissionResponse, BacktestExperiment, BacktestValidation } from "../../api";
-import { asRecord, shortHash, shortValue } from "../../utils/display";
+import { asRecord, isRecord, shortHash, shortValue } from "../../utils/display";
 
 export function ValidationStatusTag({ validation }: { validation?: BacktestValidation | null }) {
   if (!validation) return <Tag>unknown</Tag>;
@@ -64,7 +64,7 @@ export function BacktestTrustPanel({
   const coverage = asRecord(validationData.coverage);
   const benchmark = asRecord(validationData.benchmark);
   const latestBatch = asRecord(validationData.latestImportBatch);
-  const gates = validation?.gates ?? [];
+  const gates = Array.isArray(validation?.gates) ? validation.gates.filter(isRecord) : [];
   const strategy = asRecord(experiment?.strategy);
   const parameters = asRecord(experiment?.parameters);
   const experimentData = asRecord(experiment?.data);
@@ -198,7 +198,7 @@ export function StrategyAdmissionPanel({ value }: { value?: BacktestAdmissionRes
   const evaluation = admission.evaluation ?? {};
   const status = evaluation.status ?? (admission.current_stage === "admission_passed" || admission.current_stage === "paper_validated" ? "pass" : "pending");
   const statusColor = status === "pass" ? "green" : status === "watch" ? "gold" : status === "fail" ? "red" : "blue";
-  const gates = evaluation.gates ?? [];
+  const gates = Array.isArray(evaluation.gates) ? evaluation.gates.filter(isRecord) : [];
   return (
     <>
       <div className="grid">

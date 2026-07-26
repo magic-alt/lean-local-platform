@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Redesign backtest results around performance, trades, research quality, and run details; compare strategy and benchmark on rebased cumulative returns and treat admission as an optional promotion workflow.
+- Fix the backtest-detail white screen caused by invalid cumulative-return label precision crashing ECharts during tab changes; normalize malformed historical chart and ledger collections, isolate all four detail panels, and rebuild local parsed results and HTML reports with canonical `report-layout-v2`.
 
 - 2026-07-26 — align Paper account name and description length checks with the API before submission, reject whitespace-only names in the setup wizard, and surface structured request-validation field details instead of only a generic Trace ID.
 - 2026-07-26 — add a production-ready Pipedream/Make-to-Feishu alert relay recipe with an end-to-end Pipedream transformer and optional Feishu signing; add protected cascading deletion for stopped Paper accounts; make Paper account details render from the overview before lazily loading tab data; make Project Open scroll the selected project into view; and display legitimate empty TuShare entitlement probes such as `suspend_d` as endpoint availability instead of a failure-like `EMPTY` tag after successful synchronization.

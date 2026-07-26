@@ -3,7 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { useState } from "react";
 import { BacktestRun, ChartData, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
-import { formatInteger, formatNumber, formatPercent } from "./utils/display";
+import { formatInteger, formatNumber, formatPercent, isRecord } from "./utils/display";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -90,6 +90,37 @@ function cumulativeReturnOption(datasets: Array<{ name: string; points: { time: 
     lineStyle: { width: index === 0 ? 2.5 : 1.8, type: index === 0 ? "solid" : "dashed" },
   }));
   return option;
+}
+
+function chartPoints(value: unknown): ChartData["series"]["equity"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.time !== "string") return [];
+    const pointValue = typeof item.value === "number" ? item.value : Number(item.value);
+    return Number.isFinite(pointValue) ? [{ time: item.time, value: pointValue }] : [];
+  });
+}
+
+function chartCandles(value: unknown): NonNullable<ChartData["candles"]> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.time !== "string") return [];
+    const open = Number(item.open);
+    const high = Number(item.high);
+    const low = Number(item.low);
+    const close = Number(item.close);
+    const volume = Number(item.volume ?? 0);
+    if (![open, high, low, close, volume].every(Number.isFinite)) return [];
+    return [{ time: item.time, open, high, low, close, volume }];
+  });
+}
+
+function chartIndicators(value: unknown): NonNullable<ChartData["indicators"]> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.chart !== "string" || typeof item.name !== "string") return [];
+    return [{ chart: item.chart, name: item.name, points: chartPoints(item.points) }];
+  });
 }
 
 export function RunsTable({
@@ -224,12 +255,37 @@ export function RunsTable({
 }
 
 export function BacktestCharts({ chartData }: { chartData: ChartData }) {
-  const strategyReturns = chartData.series.cumulativeReturn !== undefined
-    ? chartData.series.cumulativeReturn
-    : cumulativeReturnSeries(chartData.series.equity);
-  const benchmarkReturns = chartData.series.benchmarkReturn !== undefined
-    ? chartData.series.benchmarkReturn
-    : cumulativeReturnSeries(chartData.series.benchmark);
+  const series: Record<string, unknown> = isRecord(chartData?.series) ? chartData.series : {};
+  const equity = chartPoints(series.equity);
+  const benchmark = chartPoints(series.benchmark);
+  const price = chartPoints(series.price);
+  const candles = chartCandles(chartData?.candles);
+  const indicators = chartIndicators(chartData?.indicators);
+  const strategyReturns = Array.isArray(series.cumulativeReturn)
+    ? chartPoints(series.cumulativeReturn)
+    : cumulativeReturnSeries(equity);
+  const benchmarkReturns = Array.isArray(series.benchmarkReturn)
+    ? chartPoints(series.benchmarkReturn)
+    : cumulativeReturnSeries(benchmark);
+  const normalizedChartData: ChartData = {
+    ...chartData,
+    candles,
+    indicators,
+    series: {
+      equity,
+      return: chartPoints(series.return),
+      cumulativeReturn: strategyReturns,
+      drawdown: chartPoints(series.drawdown),
+      emaFast: chartPoints(series.emaFast),
+      emaSlow: chartPoints(series.emaSlow),
+      benchmark,
+      benchmarkReturn: benchmarkReturns,
+      price,
+    },
+    orders: Array.isArray(chartData?.orders) ? chartData.orders.filter(isRecord) as ChartData["orders"] : [],
+    orderMarkers: Array.isArray(chartData?.orderMarkers) ? chartData.orderMarkers.filter(isRecord) as ChartData["orderMarkers"] : [],
+    order_markers: Array.isArray(chartData?.order_markers) ? chartData.order_markers.filter(isRecord) as ChartData["order_markers"] : [],
+  };
   const benchmarkLabel = String(chartData.metadata?.benchmarkSymbol || "Benchmark");
   const comparisonSeries = [
     { name: "Strategy", points: strategyReturns },
@@ -260,12 +316,12 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           />
         </div>
       </Card>
-      {((chartData.candles?.length ?? 0) > 0 || chartData.series.price.length > 0) && (
+      {(candles.length > 0 || price.length > 0) && (
         <Card title="Asset Price, Orders & Indicators" style={{ marginTop: 16 }}>
-          <div data-testid="price-chart" data-point-count={chartData.candles?.length ?? chartData.series.price.length}>
+          <div data-testid="price-chart" data-point-count={candles.length || price.length}>
             <ReactECharts
-              style={{ height: backtestAssetChartHeight(chartData) }}
-              option={backtestAssetOption(chartData)}
+              style={{ height: backtestAssetChartHeight(normalizedChartData) }}
+              option={backtestAssetOption(normalizedChartData)}
             />
           </div>
         </Card>

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { attachFrontendGuards } from "../fixtures/console";
 import { BacktestConfigPage } from "../pages/backtest-config.page";
 import { ensureE2EProject } from "../utils/api";
 import { BACKTEST_CASES, E2E_PROJECT } from "../utils/test-data";
@@ -39,6 +40,70 @@ test.describe("09 frontend resilience @smoke @responsive", () => {
     await page.getByRole("tab", { name: "Logs" }).click();
     await expect(page.getByTestId("backtest-logs")).toContainText("E2E log line 1999");
     await expect(page.locator(".app-content")).not.toBeEmpty();
+  });
+
+  test("keeps every backtest detail tab usable with malformed historical collections", async ({ page }, testInfo) => {
+    const assertNoFrontendErrors = attachFrontendGuards(page, testInfo);
+    const runId = "e2e-malformed-backtest-report";
+    const run = {
+      id: runId,
+      name: "Malformed historical report",
+      symbol: "600519",
+      status: "success",
+      parameters: { ticker: "600519", market: "china", start: "2026-06-01", end: "2026-07-22", cash: 100000 },
+      docker_image: "quantconnect/lean:latest",
+      results_dir: `/tmp/${runId}`,
+      result_json_path: `/tmp/${runId}/result.json`,
+      created_at: new Date().toISOString(),
+      artifacts: [null, { name: "legacy-report.html" }, "report.html"],
+      validation: { passed: true, severity: "ok", gates: { name: "legacy-gate", passed: true } }
+    };
+    const result = {
+      id: "result-malformed",
+      job_id: runId,
+      summary_metrics: { "Net Profit": "1.00%" },
+      orders: { legacy: true },
+      trades: [null, "legacy", { id: 1, symbol: "600519", payload: { source: "old-parser" } }],
+      holdings: "legacy",
+      performance: {
+        strategy_return: 0.01,
+        monthly_returns: [null, "legacy", { period: "2026-07", return: 0.01 }],
+        yearly_returns: [{ period: "2026", return: 0.01 }, 7],
+        trade_pnl: [null, { symbol: "600519", net_pnl: 100, return: 0.01 }],
+        industry_exposure: [{ industry: "Consumer", market_value: 100000, weight: 1 }, false]
+      },
+      created_at: new Date().toISOString()
+    };
+    const chart = {
+      statistics: {},
+      candles: null,
+      indicators: [{ chart: "Price", name: "SMA", points: [null, { time: "2026-07-01", value: "10" }] }],
+      series: {
+        equity: [null, { time: "2026-07-01", value: 100000 }, "legacy"],
+        cumulativeReturn: null,
+        benchmark: null,
+        price: { time: "2026-07-01", value: 10 }
+      },
+      orders: {}
+    };
+
+    await page.route(`**/api/backtests/${runId}`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(run) }));
+    await page.route(`**/api/backtests/${runId}/logs`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logs: "legacy run" }) }));
+    await page.route(`**/api/backtests/${runId}/validation`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job_id: runId, validation: run.validation }) }));
+    await page.route(`**/api/backtests/${runId}/admission**`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId, registrationStatus: "not_applicable", parametersSha256: "" }) }));
+    await page.route(`**/api/backtests/${runId}/chart-data`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(chart) }));
+    await page.route(`**/api/backtests/${runId}/result`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job: run, result }) }));
+
+    await page.goto(`/#/runs/${runId}`);
+    await expect(page.getByTestId("run-status-panel")).toBeVisible();
+
+    for (const tab of ["Trades (1)", "Research Quality", "Run Details", "Performance"]) {
+      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await expect(page.locator(".app-content")).not.toBeEmpty();
+      await expect(page.getByText("could not be displayed.")).toHaveCount(0);
+    }
+
+    await assertNoFrontendErrors();
   });
 
   test("prevents duplicate submit while create backtest is pending", async ({ page, request }) => {

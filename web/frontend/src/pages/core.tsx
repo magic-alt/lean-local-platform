@@ -47,9 +47,11 @@ import type {
   AppSettings,
   AssetClassInfo,
   BacktestAdmissionResponse,
+  BacktestExperiment,
   BacktestPreflight,
   BacktestResult,
   BacktestRun,
+  BacktestValidation,
   BacktestValidationResponse,
   CBondPoolItem,
   CBondRiskItem,
@@ -85,6 +87,7 @@ import { SecuritySearch } from "../components/SecuritySearch";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { DatasetPreviewPanel } from "../components/data/DatasetPreviewPanel";
 import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
+import { RunDetailPanelBoundary } from "../components/backtests/RunDetailPanelBoundary";
 import { ExampleGallery } from "../components/examples/ExampleGallery";
 import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
 import { candlestickOption } from "../charts/candlestick";
@@ -100,6 +103,7 @@ import {
   formatInteger,
   formatNumber,
   formatPercent,
+  isRecord,
   shortValue
 } from "../utils/display";
 import {
@@ -2646,6 +2650,25 @@ export function BacktestsPage() {
   );
 }
 
+function recordRows(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stableRecordKey(row: Record<string, unknown>, prefix: string) {
+  const identity = row.id
+    ?? row.orderId
+    ?? row.order_id
+    ?? row.tradeId
+    ?? row.trade_id
+    ?? [row.symbol, row.entry_time, row.exit_time].filter((item) => item != null).join("-");
+  if (identity !== "") return `${prefix}-${String(identity)}`;
+  try {
+    return `${prefix}-${JSON.stringify(row)}`;
+  } catch {
+    return `${prefix}-${shortValue(row, 240)}`;
+  }
+}
+
 export function RunDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -2745,33 +2768,48 @@ export function RunDetailPage() {
     }
   }
   if (!run) return <Alert type="info" message="Loading run..." />;
-  const validation = trust?.validation ?? run.validation ?? result?.performance?.validation;
-  const experiment = trust?.experiment ?? run.experiment ?? result?.performance?.experiment;
-  const fingerprint = trust?.fingerprint ?? run.fingerprint;
+  const parameters = asRecord(run.parameters);
   const performance = asRecord(result?.performance);
+  const validationSource = trust?.validation ?? run.validation ?? performance.validation;
+  const validationRecord = asRecord(validationSource);
+  const validationGates = recordRows(validationRecord.gates).map((gate) => ({
+    name: String(gate.name ?? "Unnamed gate"),
+    passed: gate.passed === true,
+    severity: String(gate.severity ?? (gate.passed === true ? "ok" : "critical")),
+    details: isRecord(gate.details) ? gate.details : undefined,
+  }));
+  const validation = Object.keys(validationRecord).length > 0
+    ? { ...validationRecord, gates: validationGates } as unknown as BacktestValidation
+    : undefined;
+  const experimentRecord = asRecord(trust?.experiment ?? run.experiment ?? performance.experiment);
+  const experiment = Object.keys(experimentRecord).length > 0
+    ? experimentRecord as BacktestExperiment
+    : undefined;
+  const fingerprint = trust?.fingerprint ?? run.fingerprint;
   const trustedMetrics = ["success", "succeeded"].includes(run.status) && validation?.passed !== false;
-  const summaryMetrics = result?.summary_metrics ?? {};
-  const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? run.statistics?.["Sharpe Ratio"];
+  const summaryMetrics = asRecord(result?.summary_metrics);
+  const runStatistics = asRecord(run.statistics);
+  const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? runStatistics["Sharpe Ratio"];
   const sharpeWarning = metricTruthy(summaryMetrics["Short Window Unstable"]);
-  const market = String(run.parameters?.market ?? run.venue ?? "").toLowerCase();
+  const market = String(parameters.market ?? run.venue ?? "").toLowerCase();
   const currency = market === "china" ? "CNY" : "USD";
   const metricCards = [
     {
       title: "Total Return",
-      value: run.statistics?.["Net Profit"] ?? summaryMetrics["Total Return"],
+      value: runStatistics["Net Profit"] ?? summaryMetrics["Total Return"],
       kind: "percent" as const,
       featured: true,
     },
-    { title: "End Equity", value: run.statistics?.["End Equity"], kind: "currency" as const },
+    { title: "End Equity", value: runStatistics["End Equity"], kind: "currency" as const },
     { title: "Sharpe Ratio", value: sharpeMetric, kind: "number" as const, warning: sharpeWarning },
     {
       title: "Max Drawdown",
-      value: run.statistics?.["Drawdown"] ?? run.statistics?.["Max Drawdown"],
+      value: runStatistics["Drawdown"] ?? runStatistics["Max Drawdown"],
       kind: "percent" as const,
     },
     {
       title: "Total Trades",
-      value: run.statistics?.["Total Trades"] ?? run.statistics?.["Total Orders"] ?? result?.orders?.length,
+      value: runStatistics["Total Trades"] ?? runStatistics["Total Orders"] ?? recordRows(result?.orders).length,
       kind: "integer" as const,
     },
     { title: "Information Ratio", value: summaryMetrics["Computed Information Ratio"], kind: "number" as const },
@@ -2789,10 +2827,10 @@ export function RunDetailPage() {
     { title: "Alpha", value: performance.computed_alpha, kind: "number" as const },
     { title: "Beta", value: performance.computed_beta, kind: "number" as const },
   ];
-  const monthlyReturns = Array.isArray(performance.monthly_returns) ? performance.monthly_returns as Array<Record<string, unknown>> : [];
-  const yearlyReturns = Array.isArray(performance.yearly_returns) ? performance.yearly_returns as Array<Record<string, unknown>> : [];
-  const tradePnl = Array.isArray(performance.trade_pnl) ? performance.trade_pnl as Array<Record<string, unknown>> : [];
-  const industryExposure = Array.isArray(performance.industry_exposure) ? performance.industry_exposure as Array<Record<string, unknown>> : [];
+  const monthlyReturns = recordRows(performance.monthly_returns);
+  const yearlyReturns = recordRows(performance.yearly_returns);
+  const tradePnl = recordRows(performance.trade_pnl);
+  const industryExposure = recordRows(performance.industry_exposure);
   const tradeSummary = asRecord(performance.trade_pnl_summary);
   const tradeSummaryRows = Object.entries(tradeSummary).map(([key, value]) => ({ key, value }));
   const riskRows: Array<Record<string, unknown>> = [
@@ -2805,9 +2843,9 @@ export function RunDetailPage() {
     { key: "Sharpe Status", value: performance.sharpe_recompute_status, kind: "text" },
   ];
   const records = {
-    orders: result?.orders ?? chart?.orders ?? [],
-    trades: result?.trades ?? [],
-    holdings: result?.holdings ?? []
+    orders: recordRows(result?.orders ?? chart?.orders),
+    trades: recordRows(result?.trades),
+    holdings: recordRows(result?.holdings)
   };
   function recordColumns(rows: Array<Record<string, unknown>>) {
     const fields = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
@@ -2824,10 +2862,10 @@ export function RunDetailPage() {
       ),
     }));
   }
-  const rawMetricRows = Object.entries(result?.summary_metrics ?? run.statistics ?? {})
+  const rawMetricRows = Object.entries(Object.keys(summaryMetrics).length > 0 ? summaryMetrics : runStatistics)
     .filter(([key]) => key.toLowerCase().includes(metricQuery.trim().toLowerCase()))
     .map(([key, value]) => ({ key, value }));
-  const passedGates = validation?.gates?.filter((gate) => gate.passed).length ?? 0;
+  const passedGates = validation?.gates?.filter((gate) => gate.passed === true).length ?? 0;
   const totalGates = validation?.gates?.length ?? 0;
   const promotionStage = admission?.admission?.current_stage
     ?? (admission?.registrationStatus === "not_registered"
@@ -2835,8 +2873,9 @@ export function RunDetailPage() {
       : admission?.registrationStatus === "not_applicable"
         ? "not applicable"
         : "not available");
-  const artifactCount = run.artifacts?.length ?? 0;
-  const initialCash = run.parameters?.initialCash ?? run.parameters?.initial_cash ?? run.parameters?.cash;
+  const artifacts = Array.isArray(run.artifacts) ? run.artifacts.filter((item): item is string => typeof item === "string") : [];
+  const artifactCount = artifacts.length;
+  const initialCash = parameters.initialCash ?? parameters.initial_cash ?? parameters.cash;
   function analysisValue(key: unknown, value: unknown) {
     const label = String(key);
     if (/return|drawdown|weight|var|shortfall|tracking error/i.test(label)) return formatPercent(value);
@@ -2857,16 +2896,16 @@ export function RunDetailPage() {
             Backtests
           </Button>
           <div className="run-hero__eyebrow">
-            <span>{run.asset_class ?? run.parameters.assetClass ?? "equity"}</span>
+            <span>{shortValue(run.asset_class ?? parameters.assetClass ?? "equity")}</span>
             <span>·</span>
-            <span>{String(run.venue ?? run.parameters.venue ?? run.parameters.market ?? "unknown").toUpperCase()}</span>
+            <span>{String(run.venue ?? parameters.venue ?? parameters.market ?? "unknown").toUpperCase()}</span>
             <span>·</span>
-            <span>{run.resolution ?? run.parameters.resolution ?? "daily"}</span>
+            <span>{shortValue(run.resolution ?? parameters.resolution ?? "daily")}</span>
           </div>
           <h1>{run.name ?? run.id}</h1>
           <div className="run-hero__subtitle">
             <strong>{run.symbol}</strong>
-            <span>{run.parameters.start} — {run.parameters.end}</span>
+            <span>{shortValue(parameters.start)} — {shortValue(parameters.end)}</span>
             <span>{run.project_id ?? "Standalone strategy"}</span>
           </div>
           <div className="run-hero__badges">
@@ -2934,6 +2973,7 @@ export function RunDetailPage() {
             key: "performance",
             label: "Performance",
             children: (
+              <RunDetailPanelBoundary panel="Performance" resetKey={`${run.id}:performance`}>
               <div className="run-analysis" data-testid="run-status-panel">
                 {chart
                   ? <div className="run-charts"><BacktestCharts chartData={chart} /></div>
@@ -2993,12 +3033,14 @@ export function RunDetailPage() {
                   </>
                 ) : <Alert type="warning" showIcon message="Trusted performance analysis is unavailable for this run." style={{ marginTop: 12 }} />}
               </div>
+              </RunDetailPanelBoundary>
             )
           },
           {
             key: "trades",
             label: `Trades (${records.trades.length})`,
             children: (
+              <RunDetailPanelBoundary panel="Trades" resetKey={`${run.id}:trades`}>
               <div data-testid="records-panel">
                 <div className="run-overview-grid">
                   <Card title="Trade Summary">
@@ -3014,7 +3056,7 @@ export function RunDetailPage() {
                     />
                   </Card>
                   <Card title="Trade P&L">
-                  <Table<Record<string, unknown>> size="small" rowKey={(_, index) => String(index)} dataSource={tradePnl} columns={[
+                  <Table<Record<string, unknown>> size="small" rowKey={(row) => stableRecordKey(row, "trade-pnl")} dataSource={tradePnl} columns={[
                     { title: "Symbol", dataIndex: "symbol" },
                     { title: "Entry", dataIndex: "entry_time" },
                     { title: "Exit", dataIndex: "exit_time" },
@@ -3039,7 +3081,7 @@ export function RunDetailPage() {
                           data-testid={item.testId}
                           className="record-ledger-table"
                           size="small"
-                          rowKey={(row, index) => `${item.key}-${String(row.id ?? row.orderId ?? index)}`}
+                          rowKey={(row) => stableRecordKey(row, item.key)}
                           dataSource={item.rows}
                           columns={recordColumns(item.rows)}
                           scroll={{ x: "max-content" }}
@@ -3050,12 +3092,14 @@ export function RunDetailPage() {
                   />
                 </Card>
               </div>
+              </RunDetailPanelBoundary>
             )
           },
           {
             key: "quality",
             label: "Research Quality",
             children: (
+              <RunDetailPanelBoundary panel="Research Quality" resetKey={`${run.id}:quality`}>
               <>
                 <div className="run-overview-strip run-overview-strip--quality">
                   <div><span>Execution</span><StatusTag status={run.status} /></div>
@@ -3080,12 +3124,14 @@ export function RunDetailPage() {
                   ]}
                 />
               </>
+              </RunDetailPanelBoundary>
             )
           },
           {
             key: "details",
             label: "Run Details",
             children: (
+              <RunDetailPanelBoundary panel="Run Details" resetKey={`${run.id}:details`}>
               <Tabs
                 className="run-subtabs"
                 type="card"
@@ -3100,11 +3146,11 @@ export function RunDetailPage() {
                             <Descriptions size="small" bordered column={2}>
                               <Descriptions.Item label="Run ID" span={2}><span className="copyable-value">{run.id}</span></Descriptions.Item>
                               <Descriptions.Item label="Symbol">{run.symbol}</Descriptions.Item>
-                              <Descriptions.Item label="Market">{String(run.parameters?.market ?? run.venue ?? "-").toUpperCase()}</Descriptions.Item>
-                              <Descriptions.Item label="Asset">{run.asset_class ?? run.parameters.assetClass ?? "equity"}</Descriptions.Item>
-                              <Descriptions.Item label="Resolution">{run.resolution ?? run.parameters.resolution ?? "-"}</Descriptions.Item>
-                              <Descriptions.Item label="Start">{run.parameters.start}</Descriptions.Item>
-                              <Descriptions.Item label="End">{run.parameters.end}</Descriptions.Item>
+                              <Descriptions.Item label="Market">{String(parameters.market ?? run.venue ?? "-").toUpperCase()}</Descriptions.Item>
+                              <Descriptions.Item label="Asset">{shortValue(run.asset_class ?? parameters.assetClass ?? "equity")}</Descriptions.Item>
+                              <Descriptions.Item label="Resolution">{shortValue(run.resolution ?? parameters.resolution ?? "-")}</Descriptions.Item>
+                              <Descriptions.Item label="Start">{shortValue(parameters.start)}</Descriptions.Item>
+                              <Descriptions.Item label="End">{shortValue(parameters.end)}</Descriptions.Item>
                               <Descriptions.Item label="Initial capital">{formatCurrency(initialCash, currency)}</Descriptions.Item>
                               <Descriptions.Item label="Project">{run.project_id ?? "Standalone"}</Descriptions.Item>
                             </Descriptions>
@@ -3136,7 +3182,7 @@ export function RunDetailPage() {
                     children: (
                       <Card title="Strategy Parameters" className="run-section-card">
                         <Descriptions size="small" bordered column={{ xs: 1, sm: 2, lg: 3 }}>
-                          {Object.entries(run.parameters).map(([key, value]) => (
+                          {Object.entries(parameters).map(([key, value]) => (
                             <Descriptions.Item key={key} label={humanizeField(key)}>
                               <span className={typeof value === "number" ? "numeric-cell" : undefined}>{shortValue(value, 96)}</span>
                             </Descriptions.Item>
@@ -3155,7 +3201,7 @@ export function RunDetailPage() {
                         className="run-section-card"
                         extra={<Space wrap>
                           <Input allowClear value={metricQuery} onChange={(event) => setMetricQuery(event.target.value)} placeholder="Filter metrics" style={{ width: 220 }} />
-                          <Button icon={<CopyOutlined />} onClick={() => copyText(JSON.stringify(result?.summary_metrics ?? run.statistics ?? {}, null, 2), "Metrics JSON")}>Copy JSON</Button>
+                          <Button icon={<CopyOutlined />} onClick={() => copyText(JSON.stringify(Object.keys(summaryMetrics).length > 0 ? summaryMetrics : runStatistics, null, 2), "Metrics JSON")}>Copy JSON</Button>
                         </Space>}
                       >
                         <Table size="small" pagination={false} rowKey="key" dataSource={rawMetricRows} columns={[
@@ -3172,7 +3218,7 @@ export function RunDetailPage() {
                       <Card title="Result Artifacts" className="run-section-card">
                         {artifactCount ? (
                           <div className="artifact-grid">
-                            {(run.artifacts ?? []).map((name) => {
+                            {artifacts.map((name) => {
                               const extension = name.includes(".") ? name.split(".").pop()?.toUpperCase() : "FILE";
                               const artifactPath = name.split("/").map((part) => encodeURIComponent(part)).join("/");
                               const href = `/api/backtests/${run.id}/artifacts/${artifactPath}`;
@@ -3200,6 +3246,7 @@ export function RunDetailPage() {
                   }
                 ]}
               />
+              </RunDetailPanelBoundary>
             )
           }
         ]}
