@@ -534,7 +534,8 @@ export function TasksPage() {
 
 export function MonitoringPage() {
   const health = useAsyncData<DependencyHealth>(api.dependencyHealth, {
-    status: "degraded",
+    status: "ok",
+    executionStatus: "ok",
     dependencies: [],
     urls: {
       prometheus: "http://127.0.0.1:9090",

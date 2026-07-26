@@ -467,6 +467,7 @@ export interface DependencyStatus {
 
 export interface DependencyHealth {
   status: "ok" | "degraded";
+  executionStatus: "ok" | "degraded";
   dependencies: DependencyStatus[];
   urls: {
     prometheus: string;

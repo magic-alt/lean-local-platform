@@ -67,3 +67,26 @@ def test_scheduled_automation_without_alert_channel_is_degraded(monkeypatch):
 
     assert result["ok"] is False
     assert result["detail"]["reason"] == "scheduled_automation_requires_external_alert_channel"
+
+
+def test_missing_alert_channel_does_not_degrade_interactive_execution():
+    checks = [
+        {"service": "database", "ok": True},
+        {"service": "redis", "ok": True},
+        {"service": "external_alert_channel", "ok": False},
+    ]
+
+    assert (
+        dependencies._dependency_status(
+            checks,
+            dependencies.OPERATIONAL_CRITICAL_SERVICES,
+        )
+        == "degraded"
+    )
+    assert (
+        dependencies._dependency_status(
+            checks,
+            dependencies.EXECUTION_CRITICAL_SERVICES,
+        )
+        == "ok"
+    )

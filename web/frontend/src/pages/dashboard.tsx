@@ -26,7 +26,12 @@ export function Dashboard() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const runs = useAsyncData(api.backtests, []);
   const tasks = useAsyncData(api.tasks, []);
-  const dependencyHealth = useAsyncData(api.dependencyHealth, { status: "degraded", dependencies: [], urls: { prometheus: "", grafana: "" } });
+  const dependencyHealth = useAsyncData(api.dependencyHealth, {
+    status: "ok",
+    executionStatus: "ok",
+    dependencies: [],
+    urls: { prometheus: "", grafana: "" }
+  });
   const latest = runs.data[0];
   const activeTasks = tasks.data.filter((task) => ["created", "queued", "running"].includes(task.status)).length;
   const finishedRuns = runs.data.filter((run) => ["success", "succeeded", "failed", "cancelled"].includes(run.status));
@@ -36,6 +41,14 @@ export function Dashboard() {
   const averageDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0;
   const runsLoading = runs.loading && runs.data.length === 0;
   const tasksLoading = tasks.loading && tasks.data.length === 0;
+  const dependencyChecksCompleted = dependencyHealth.data.dependencies.length > 0;
+  const failedDependencies = dependencyHealth.data.dependencies.filter((item) => !item.ok);
+  const failedDependencyNames = failedDependencies.map((item) => item.service).join(", ");
+  const executionBlocked = dependencyChecksCompleted && dependencyHealth.data.executionStatus !== "ok";
+  const operationallyDegraded = dependencyChecksCompleted
+    && dependencyHealth.data.status !== "ok"
+    && !executionBlocked;
+  const alertChannelMissing = failedDependencies.some((item) => item.service === "external_alert_channel");
 
   return (
     <>
@@ -46,16 +59,25 @@ export function Dashboard() {
           <Button icon={<DeleteOutlined />} onClick={() => setHistoryOpen(true)}>Manage Local History</Button>
         </Space>
       </div>
-      {dependencyHealth.data.status !== "ok" && (
+      {executionBlocked && (
         <Alert
           type="error"
           showIcon
           message="Platform execution is blocked or degraded"
+          description={failedDependencyNames}
+          action={<Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {operationallyDegraded && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Scheduled automation needs attention"
           description={
-            dependencyHealth.data.dependencies
-              .filter((item) => !item.ok)
-              .map((item) => item.service)
-              .join(", ") || "Dependency readiness checks have not completed."
+            alertChannelMissing
+              ? "External alert delivery is not configured. Interactive backtests remain available, but unattended schedules are not operationally ready."
+              : failedDependencyNames
           }
           action={<Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>}
           style={{ marginBottom: 16 }}

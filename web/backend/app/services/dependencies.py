@@ -25,6 +25,24 @@ from .alerts import external_alert_channel_configured
 from .source_gate import source_certification
 
 
+EXECUTION_CRITICAL_SERVICES = frozenset(
+    {
+        "database",
+        "redis",
+        "docker",
+        "backtest_worker",
+        "lean_data_dir",
+        "results_dir_writable",
+        "lean_runner",
+        "paper_order_pipeline_v2",
+        "source_certification",
+    }
+)
+OPERATIONAL_CRITICAL_SERVICES = EXECUTION_CRITICAL_SERVICES | {
+    "external_alert_channel",
+}
+
+
 def _timed(service: str, check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     start = time.perf_counter()
     try:
@@ -306,6 +324,14 @@ def check_database() -> dict[str, Any]:
         }
 
 
+def _dependency_status(
+    checks: list[dict[str, Any]],
+    critical_services: frozenset[str],
+) -> str:
+    critical = [item for item in checks if item["service"] in critical_services]
+    return "ok" if all(item["ok"] for item in critical) else "degraded"
+
+
 def dependency_health() -> dict[str, Any]:
     checks = [
         _timed("database", check_database),
@@ -332,26 +358,9 @@ def dependency_health() -> dict[str, Any]:
             _timed("source_certification", check_source_certifications),
         ]
     )
-    critical = [
-        item
-        for item in checks
-        if item["service"]
-        in {
-            "database",
-            "redis",
-            "docker",
-            "backtest_worker",
-            "lean_data_dir",
-            "results_dir_writable",
-            "lean_runner",
-            "external_alert_channel",
-            "paper_order_pipeline_v2",
-            "source_certification",
-        }
-    ]
-    status = "ok" if all(item["ok"] for item in critical) else "degraded"
     return {
-        "status": status,
+        "status": _dependency_status(checks, OPERATIONAL_CRITICAL_SERVICES),
+        "executionStatus": _dependency_status(checks, EXECUTION_CRITICAL_SERVICES),
         "dependencies": checks,
         "urls": {
             "prometheus": PROMETHEUS_URL,
