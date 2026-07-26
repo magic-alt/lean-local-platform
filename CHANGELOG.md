@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Redesign backtest results around performance, trades, research quality, and run details; compare strategy and benchmark on rebased cumulative returns and treat admission as an optional promotion workflow.
+
 - 2026-07-26 — align Paper account name and description length checks with the API before submission, reject whitespace-only names in the setup wizard, and surface structured request-validation field details instead of only a generic Trace ID.
 - 2026-07-26 — add a production-ready Pipedream/Make-to-Feishu alert relay recipe with an end-to-end Pipedream transformer and optional Feishu signing; add protected cascading deletion for stopped Paper accounts; make Paper account details render from the overview before lazily loading tab data; make Project Open scroll the selected project into view; and display legitimate empty TuShare entitlement probes such as `suspend_d` as endpoint availability instead of a failure-like `EMPTY` tag after successful synchronization.
 - 2026-07-26 — make Level 3 smoke audits project-aware for dynamic-universe strategies by materializing and recording the required PIT `universeSchedule`, with optional aggregate evidence output; allow Level 5 clean and combined six-phase evidence reuse to verify scope, durable daily-job/checkpoint coverage, worker-loss actions, and canonical equivalence after historical sessions are retired; and add a fail-closed external webhook acceptance probe that only certifies a persisted 2xx delivery to a public endpoint.

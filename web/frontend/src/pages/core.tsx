@@ -2829,7 +2829,12 @@ export function RunDetailPage() {
     .map(([key, value]) => ({ key, value }));
   const passedGates = validation?.gates?.filter((gate) => gate.passed).length ?? 0;
   const totalGates = validation?.gates?.length ?? 0;
-  const admissionStage = admission?.admission?.current_stage ?? admission?.registrationStatus ?? "not available";
+  const promotionStage = admission?.admission?.current_stage
+    ?? (admission?.registrationStatus === "not_registered"
+      ? "not enrolled"
+      : admission?.registrationStatus === "not_applicable"
+        ? "not applicable"
+        : "not available");
   const artifactCount = run.artifacts?.length ?? 0;
   const initialCash = run.parameters?.initialCash ?? run.parameters?.initial_cash ?? run.parameters?.cash;
   function analysisValue(key: unknown, value: unknown) {
@@ -2926,63 +2931,75 @@ export function RunDetailPage() {
         destroyOnHidden
         items={[
           {
-            key: "status",
-            label: "Overview",
+            key: "performance",
+            label: "Performance",
             children: (
-              <div data-testid="run-status-panel">
-                <div className="run-overview-strip">
-                  <div><span>Execution</span><StatusTag status={run.status} /></div>
-                  <div><span>Validation</span><ValidationStatusTag validation={validation} /></div>
-                  <div><span>Admission</span><strong>{humanizeField(String(admissionStage))}</strong></div>
-                  <div><span>Artifacts</span><strong>{formatInteger(artifactCount)}</strong></div>
-                </div>
-                <div className="run-overview-grid">
-                  <Card title="Run Profile">
-                    <Descriptions size="small" bordered column={2}>
-                      <Descriptions.Item label="Run ID" span={2}>
-                        <span className="copyable-value">{run.id}</span>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Symbol">{run.symbol}</Descriptions.Item>
-                      <Descriptions.Item label="Market">{String(run.parameters?.market ?? run.venue ?? "-").toUpperCase()}</Descriptions.Item>
-                      <Descriptions.Item label="Asset">{run.asset_class ?? run.parameters.assetClass ?? "equity"}</Descriptions.Item>
-                      <Descriptions.Item label="Resolution">{run.resolution ?? run.parameters.resolution ?? "-"}</Descriptions.Item>
-                      <Descriptions.Item label="Start">{run.parameters.start}</Descriptions.Item>
-                      <Descriptions.Item label="End">{run.parameters.end}</Descriptions.Item>
-                      <Descriptions.Item label="Initial capital">{formatCurrency(initialCash, currency)}</Descriptions.Item>
-                      <Descriptions.Item label="Project">{run.project_id ?? "Standalone"}</Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                  <Card title="Execution Lifecycle">
-                    <Descriptions size="small" bordered column={1}>
-                      <Descriptions.Item label="Created">{formatDateTime(run.created_at)}</Descriptions.Item>
-                      <Descriptions.Item label="Queued">{formatDateTime(run.queued_at)}</Descriptions.Item>
-                      <Descriptions.Item label="Started">{formatDateTime(run.started_at)}</Descriptions.Item>
-                      <Descriptions.Item label="Finished">{formatDateTime(run.finished_at)}</Descriptions.Item>
-                      <Descriptions.Item label="Duration">{formatDuration(run.duration_seconds)}</Descriptions.Item>
-                      <Descriptions.Item label="Exit code">{run.exit_code ?? "—"}</Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </div>
-                <Card title="Runtime" className="run-section-card">
-                  <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
-                    <Descriptions.Item label="Docker image">{run.docker_image || "—"}</Descriptions.Item>
-                    <Descriptions.Item label="Container">{run.container_name || "—"}</Descriptions.Item>
-                    <Descriptions.Item label="Result directory">{run.results_dir || "—"}</Descriptions.Item>
-                  </Descriptions>
-                </Card>
+              <div className="run-analysis" data-testid="run-status-panel">
+                {chart
+                  ? <div className="run-charts"><BacktestCharts chartData={chart} /></div>
+                  : <Alert
+                      type={chartError ? "error" : "info"}
+                      showIcon={Boolean(chartError)}
+                      message={chartError ? "Performance charts failed to load." : "Performance charts are generated after the result artifact is ready."}
+                      description={chartError}
+                    />}
+                {trustedMetrics ? (
+                  <>
+                    <div className="backtest-kpi-grid backtest-kpi-grid--analysis">
+                      {analysisCards.map((item) => (
+                        <BacktestMetricCard key={item.title} {...item} />
+                      ))}
+                    </div>
+                    <Card title="Risk & Attribution" className="run-section-card">
+                      <Table<Record<string, unknown>>
+                        size="small"
+                        pagination={false}
+                        rowKey="key"
+                        dataSource={riskRows}
+                        columns={[
+                          { title: "Metric", dataIndex: "key" },
+                          {
+                            title: "Value",
+                            dataIndex: "value",
+                            align: "right",
+                            render: (value, row) => <span className="numeric-cell">{formatBacktestMetric(value, String(row.kind) as BacktestMetricKind)}</span>
+                          }
+                        ]}
+                      />
+                    </Card>
+                    <div className="run-overview-grid run-period-returns">
+                      <Card title="Monthly Returns">
+                        <Table<Record<string, unknown>> size="small" rowKey={(row) => String(row.period)} dataSource={monthlyReturns} columns={[
+                          { title: "Period", dataIndex: "period" },
+                          { title: "Return", dataIndex: "return", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
+                        ]} pagination={{ pageSize: 12, showSizeChanger: false }} />
+                      </Card>
+                      <Card title="Yearly Returns">
+                        <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.period)} dataSource={yearlyReturns} columns={[
+                          { title: "Year", dataIndex: "period" },
+                          { title: "Return", dataIndex: "return", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
+                        ]} />
+                      </Card>
+                    </div>
+                    {industryExposure.length > 0 && (
+                      <Card title="Industry Exposure" className="run-section-card">
+                        <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.industry)} dataSource={industryExposure} columns={[
+                          { title: "Industry", dataIndex: "industry" },
+                          { title: "Market Value", dataIndex: "market_value", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
+                          { title: "Weight", dataIndex: "weight", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
+                        ]} />
+                      </Card>
+                    )}
+                  </>
+                ) : <Alert type="warning" showIcon message="Trusted performance analysis is unavailable for this run." style={{ marginTop: 12 }} />}
               </div>
             )
           },
           {
-            key: "analysis",
-            label: "Analysis",
-            children: trustedMetrics ? (
-              <div className="run-analysis">
-                <div className="backtest-kpi-grid backtest-kpi-grid--analysis">
-                  {analysisCards.map((item) => (
-                    <BacktestMetricCard key={item.title} {...item} />
-                  ))}
-                </div>
+            key: "trades",
+            label: `Trades (${records.trades.length})`,
+            children: (
+              <div data-testid="records-panel">
                 <div className="run-overview-grid">
                   <Card title="Trade Summary">
                     <Table<Record<string, unknown>>
@@ -2996,41 +3013,7 @@ export function RunDetailPage() {
                       ]}
                     />
                   </Card>
-                  <Card title="Risk & Attribution">
-                    <Table<Record<string, unknown>>
-                      size="small"
-                      pagination={false}
-                      rowKey="key"
-                      dataSource={riskRows}
-                      columns={[
-                        { title: "Metric", dataIndex: "key" },
-                        {
-                          title: "Value",
-                          dataIndex: "value",
-                          align: "right",
-                          render: (value, row) => <span className="numeric-cell">{formatBacktestMetric(value, String(row.kind) as BacktestMetricKind)}</span>
-                        }
-                      ]}
-                    />
-                  </Card>
-                </div>
-                <Card title="Monthly Returns" className="run-section-card">
-                  <Table<Record<string, unknown>> size="small" rowKey={(row) => String(row.period)} dataSource={monthlyReturns} columns={[
-                    { title: "Period", dataIndex: "period" },
-                    { title: "Start Equity", dataIndex: "start", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
-                    { title: "End Equity", dataIndex: "end", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
-                    { title: "Return", dataIndex: "return", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
-                  ]} pagination={{ pageSize: 12, showSizeChanger: false }} />
-                </Card>
-                <Card title="Yearly Returns" className="run-section-card">
-                  <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.period)} dataSource={yearlyReturns} columns={[
-                    { title: "Year", dataIndex: "period" },
-                    { title: "Start Equity", dataIndex: "start", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
-                    { title: "End Equity", dataIndex: "end", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
-                    { title: "Return", dataIndex: "return", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
-                  ]} />
-                </Card>
-                <Card title="Trade P&L" className="run-section-card">
+                  <Card title="Trade P&L">
                   <Table<Record<string, unknown>> size="small" rowKey={(_, index) => String(index)} dataSource={tradePnl} columns={[
                     { title: "Symbol", dataIndex: "symbol" },
                     { title: "Entry", dataIndex: "entry_time" },
@@ -3039,98 +3022,8 @@ export function RunDetailPage() {
                     { title: "Net P&L", dataIndex: "net_pnl", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
                     { title: "Return", dataIndex: "return", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
                   ]} scroll={{ x: 760 }} pagination={{ pageSize: 10, showSizeChanger: true }} />
-                </Card>
-                <Card title="Industry Exposure" className="run-section-card">
-                  <Table<Record<string, unknown>> size="small" pagination={false} rowKey={(row) => String(row.industry)} dataSource={industryExposure} columns={[
-                    { title: "Industry", dataIndex: "industry" },
-                    { title: "Market Value", dataIndex: "market_value", align: "right", render: (value) => <span className="numeric-cell">{formatCurrency(value, currency)}</span> },
-                    { title: "Weight", dataIndex: "weight", align: "right", render: (value) => <span className="numeric-cell">{formatPercent(value)}</span> },
-                  ]} />
-                </Card>
-              </div>
-            ) : <Alert type="warning" showIcon message="Trusted analysis is unavailable for this run." />
-          },
-          {
-            key: "config",
-            label: "Config",
-            children: (
-              <Card title="Strategy Parameters" className="run-section-card">
-                <Descriptions size="small" bordered column={{ xs: 1, sm: 2, lg: 3 }}>
-                  {Object.entries(run.parameters).map(([key, value]) => (
-                    <Descriptions.Item key={key} label={humanizeField(key)}>
-                      <span className={typeof value === "number" ? "numeric-cell" : undefined}>{shortValue(value, 96)}</span>
-                    </Descriptions.Item>
-                  ))}
-                </Descriptions>
-              </Card>
-            )
-          },
-          {
-            key: "metrics",
-            label: `Metrics (${rawMetricRows.length})`,
-            children: (
-              <Card
-                title="Metric Ledger"
-                data-testid="metrics-table"
-                className="run-section-card"
-                extra={(
-                  <Space wrap>
-                    <Input
-                      allowClear
-                      value={metricQuery}
-                      onChange={(event) => setMetricQuery(event.target.value)}
-                      placeholder="Filter metrics"
-                      style={{ width: 220 }}
-                    />
-                    <Button
-                      icon={<CopyOutlined />}
-                      onClick={() => copyText(JSON.stringify(result?.summary_metrics ?? run.statistics ?? {}, null, 2), "Metrics JSON")}
-                    >
-                      Copy JSON
-                    </Button>
-                  </Space>
-                )}
-              >
-                <Table
-                  size="small"
-                  pagination={false}
-                  rowKey="key"
-                  dataSource={rawMetricRows}
-                  columns={[
-                    { title: "Metric", dataIndex: "key", width: "52%" },
-                    { title: "Value", dataIndex: "value", align: "right", render: (value) => <span className="numeric-cell">{shortValue(value)}</span> }
-                  ]}
-                />
-              </Card>
-            )
-          },
-          {
-            key: "validation",
-            label: totalGates ? `Validation (${passedGates}/${totalGates})` : "Validation",
-            children: <div className="run-trust-panel"><BacktestTrustPanel validation={validation} experiment={experiment} fingerprint={fingerprint} /></div>
-          },
-          {
-            key: "admission",
-            label: "Admission",
-            children: <StrategyAdmissionPanel value={admission} />
-          },
-          {
-            key: "charts",
-            label: "Charts",
-            children: chart
-              ? <div className="run-charts"><BacktestCharts chartData={chart} /></div>
-              : <Alert
-                  type={chartError ? "error" : "info"}
-                  showIcon={Boolean(chartError)}
-                  message={chartError ? "Chart data failed to load." : "Charts are generated after the result artifact is ready."}
-                  description={chartError}
-                />
-          },
-          {
-            key: "records",
-            label: `Records (${records.orders.length + records.trades.length + records.holdings.length})`,
-            children: (
-              <div data-testid="records-panel">
+                  </Card>
+                </div>
                 <Card className="run-records-card">
                   <Tabs
                     type="card"
@@ -3160,43 +3053,153 @@ export function RunDetailPage() {
             )
           },
           {
-            key: "raw",
-            label: `Raw Files (${artifactCount})`,
+            key: "quality",
+            label: "Research Quality",
             children: (
-              <Card title="Result Artifacts" className="run-section-card">
-                {artifactCount ? (
-                  <div className="artifact-grid">
-                    {(run.artifacts ?? []).map((name) => {
-                      const extension = name.includes(".") ? name.split(".").pop()?.toUpperCase() : "FILE";
-                      const artifactPath = name.split("/").map((part) => encodeURIComponent(part)).join("/");
-                      const href = `/api/backtests/${run.id}/artifacts/${artifactPath}`;
-                      return (
-                        <div className="artifact-item" key={name}>
-                          <div className="artifact-icon"><FileTextOutlined /></div>
-                          <div className="artifact-info">
-                            <strong title={name}>{name}</strong>
-                            <span>{extension} artifact</span>
-                          </div>
-                          <Button type="text" icon={<DownloadOutlined />} href={href} target="_blank" aria-label={`Open ${name}`} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : <Alert type="info" message="No result artifacts are available for this run." />}
-              </Card>
+              <>
+                <div className="run-overview-strip run-overview-strip--quality">
+                  <div><span>Execution</span><StatusTag status={run.status} /></div>
+                  <div><span>Validation</span><ValidationStatusTag validation={validation} /></div>
+                  <div><span>Promotion</span><strong>{humanizeField(String(promotionStage))}</strong></div>
+                  <div><span>Validation gates</span><strong>{totalGates ? `${passedGates}/${totalGates}` : "not available"}</strong></div>
+                </div>
+                <Tabs
+                  className="run-subtabs"
+                  type="card"
+                  items={[
+                    {
+                      key: "validation",
+                      label: totalGates ? `Validation (${passedGates}/${totalGates})` : "Validation",
+                      children: <div className="run-trust-panel"><BacktestTrustPanel validation={validation} experiment={experiment} fingerprint={fingerprint} /></div>
+                    },
+                    {
+                      key: "promotion",
+                      label: "Strategy Promotion",
+                      children: <StrategyAdmissionPanel value={admission} />
+                    }
+                  ]}
+                />
+              </>
             )
           },
           {
-            key: "logs",
-            label: "Logs",
+            key: "details",
+            label: "Run Details",
             children: (
-              <Card
-                title="Execution Log"
-                className="run-section-card"
-                extra={<Button icon={<CopyOutlined />} onClick={() => copyText(logs, "Logs")} disabled={!logs}>Copy logs</Button>}
-              >
-                <pre data-testid="backtest-logs" className="log-view">{logs || "No logs yet."}</pre>
-              </Card>
+              <Tabs
+                className="run-subtabs"
+                type="card"
+                items={[
+                  {
+                    key: "overview",
+                    label: "Overview",
+                    children: (
+                      <>
+                        <div className="run-overview-grid">
+                          <Card title="Run Profile">
+                            <Descriptions size="small" bordered column={2}>
+                              <Descriptions.Item label="Run ID" span={2}><span className="copyable-value">{run.id}</span></Descriptions.Item>
+                              <Descriptions.Item label="Symbol">{run.symbol}</Descriptions.Item>
+                              <Descriptions.Item label="Market">{String(run.parameters?.market ?? run.venue ?? "-").toUpperCase()}</Descriptions.Item>
+                              <Descriptions.Item label="Asset">{run.asset_class ?? run.parameters.assetClass ?? "equity"}</Descriptions.Item>
+                              <Descriptions.Item label="Resolution">{run.resolution ?? run.parameters.resolution ?? "-"}</Descriptions.Item>
+                              <Descriptions.Item label="Start">{run.parameters.start}</Descriptions.Item>
+                              <Descriptions.Item label="End">{run.parameters.end}</Descriptions.Item>
+                              <Descriptions.Item label="Initial capital">{formatCurrency(initialCash, currency)}</Descriptions.Item>
+                              <Descriptions.Item label="Project">{run.project_id ?? "Standalone"}</Descriptions.Item>
+                            </Descriptions>
+                          </Card>
+                          <Card title="Execution Lifecycle">
+                            <Descriptions size="small" bordered column={1}>
+                              <Descriptions.Item label="Created">{formatDateTime(run.created_at)}</Descriptions.Item>
+                              <Descriptions.Item label="Queued">{formatDateTime(run.queued_at)}</Descriptions.Item>
+                              <Descriptions.Item label="Started">{formatDateTime(run.started_at)}</Descriptions.Item>
+                              <Descriptions.Item label="Finished">{formatDateTime(run.finished_at)}</Descriptions.Item>
+                              <Descriptions.Item label="Duration">{formatDuration(run.duration_seconds)}</Descriptions.Item>
+                              <Descriptions.Item label="Exit code">{run.exit_code ?? "—"}</Descriptions.Item>
+                            </Descriptions>
+                          </Card>
+                        </div>
+                        <Card title="Runtime" className="run-section-card">
+                          <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+                            <Descriptions.Item label="Docker image">{run.docker_image || "—"}</Descriptions.Item>
+                            <Descriptions.Item label="Container">{run.container_name || "—"}</Descriptions.Item>
+                            <Descriptions.Item label="Result directory">{run.results_dir || "—"}</Descriptions.Item>
+                          </Descriptions>
+                        </Card>
+                      </>
+                    )
+                  },
+                  {
+                    key: "config",
+                    label: "Configuration",
+                    children: (
+                      <Card title="Strategy Parameters" className="run-section-card">
+                        <Descriptions size="small" bordered column={{ xs: 1, sm: 2, lg: 3 }}>
+                          {Object.entries(run.parameters).map(([key, value]) => (
+                            <Descriptions.Item key={key} label={humanizeField(key)}>
+                              <span className={typeof value === "number" ? "numeric-cell" : undefined}>{shortValue(value, 96)}</span>
+                            </Descriptions.Item>
+                          ))}
+                        </Descriptions>
+                      </Card>
+                    )
+                  },
+                  {
+                    key: "metrics",
+                    label: `Raw Metrics (${rawMetricRows.length})`,
+                    children: (
+                      <Card
+                        title="Metric Ledger"
+                        data-testid="metrics-table"
+                        className="run-section-card"
+                        extra={<Space wrap>
+                          <Input allowClear value={metricQuery} onChange={(event) => setMetricQuery(event.target.value)} placeholder="Filter metrics" style={{ width: 220 }} />
+                          <Button icon={<CopyOutlined />} onClick={() => copyText(JSON.stringify(result?.summary_metrics ?? run.statistics ?? {}, null, 2), "Metrics JSON")}>Copy JSON</Button>
+                        </Space>}
+                      >
+                        <Table size="small" pagination={false} rowKey="key" dataSource={rawMetricRows} columns={[
+                          { title: "Metric", dataIndex: "key", width: "52%" },
+                          { title: "Value", dataIndex: "value", align: "right", render: (value) => <span className="numeric-cell">{shortValue(value)}</span> }
+                        ]} />
+                      </Card>
+                    )
+                  },
+                  {
+                    key: "files",
+                    label: `Files (${artifactCount})`,
+                    children: (
+                      <Card title="Result Artifacts" className="run-section-card">
+                        {artifactCount ? (
+                          <div className="artifact-grid">
+                            {(run.artifacts ?? []).map((name) => {
+                              const extension = name.includes(".") ? name.split(".").pop()?.toUpperCase() : "FILE";
+                              const artifactPath = name.split("/").map((part) => encodeURIComponent(part)).join("/");
+                              const href = `/api/backtests/${run.id}/artifacts/${artifactPath}`;
+                              return (
+                                <div className="artifact-item" key={name}>
+                                  <div className="artifact-icon"><FileTextOutlined /></div>
+                                  <div className="artifact-info"><strong title={name}>{name}</strong><span>{extension} artifact</span></div>
+                                  <Button type="text" icon={<DownloadOutlined />} href={href} target="_blank" aria-label={`Open ${name}`} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : <Alert type="info" message="No result artifacts are available for this run." />}
+                      </Card>
+                    )
+                  },
+                  {
+                    key: "logs",
+                    label: "Logs",
+                    children: (
+                      <Card title="Execution Log" className="run-section-card" extra={<Button icon={<CopyOutlined />} onClick={() => copyText(logs, "Logs")} disabled={!logs}>Copy logs</Button>}>
+                        <pre data-testid="backtest-logs" className="log-view">{logs || "No logs yet."}</pre>
+                      </Card>
+                    )
+                  }
+                ]}
+              />
             )
           }
         ]}

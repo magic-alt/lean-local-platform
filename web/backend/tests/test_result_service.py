@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.services.result_service import parse_result_payload, persist_result
 
 
@@ -64,6 +66,73 @@ def test_extract_chart_data_includes_candles_volume_and_strategy_indicators(tmp_
         ("RSI", "RSI"),
     }
     assert chart["orderMarkers"][0]["priceValue"] == 10.15
+
+
+def test_extract_chart_data_rebases_equity_and_benchmark_for_comparison(tmp_path, monkeypatch):
+    import app.lean_engine.results as results_module
+
+    result_json = tmp_path / "comparison.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "charts": {
+                    "Strategy Equity": {
+                        "series": {
+                            "Equity": {"values": [[1704153600, 100000], [1704240000, 110000]]}
+                        }
+                    },
+                    "Benchmark": {
+                        "series": {
+                            "Benchmark": {"values": [[1704153600, 500], [1704240000, 525]]}
+                        }
+                    },
+                },
+                "orders": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(results_module, "read_lean_daily_candle_series", lambda *args, **kwargs: [])
+
+    chart = results_module.extract_chart_data(result_json, benchmark_symbol="SPY")
+
+    assert [point["value"] for point in chart["series"]["cumulativeReturn"]] == pytest.approx([0.0, 0.1])
+    assert [point["value"] for point in chart["series"]["benchmarkReturn"]] == pytest.approx([0.0, 0.05])
+    assert chart["seriesSources"]["benchmarkStatus"] == "available"
+    assert chart["metadata"]["comparisonBasis"] == "cumulative_return"
+
+
+def test_extract_chart_data_does_not_plot_zero_only_benchmark(tmp_path, monkeypatch):
+    import app.lean_engine.results as results_module
+
+    result_json = tmp_path / "missing-benchmark.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "charts": {
+                    "Strategy Equity": {
+                        "series": {
+                            "Equity": {"values": [[1704153600, 100000], [1704240000, 101000]]}
+                        }
+                    },
+                    "Benchmark": {
+                        "series": {
+                            "Benchmark": {"values": [[1704153600, 0], [1704240000, 0]]}
+                        }
+                    },
+                },
+                "orders": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(results_module, "read_lean_daily_candle_series", lambda *args, **kwargs: [])
+    monkeypatch.setattr(results_module, "read_lean_daily_price_series", lambda *args, **kwargs: [])
+
+    chart = results_module.extract_chart_data(result_json, benchmark_symbol="SPY")
+
+    assert chart["series"]["benchmarkReturn"] == []
+    assert chart["seriesSources"]["benchmarkStatus"] == "unavailable"
 
 
 def test_parse_result_payload_extracts_core_sections(tmp_path):

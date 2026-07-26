@@ -161,17 +161,38 @@ export function StrategyAdmissionPanel({ value }: { value?: BacktestAdmissionRes
   const admission = value?.admission;
   if (!value) return <Alert type="info" message="Strategy admission metadata is not available for this run." />;
   if (!admission) {
+    const notApplicable = value.registrationStatus === "not_applicable";
     return (
-      <Alert
-        type="info"
-        showIcon
-        message={value.registrationStatus === "not_applicable"
-          ? "Strategy admission does not apply to this standalone run."
-          : "This parameter set has not been registered for strategy admission."}
-        description={value.registrationStatus === "not_applicable"
-          ? `Parameter fingerprint: ${shortHash(value.parametersSha256)}`
-          : `Parameter fingerprint: ${shortHash(value.parametersSha256)}. Register a baseline and evaluate the required market-regime runs before treating this as admitted.`}
-      />
+      <Card title="Strategy Promotion" className="promotion-card">
+        <div className="promotion-summary">
+          <div>
+            <span className="metric-label">Promotion status</span>
+            <Tag>{notApplicable ? "not applicable" : "not enrolled"}</Tag>
+          </div>
+          <div>
+            <span className="metric-label">Parameter set</span>
+            <code>{shortHash(value.parametersSha256)}</code>
+          </div>
+        </div>
+        <Alert
+          type="info"
+          showIcon
+          message={notApplicable
+            ? "This standalone run is outside the strategy promotion workflow."
+            : "This is a normal research result, not an admission failure."}
+          description={notApplicable
+            ? "Validation still describes whether the individual backtest is trustworthy."
+            : "Admission is created from a registered baseline plus a complete bull, bear, range, and high-volatility test set. An individual backtest is not auto-enrolled."}
+        />
+        {!notApplicable && (
+          <div className="promotion-path" aria-label="Strategy promotion path">
+            <span className="promotion-path__current">Research run</span>
+            <span>Baseline</span>
+            <span>Regime evaluation</span>
+            <span>Paper validation</span>
+          </div>
+        )}
+      </Card>
     );
   }
   const evaluation = admission.evaluation ?? {};

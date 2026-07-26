@@ -1,9 +1,9 @@
-import { Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
 import ReactECharts from "echarts-for-react";
 import { useState } from "react";
-import { BacktestRun, ChartData, OrderMarkerPoint, RunStatus } from "./api";
+import { BacktestRun, ChartData, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
-import { formatInteger, formatNumber } from "./utils/display";
+import { formatInteger, formatNumber, formatPercent } from "./utils/display";
 
 export function StatusTag({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -70,45 +70,25 @@ export function lineOption(title: string, datasets: Array<{ name: string; points
   };
 }
 
-function orderMarkerPoints(
-  chartData: ChartData,
-  valueKey: "equityValue" | "priceValue"
-) {
-  const markers = chartData.orderMarkers ?? chartData.order_markers ?? [];
-  return markers
-    .filter((marker): marker is OrderMarkerPoint => marker.side != null && marker.time != null && marker[valueKey] != null)
-    .map((marker) => ({
-      name: marker.side,
-      coord: [marker.time, marker[valueKey] as number],
-      value: `${marker.side} ${marker.quantity}`,
-      symbol: "triangle",
-      symbolSize: 13,
-      symbolRotate: marker.side === "SELL" ? 180 : 0,
-      itemStyle: { color: marker.side === "BUY" ? "#16a34a" : "#dc2626" },
-      label: { show: false },
-      tooltip: {
-        formatter: [
-          `${marker.side} ${marker.symbol}`,
-          `Time: ${marker.time}`,
-          `Quantity: ${formatInteger(marker.quantity)}`,
-          `Fill: ${formatNumber(marker.fillPrice)}`,
-          marker.tag ? `Tag: ${marker.tag}` : ""
-        ].filter(Boolean).join("<br/>")
-      }
-    }));
+function cumulativeReturnSeries(points: Array<{ time: string; value: number }>) {
+  const base = points.find((point) => Number.isFinite(point.value) && point.value !== 0)?.value;
+  if (base == null) return [];
+  return points
+    .filter((point) => Number.isFinite(point.value))
+    .map((point) => ({ time: point.time, value: (point.value / base) - 1 }));
 }
 
-function lineWithOrdersOption(
-  title: string,
-  datasets: Array<{ name: string; points: { time: string; value: number }[] }>,
-  chartData: ChartData,
-  valueKey: "equityValue" | "priceValue"
-) {
-  const option: any = lineOption(title, datasets);
-  const markers = orderMarkerPoints(chartData, valueKey);
-  if (markers.length > 0 && option.series.length > 0) {
-    option.series[0].markPoint = { data: markers };
-  }
+function cumulativeReturnOption(datasets: Array<{ name: string; points: { time: string; value: number }[] }>) {
+  const option: any = lineOption("Cumulative Return", datasets);
+  option.color = ["#1677ff", "#8c8c8c"];
+  option.tooltip.valueFormatter = (value: unknown) => formatPercent(value);
+  option.yAxis.axisLabel.formatter = (value: unknown) => formatPercent(value, 1);
+  option.yAxis.name = "Return";
+  option.yAxis.nameTextStyle = { color: "#64748b" };
+  option.series = option.series.map((series: Record<string, unknown>, index: number) => ({
+    ...series,
+    lineStyle: { width: index === 0 ? 2.5 : 1.8, type: index === 0 ? "solid" : "dashed" },
+  }));
   return option;
 }
 
@@ -188,10 +168,15 @@ export function RunsTable({
             </div>
           },
           {
-            title: "Status",
+            title: "Health",
             width: "14%",
             render: (_, run) => <div className="table-primary-cell">
               <StatusTag status={run.status as RunStatus} />
+              {run.validation && (
+                <Tag color={run.validation.passed === false ? "red" : run.validation.severity === "warning" ? "gold" : "green"}>
+                  {run.validation.passed === false ? "validation failed" : run.validation.severity || "validated"}
+                </Tag>
+              )}
               {run.failure && <Typography.Text type="danger">{run.failure.stage}: {run.failure.code}</Typography.Text>}
             </div>
           },
@@ -239,21 +224,39 @@ export function RunsTable({
 }
 
 export function BacktestCharts({ chartData }: { chartData: ChartData }) {
+  const strategyReturns = chartData.series.cumulativeReturn !== undefined
+    ? chartData.series.cumulativeReturn
+    : cumulativeReturnSeries(chartData.series.equity);
+  const benchmarkReturns = chartData.series.benchmarkReturn !== undefined
+    ? chartData.series.benchmarkReturn
+    : cumulativeReturnSeries(chartData.series.benchmark);
+  const benchmarkLabel = String(chartData.metadata?.benchmarkSymbol || "Benchmark");
+  const comparisonSeries = [
+    { name: "Strategy", points: strategyReturns },
+    ...(benchmarkReturns.length ? [{ name: benchmarkLabel, points: benchmarkReturns }] : []),
+  ];
   return (
     <>
-      <Card title="Equity vs Benchmark" style={{ marginTop: 16 }}>
-        <div data-testid="equity-chart" data-point-count={chartData.series.equity.length}>
+      <Card
+        title="Cumulative Return"
+        extra={<Tag color={benchmarkReturns.length ? "blue" : "default"}>{benchmarkReturns.length ? `vs ${benchmarkLabel}` : "strategy only"}</Tag>}
+      >
+        <p className="chart-caption">
+          Strategy and benchmark are independently rebased to 0% at the start, so their relative performance is directly comparable.
+        </p>
+        {!benchmarkReturns.length && (
+          <Alert
+            type="info"
+            showIcon
+            message={`${benchmarkLabel} comparison is unavailable`}
+            description="No usable benchmark price series was found for this period. The zero placeholder is intentionally hidden."
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        <div data-testid="equity-chart" data-point-count={strategyReturns.length}>
           <ReactECharts
             style={{ height: 380 }}
-            option={lineWithOrdersOption(
-              "Equity",
-              [
-                { name: "Equity", points: chartData.series.equity },
-                { name: "Benchmark", points: chartData.series.benchmark }
-              ],
-              chartData,
-              "equityValue"
-            )}
+            option={cumulativeReturnOption(comparisonSeries)}
           />
         </div>
       </Card>
@@ -267,24 +270,6 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           </div>
         </Card>
       )}
-      <Card title="Orders" style={{ marginTop: 16 }}>
-        <Table
-          data-testid="orders-table"
-          rowKey={(row) => `${row.time}-${row.side}-${row.quantity}`}
-          dataSource={chartData.orders}
-          size="small"
-          scroll={{ x: 720 }}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `${total} orders` }}
-          columns={[
-            { title: "Time", dataIndex: "time" },
-            { title: "Side", dataIndex: "side" },
-            { title: "Symbol", dataIndex: "symbol" },
-            { title: "Quantity", dataIndex: "quantity", align: "right", render: (value) => <span className="numeric-cell">{formatInteger(value)}</span> },
-            { title: "Price", dataIndex: "price", align: "right", render: (value) => <span className="numeric-cell">{formatNumber(value)}</span> },
-            { title: "Tag", dataIndex: "tag", ellipsis: true }
-          ]}
-        />
-      </Card>
     </>
   );
 }

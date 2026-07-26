@@ -1441,11 +1441,18 @@ export interface ChartData {
   series: {
     equity: ChartPoint[];
     return: ChartPoint[];
+    cumulativeReturn?: ChartPoint[];
     drawdown: ChartPoint[];
     emaFast: ChartPoint[];
     emaSlow: ChartPoint[];
     benchmark: ChartPoint[];
+    benchmarkReturn?: ChartPoint[];
     price: ChartPoint[];
+  };
+  seriesSources?: {
+    benchmark?: string;
+    benchmarkStatus?: "available" | "unavailable";
+    [key: string]: unknown;
   };
   orders: Array<{
     time: string;
@@ -1458,7 +1465,11 @@ export interface ChartData {
   }>;
   orderMarkers?: OrderMarkerPoint[];
   order_markers?: OrderMarkerPoint[];
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    benchmarkSymbol?: string | null;
+    comparisonBasis?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface DataQueryRow {

@@ -100,6 +100,32 @@ def _has_moving_values(points: list[dict[str, Any]]) -> bool:
     return len(values) > 1
 
 
+def _cumulative_return_series(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebase a value curve to decimal cumulative returns starting at zero."""
+    base = next(
+        (
+            float(point["value"])
+            for point in points
+            if point.get("value") is not None
+            and math.isfinite(float(point["value"]))
+            and float(point["value"]) != 0
+        ),
+        None,
+    )
+    if base is None:
+        return []
+    return [
+        {
+            "time": point["time"],
+            "value": (float(point["value"]) / base) - 1.0,
+        }
+        for point in points
+        if point.get("time")
+        and point.get("value") is not None
+        and math.isfinite(float(point["value"]))
+    ]
+
+
 FILLED_ORDER_STATUSES = {2, 3}
 FILLED_ORDER_STATUS_LABELS = {"filled", "partiallyfilled", "partialfilled", "partially"}
 NON_FILLED_ORDER_STATUS_LABELS = {"submitted", "invalid", "canceled", "cancelled", "rejected"}
@@ -335,6 +361,12 @@ def extract_chart_data(
             benchmark_series = cache_series
             benchmark_source = "lean_data_cache"
     equity_series = point_series(equity, "Equity")
+    cumulative_return_series = _cumulative_return_series(equity_series)
+    benchmark_return_series = (
+        _cumulative_return_series(benchmark_series)
+        if _has_moving_values(benchmark_series)
+        else []
+    )
     excluded_indicator_charts = {
         "Strategy Equity",
         "Drawdown",
@@ -371,13 +403,22 @@ def extract_chart_data(
         "series": {
             "equity": equity_series,
             "return": point_series(equity, "Return"),
+            "cumulativeReturn": cumulative_return_series,
             "drawdown": point_series(drawdown, "Equity Drawdown"),
             "emaFast": point_series(ema, "Fast"),
             "emaSlow": point_series(ema, "Slow"),
             "benchmark": benchmark_series,
+            "benchmarkReturn": benchmark_return_series,
             "price": price,
         },
-        "seriesSources": {"benchmark": benchmark_source},
+        "seriesSources": {
+            "benchmark": benchmark_source,
+            "benchmarkStatus": "available" if benchmark_return_series else "unavailable",
+        },
+        "metadata": {
+            "benchmarkSymbol": benchmark_symbol,
+            "comparisonBasis": "cumulative_return",
+        },
         "orders": orders,
         "orderMarkers": order_markers,
         "holdings": infer_holdings_from_orders(orders, price_series=price),
