@@ -126,7 +126,7 @@ def test_data_provider_failures_preserve_attempt_evidence(tmp_path, monkeypatch)
     assert payload["details"]["attempts"][0]["error"] == "访问频率超限"
 
 
-def test_api_delete_task_accepts_trailing_slash(tmp_path, monkeypatch):
+def test_api_delete_task_rejects_removed_trailing_slash_alias(tmp_path, monkeypatch):
     import app.db as db_module
     from app.main import app
     from app.services.tasks import create_task
@@ -144,8 +144,7 @@ def test_api_delete_task_accepts_trailing_slash(tmp_path, monkeypatch):
     task = create_task("data_fetch", "Trailing slash delete", {"symbols": ["000001"]}, status="success")
     response = client.delete(f"/api/tasks/{task['id']}/")
 
-    assert response.status_code == 200
-    assert response.json() == {"deleted": True, "id": task["id"]}
+    assert response.status_code == 405
 
 
 def test_api_delete_task_accepts_no_trailing_slash(tmp_path, monkeypatch):

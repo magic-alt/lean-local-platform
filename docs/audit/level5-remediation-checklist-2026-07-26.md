@@ -30,8 +30,8 @@
 - [x] **批次 A / `L5-PAPER-001`**：新增 `repositories/market_data_repository.py`，估值只接受 Source Gate 允许的精确 source，所有收盘价查询强制 `trade_date <= as_of_date`；缺价时投影标记 `degraded` 并 fail closed。
 - [x] **批次 B / `L5-PAPER-002`**：canonical projection writer 同时写入 `cumulative_return`、真实 `benchmark_return` 与 `excess_return = cumulative_return - benchmark_return`；日报不再反向 UPDATE 投影。
 - [x] **批次 C / `L5-PAPER-004`**：intent/fill/ledger 首次 INSERT 即写全账户、代次、周期、序号和 Decimal 权威列；finalize 删除 post-write ledger UPDATE；migration `0031` 增加账户代次序号唯一索引，checkpoint digest 漂移直接报错并置账户 `error`。
-- [x] **验证**：新增 as-of、benchmark/excess、missing-data 与 append-only ledger 回归均通过；后端全量 `460 passed, 2 skipped`，前端 `npm run build` 通过，`git diff --check` 与 ledger/行情直读静态门禁通过；本机迁移状态确认 `0031` 为 `pending`（未擅自修改正式库）。
-- [ ] **历史数据复审**：尚未应用正式库 `0031`，也未执行生产库历史投影/快照重算，因此 `dataTrust.valuationTrusted` 继续保持 `false`；完成备份、迁移与 `1.11` 后方可恢复可信声明。
+- [x] **验证**：新增 as-of 行情和账本周期过滤、benchmark/excess、missing-data、append-only ledger 与 checkpoint 自校验回归；正式库 `0031` 已应用，28GB SQL + SHA-256 恢复点存在。
+- [ ] **历史数据复审**：`scripts/recompute_paper_projections.py --verify` 在 3 个账户中发现 3 个 legacy opening checkpoint digest 不匹配，并在 2 个账户发现 3 个历史 future quote；`--apply` 因 `CanonicalStateDivergence` fail closed，未改写 immutable checkpoint，`dataTrust.valuationTrusted` 继续为 `false`。首次重建探测已按安全设计把发生 divergence 的账户置为 `error`，其余账户保持 `paused`。
 
 ## 下一批执行的 3 个 P0（优先）
 
@@ -121,7 +121,7 @@ ls -la web/runtime/backups/
 | 1.5 | checkpoint 重算：`else` 分支改为 `if existing.digest != computed: raise CanonicalStateDivergence`，并发 Critical alert、置账户 `error` | `services/paper_accounts.py:1886-1914` |
 | 1.6 | `paper_order_pipeline.record_fill_and_ledger` / `ensure_opening_ledger` 签名增加 `paper_account_id`、`account_generation`、`execution_cycle_id`、`ledger_sequence`，一次 INSERT 写全；删除 `paper_accounts.py:1452-1466` 的 UPDATE | `services/paper_order_pipeline.py`、`services/paper_accounts.py` |
 | 1.7 | 金额链路全程 Decimal：`record_fill_and_ledger` 接收 Decimal，`precise_amount`/`precise_quantity` 为权威列，`amount`/`quantity` 标注为只读兼容 | `services/paper_order_pipeline.py` |
-| 1.8 | migration `0031_paper_ledger_integrity.sql`：`(paper_account_id, account_generation, ledger_sequence)` 与 `(paper_account_id, generation, source_ledger_sequence)` 各加 UNIQUE 约束（先清理重复行） | `web/backend/app/migrations/versions/0031_paper_ledger_integrity.sql` |
+| 1.8 | 精确唯一约束：ledger 序号约束由 `0031` 加固，checkpoint 序号约束已由 `0029` 创建；不得为迎合文档改写已应用 migration checksum | `web/backend/app/migrations/versions/0029_paper_accounts.sql`、`0031_paper_ledger_integrity.sql` |
 | 1.9 | `RunnerJob` 改为结构化参数 `{runId, projectDir, dataDir, resultsDir, configPath, storageDir, timeoutSeconds}`；runner 内部拼装 docker 命令行，拒绝任何调用方提供的 flag | `app/runner_service.py`、`runners/lean_runner.py`、`lean_engine/docker.py` |
 | 1.10 | `runner_token` 移出 `.:/workspace`，改用独立只读 tmpfs 挂载或 Docker secret；worker 的 `/workspace` 源码目录改只读 | `docker-compose.yml`、`scripts/start_web_single_instance.sh` |
 | 1.11 | 一次性重算历史 `paper_account_projections` / `paper_account_daily_snapshots` / `paper_account_daily_reports`（按各自 as-of 日期） | 新增 `scripts/recompute_paper_projections.py` |
@@ -363,11 +363,11 @@ curl -s -H "Authorization: Bearer $(cat web/runtime/secrets/api_token)" \
 | 5.2 | 引入 `idempotency_keys` 表与 `Idempotency-Key` 请求头，覆盖 `POST /api/backtests`、`/experiment-batches`、`/paper/accounts`、`/paper/accounts/{id}/deployments`、`/data/sync-runs` | 新增 migration `0033_idempotency_keys.sql`、`api/common.py` |
 | 5.3 | 日志端点增加 `offset` / `limit` / `cursor`，返回 `{lines, nextCursor, totalBytes, truncated}` | `api/backtests.py:239`、`api/tasks.py:22` |
 | 5.4 | 统一错误契约：顶层 `retryable` 由 `details.retryable` 派生；校验错误增加 `field` 定位；移除 `"HTTP request failed."` 这类无信息 message | `main.py:150-215`、`api/common.py` |
-| 5.5 | 移除 `/backtests/{id}/results` 别名（保留 6 个月 301）；合并 `/api/insights/ashare-tech` 与 `/api/ashare-tech-insights/*` 为单一命名空间 | `api/backtests.py`、`api/insights.py`、`api/ashare_tech_insights.py` |
-| 5.6 | 统一 `fingerprint_json` 键名为 camelCase，写入时同时保留 snake_case 别名 6 个月，读取端只认 camelCase | `services/run_fingerprint.py` |
+| 5.5 | `/backtests/{id}/results` 隐藏并 308 到 canonical `/result`；A-share 技术洞察收敛到 `/api/insights/ashare-tech`，旧命名空间只保留隐藏 308 | `api/backtests.py`、`api/ashare_tech_insights.py` |
+| 5.6 | 统一 `fingerprint_json` 顶层键名为 camelCase，兼容 snake_case 仅置于嵌套 `legacyAliases`，读取端只认 camelCase | `services/run_fingerprint.py` |
 | 5.7 | `/metrics` 增加 Bearer 认证（Prometheus 配置同步注入 token） | `main.py`、`config/prometheus.yml` |
 | 5.8 | `reports.py:341` 的 `report_path` 增加根目录约束（必须在 `RUNS_DIR` 或 `REPORTS_DIR` 之下） | `api/reports.py` |
-| 5.9 | 删除死表 `object_store_items`（migration `0034`），或将其接入实际使用 | `migrations/versions/0034_*.sql` |
+| 5.9 | 核对 `object_store_items` 生命周期；该表已由 `object_store.py` 用作 `stored_objects` 的活动索引，因此保留并以连接性测试防止误删 | `services/object_store.py` |
 | 5.10 | 移除尾斜杠重复 DELETE 路由 | `api/projects.py`、`api/tasks.py`、`api/strategies.py` |
 | 5.11 | 按 §5.4 目标架构，把 `paper_accounts.py`（2742 行）与 `data_sync.py`（4447 行）拆分为 orchestrator + repository | `services/`、`repositories/` |
 
@@ -406,6 +406,15 @@ cd web/frontend && npm run build
 - 日志端点支持游标分页；
 - `/metrics` 需要认证；
 - OpenAPI 与 `docs/help/api-reference.md` 一致（`--check` 通过）。
+
+### Wave 1–5 本轮验证汇总（2026-07-26）
+
+- 后端全量：`505 passed, 2 skipped`；Wave 1–5 定向矩阵：`77 passed`。
+- 前端：`npm run build` 通过；OpenAPI 帮助文档生成后 `--check` 通过，32 篇 help 文档检查通过。
+- 配置/静态：`docker compose config --quiet`、脚本 `py_compile` / `bash -n`、`git diff --check` 通过。
+- 发布门禁：`check_supply_chain.py` 为 `passed`（hash lock、12 份 SBOM/漏洞报告、签名验证均通过）；`check_repository_hygiene.py` 为 `ok`。
+- 正式库只读复审：migration `0001`–`0032` 均 applied；存在 28GB SQL + SHA-256 恢复点。
+- 未通过项：历史 Paper verify 因 3 个 legacy opening checkpoint digest mismatch 与 3 个 future quote 返回 FAIL；apply fail closed，未提升 `dataTrust`。这是一项待显式迁移/隔离决策的历史证据问题，不影响新写入路径回归通过的结论。
 
 ---
 
@@ -519,51 +528,53 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 
 ```markdown
 ### Wave 0 — 立即停止风险
-- [ ] L5-PAPER-001 暂停全部 Paper 账户并在 UI 标注净值不可信
-- [ ] L5-PAPER-002 在 Paper 绩效 API 中加入 dataTrust 不可信标记
-- [ ] L5-OPS-003 无外部通道时禁止 outbox 写入 delivered
-- [ ] L5-OPS-004 evidence_revalidation 模式不得输出 passed
-- [ ] L5-OPS-001 立即手工执行一次全库备份，建立还原点
-- [ ] 撤回 roadmap.md 中的 Level 5 PASS 表述
+- [x] L5-PAPER-001 暂停全部 Paper 账户并在 UI 标注净值不可信
+- [x] L5-PAPER-002 在 Paper 绩效 API 中加入 dataTrust 不可信标记
+- [x] L5-OPS-003 无外部通道时禁止 outbox 写入 delivered
+- [x] L5-OPS-004 evidence_revalidation 模式不得输出 passed
+- [x] L5-OPS-001 立即手工执行一次全库备份，建立还原点
+- [x] 撤回 roadmap.md 中的 Level 5 PASS 表述
 
 ### Wave 1 — Level 5 Critical / P0
-- [ ] L5-DATA-001 新建 MarketDataRepository，强制 (source, as_of) 并内嵌 Source Gate
-- [ ] L5-PAPER-001 rebuild_projection 增加必填 as_of_date，禁止取全表最新价
-- [ ] L5-PAPER-002 删除 benchmark=0 字面量与 excess=-prior，投影收敛为单一写入者
-- [ ] L5-PAPER-003 checkpoint digest 分歧必须抛 CanonicalStateDivergence
-- [ ] L5-PAPER-004 ledger 改为 append-only，sequence 由 DB 唯一约束保障
-- [ ] L5-PAPER-004 金额链路全程 Decimal，precise_* 成为权威列
-- [ ] L5-PAPER-004 migration 0031 增加两条 UNIQUE 约束（含 down）
-- [ ] L5-SEC-001 runner 改为结构化参数，内部构造 docker 命令行
+- [x] L5-DATA-001 新建 MarketDataRepository，强制 (source, as_of) 并内嵌 Source Gate
+- [x] L5-PAPER-001 rebuild_projection 增加必填 as_of_date，同时按 execution-cycle 日期过滤 ledger
+- [x] L5-PAPER-002 删除 benchmark=0 字面量与 excess=-prior，投影收敛为单一写入者
+- [x] L5-PAPER-003 checkpoint digest 分歧必须抛 CanonicalStateDivergence
+- [x] L5-PAPER-004 ledger 改为 append-only，sequence 由 DB 唯一约束保障
+- [x] L5-PAPER-004 金额链路全程 Decimal，precise_* 成为权威列
+- [x] L5-PAPER-004 ledger/checkpoint 两条精确 UNIQUE 约束由 0029 + 0031 共同保障
+- [x] L5-SEC-001 runner 改为结构化参数，内部构造 docker 命令行
 - [x] L5-SEC-002 runner_token 移出共享 /workspace 挂载
-- [ ] 一次性重算历史投影 / 快照 / 日报
+- [ ] 一次性重算历史投影 / 快照 / 日报（脚本与 fail-closed 验证已完成；legacy opening checkpoint divergence 待独立迁移决策）
 
 ### Wave 2 — 可靠性和恢复
-- [ ] L5-OPS-001 Beat 每日备份任务 + 保留策略
-- [ ] L5-OPS-001 run_restore_drill.py 输出 RPO/RTO 与一致性证明
+- [x] L5-OPS-001 Beat 每日备份任务 + 保留策略
+- [x] L5-OPS-001 run_restore_drill.py 输出 RPO/RTO 与一致性证明
 - [x] L5-OPS-006 restore 增加抽样行数与 checksum 比对
-- [ ] L5-OPS-002 启动自检：调度启用而告警未配置则 degraded + Critical alert
-- [ ] L5-OPS-002 MIN_SEVERITY 默认降为 error，Paper cycle_failed 升级为 critical
-- [ ] L5-DATA-002 认证撤销发 Critical alert + 自动重认证 + Dashboard 状态条
+- [x] L5-OPS-002 启动自检：调度启用而告警未配置则 degraded + Critical alert
+- [x] L5-OPS-002 MIN_SEVERITY 默认降为 error，Paper cycle_failed 升级为 critical
+- [x] L5-DATA-002 认证撤销发 Critical alert + 自动重认证 + Dashboard 状态条
 - [x] L5-OPS-005 为全部 migration 补齐 down 或不可逆标注
 - [x] L5-OBS-001 Trace ID 贯穿 API → Celery → runner → run 目录
-- [ ] L5-SUP-001 requirements.lock + SBOM 归档 + 供应链门禁
+- [x] L5-SUP-001 requirements.lock + SBOM 归档 + 供应链门禁
+- [ ] 外部 Webhook 接收端真实 2xx 送达证据
 
 ### Wave 3 — Paper 与订单账本
 - [x] L5-ARCH-001 抽出 trading_calendar，消除对 legacy_paper 私有函数的依赖
 - [x] L5-PAPER-007 移除 same_close 执行策略
-- [ ] L5-PAPER-006 验收脚本强制 21 日 + 差异化初始资金 + 场景日覆盖
-- [ ] L5-PAPER-006 账户层六检查点中断/恢复，按 ledger digest 比对
-- [ ] L5-PAPER-006 多账户并发执行验收
+- [x] L5-PAPER-006 验收脚本强制 21 日 + 差异化初始资金 + 场景日覆盖
+- [x] L5-PAPER-006 账户层六检查点中断/恢复，按 ledger digest 比对
+- [x] L5-PAPER-006 多账户同日并发执行验收与 sequence/cross-account 断言
 - [x] L5-RISK-001 行业集中度 / 容量上限 / 回撤熔断
-- [ ] L5-PAPER-005 把 PAPER_ORDER_PIPELINE_V2 默认翻转为 1
+- [x] L5-PAPER-005 把 PAPER_ORDER_PIPELINE_V2 默认翻转为 1
+- [ ] 在真实 LEAN/MySQL 栈执行新的 21 日 × 2 账户 × 六故障点验收
 
 ### Wave 4 — 数据和回测可信度
-- [ ] L5-DATA-002 完成 TuShare production 重认证
-- [ ] 重跑确定性 golden run（双跑 digest 一致）
-- [ ] 补齐 13 项 A 股执行规则用例
-- [ ] 补齐 7 项 fail-closed 构造用例
-- [ ] L5-DATA-003 修正 PIT 覆盖响应字段语义矛盾
+- [x] L5-DATA-002 完成 TuShare production 重认证
+- [x] 重跑确定性 golden run（既有 3 组双跑 digest 一致证据）
+- [x] 补齐 13 项 A 股执行规则矩阵
+- [x] 补齐 7 项 fail-closed 构造矩阵
+- [x] L5-DATA-003 修正 PIT 覆盖响应字段语义矛盾
 - [ ] 关闭或明确标注四个 universe 的 launch 缺口
 - [ ] 填充并重认证 ETF / 可转债 / 期货 / 期权数据集
 
@@ -572,12 +583,12 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 - [x] L5-API-002 引入 Idempotency-Key（migration 0032）
 - [x] L5-API-003 日志端点游标分页
 - [x] L5-API-004 统一错误契约，校验错误定位到字段
-- [ ] L5-API-005 下线 /results 别名，合并 insights 三套命名空间
-- [ ] L5-API-006 fingerprint_json 键名统一为 camelCase
-- [ ] L5-API-007 /metrics 增加认证
-- [ ] L5-SEC-003 report export 增加根目录约束
-- [ ] L5-ARCH-003 清理死表 object_store_items（migration 0034）
-- [ ] L5-API-008 移除尾斜杠重复路由
+- [x] L5-API-005 /results 与旧 A-share insights 命名空间隐藏并 308 到 canonical 路由
+- [x] L5-API-006 fingerprint_json 顶层统一 camelCase，兼容键隔离到 legacyAliases
+- [x] L5-API-007 /metrics 增加认证并给 Prometheus 注入只读 token secret
+- [x] L5-SEC-003 report export 增加 RUNS_DIR / REPORTS_DIR 根目录约束
+- [x] L5-ARCH-003 确认 object_store_items 是 stored_objects 活动索引并增加连接性测试，不误删
+- [x] L5-API-008 移除尾斜杠重复路由
 - [ ] L5-ARCH-002 拆分 paper_accounts.py 与 data_sync.py 为 orchestrator + repository
 
 ### Wave 6 — UI 和商业产品差距

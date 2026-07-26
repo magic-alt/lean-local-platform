@@ -204,6 +204,64 @@ def test_valuation_uses_as_of_price_not_latest() -> None:
     assert position["quote_data_timestamp"] == "2024-01-02"
 
 
+def test_projection_excludes_future_cycle_ledger_entries(tmp_path, monkeypatch) -> None:
+    _init()
+    from app.db import db, utc_now
+    from app.services import paper_accounts
+
+    account = _account("Ledger point in time account", "100000")
+    deployment = _deployment(account["id"], tmp_path, monkeypatch)
+    future_cycle = paper_accounts.ensure_cycle(deployment["id"], "2024-01-03")
+    with db() as connection:
+        connection.execute(
+            """
+            insert into paper_ledger_entries
+                (id,session_id,intent_id,entry_type,asset,quantity,amount,currency,
+                 idempotency_key,created_at,paper_account_id,account_generation,
+                 execution_cycle_id,ledger_sequence,precise_quantity,precise_amount)
+            values ('future-fee',?,'future-fee','COMMISSION','cash',0,-100,'CNY',
+                    'future-fee',?,?,1,?,2,0,-100)
+            """,
+            (
+                account["shadow_session_id"],
+                utc_now(),
+                account["id"],
+                future_cycle["id"],
+            ),
+        )
+        for trade_date, close in (("2024-01-02", 100), ("2024-01-03", 101)):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
+                     data_type,close,adjust,source,created_at)
+                values ('index:000300','000300','index','china','china',?,'daily',
+                        'trade',?,'raw','unit',?)
+                """,
+                (trade_date, close, utc_now()),
+            )
+
+    historical = paper_accounts.rebuild_projection(
+        account["id"],
+        "2024-01-02",
+        source="unit",
+        allow_research_source=True,
+        benchmark_start_date="2024-01-02",
+    )["account"]
+    current = paper_accounts.rebuild_projection(
+        account["id"],
+        "2024-01-03",
+        source="unit",
+        allow_research_source=True,
+        benchmark_start_date="2024-01-02",
+    )["account"]
+
+    assert historical["cash"] == "100000.00000000"
+    assert historical["source_ledger_sequence"] == 1
+    assert current["cash"] == "99900.00000000"
+    assert current["source_ledger_sequence"] == 2
+
+
 def test_excess_equals_cumulative_minus_benchmark() -> None:
     _init()
     from app.db import db, utc_now
@@ -330,6 +388,27 @@ def test_checkpoint_divergence_raises() -> None:
             (account["id"],),
         ).fetchone()
     assert status["status"] == "error"
+
+
+def test_projection_history_verification_rejects_checkpoint_digest_mismatch() -> None:
+    _init()
+    from app.db import db
+    from app.services.paper_accounts import verify_projection_history
+
+    account = _account("Invalid checkpoint digest account", "100000")
+    with db() as connection:
+        connection.execute(
+            """
+            update paper_account_checkpoints set digest='invalid'
+            where paper_account_id=? and source_ledger_sequence=1
+            """,
+            (account["id"],),
+        )
+
+    verification = verify_projection_history(account["id"])
+
+    assert verification["passed"] is False
+    assert verification["failures"] == ["checkpoint_digest_mismatch:1"]
 
 
 def test_ledger_sequence_is_unique_per_account_generation() -> None:

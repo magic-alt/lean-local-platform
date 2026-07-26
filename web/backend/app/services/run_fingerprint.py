@@ -496,6 +496,9 @@ def build_run_fingerprint(
         "dockerImageDigest": docker.get("digest"),
     }
     input_fingerprint = _json_hash(identity_payload)
+    parameters_hash = _json_hash(canonical_params)
+    config_file_hash = _file_hash(config_path)
+    dataset_version = certification.get("datasetVersion")
     return {
         "schemaVersion": 2,
         "runId": run_id,
@@ -509,22 +512,24 @@ def build_run_fingerprint(
         "git_branch": git.get("branch"),
         "git_dirty": git.get("dirty"),
         "git_status_hash": git.get("statusHash"),
-        "parametersHash": _json_hash(canonical_params),
-        "parameters_sha256": _json_hash(canonical_params),
+        "parametersHash": parameters_hash,
         "parameters": parameters,
         "canonicalParameters": canonical_params,
         "inputFingerprint": input_fingerprint,
-        "input_fingerprint": input_fingerprint,
         "inputIdentity": identity_payload,
         "strategyFileHash": strategy_sha256,
-        "strategy_file_sha256": strategy_sha256,
-        "configFileHash": _file_hash(config_path),
-        "config_file_sha256": _file_hash(config_path),
+        "configFileHash": config_file_hash,
         "data": data,
         "source": certification.get("source"),
-        "datasetVersion": certification.get("datasetVersion"),
+        "datasetVersion": dataset_version,
         "datasetCertification": certification,
-        "dataset_version": certification.get("datasetVersion"),
+        "legacyAliases": {
+            "parameters_sha256": parameters_hash,
+            "input_fingerprint": input_fingerprint,
+            "strategy_file_sha256": strategy_sha256,
+            "config_file_sha256": config_file_hash,
+            "dataset_version": dataset_version,
+        },
         "dataset_is_certified": certification.get("isCertified"),
         "dataset_qa_report_id": certification.get("qaReportId"),
         "data_batch_id": market_daily.get("last_batch_id"),

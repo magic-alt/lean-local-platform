@@ -86,6 +86,17 @@ class CanonicalStateDivergence(RuntimeError):
 
 def _data_trust() -> dict[str, Any]:
     """Return a fresh response payload so callers cannot mutate shared state."""
+    try:
+        with db() as connection:
+            row = connection.execute(
+                "select value_json from settings where key='paperAccountValuationTrust'",
+            ).fetchone()
+        if row:
+            value = json.loads(str(row["value_json"]))
+            if isinstance(value, dict) and value.get("valuationTrusted") is True:
+                return value
+    except Exception:
+        pass
     return dict(PAPER_ACCOUNT_DATA_TRUST)
 
 
@@ -1794,11 +1805,17 @@ def rebuild_projection(
         entries = rows_to_dicts(
             connection.execute(
                 """
-                select * from paper_ledger_entries
-                where paper_account_id=? and account_generation=?
-                order by ledger_sequence,id
+                select ledger.* from paper_ledger_entries ledger
+                left join paper_execution_cycles cycle
+                  on cycle.id=ledger.execution_cycle_id
+                where ledger.paper_account_id=? and ledger.account_generation=?
+                  and (
+                    ledger.execution_cycle_id is null
+                    or cycle.trading_date<=?
+                  )
+                order by ledger.ledger_sequence,ledger.id
                 """,
-                (account_id, generation),
+                (account_id, generation, valuation_date),
             ).fetchall()
         )
         prior = row_to_dict(
@@ -2080,7 +2097,12 @@ def rebuild_current_projection(account_id: str) -> dict[str, Any]:
     )
 
 
-def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, Any]:
+def _write_daily_report(
+    cycle_id: str,
+    projection: dict[str, Any],
+    *,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
     cycle = get_cycle(cycle_id)
     account_projection = dict(projection.get("account") or {})
     benchmark_symbol = str(account_projection.get("benchmark_symbol") or "").strip().upper()
@@ -2109,26 +2131,36 @@ def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, 
                 (cycle_id,),
             ).fetchone()
         )
-        if existing:
+        if existing and not replace_existing:
             return _public(existing) or {}
-        connection.execute(
-            """
-            insert into paper_account_daily_reports
-                (id,paper_account_id,deployment_id,cycle_id,trading_date,report_json,
-                 result_digest,created_at)
-            values (?,?,?,?,?,?,?,?)
-            """,
-            (
-                report_id,
-                cycle["paper_account_id"],
-                cycle["deployment_id"],
-                cycle_id,
-                cycle["trading_date"],
-                json_dump(payload),
-                digest,
-                utc_now(),
-            ),
-        )
+        if existing:
+            report_id = str(existing["id"])
+            connection.execute(
+                """
+                update paper_account_daily_reports
+                set report_json=?,result_digest=? where id=?
+                """,
+                (json_dump(payload), digest, report_id),
+            )
+        else:
+            connection.execute(
+                """
+                insert into paper_account_daily_reports
+                    (id,paper_account_id,deployment_id,cycle_id,trading_date,report_json,
+                     result_digest,created_at)
+                values (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    report_id,
+                    cycle["paper_account_id"],
+                    cycle["deployment_id"],
+                    cycle_id,
+                    cycle["trading_date"],
+                    json_dump(payload),
+                    digest,
+                    utc_now(),
+                ),
+            )
         connection.execute(
             """
             insert into paper_account_daily_snapshots
@@ -2156,6 +2188,169 @@ def _write_daily_report(cycle_id: str, projection: dict[str, Any]) -> dict[str, 
             ),
         )
     return {"id": report_id, "result_digest": digest, "report": payload}
+
+
+def verify_projection_history(account_id: str) -> dict[str, Any]:
+    account = get_account(account_id)
+    generation = int(account["current_generation"])
+    with db() as connection:
+        cycles = rows_to_dicts(
+            connection.execute(
+                """
+                select id,trading_date from paper_execution_cycles
+                where paper_account_id=? and account_generation=? and status='succeeded'
+                order by trading_date,id
+                """,
+                (account_id, generation),
+            ).fetchall()
+        )
+        snapshots = rows_to_dicts(
+            connection.execute(
+                """
+                select * from paper_account_daily_snapshots
+                where paper_account_id=? and generation=?
+                order by trading_date,id
+                """,
+                (account_id, generation),
+            ).fetchall()
+        )
+        reports = rows_to_dicts(
+            connection.execute(
+                """
+                select cycle_id,trading_date,result_digest from paper_account_daily_reports
+                where paper_account_id=? order by trading_date,id
+                """,
+                (account_id,),
+            ).fetchall()
+        )
+        checkpoints = rows_to_dicts(
+            connection.execute(
+                """
+                select id,source_ledger_sequence,digest,checkpoint_json
+                from paper_account_checkpoints
+                where paper_account_id=? and generation=?
+                order by source_ledger_sequence,id
+                """,
+                (account_id, generation),
+            ).fetchall()
+        )
+    snapshots_by_date = {str(item["trading_date"]): item for item in snapshots}
+    report_cycle_ids = {str(item["cycle_id"]) for item in reports}
+    failures: list[str] = []
+    for checkpoint in checkpoints:
+        payload = checkpoint.get("checkpoint")
+        if not isinstance(payload, dict):
+            try:
+                payload = json.loads(str(checkpoint.get("checkpoint_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+        if _digest(payload) != str(checkpoint.get("digest") or ""):
+            failures.append(
+                f"checkpoint_digest_mismatch:{checkpoint['source_ledger_sequence']}"
+            )
+    for cycle in cycles:
+        trading_date = str(cycle["trading_date"])
+        snapshot = snapshots_by_date.get(trading_date)
+        if snapshot is None:
+            failures.append(f"snapshot_missing:{trading_date}")
+            continue
+        if snapshot.get("benchmark_return") is None:
+            failures.append(f"benchmark_missing:{trading_date}")
+        if not snapshot.get("source_checkpoint_digest"):
+            failures.append(f"checkpoint_missing:{trading_date}")
+        projection = dict(snapshot.get("projection") or {})
+        quote_date = str(projection.get("quote_data_timestamp") or "")[:10]
+        if quote_date and quote_date > trading_date:
+            failures.append(f"future_quote:{trading_date}:{quote_date}")
+        cumulative = projection.get("cumulative_return")
+        benchmark = snapshot.get("benchmark_return")
+        excess = projection.get("excess_return")
+        if cumulative is not None and benchmark is not None and excess is not None:
+            difference = _decimal(cumulative) - _decimal(benchmark) - _decimal(excess)
+            if abs(difference) > Decimal("0.00000001"):
+                failures.append(f"excess_mismatch:{trading_date}")
+        if str(cycle["id"]) not in report_cycle_ids:
+            failures.append(f"report_missing:{trading_date}")
+    return {
+        "accountId": account_id,
+        "generation": generation,
+        "succeededCycles": len(cycles),
+        "snapshots": len(snapshots),
+        "reports": len(reports),
+        "checkpoints": len(checkpoints),
+        "passed": not failures,
+        "failures": failures,
+    }
+
+
+def rebuild_projection_history(account_id: str) -> dict[str, Any]:
+    account = get_account(account_id)
+    generation = int(account["current_generation"])
+    with db() as connection:
+        cycles = rows_to_dicts(
+            connection.execute(
+                """
+                select cycle.*,deployment.parameters_json
+                from paper_execution_cycles cycle
+                join paper_strategy_deployments deployment on deployment.id=cycle.deployment_id
+                where cycle.paper_account_id=? and cycle.account_generation=?
+                  and cycle.status='succeeded'
+                order by cycle.trading_date,cycle.id
+                """,
+                (account_id, generation),
+            ).fetchall()
+        )
+    rebuilt: list[dict[str, Any]] = []
+    for cycle in cycles:
+        parameters = dict(cycle.get("parameters") or {})
+        projection = rebuild_projection(
+            account_id,
+            str(cycle["trading_date"]),
+            source=parameters.get("source"),
+            allow_research_source=bool(parameters.get("allowResearchSource")),
+        )
+        report = _write_daily_report(
+            str(cycle["id"]),
+            projection,
+            replace_existing=True,
+        )
+        rebuilt.append(
+            {
+                "cycleId": str(cycle["id"]),
+                "tradingDate": str(cycle["trading_date"]),
+                "reportDigest": report["result_digest"],
+                "checkpointDigest": projection["account"]["source_checkpoint_digest"],
+            }
+        )
+    verification = verify_projection_history(account_id)
+    return {
+        "accountId": account_id,
+        "generation": generation,
+        "rebuilt": rebuilt,
+        "verification": verification,
+    }
+
+
+def mark_projection_history_trusted(evidence: dict[str, Any]) -> dict[str, Any]:
+    if not evidence.get("passed"):
+        raise ValueError("Projection history cannot be trusted without passing verification.")
+    value = {
+        "valuationTrusted": True,
+        "reason": "historical_projection_recomputed_and_verified",
+        "verifiedAt": utc_now(),
+        "evidence": evidence,
+    }
+    with db() as connection:
+        connection.execute(
+            """
+            insert into settings(key,value_json,updated_at)
+            values ('paperAccountValuationTrust',?,?)
+            on conflict(key) do update set
+                value_json=excluded.value_json,updated_at=excluded.updated_at
+            """,
+            (json_dump(value), utc_now()),
+        )
+    return value
 
 
 def _enqueue_notification(

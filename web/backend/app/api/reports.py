@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .common import dispatch_task
+from .. import db as db_module
+from ..core.config import REPORTS_DIR, RUNS_DIR
 from ..db import db, row_to_dict, rows_to_dicts, utc_now
 from ..core.errors import NotFoundError
 from ..services.db_object_store import get_object, read_bytes
@@ -25,6 +27,31 @@ REPORT_FILE_CACHE_HEADERS = {
 
 class ReportRequest(BaseModel):
     runId: str
+
+
+def _report_file_path(value: Any) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise HTTPException(status_code=404, detail="Report file not found.")
+    candidate = Path(raw).resolve()
+    roots = {
+        RUNS_DIR.resolve(),
+        REPORTS_DIR.resolve(),
+        Path(db_module.RUNS_DIR).resolve(),
+        Path(db_module.REPORTS_DIR).resolve(),
+    }
+    if not any(candidate == root or candidate.is_relative_to(root) for root in roots):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Report file path is outside the approved report roots.",
+                "code": "REPORT_PATH_FORBIDDEN",
+                "field": "report_path",
+            },
+        )
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Report file not found.")
+    return candidate
 
 
 def _stored_object(object_id: str | None) -> dict[str, Any] | None:
@@ -316,9 +343,7 @@ def report_object(report_id: str, object_id: str):
 @router.get("/{report_id}/file")
 def report_file(report_id: str):
     item = detail(report_id)
-    path = Path(item.get("report_path") or item.get("report_html_path") or "")
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Report file not found.")
+    path = _report_file_path(item.get("report_path") or item.get("report_html_path"))
     return FileResponse(path, headers=REPORT_FILE_CACHE_HEADERS)
 
 
@@ -338,9 +363,7 @@ def export_report(report_id: str, format: str = "html"):
     item = _export_report_item(report_id)
     filename_base = f"backtest-report-{_run_id_from_report_id(report_id).replace(':', '-')}"
     if export_format == "html":
-        path = Path(item.get("report_path") or item.get("report_html_path") or "")
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="HTML report file not found.")
+        path = _report_file_path(item.get("report_path") or item.get("report_html_path"))
         return FileResponse(
             path,
             media_type="text/html",

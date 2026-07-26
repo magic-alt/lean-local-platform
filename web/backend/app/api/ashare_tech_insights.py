@@ -1,6 +1,7 @@
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from .common import dispatch_task
@@ -9,8 +10,8 @@ from ..services.tasks import create_task
 from ..tasks.worker import generate_ashare_tech_report_task
 
 
-router = APIRouter(prefix="/api/ashare-tech-insights", tags=["insights", "ashare-tech"])
-legacy_router = APIRouter(prefix="/api/insights/ashare-tech", tags=["insights", "ashare-tech-legacy"])
+router = APIRouter(prefix="/api/insights/ashare-tech", tags=["insights", "ashare-tech"])
+legacy_router = APIRouter(prefix="/api/ashare-tech-insights", tags=["insights-legacy"])
 
 
 class AshareTechReportRequest(BaseModel):
@@ -125,9 +126,25 @@ def reset_watchlist():
     return service.reset_watchlist()
 
 
-# Compatibility aliases for the first implementation. The frontend exclusively uses
-# the canonical top-level prefix so it can never collide with /api/insights/{report_id}.
-legacy_router.add_api_route("/capabilities", read_capabilities, methods=["GET"])
-legacy_router.add_api_route("", list_reports, methods=["GET"])
-legacy_router.add_api_route("", create_report, methods=["POST"], status_code=202)
-legacy_router.add_api_route("/{report_id}", report_detail, methods=["GET"])
+def _legacy_redirect(request: Request, path: str = "") -> RedirectResponse:
+    suffix = f"/{path}" if path else ""
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(
+        url=f"/api/insights/ashare-tech{suffix}{query}",
+        status_code=308,
+        headers={"Deprecation": "true", "Sunset": "Sun, 26 Jan 2027 00:00:00 GMT"},
+    )
+
+
+legacy_router.add_api_route(
+    "",
+    _legacy_redirect,
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+legacy_router.add_api_route(
+    "/{path:path}",
+    _legacy_redirect,
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)

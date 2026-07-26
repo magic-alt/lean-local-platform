@@ -38,7 +38,6 @@ def cancel(task_id: str):
 
 
 @router.delete("/{task_id}")
-@router.delete("/{task_id}/")
 def delete(task_id: str):
     try:
         return delete_task(task_id)

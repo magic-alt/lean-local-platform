@@ -138,7 +138,7 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
 
     with db_module.db() as connection:
         for index, run_id in enumerate(("run-a", "run-b"), start=1):
-            report_path = tmp_path / run_id / "report.html"
+            report_path = db_module.RUNS_DIR / run_id / "report.html"
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(f"<html><body>Report {run_id}</body></html>", encoding="utf-8")
             connection.execute(
@@ -159,8 +159,8 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
                     json_dump({"start": "2020-01-01", "end": "2020-12-31"}),
                     "success",
                     "lean:test",
-                    str(tmp_path / run_id),
-                    str(tmp_path / run_id / "result.json"),
+                    str(db_module.RUNS_DIR / run_id),
+                    str(db_module.RUNS_DIR / run_id / "result.json"),
                     str(report_path),
                     json_dump(
                         {
@@ -201,7 +201,7 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
                             "sharpe_recompute_status": "computed_from_equity_curve",
                         }
                     ),
-                    str(tmp_path / run_id / "result.json"),
+                    str(db_module.RUNS_DIR / run_id / "result.json"),
                     f"2026-07-05T00:1{index}:00+00:00",
                 ),
             )

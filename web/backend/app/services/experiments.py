@@ -157,7 +157,7 @@ def record_experiment_versions(
                 run_id,
                 strategy_version_id,
                 dataset_version_id,
-                fingerprint.get("parameters_sha256"),
+                fingerprint.get("parametersHash"),
                 fingerprint.get("docker_image"),
                 fingerprint.get("docker_image_digest"),
                 fingerprint.get("git_commit"),

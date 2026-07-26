@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **270** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **262** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -40,7 +40,6 @@
 | `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/result` | Result | `run_id` (path, required) | `200` - |
-| `GET` | `/api/backtests/{run_id}/results` | Results | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/status` | Status | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/validation` | Validation | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/versions` | Versions | `run_id` (path, required) | `200` - |
@@ -180,22 +179,18 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/ashare-tech-insights/capabilities` | Read Capabilities | - | `200` - |
-| `GET` | `/api/ashare-tech-insights/reports` | List Reports | `limit` (query)<br>`offset` (query) | `200` - |
-| `POST` | `/api/ashare-tech-insights/reports` | Create Report | body `AshareTechReportRequest` | `202` - |
-| `DELETE` | `/api/ashare-tech-insights/reports/{report_id}` | Delete Report | `report_id` (path, required)<br>`force` (query) | `200` - |
-| `GET` | `/api/ashare-tech-insights/reports/{report_id}` | Report Detail | `report_id` (path, required) | `200` - |
-| `GET` | `/api/ashare-tech-insights/watchlist` | Read Watchlist | - | `200` - |
-| `POST` | `/api/ashare-tech-insights/watchlist/items` | Add Watchlist Item | body `WatchlistItemCreate` | `201` - |
-| `DELETE` | `/api/ashare-tech-insights/watchlist/items/{code}` | Delete Watchlist Item | `code` (path, required) | `200` - |
-| `PATCH` | `/api/ashare-tech-insights/watchlist/items/{code}` | Update Watchlist Item | `code` (path, required)<br>body `WatchlistItemUpdate` | `200` - |
-| `POST` | `/api/ashare-tech-insights/watchlist/reset` | Reset Watchlist | - | `200` - |
 | `GET` | `/api/insights` | List Insights | `assetClass` (query)<br>`symbol` (query)<br>`status` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/insights` | Create Insight | body `InsightRequest` | `202` - |
-| `GET` | `/api/insights/ashare-tech` | List Reports | `limit` (query)<br>`offset` (query) | `200` - |
-| `POST` | `/api/insights/ashare-tech` | Create Report | body `AshareTechReportRequest` | `202` - |
 | `GET` | `/api/insights/ashare-tech/capabilities` | Read Capabilities | - | `200` - |
-| `GET` | `/api/insights/ashare-tech/{report_id}` | Report Detail | `report_id` (path, required) | `200` - |
+| `GET` | `/api/insights/ashare-tech/reports` | List Reports | `limit` (query)<br>`offset` (query) | `200` - |
+| `POST` | `/api/insights/ashare-tech/reports` | Create Report | body `AshareTechReportRequest` | `202` - |
+| `DELETE` | `/api/insights/ashare-tech/reports/{report_id}` | Delete Report | `report_id` (path, required)<br>`force` (query) | `200` - |
+| `GET` | `/api/insights/ashare-tech/reports/{report_id}` | Report Detail | `report_id` (path, required) | `200` - |
+| `GET` | `/api/insights/ashare-tech/watchlist` | Read Watchlist | - | `200` - |
+| `POST` | `/api/insights/ashare-tech/watchlist/items` | Add Watchlist Item | body `WatchlistItemCreate` | `201` - |
+| `DELETE` | `/api/insights/ashare-tech/watchlist/items/{code}` | Delete Watchlist Item | `code` (path, required) | `200` - |
+| `PATCH` | `/api/insights/ashare-tech/watchlist/items/{code}` | Update Watchlist Item | `code` (path, required)<br>body `WatchlistItemUpdate` | `200` - |
+| `POST` | `/api/insights/ashare-tech/watchlist/reset` | Reset Watchlist | - | `200` - |
 | `GET` | `/api/insights/capabilities` | Read Capabilities | - | `200` - |
 | `DELETE` | `/api/insights/{report_id}` | Delete Insight | `report_id` (path, required) | `200` - |
 | `GET` | `/api/insights/{report_id}` | Insight Detail | `report_id` (path, required) | `200` - |
@@ -338,7 +333,6 @@
 | `DELETE` | `/api/projects/{project_id}` | Delete Project | `project_id` (path, required) | `200` - |
 | `GET` | `/api/projects/{project_id}` | Get Project | `project_id` (path, required) | `200` - |
 | `PUT` | `/api/projects/{project_id}` | Update Project | `project_id` (path, required)<br>body `ProjectUpdate` | `200` - |
-| `DELETE` | `/api/projects/{project_id}/` | Delete Project | `project_id` (path, required) | `200` - |
 | `POST` | `/api/projects/{project_id}/clone` | Clone Project | `project_id` (path, required)<br>body `ProjectClone` | `200` - |
 | `GET` | `/api/projects/{project_id}/file` | Read File | `project_id` (path, required)<br>`path` (query, required) | `200` - |
 | `PUT` | `/api/projects/{project_id}/file` | Write File | `project_id` (path, required)<br>body `FileWrite` | `200` - |
@@ -388,7 +382,6 @@
 | `DELETE` | `/api/strategies/{strategy_id}` | Delete Strategy | `strategy_id` (path, required) | `200` - |
 | `GET` | `/api/strategies/{strategy_id}` | Get Strategy | `strategy_id` (path, required) | `200` - |
 | `PUT` | `/api/strategies/{strategy_id}` | Update Strategy | `strategy_id` (path, required)<br>body `StrategyUpdate` | `200` - |
-| `DELETE` | `/api/strategies/{strategy_id}/` | Delete Strategy | `strategy_id` (path, required) | `200` - |
 | `GET` | `/api/strategies/{strategy_id}/admission` | Admission Detail | `strategy_id` (path, required)<br>`parametersSha256` (query, required)<br>`profile` (query) | `200` - |
 | `POST` | `/api/strategies/{strategy_id}/admissions` | Create Admission | `strategy_id` (path, required)<br>body `AdmissionRequest` | `200` - |
 | `POST` | `/api/strategies/{strategy_id}/baselines` | Create Baseline | `strategy_id` (path, required)<br>body `BaselineRequest` | `200` - |
@@ -401,7 +394,6 @@
 | `GET` | `/api/tasks` | Tasks | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `DELETE` | `/api/tasks/{task_id}` | Delete | `task_id` (path, required) | `200` - |
 | `GET` | `/api/tasks/{task_id}` | Task Detail | `task_id` (path, required) | `200` - |
-| `DELETE` | `/api/tasks/{task_id}/` | Delete | `task_id` (path, required) | `200` - |
 | `POST` | `/api/tasks/{task_id}/cancel` | Cancel | `task_id` (path, required) | `200` - |
 | `GET` | `/api/tasks/{task_id}/logs` | Logs | `task_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 

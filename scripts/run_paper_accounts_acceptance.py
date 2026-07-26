@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -130,8 +131,8 @@ def _git_commit() -> str:
     return result.stdout.strip() or "unknown"
 
 
-def _ledger_evidence(account_id: str) -> dict[str, Any]:
-    projection = rebuild_projection(account_id)["account"]
+def _ledger_evidence(account_id: str, as_of_date: str) -> dict[str, Any]:
+    projection = rebuild_projection(account_id, as_of_date)["account"]
     with db() as connection:
         rows = connection.execute(
             """
@@ -163,6 +164,41 @@ def _ledger_evidence(account_id: str) -> dict[str, Any]:
         "projectionEquity": projection["total_equity"],
         "sourceLedgerSequence": projection["source_ledger_sequence"],
         "sourceCheckpointDigest": projection["source_checkpoint_digest"],
+    }
+
+
+def _dispatch_cycle(
+    base_url: str,
+    account_id: str,
+    deployment_id: str,
+    trading_date: str | None,
+    timeout: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = {"tradingDate": trading_date} if trading_date else {}
+    first_status, first_dispatch = _api(
+        base_url,
+        "POST",
+        f"/api/paper/deployments/{deployment_id}/run-now",
+        payload,
+    )
+    _expect(first_status, first_dispatch, {200}, "run_now")
+    duplicate_status, duplicate = _api(
+        base_url,
+        "POST",
+        f"/api/paper/deployments/{deployment_id}/run-now",
+        payload,
+    )
+    _expect(duplicate_status, duplicate, {200}, "duplicate_run_now")
+    if duplicate["id"] != first_dispatch["id"]:
+        raise RuntimeError("duplicate_run_now_created_second_cycle")
+    completed = _wait_cycle(base_url, account_id, first_dispatch["id"], timeout)
+    return completed, {
+        "deploymentId": deployment_id,
+        "tradingDate": completed["trading_date"],
+        "firstCycleId": first_dispatch["id"],
+        "duplicateCycleId": duplicate["id"],
+        "sameCycle": duplicate["id"] == first_dispatch["id"],
+        "resultDigest": completed["result_digest"],
     }
 
 
@@ -269,47 +305,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     cycles: list[dict[str, Any]] = []
     idempotency: list[dict[str, Any]] = []
-    for account, deployment in zip(accounts, deployments, strict=True):
-        trading_dates: list[str | None] = [args.trading_date]
-        for date_index in range(contract["requiredTradingDays"]):
-            trading_date = trading_dates[date_index]
-            payload = {"tradingDate": trading_date} if trading_date else {}
-            first_status, first_dispatch = _api(
-                args.base_url,
-                "POST",
-                f"/api/paper/deployments/{deployment['id']}/run-now",
-                payload,
-            )
-            _expect(first_status, first_dispatch, {200}, "run_now")
-            duplicate_status, duplicate = _api(
-                args.base_url,
-                "POST",
-                f"/api/paper/deployments/{deployment['id']}/run-now",
-                payload,
-            )
-            _expect(duplicate_status, duplicate, {200}, "duplicate_run_now")
-            if duplicate["id"] != first_dispatch["id"]:
-                raise RuntimeError("duplicate_run_now_created_second_cycle")
-            completed = _wait_cycle(args.base_url, account["id"], first_dispatch["id"], args.timeout)
-            cycles.append(completed)
-            idempotency.append(
-                {
-                    "deploymentId": deployment["id"],
-                    "tradingDate": completed["trading_date"],
-                    "firstCycleId": first_dispatch["id"],
-                    "duplicateCycleId": duplicate["id"],
-                    "sameCycle": duplicate["id"] == first_dispatch["id"],
-                    "resultDigest": completed["result_digest"],
-                }
-            )
-            if date_index == 0:
-                next_status, next_payload = _api(
+    next_dates: list[str | None] = [args.trading_date for _ in accounts]
+    for _date_index in range(contract["requiredTradingDays"]):
+        with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
+            futures = [
+                pool.submit(
+                    _dispatch_cycle,
                     args.base_url,
-                    "GET",
-                    f"/api/paper/deployments/{deployment['id']}/next-runs?count=1",
+                    account["id"],
+                    deployment["id"],
+                    next_dates[index],
+                    args.timeout,
                 )
-                _expect(next_status, next_payload, {200}, "next_runs")
-                trading_dates.append(str(next_payload["runs"][0]["tradingDate"]))
+                for index, (account, deployment) in enumerate(
+                    zip(accounts, deployments, strict=True)
+                )
+            ]
+            completed_items = [future.result() for future in futures]
+        for index, ((completed, duplicate_evidence), deployment) in enumerate(
+            zip(completed_items, deployments, strict=True)
+        ):
+            cycles.append(completed)
+            idempotency.append(duplicate_evidence)
+            next_status, next_payload = _api(
+                args.base_url,
+                "GET",
+                f"/api/paper/deployments/{deployment['id']}/next-runs?count=1",
+            )
+            _expect(next_status, next_payload, {200}, "next_runs")
+            next_dates[index] = str(next_payload["runs"][0]["tradingDate"])
     if not any(int(item["fill_count"]) > 0 for item in cycles):
         raise RuntimeError("successful_fill_evidence_missing")
     if not any(int(item["rejected_count"]) > 0 for item in cycles):
@@ -326,9 +350,65 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if len(account_cycles) < contract["requiredTradingDays"]:
             raise RuntimeError(f"insufficient_account_trading_days:{account['id']}")
 
-    ledgers = {account["id"]: _ledger_evidence(account["id"]) for account in accounts}
+    last_dates = {
+        account["id"]: max(
+            str(item["trading_date"])
+            for item in cycles
+            if str(item["paper_account_id"]) == str(account["id"])
+        )
+        for account in accounts
+    }
+    ledgers = {
+        account["id"]: _ledger_evidence(account["id"], last_dates[account["id"]])
+        for account in accounts
+    }
+    replayed_ledgers = {
+        account["id"]: _ledger_evidence(account["id"], last_dates[account["id"]])
+        for account in accounts
+    }
+    for account in accounts:
+        account_id = account["id"]
+        if ledgers[account_id]["ledgerDigest"] != replayed_ledgers[account_id]["ledgerDigest"]:
+            raise RuntimeError(f"ledger_replay_digest_mismatch:{account_id}")
     if len({item["openingLedgerEntryId"] for item in ledgers.values()}) != len(accounts):
         raise RuntimeError("account_opening_ledger_not_isolated")
+    with db() as connection:
+        duplicate_sequences = connection.execute(
+            """
+            select count(*) as count from (
+                select paper_account_id,account_generation,ledger_sequence,count(*) as rows_count
+                from paper_ledger_entries
+                where paper_account_id in ({})
+                group by paper_account_id,account_generation,ledger_sequence
+                having count(*)>1
+            ) duplicate_rows
+            """.format(",".join("?" for _ in accounts)),
+            tuple(account["id"] for account in accounts),
+        ).fetchone()
+        waiting_data_events = connection.execute(
+            """
+            select count(*) as count from paper_execution_cycle_events event
+            join paper_execution_cycles cycle on cycle.id=event.cycle_id
+            where cycle.paper_account_id in ({}) and event.to_status='waiting_data'
+            """.format(",".join("?" for _ in accounts)),
+            tuple(account["id"] for account in accounts),
+        ).fetchone()
+        checkpoint_phases = connection.execute(
+            """
+            select distinct checkpoint.phase from paper_run_checkpoints checkpoint
+            join paper_walkforward_runs run on run.id=checkpoint.paper_run_id
+            join paper_execution_cycles cycle on cycle.paper_run_id=run.id
+            where cycle.paper_account_id in ({})
+            """.format(",".join("?" for _ in accounts)),
+            tuple(account["id"] for account in accounts),
+        ).fetchall()
+    if int(duplicate_sequences["count"] or 0):
+        raise RuntimeError("duplicate_account_ledger_sequence")
+    if args.require_waiting_data and int(waiting_data_events["count"] or 0) <= 0:
+        raise RuntimeError("waiting_data_day_evidence_missing")
+    observed_phases = sorted(str(item["phase"]) for item in checkpoint_phases)
+    if args.with_fault and len(observed_phases) < 6:
+        raise RuntimeError("six_checkpoint_fault_evidence_missing")
     api_evidence: dict[str, Any] = {}
     for account in accounts:
         api_evidence[account["id"]] = {}
@@ -376,6 +456,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "risk_rejection",
                 "idempotent_duplicate_dispatch",
                 "account_isolation",
+                "concurrent_multi_account_dispatch",
+                "ledger_digest_replay",
+                "waiting_data_recovery",
+                "six_checkpoint_recovery",
             ],
         },
         "accountIds": [account["id"] for account in accounts],
@@ -384,6 +468,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "inputDigests": [item["input_fingerprint"] for item in cycles],
         "resultDigests": [item["result_digest"] for item in cycles],
         "ledgerReconciliation": ledgers,
+        "ledgerReplayReconciliation": replayed_ledgers,
+        "concurrency": {
+            "enabled": True,
+            "accountCount": len(accounts),
+            "duplicateLedgerSequences": int(duplicate_sequences["count"] or 0),
+        },
+        "recoveryEvidence": {
+            "waitingDataEvents": int(waiting_data_events["count"] or 0),
+            "checkpointPhases": observed_phases,
+            "withFault": bool(args.with_fault),
+        },
         "idempotency": idempotency,
         "failureRejectEvidence": {
             "rejectedCounts": [item["rejected_count"] for item in cycles],
@@ -406,6 +501,12 @@ def main() -> int:
     parser.add_argument("--accounts", type=int, default=MIN_ACCOUNTS)
     parser.add_argument("--initial-cash", default="1000000,3000000")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--with-fault", action="store_true")
+    parser.add_argument(
+        "--require-waiting-data",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument(
         "--evidence",
         type=Path,

@@ -110,3 +110,35 @@ def test_tushare_snapshot_builder_creates_non_overlapping_intervals(monkeypatch)
         {"date": "2024-01-01", "count": 2},
         {"date": "2024-02-01", "count": 2},
     ]
+
+
+def test_complete_certification_is_not_claimed_outside_covered_dates(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services.pit_data import import_index_members
+    from app.services.universe_coverage import coverage_gap, record_universe_coverage
+
+    import_index_members(
+        [
+            {
+                "universe_code": "CSI500",
+                "symbol": "600000",
+                "start_date": "2007-01-15",
+                "announce_date": "2007-01-15",
+            }
+        ],
+        source="tushare:index_weight",
+    )
+    stored = record_universe_coverage(
+        "CSI500",
+        coverage_start="2007-01-15",
+        coverage_end="2026-07-26",
+        status="complete",
+        source="tushare:index_weight",
+    )
+    gap = coverage_gap("CSI500", "2006-12-31")
+
+    assert stored["coverage_status"] == "complete"
+    assert gap["isOfficialHistoryComplete"] is False
+    assert gap["coverageCertification"] == "partial"
+    assert gap["storedCoverageCertification"] == "complete"

@@ -703,32 +703,32 @@ export const api = {
         body: JSON.stringify(payload)
       }
     ),
-  ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/ashare-tech-insights/capabilities"),
-  ashareTechReports: () => request<AshareTechReportList>("/api/ashare-tech-insights/reports"),
-  ashareTechReport: (id: string) => request<AshareTechReport>(`/api/ashare-tech-insights/reports/${encodeURIComponent(id)}`),
+  ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/insights/ashare-tech/capabilities"),
+  ashareTechReports: () => request<AshareTechReportList>("/api/insights/ashare-tech/reports"),
+  ashareTechReport: (id: string) => request<AshareTechReport>(`/api/insights/ashare-tech/reports/${encodeURIComponent(id)}`),
   deleteAshareTechReport: (id: string, force = false) =>
     request<{ deleted: boolean; id: string; deletedTasks: number; cancelledTasks: number; recoveredOrphan: boolean }>(
-      `/api/ashare-tech-insights/reports/${encodeURIComponent(id)}${force ? "?force=true" : ""}`,
+      `/api/insights/ashare-tech/reports/${encodeURIComponent(id)}${force ? "?force=true" : ""}`,
       { method: "DELETE" }
     ),
   createAshareTechReport: (payload: { requestedDate?: string; force?: boolean }) =>
-    request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/ashare-tech-insights/reports", {
+    request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/insights/ashare-tech/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  ashareTechWatchlist: () => request<AshareTechWatchlist>("/api/ashare-tech-insights/watchlist"),
+  ashareTechWatchlist: () => request<AshareTechWatchlist>("/api/insights/ashare-tech/watchlist"),
   addAshareTechWatchlistItem: (payload: { code: string; groupKey: AshareTechWatchlistItem["groupKey"]; ruleTags: AshareTechRuleTag[] }) =>
-    request<AshareTechWatchlistItem>("/api/ashare-tech-insights/watchlist/items", {
+    request<AshareTechWatchlistItem>("/api/insights/ashare-tech/watchlist/items", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),
   updateAshareTechWatchlistItem: (code: string, payload: { enabled?: boolean; groupKey?: AshareTechWatchlistItem["groupKey"]; ruleTags?: AshareTechRuleTag[] }) =>
-    request<AshareTechWatchlistItem>(`/api/ashare-tech-insights/watchlist/items/${encodeURIComponent(code)}`, {
+    request<AshareTechWatchlistItem>(`/api/insights/ashare-tech/watchlist/items/${encodeURIComponent(code)}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     }),
   deleteAshareTechWatchlistItem: (code: string) =>
-    request<{ deleted: boolean; code: string; watchlist: AshareTechWatchlist }>(`/api/ashare-tech-insights/watchlist/items/${encodeURIComponent(code)}`, { method: "DELETE" }),
-  resetAshareTechWatchlist: () => request<AshareTechWatchlist>("/api/ashare-tech-insights/watchlist/reset", { method: "POST" }),
+    request<{ deleted: boolean; code: string; watchlist: AshareTechWatchlist }>(`/api/insights/ashare-tech/watchlist/items/${encodeURIComponent(code)}`, { method: "DELETE" }),
+  resetAshareTechWatchlist: () => request<AshareTechWatchlist>("/api/insights/ashare-tech/watchlist/reset", { method: "POST" }),
   updatePaperSessionStatus: (id: string, status: string) =>
     request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
       method: "POST",

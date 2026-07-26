@@ -172,7 +172,6 @@ def update_strategy(strategy_id: str, request: StrategyUpdate):
 
 
 @router.delete("/{strategy_id}")
-@router.delete("/{strategy_id}/")
 def delete_strategy(strategy_id: str):
     try:
         return {"deleted": True, "details": project_service.delete_project(strategy_id)}

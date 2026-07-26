@@ -229,12 +229,18 @@ def coverage_gap(universe_code: str, as_of_date: str) -> dict[str, Any] | None:
         # cannot be promoted as complete PIT evidence.
         return None
     missing_before = start or item["launchDate"]
+    effective_certification = (
+        "partial"
+        if status == "complete"
+        else status
+    )
     return {
         "coverageStatus": "coverage_gap",
         "coverageStart": start,
         "coverageEnd": end,
         "missingHistoryBefore": missing_before,
         "isOfficialHistoryComplete": False,
-        "coverageCertification": status,
+        "coverageCertification": effective_certification,
+        "storedCoverageCertification": status,
         "reason": f"{code} PIT coverage does not include {as_of_date}; certification status is {status}.",
     }

@@ -354,7 +354,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert job["parameters"]["blacklist"] == ["000001", "600000"]
     assert job["parameters"]["constraintVersion"] == 3
     assert job["parameters"]["nextOpenGapBufferBps"] == 2000.0
-    assert job["fingerprint"]["parameters_sha256"]
+    assert job["fingerprint"]["parametersHash"]
     assert "git_commit" in job["fingerprint"]
     assert job["fingerprint"]["benchmark_rows"] == 3
     assert job["fingerprint"]["lean_zip_sha256"]
@@ -381,7 +381,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
         "benchmark_end_date_coverage",
         "ashare_multisource_quality",
     }
-    assert job["experiment"]["parameters"]["sha256"] == job["fingerprint"]["parameters_sha256"]
+    assert job["experiment"]["parameters"]["sha256"] == job["fingerprint"]["parametersHash"]
     assert job["experiment"]["data"]["marketDailyBars"]["row_count"] == 3
     assert job["experiment"]["data"]["benchmark"]["symbol"] == "000300"
     assert job["experiment"]["environment"]["dockerImage"] == job["parameters"]["dockerImage"]
@@ -392,7 +392,7 @@ def test_backtest_creation_injects_ashare_rules_after_preflight(tmp_path, monkey
     assert versions["experiment"]["run_id"] == job["id"]
     assert versions["experiment"]["strategy_version_id"].startswith("strategy:")
     assert versions["experiment"]["dataset_version_id"].startswith("dataset:")
-    assert versions["strategyVersion"]["source_sha256"] == job["fingerprint"]["strategy_file_sha256"]
+    assert versions["strategyVersion"]["source_sha256"] == job["fingerprint"]["strategyFileHash"]
     assert versions["datasetVersion"]["symbol"] == "600519"
     assert versions["datasetVersion"]["row_count"] == 3
     assert versions["datasetVersion"]["benchmark_symbol"] == "000300"
@@ -578,12 +578,13 @@ def test_backtest_creation_does_not_silently_fall_back_to_other_source(tmp_path,
         )
 
 
-def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exist(tmp_path, monkeypatch):
+def test_backtest_preflight_fails_closed_when_trade_calendar_missing_but_bars_exist(tmp_path, monkeypatch):
     import_sample_ashare(tmp_path, monkeypatch)
 
     import app.db as db_module
     import app.services.backtest_service as backtest_service
     import app.services.tasks as task_service
+    from app.lean_engine.errors import LeanPlatformError
 
     with db_module.db() as connection:
         connection.execute("delete from trade_calendar where market = 'china'")
@@ -591,19 +592,18 @@ def test_backtest_preflight_falls_back_when_trade_calendar_missing_but_bars_exis
     monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
 
-    job = backtest_service.create_backtest_job(
-        {
-            "symbol": "600519",
-            "assetClass": "equity",
-            "market": "china",
-            "start": "2024-01-02",
-            "end": "2024-01-04",
-            "cash": 100000,
-            "projectId": TEST_PROJECT_ID,
-        }
-    )
-
-    assert job["status"] == "created"
+    with pytest.raises(LeanPlatformError, match="trade_calendar_missing"):
+        backtest_service.create_backtest_job(
+            {
+                "symbol": "600519",
+                "assetClass": "equity",
+                "market": "china",
+                "start": "2024-01-02",
+                "end": "2024-01-04",
+                "cash": 100000,
+                "projectId": TEST_PROJECT_ID,
+            }
+        )
 
 
 def test_backtest_creation_allows_missing_local_ashare_cache_for_worker_restore(tmp_path, monkeypatch):
@@ -760,10 +760,10 @@ def test_run_fingerprint_includes_git_parameters_data_and_cache(tmp_path, monkey
     )
 
     assert fingerprint["parametersHash"]
-    assert fingerprint["parameters_sha256"] == fingerprint["parametersHash"]
+    assert fingerprint["legacyAliases"]["parameters_sha256"] == fingerprint["parametersHash"]
     assert "git_commit" in fingerprint
     assert "git_dirty" in fingerprint
-    assert fingerprint["strategy_file_sha256"] is None
+    assert fingerprint["strategyFileHash"] is None
     assert fingerprint["data"]["marketDailyBars"]["row_count"] == 3
     assert fingerprint["market_daily_bars_count"] == 3
     assert fingerprint["trade_status_count"] == 3
@@ -1229,8 +1229,10 @@ def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tm
                     "2024-01-02": {"is_suspended": False, "is_limit_up": True, "can_buy": False, "can_sell": True},
                     "2024-01-03": {"is_suspended": False, "is_limit_up": False, "can_buy": True, "can_sell": True},
                     "2024-01-04": {"is_suspended": False, "can_buy": True, "can_sell": True},
-                    "2024-01-05": {"is_suspended": False, "is_limit_down": True, "can_buy": True, "can_sell": False},
-                    "2024-01-06": {"is_suspended": True, "can_buy": False, "can_sell": False},
+                        "2024-01-05": {"is_suspended": False, "is_limit_down": True, "can_buy": True, "can_sell": False},
+                        "2024-01-06": {"is_suspended": True, "can_buy": False, "can_sell": False},
+                        "2024-01-07": {"is_suspended": False, "can_buy": True, "can_sell": True},
+                        "2024-01-08": {"is_suspended": False, "is_st": True, "can_buy": True, "can_sell": True},
                 }
             }
         ),
@@ -1303,7 +1305,14 @@ def test_ashare_execution_helper_blocks_limits_suspend_tplus1_and_rounds_lots(tm
     algo.portfolio["600001"].quantity = 150
     helper.exit("600001")
     assert algo.orders[-1] == ("600001", -100)
-    assert algo.portfolio["600001"].quantity == 50
+    algo.time = datetime(2024, 1, 8)
+    algo.portfolio["600001"].quantity = 0
+    assert helper.target_percent("600001", 1) is None
+    assert "st_blocked" in algo.messages[-1]
+    algo.time = datetime(2024, 1, 9)
+    assert helper.target_percent("600001", 1) is None
+    assert "trade_status_missing" in algo.messages[-1]
+    assert algo.portfolio["600001"].quantity == 0
 
 
 def test_ashare_end_date_coverage_blocks_or_marks_truncated_runs(tmp_path, monkeypatch):

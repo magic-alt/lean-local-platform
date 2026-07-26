@@ -146,7 +146,12 @@ async def idempotency_middleware(request: Request, call_next):
 @app.middleware("http")
 async def api_auth_middleware(request: Request, call_next):
     path = request.url.path
-    is_protected = path.startswith("/api/") or path in {"/openapi.json", "/docs", "/redoc"}
+    is_protected = path.startswith("/api/") or path in {
+        "/metrics",
+        "/openapi.json",
+        "/docs",
+        "/redoc",
+    }
     if not is_protected:
         response = await call_next(request)
         if (
@@ -171,7 +176,6 @@ async def api_auth_middleware(request: Request, call_next):
         not API_AUTH_REQUIRED
         or request.method == "OPTIONS"
         or path.startswith("/api/health")
-        or path == "/metrics"
     ):
         return await call_next(request)
     if not API_TOKEN:

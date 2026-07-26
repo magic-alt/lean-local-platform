@@ -244,6 +244,12 @@ def test_reference_data_coverage_api_exposes_level3_data_gaps(tmp_path, monkeypa
     with db_module.db() as connection:
         connection.execute(
             """
+            insert into trade_calendar(market,trade_date,is_open,source,batch_id)
+            values ('china','2024-01-02',1,'unit','reference-coverage')
+            """
+        )
+        connection.execute(
+            """
             insert into data_quality_reports
                 (id, report_type, asset_class, market, symbol, start_date, end_date,
                  sources_json, severity, result_json, created_at)

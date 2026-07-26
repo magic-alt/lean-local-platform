@@ -129,10 +129,18 @@ Celery Beat (60-second coordinator)
 
 `paper_accounts` never stores mutable current cash or holdings as facts.
 `paper_account_projections` and position/daily projections are caches rebuilt
-from account-tagged ledger entries, fills and certified prices. Each account has
+from account-tagged ledger entries, fills and certified point-in-time prices.
+Historical replay filters ledger entries by their execution-cycle trading date
+as well as quote date. Recertification verifies every stored checkpoint digest
+before writing and refuses legacy divergence instead of rewriting immutable
+evidence. Each account has
 an independent shadow v2 session solely to reuse the existing LEAN and order
 pipeline; it is not a second ledger. A deployment freezes source Backtest,
 project snapshot, strategy, dataset, universe, parameters and risk version.
+
+The market-data read boundary is repository-backed. Full transaction repository
+extraction remains open for the large `paper_accounts` and `data_sync`
+orchestrators; this is tracked as `L5-ARCH-002` and is not represented as closed.
 Changing execution inputs creates a new deployment version.
 
 The v1 production acceptance scope is China A-share daily data in

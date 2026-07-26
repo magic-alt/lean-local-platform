@@ -91,6 +91,7 @@ class AShareExecutionHelper:
         self.lot_size = _int_parameter(algorithm, "lotSize", 100)
         self.min_cash_buffer = _float_parameter(algorithm, "cashBuffer", 0.0)
         self.execution_policy = str(_parameter(algorithm, "executionPolicy", "next_open")).lower()
+        self.allow_st_buy = str(_parameter(algorithm, "allowStBuy", "false")).lower() in {"1", "true", "yes", "on"}
         self.next_open_gap_buffer_bps = _float_parameter(algorithm, "nextOpenGapBufferBps", 2000.0)
         self.buy_dates = {}
         self.registered_symbols = set()
@@ -113,14 +114,20 @@ class AShareExecutionHelper:
 
     def can_buy(self, symbol):
         item = self._status(symbol)
+        if not item:
+            return False, "trade_status_missing"
         if item.get("is_suspended"):
             return False, "suspended"
+        if item.get("is_st") and not self.allow_st_buy:
+            return False, "st_blocked"
         if not item.get("can_buy", True) or item.get("is_limit_up"):
             return False, "limit_up_or_blocked"
         return True, "ok"
 
     def can_sell(self, symbol):
         item = self._status(symbol)
+        if not item:
+            return False, "trade_status_missing"
         if item.get("is_suspended"):
             return False, "suspended"
         if not item.get("can_sell", True) or item.get("is_limit_down"):

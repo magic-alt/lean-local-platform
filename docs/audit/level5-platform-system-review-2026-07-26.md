@@ -16,6 +16,19 @@
 > **P1 整改更新（2026-07-26）**：P1 简表中的 11 项已完成代码和回归整改；
 > `L5-ARCH-002` 的 Paper 全域 repository 下沉为 XL 级重构，保留
 > **In Progress**，不得由已有的行情 repository 边界推断为完成。
+>
+> **Wave 1–5 收口更新（2026-07-26）**：新增历史投影 verify/apply 工具并把
+> ledger 也按 execution-cycle date 做 PIT 过滤；Paper 验收脚本强制 21 日、
+> 差异化资金、同日多账户并发、六阶段故障恢复与 ledger digest 重放；A 股
+> 13 条规则及 7 类 fail-closed 构造矩阵已覆盖；PIT 响应语义、canonical API
+> 路由、fingerprint 顶层键、`/metrics` 鉴权、report 根目录和重复路由已修正。
+> `object_store_items` 经代码追踪确认是 `stored_objects` 的活动索引，并非死表。
+> 真实历史复审仍发现 3 个 legacy opening checkpoint digest mismatch 与 3 个
+> future quote；apply 按设计抛 `CanonicalStateDivergence`，没有改写 immutable
+> checkpoint，故 `dataTrust=false`。外部 Webhook、全栈 21 日故障验收、四类
+> 跨资产数据填充以及 `L5-ARCH-002` 仍是开放发布条件。
+> 本轮代码验证为后端 `505 passed, 2 skipped`、前端 build、OpenAPI/help
+> 文档检查、Compose 配置、供应链门禁与 repository hygiene 全部通过。
 
 ---
 
@@ -1172,7 +1185,7 @@ for ledger_row in ledger_rows:
 | ID | 标题 | 位置 | 证据 | 建议 | 工作量 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | L5-ARCH-001 | `paper_accounts` 运行时依赖 legacy `paper` 私有函数 | `paper_accounts.py`（8 处 `legacy_paper._next_trade_date`） | grep | 抽出共享 `trading_calendar` 服务 | M | **Fixed**（共享 `trading_calendar.next_trade_date`；legacy 私有调用为 0） |
-| L5-ARCH-002 | repository 层名存实亡，服务层内联 ~60 处 SQL | `paper_accounts.py` 当前仍有 124 处 `connection.execute` | grep | 按 §5.4 分层 | XL | **In Progress**（行情已走强制 source/as-of repository；Paper 事务 SQL 尚未下沉） |
+| L5-ARCH-002 | repository 层名存实亡，服务层内联 ~60 处 SQL | `paper_accounts.py` 当前仍有 132 处、`data_sync.py` 119 处 `connection.execute` | grep | 按 §5.4 分层 | XL | **In Progress**（行情已走强制 source/as-of repository；Paper/data-sync 事务 SQL 尚未下沉） |
 | L5-API-001 | 9/12 列表端点返回裸数组，无分页 | 9 个主列表 | 统一 `{items,count,limit,offset}` + 兼容期 | M | **Fixed**（默认统一 envelope；`paged=false` 保留有界数组兼容） |
 | L5-API-002 | 全 API 无 `Idempotency-Key` | `0032_api_idempotency_keys.sql` | 对写端点引入幂等键表 | M | **Fixed**（写请求持久化、并发冲突、payload drift 与完成响应 replay） |
 | L5-API-003 | 日志只能取尾部，无游标 | Backtest / Task logs | 增加 `offset`/`cursor`/`limit` | S | **Fixed**（字节游标、总长、next cursor 与 hasMore） |
@@ -1194,20 +1207,20 @@ P1 整改验证入口：
 
 ### P2 问题（简表）
 
-| ID | 标题 | 证据 |
-| --- | --- | --- |
-| L5-UI-001 | 侧栏导航无 `selectedKeys`，当前页永不高亮 | `App.tsx:79`；grep `selectedKeys` = 0 |
-| L5-UI-002 | 13 个平级导航项无分组；Backtests/Optimization/Research/Insights 概念重叠 | `App.tsx:62-76` |
-| L5-UI-003 | 全部页面合计 6 处 `aria-label`；5 个页面为 0 | grep 统计 |
-| L5-UI-004 | 上次 E2E 仅执行 1 个用例；无 1280×800 / 768×1024 视口 | `results.json`、`playwright.config.ts` |
-| L5-UI-006 | Paper 账户详情缺独立「风控」与「策略部署」tab | `paper-accounts.tsx:820-1003` |
-| L5-API-005 | `/backtests/{id}/result` 与 `/results` 完全等价 | `backtests.py:196-197` |
-| L5-API-006 | `fingerprint_json` 含 5 对 camelCase/snake_case 同义键 | `json_keys()` 输出 |
-| L5-API-007 | `/metrics` 无鉴权（仅回环缓解） | 实测 200 |
-| L5-API-009 | `/api/insights`、`/api/insights/ashare-tech`、`/api/ashare-tech-insights/*` 三套并存 | OpenAPI |
-| L5-SEC-003 | `reports.py:341` 直接使用 DB 中的 `report_path`，无根目录约束 | 代码 |
-| L5-DATA-003 | PIT 覆盖响应同时返回 `isOfficialHistoryComplete:false` 与 `coverageCertification:"complete"` | 实测 |
-| L5-ARCH-003 | `object_store_items` 表 0 行（死表），实际使用 `stored_objects` | DB |
+| ID | 标题 | 证据 | 当前状态 |
+| --- | --- | --- | --- |
+| L5-UI-001 | 侧栏导航无 `selectedKeys`，当前页永不高亮 | `App.tsx:79`；grep `selectedKeys` = 0 | **Open / Wave 6** |
+| L5-UI-002 | 13 个平级导航项无分组；Backtests/Optimization/Research/Insights 概念重叠 | `App.tsx:62-76` | **Open / Wave 6** |
+| L5-UI-003 | 全部页面合计 6 处 `aria-label`；5 个页面为 0 | grep 统计 | **Open / Wave 6** |
+| L5-UI-004 | 上次 E2E 仅执行 1 个用例；无 1280×800 / 768×1024 视口 | `results.json`、`playwright.config.ts` | **Open / Wave 6** |
+| L5-UI-006 | Paper 账户详情缺独立「风控」与「策略部署」tab | `paper-accounts.tsx:820-1003` | **Open / Wave 6** |
+| L5-API-005 | `/backtests/{id}/result` 与 `/results` 完全等价 | OpenAPI canonical/redirect 回归 | **Fixed**（旧路由隐藏并 308） |
+| L5-API-006 | `fingerprint_json` 含 5 对 camelCase/snake_case 同义键 | fingerprint contract 回归 | **Fixed**（顶层 camelCase；别名嵌套隔离） |
+| L5-API-007 | `/metrics` 无鉴权（仅回环缓解） | auth 回归 + Prometheus secret 配置 | **Fixed** |
+| L5-API-009 | `/api/insights`、`/api/insights/ashare-tech`、`/api/ashare-tech-insights/*` 三套并存 | OpenAPI canonical/redirect 回归 | **Fixed**（canonical `/api/insights/ashare-tech`） |
+| L5-SEC-003 | report file 直接使用 DB 中的 `report_path`，无根目录约束 | outside-root 拒绝回归 | **Fixed** |
+| L5-DATA-003 | PIT 覆盖响应同时返回 false history 与 complete certification | unit regression | **Fixed**（请求区间越界降为 partial，并保留 stored certification） |
+| L5-ARCH-003 | `object_store_items` 表 0 行，被误判为死表 | `object_store.py` + schema connectivity regression | **Closed by evidence**（活动索引，保留） |
 
 ### P3 问题（简表）
 

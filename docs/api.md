@@ -37,7 +37,6 @@ POST   /api/backtests/preflight
 GET    /api/backtests/{run_id}
 GET    /api/backtests/{run_id}/status
 GET    /api/backtests/{run_id}/result
-GET    /api/backtests/{run_id}/results
 GET    /api/backtests/{run_id}/validation
 GET    /api/backtests/{run_id}/versions
 POST   /api/backtests/{run_id}/cancel
@@ -45,6 +44,11 @@ GET    /api/backtests/{run_id}/logs
 GET    /api/backtests/{run_id}/chart-data
 GET    /api/backtests/{run_id}/artifacts/{name}
 ```
+
+`GET /api/backtests/{run_id}/results` is a deprecated, OpenAPI-hidden 308
+redirect to the canonical singular `/result` route. New fingerprints expose
+camelCase canonical keys; the five former snake_case synonyms are isolated
+under `legacyAliases` during the compatibility period.
 
 `POST /api/backtests` accepts:
 
@@ -190,7 +194,10 @@ GET    /api/reports/{report_id}/export?format=html|markdown|pdf|csv|json
 Backtest reports are synthesized from `backtest_runs`, `backtest_results`, and `stored_objects`. They include `fingerprint`, `validation`, `experiment`, and all archived backtest artifacts when available.
 
 Report file responses use `Cache-Control: no-store`. HTML, Markdown, PDF, CSV
-and JSON exports are generated from the same canonical report payload.
+and JSON exports are generated from the same canonical report payload. A
+persisted `report_path` is served only when its resolved file is beneath
+`RUNS_DIR` or `REPORTS_DIR`; paths outside those roots fail with
+`REPORT_PATH_FORBIDDEN`.
 
 ## Data
 
@@ -325,8 +332,9 @@ Creating a LEAN Paper session requires `projectId` and `sourceBacktestId`. The s
 intents, applies constraints before fill/ledger projection, appends legal state
 transitions, persists opening balance, principal, commission and position
 ledger entries, and rebuilds mutable cash/position read models from that ledger.
-It persists six recovery checkpoints. The mode is disabled by
-default pending a new production-like Level 5 acceptance.
+It persists six recovery checkpoints. Pipeline v2 is the default; explicitly
+setting `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=0` is a degraded compatibility
+mode surfaced by dependency health.
 
 ## Insights and A-share Technology Daily Report
 
@@ -338,17 +346,20 @@ GET  /api/insights/{report_id}
 DELETE /api/insights/{report_id}
 POST /api/insights/{report_id}/paper-signals
 
-GET    /api/ashare-tech-insights/capabilities
-GET    /api/ashare-tech-insights/reports
-POST   /api/ashare-tech-insights/reports
-GET    /api/ashare-tech-insights/reports/{report_id}
-DELETE /api/ashare-tech-insights/reports/{report_id}
-GET    /api/ashare-tech-insights/watchlist
-POST   /api/ashare-tech-insights/watchlist/items
-PATCH  /api/ashare-tech-insights/watchlist/items/{code}
-DELETE /api/ashare-tech-insights/watchlist/items/{code}
-POST   /api/ashare-tech-insights/watchlist/reset
+GET    /api/insights/ashare-tech/capabilities
+GET    /api/insights/ashare-tech/reports
+POST   /api/insights/ashare-tech/reports
+GET    /api/insights/ashare-tech/reports/{report_id}
+DELETE /api/insights/ashare-tech/reports/{report_id}
+GET    /api/insights/ashare-tech/watchlist
+POST   /api/insights/ashare-tech/watchlist/items
+PATCH  /api/insights/ashare-tech/watchlist/items/{code}
+DELETE /api/insights/ashare-tech/watchlist/items/{code}
+POST   /api/insights/ashare-tech/watchlist/reset
 ```
+
+The former `/api/ashare-tech-insights/*` namespace remains as an
+OpenAPI-hidden 308 redirect during the compatibility period.
 
 The specialized A-share report starts with a 26-stock default pool and persists
 an editable add/delete/enable configuration. New symbols must pass TuShare
@@ -370,6 +381,9 @@ GET /api/health/dependencies
 GET /api/health/database
 GET /metrics
 ```
+
+`/metrics` requires the API Bearer token. Prometheus supplies it through its
+Docker secret credentials file.
 
 ## Help Articles
 

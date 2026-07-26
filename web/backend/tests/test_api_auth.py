@@ -47,3 +47,17 @@ def test_built_frontend_receives_http_only_same_site_session(monkeypatch):
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
     assert client.get("/openapi.json").status_code == 200
+
+
+def test_metrics_requires_bearer_authentication(monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "API_AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "API_TOKEN", "unit-secret")
+    client = TestClient(main.app)
+
+    assert client.get("/metrics").status_code == 401
+    assert client.get(
+        "/metrics",
+        headers={"Authorization": "Bearer unit-secret"},
+    ).status_code == 200

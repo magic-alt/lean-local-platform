@@ -13,7 +13,9 @@ exposed to frontend JavaScript or local storage. When the production frontend
 is served directly by FastAPI, the HTML response establishes a derived,
 HttpOnly, SameSite=Strict browser session cookie. Direct API clients must send
 `Authorization: Bearer <token>` (or `X-LEAN-API-Key`). `/api/health` and
-`/metrics` remain unauthenticated for local health checks and Prometheus.
+`/metrics` requires the same Bearer authentication as the API. Prometheus reads
+the token from the read-only `/run/secrets/lean_api_token` credentials file;
+health probes remain available on their dedicated health endpoints.
 
 `LEAN_API_AUTH_REQUIRED=1` is the production default. If authentication is
 enabled but `LEAN_API_TOKEN` is empty, business APIs fail closed with HTTP 503.
@@ -363,7 +365,9 @@ GET /api/health/database
 GET /metrics
 ```
 
-Use dependency health before running long backtests.
+Use dependency health before running long backtests. Direct metric scrapes must
+send the API Bearer token; the Compose Prometheus service is already configured
+with `/run/secrets/lean_api_token`.
 
 ## Production Hardening Checklist
 

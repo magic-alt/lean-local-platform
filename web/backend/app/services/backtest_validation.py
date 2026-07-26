@@ -42,6 +42,12 @@ def _gate(name: str, passed: bool, *, severity: str | None = None, details: dict
 
 
 def _ashare_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
+    allow_st_buy = str(parameters.get("allowStBuy") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     return {
         "schemaVersion": P1_RULE_VERSION,
         "enabled": True,
@@ -49,8 +55,13 @@ def _ashare_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
         "assetClass": "equity",
         "tPlusOne": True,
         "suspendedBlocked": True,
+        "missingTradeStatusBlocked": True,
+        "stBuyBlocked": not allow_st_buy,
         "limitUpBuyBlocked": True,
         "limitDownSellBlocked": True,
+        "delistedBlocked": True,
+        "corporateActionsRequired": True,
+        "adjustmentMode": parameters.get("adjust") or "raw",
         "benchmarkRequired": True,
         "feeModel": {
             "commissionRate": parameters.get("commissionRate"),
@@ -240,6 +251,12 @@ def build_backtest_validation(
     end_coverage = end_coverage_status("china", end, coverage.get("market_last_date") or coverage.get("last_date"))
     benchmark_end_coverage = end_coverage_status("china", end, benchmark.get("lastDate"))
     batch_passed = batch.get("status") == "success" and bool(qa_report.get("passed"))
+    configured_timezone = str(
+        parameters.get("marketTimezone")
+        or parameters.get("timezone")
+        or "Asia/Shanghai"
+    )
+    timezone_passed = configured_timezone == "Asia/Shanghai"
     gates = [
         source_gate,
         _gate("ashare_data_coverage", coverage_passed, details=coverage),
@@ -264,6 +281,14 @@ def build_backtest_validation(
                 **(coverage_summary.get("reference") or {}),
                 "enforced": not allow_research_source,
                 "researchOnly": allow_research_source,
+            },
+        ),
+        _gate(
+            "ashare_timezone_consistency",
+            timezone_passed,
+            details={
+                "expected": "Asia/Shanghai",
+                "configured": configured_timezone,
             },
         ),
         *[
@@ -324,14 +349,14 @@ def build_experiment_record(
         "strategy": {
             "projectId": project_id,
             "path": strategy_path,
-            "sha256": fingerprint.get("strategy_file_sha256"),
+            "sha256": fingerprint.get("strategyFileHash"),
             "gitCommit": fingerprint.get("git_commit"),
             "gitBranch": fingerprint.get("git_branch"),
             "gitDirty": fingerprint.get("git_dirty"),
             "gitStatusHash": fingerprint.get("git_status_hash"),
         },
         "parameters": {
-            "sha256": fingerprint.get("parameters_sha256"),
+            "sha256": fingerprint.get("parametersHash"),
             "start": parameters.get("start"),
             "end": parameters.get("end"),
             "initialCash": parameters.get("initialCash") or parameters.get("cash"),

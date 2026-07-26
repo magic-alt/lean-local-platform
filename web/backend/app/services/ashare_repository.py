@@ -1145,6 +1145,15 @@ def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
 def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
     code = index_code.strip().upper()
     with db() as connection:
+        calendar = connection.execute(
+            """
+            select count(*) as total,
+                   sum(case when is_open=1 then 1 else 0 end) as open_days,
+                   min(trade_date) as start_date,
+                   max(trade_date) as end_date
+            from trade_calendar where market='china'
+            """
+        ).fetchone()
         securities = connection.execute(
             """
             select count(*) as total,
@@ -1195,6 +1204,7 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
             limit 1
             """
         ).fetchone()
+    calendar = row_to_dict(calendar) or {}
     securities = row_to_dict(securities) or {}
     trade_status = row_to_dict(trade_status) or {}
     actions = row_to_dict(actions) or {}
@@ -1203,6 +1213,8 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
     reference_result = reference_report.get("result") or {}
     warnings = list(dict.fromkeys(reference_result.get("warnings") or []))
     issues = []
+    if int(calendar.get("open_days") or 0) == 0:
+        issues.append("trade_calendar_missing")
     if int(securities["total"] or 0) == 0:
         issues.append("security_master_missing")
     if int(securities["delisted"] or 0) == 0:
@@ -1223,6 +1235,12 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
         "issues": issues,
         "warnings": warnings,
         "referenceSources": reference_result.get("sourceStatus") or {},
+        "tradeCalendar": {
+            "rows": int(calendar.get("total") or 0),
+            "openDays": int(calendar.get("open_days") or 0),
+            "startDate": calendar.get("start_date"),
+            "endDate": calendar.get("end_date"),
+        },
         "securities": {
             "total": int(securities.get("total") or 0),
             "delisted": int(securities.get("delisted") or 0),

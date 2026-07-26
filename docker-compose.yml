@@ -92,6 +92,8 @@ services:
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    secrets:
+      - lean_api_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

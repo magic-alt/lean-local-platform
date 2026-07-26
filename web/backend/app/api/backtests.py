@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task, paged_items
@@ -196,9 +196,13 @@ def result(run_id: str):
     return {"job": run, "result": result_record}
 
 
-@router.get("/{run_id}/results")
+@router.get("/{run_id}/results", include_in_schema=False)
 def results(run_id: str):
-    return result(run_id)
+    return RedirectResponse(
+        url=f"/api/backtests/{run_id}/result",
+        status_code=308,
+        headers={"Deprecation": "true", "Sunset": "Sun, 26 Jan 2027 00:00:00 GMT"},
+    )
 
 
 @router.get("/{run_id}/validation")
