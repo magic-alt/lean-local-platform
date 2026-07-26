@@ -901,37 +901,6 @@ export interface ObjectStoreItem {
   updated_at: string;
 }
 
-export interface PaperSession {
-  id: string;
-  project_id?: string | null;
-  name: string;
-  status: string;
-  symbol: string;
-  asset_class: string;
-  venue: string;
-  resolution: string;
-  cash: number;
-  equity: number;
-  parameters?: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-  finished_at?: string | null;
-  mode?: "legacy_replay" | "signal_simulation" | "lean_walkforward";
-  legacy_read_only?: boolean;
-  source_backtest_id?: string | null;
-  strategy_version_id?: string | null;
-  parameter_hash?: string | null;
-  start_date?: string | null;
-  last_processed_date?: string | null;
-  next_trade_date?: string | null;
-  auto_advance?: boolean;
-  failure?: { code?: string; message?: string } | null;
-  runs?: PaperWalkforwardRun[];
-  orders?: Array<Record<string, unknown>>;
-  positions?: Array<Record<string, unknown>>;
-  snapshots?: Array<Record<string, unknown>>;
-}
-
 export interface PaperBacktestCandidate {
   id: string;
   name?: string | null;
@@ -944,47 +913,6 @@ export interface PaperBacktestCandidate {
   parameterHash?: string | null;
   admissionStage?: string | null;
   validation?: BacktestValidation;
-}
-
-export interface PaperWalkforwardRun {
-  id: string;
-  session_id: string;
-  trade_date: string;
-  backtest_run_id?: string | null;
-  task_id?: string | null;
-  status: string;
-  order_fingerprint?: string | null;
-  reconciliation?: {
-    throughDate?: string;
-    expectedOrderFingerprint?: string;
-    actualOrderFingerprint?: string;
-    passed?: boolean;
-  } | null;
-  failure?: { code?: string; message?: string } | null;
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface PaperDailyReport {
-  id: string;
-  session_id: string;
-  trade_date: string;
-  schemaVersion?: number;
-  sessionId?: string;
-  tradeDate?: string;
-  executionPolicy?: string;
-  cash?: number;
-  NAV?: number;
-  dailyReturn?: number;
-  cumulativeReturn?: number;
-  excessReturn?: number;
-  benchmark?: { symbol?: string | null; close?: number | null; dailyReturn?: number | null; return?: number | null };
-  qa?: { passed?: boolean; severity?: string };
-  rejectionReasons?: string[];
-  warnings?: string[];
-  fingerprint?: string;
-  report?: Record<string, unknown>;
 }
 
 export interface PagedResponse<T> {
@@ -1170,7 +1098,6 @@ export interface InsightCapabilities {
   model?: string | null;
   assetClasses: Array<"equity" | "crypto" | "crypto_future" | "future">;
   resolutions: string[];
-  paperHandoffAssetClasses: string[];
   promptVersion: string;
 }
 
@@ -1203,8 +1130,6 @@ export interface InsightSignalRecord {
   rawSignal: Record<string, unknown>;
   finalSignal: InsightSignalPayload;
   guardrail: { passed: boolean; adjusted: boolean; violations: string[]; normalizedFields?: string[] };
-  paper_session_id?: string | null;
-  paper_signal_id?: string | null;
 }
 
 export interface InsightTechnicalReport {

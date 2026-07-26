@@ -118,6 +118,16 @@ def test_account_creation_writes_only_opening_ledger_and_projection() -> None:
     assert rebuilt["account"]["cash"] == get_account(account["id"])["cash"]
 
 
+def test_legacy_paper_routes_are_not_exposed() -> None:
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    assert "/api/paper" not in paths
+    assert "/api/paper/{session_id}" not in paths
+    assert "/api/insights/{report_id}/paper-signals" not in paths
+    assert "/api/paper/accounts/candidates" in paths
+
+
 def test_accounts_are_ledger_and_projection_isolated() -> None:
     _init()
     from app.db import db, utc_now
@@ -719,7 +729,7 @@ def test_data_gate_waiting_does_not_mutate_account_ledger(tmp_path, monkeypatch)
         expected={"scheduled"},
     )
     monkeypatch.setattr(
-        paper_accounts.legacy_paper,
+        paper_accounts.paper_runtime,
         "create_walkforward_run",
         lambda *_args: (_ for _ in ()).throw(ValueError("qa failed: data watermark missing")),
     )
@@ -750,7 +760,7 @@ def test_orphan_recovery_finalizes_successful_lean_run(tmp_path, monkeypatch) ->
         fields={"paper_run_id": "paper-run-1", "updated_at": "2020-01-01T00:00:00+00:00"},
     )
     monkeypatch.setattr(
-        paper_accounts.legacy_paper,
+        paper_accounts.paper_runtime,
         "get_walkforward_run",
         lambda _run_id: {"id": "paper-run-1", "status": "success"},
     )
@@ -781,7 +791,7 @@ def test_orphan_recovery_fails_closed_when_restricted_runner_failed(tmp_path, mo
         fields={"paper_run_id": "paper-run-failed", "updated_at": "2020-01-01T00:00:00+00:00"},
     )
     monkeypatch.setattr(
-        paper_accounts.legacy_paper,
+        paper_accounts.paper_runtime,
         "get_walkforward_run",
         lambda _run_id: {
             "id": "paper-run-failed",
@@ -796,7 +806,7 @@ def test_orphan_recovery_fails_closed_when_restricted_runner_failed(tmp_path, mo
     )
     failed_runs: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        paper_accounts.legacy_paper,
+        paper_accounts.paper_runtime,
         "fail_walkforward_run",
         lambda run_id, error: failed_runs.append((run_id, error)) or {},
     )

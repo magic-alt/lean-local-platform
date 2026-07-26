@@ -71,8 +71,6 @@ import type {
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
-  PaperDailyReport,
-  PaperSession,
   PortfolioOptimizationResult,
   Project,
   ReportRecord,

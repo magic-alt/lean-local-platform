@@ -242,7 +242,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         *_api(
             args.base_url,
             "GET",
-            f"/api/paper/candidates?projectId={urllib.parse.quote(args.project_id)}",
+            f"/api/paper/accounts/candidates?projectId={urllib.parse.quote(args.project_id)}",
         ),
         {200},
         "candidates",

@@ -85,6 +85,11 @@ def _call(callback, *args, **kwargs):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.get("/accounts/candidates")
+def account_candidates(projectId: str):
+    return _call(service.trusted_backtest_candidates, projectId)
+
+
 @router.get("/accounts/compare")
 def compare_accounts(
     accountId: list[str] = Query(default=[]),

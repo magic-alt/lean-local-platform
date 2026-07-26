@@ -25,11 +25,6 @@ class InsightRequest(BaseModel):
     backtestRunId: str | None = Field(None, max_length=64)
 
 
-class PaperHandoffRequest(BaseModel):
-    sessionId: str = Field(min_length=1)
-    targetPercent: float | None = Field(None, gt=0, le=1)
-
-
 @router.get("/capabilities")
 def read_capabilities():
     return insight_service.capabilities()
@@ -92,13 +87,3 @@ def delete_insight(report_id: str):
         raise HTTPException(status_code=404, detail="Insight report not found.") from exc
     except insight_service.InsightDeleteConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.post("/{report_id}/paper-signals")
-def handoff_to_paper(report_id: str, request: PaperHandoffRequest):
-    try:
-        return insight_service.handoff_to_paper(report_id, request.sessionId, request.targetPercent)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except insight_service.InsightError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc

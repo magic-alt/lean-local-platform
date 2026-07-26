@@ -609,7 +609,7 @@ def update_session_status(session_id: str, status: str) -> dict[str, Any]:
     if not session:
         raise KeyError("Paper session not found.")
     if session.get("legacy_read_only"):
-        raise ValueError("Legacy Paper Replay sessions are read-only.")
+        raise ValueError("Read-only internal Paper sessions cannot be mutated.")
     if session.get("status") == "stopped" and status != "stopped":
         raise ValueError("Stopped LEAN Paper sessions are immutable.")
     now = utc_now()
@@ -1838,7 +1838,7 @@ def create_signal(
     if not session:
         raise KeyError("Paper session not found.")
     if session.get("legacy_read_only"):
-        raise ValueError("Legacy Paper Replay sessions are read-only.")
+        raise ValueError("Read-only internal Paper sessions cannot be mutated.")
     if _is_lean_mode(session.get("mode")):
         raise ValueError("LEAN Paper orders must originate from the frozen project strategy.")
     signal_symbol = _normalize_session_symbol(session, symbol or session["symbol"])

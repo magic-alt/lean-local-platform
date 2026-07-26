@@ -36,7 +36,6 @@ const InsightsPage = lazy(() => loadInsightsPages().then((module) => ({ default:
 const MonitoringPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.MonitoringPage })));
 const PaperAccountsPage = lazy(() => loadPaperAccountPages().then((module) => ({ default: module.PaperAccountsPage })));
 const PaperAccountDetailPage = lazy(() => loadPaperAccountPages().then((module) => ({ default: module.PaperAccountDetailPage })));
-const LegacyPaperPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.PaperPage })));
 const ReportsPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.ReportsPage })));
 const SettingsPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.SettingsPage })));
 const TasksPage = lazy(() => loadOperationsPages().then((module) => ({ default: module.TasksPage })));
@@ -61,7 +60,6 @@ function AppShell() {
   const location = useLocation();
   const selectedMenuKey = useMemo(() => {
     const pathname = location.pathname;
-    if (pathname.startsWith("/paper/legacy")) return "/paper/legacy";
     if (pathname.startsWith("/paper")) return "/paper";
     if (pathname.startsWith("/runs/") || pathname.startsWith("/backtests")) return "/backtests";
     if (pathname.startsWith("/docs")) return "/docs";
@@ -102,8 +100,7 @@ function AppShell() {
       children: [
         { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "Research", loadResearchPages) },
         { key: "/insights", icon: <BulbOutlined />, label: navigationLink("/insights", "Insights", loadInsightsPages) },
-        { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper Accounts", loadPaperAccountPages) },
-        { key: "/paper/legacy", icon: <ExperimentOutlined />, label: navigationLink("/paper/legacy", "Legacy Paper", loadOperationsPages) }
+        { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper Accounts", loadPaperAccountPages) }
       ]
     },
     {
@@ -158,7 +155,6 @@ function AppShell() {
               <Route path="/optimization" element={<OptimizationPage />} />
               <Route path="/paper" element={<PaperAccountsPage />} />
               <Route path="/paper/accounts/:id" element={<PaperAccountDetailPage />} />
-              <Route path="/paper/legacy" element={<LegacyPaperPage />} />
               <Route path="/research" element={<ResearchPage />} />
               <Route path="/docs" element={<Navigate to="/docs/index" replace />} />
               <Route path="/docs/:slug" element={<DocsPage />} />

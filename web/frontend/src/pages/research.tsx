@@ -58,8 +58,6 @@ import type {
   MarketInfo,
   ObjectStoreItem,
   OptimizationRun,
-  PaperDailyReport,
-  PaperSession,
   Project,
   ProjectFile,
   ReportRecord,

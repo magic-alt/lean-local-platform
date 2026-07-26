@@ -390,7 +390,7 @@ def _resolve_source_backtest_id(*, project_id: str, api_url: str) -> str:
     status, payload = _api(
         api_url,
         "GET",
-        f"/api/paper/candidates?projectId={urllib.parse.quote(project_id)}",
+        f"/api/paper/accounts/candidates?projectId={urllib.parse.quote(project_id)}",
     )
     if status >= 400:
         raise RuntimeError(f"paper_candidates_unavailable:{status}:{payload}")

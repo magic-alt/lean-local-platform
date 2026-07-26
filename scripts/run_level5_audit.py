@@ -121,7 +121,7 @@ def _resolve_source_backtest_id(*, base_url: str, project_id: str, timeout: int)
     status, payload = _api(
         base_url,
         "GET",
-        f"/api/paper/candidates?projectId={quote(project_id)}",
+        f"/api/paper/accounts/candidates?projectId={quote(project_id)}",
         timeout=timeout,
     )
     if status >= 400:

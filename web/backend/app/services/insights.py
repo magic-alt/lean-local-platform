@@ -92,7 +92,6 @@ def capabilities() -> dict[str, Any]:
         "model": INSIGHTS_LLM_MODEL or None,
         "assetClasses": sorted(ASSET_CLASSES),
         "resolutions": ["daily"],
-        "paperHandoffAssetClasses": sorted(SPOT_ASSET_CLASSES),
         "promptVersion": PROMPT_VERSION,
     }
 
@@ -848,7 +847,7 @@ def delete_report(report_id: str) -> dict[str, Any]:
         report_row = connection.execute("select * from insight_reports where id = ?", (report_id,)).fetchone()
         task_rows = connection.execute("select id, status, log_path from tasks where related_id = ?", (report_id,)).fetchall()
         signal_row = connection.execute(
-            "select paper_session_id, paper_signal_id from decision_signals where insight_report_id = ?",
+            "select id from decision_signals where insight_report_id = ?",
             (report_id,),
         ).fetchone()
     report = row_to_dict(report_row)
@@ -867,13 +866,11 @@ def delete_report(report_id: str) -> dict[str, Any]:
             Path(str(task.get("log_path") or "")).unlink(missing_ok=True)
         except OSError:
             pass
-    signal = row_to_dict(signal_row)
     return {
         "deleted": True,
         "id": report_id,
         "deletedTasks": len(tasks),
         "deletedDecisionSignal": bool(signal_row),
-        "paperAuditPreserved": bool(signal and signal.get("paper_signal_id")),
     }
 
 
@@ -931,51 +928,3 @@ def run_report(task_id: str, report_id: str) -> dict[str, Any]:
         update_task(task_id, status="failed", error=safe_error, finished_at=now)
         append_log(task_id, f"Insight failed: {safe_error}")
         raise
-
-
-def handoff_to_paper(report_id: str, session_id: str, target_percent: float | None) -> dict[str, Any]:
-    from . import paper as paper_service
-
-    report = get_report(report_id)
-    signal = report.get("signal") or {}
-    final = signal.get("finalSignal") or {}
-    if not final.get("actionable"):
-        raise InsightError("Only actionable signals can be handed to Paper.")
-    if report["asset_class"] not in SPOT_ASSET_CLASSES:
-        raise InsightError("Paper handoff currently supports equity and spot crypto only.")
-    session = paper_service.get_session(session_id)
-    if not session:
-        raise KeyError("Paper session not found.")
-    if session.get("asset_class") != report["asset_class"] or session.get("venue") != report["venue"]:
-        raise InsightError("Paper session asset class or venue does not match the insight.")
-    session_symbols = (session.get("parameters") or {}).get("symbols") or [session.get("symbol")]
-    if report["symbol"] not in {str(item).upper() for item in session_symbols}:
-        raise InsightError("Paper session does not contain the insight symbol.")
-    direction = final.get("direction")
-    intent = final.get("intent")
-    if direction == "long" and intent in {"enter", "add", "hold"}:
-        side = "buy" if intent in {"enter", "add"} else "hold"
-        if side == "buy" and (target_percent is None or not 0 < float(target_percent) <= 1):
-            raise InsightError("A buy handoff requires targetPercent in (0, 1].")
-    elif intent in {"reduce", "exit"}:
-        side, target_percent = "sell", 0.0
-    else:
-        side, target_percent = "hold", None
-    if signal.get("paper_signal_id"):
-        return {"created": False, "paperSignalId": signal["paper_signal_id"], "report": report}
-    paper_signal = paper_service.create_signal(
-        session_id,
-        trade_date=report.get("as_of_date") or date.today().isoformat(),
-        side=side,
-        symbol=report["symbol"],
-        target_percent=target_percent,
-        strength=final.get("confidence"),
-        reason=str(final.get("reason") or (report.get("report") or {}).get("summary", {}).get("thesis") or "Insight signal"),
-        source=f"insight:{report_id}",
-    )
-    with db() as connection:
-        connection.execute(
-            "update decision_signals set status = ?, paper_session_id = ?, paper_signal_id = ?, updated_at = ? where insight_report_id = ?",
-            ("handed_off", session_id, paper_signal["id"], utc_now(), report_id),
-        )
-    return {"created": True, "paperSignal": paper_signal, "report": get_report(report_id)}

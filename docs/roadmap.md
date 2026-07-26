@@ -130,7 +130,7 @@ Current verification path is implemented in:
   Add `--with-fault` to include the service-restart matrix, and `--constraints`
   for policy-reject evidence.
 
-可以省略 `--source-backtest-id`，脚本会自动从 `/api/paper/candidates` 选择该项目的首个可信 backtest 作为 source；若存在跨版本/多结果场景，建议显式传入期望的
+可以省略 `--source-backtest-id`，脚本会自动从 `/api/paper/accounts/candidates` 选择该项目的首个可信 backtest 作为 source；若存在跨版本/多结果场景，建议显式传入期望的
 `--source-backtest-id <backtest-id>` 锁定复现目标。
 
 The script performs 21-day LEAN Paper, duplicate-call idempotency, optional
@@ -142,7 +142,7 @@ Implemented:
 - Paper multi-account brokerage workspace with isolated account generations,
   immutable opening balances, Decimal ledger bridges and rebuildable projections.
 - Frozen/versioned strategy deployments sourced only from trusted
-  `/api/paper/candidates`, with one active `paper_execute` primary per account
+  `/api/paper/accounts/candidates`, with one active `paper_execute` primary per account
   and optional `signal_only` deployments.
 - Unique daily execution cycles, 60-second due coordination, explicit
   queued/running/waiting-data states, duplicate Beat/Run-now idempotency,
@@ -160,7 +160,7 @@ The new account layer is implemented but is not marked operationally ready
 until `scripts/run_paper_accounts_acceptance.py` produces
 `PAPER_ACCOUNTS_PASS` against a real trusted candidate, MySQL, Redis, Celery and
 restricted LEAN Docker lane. The 2026-07-25 development database currently has
-no `/api/paper/candidates` result suitable for that new acceptance, so this
+no `/api/paper/accounts/candidates` result suitable for that new acceptance, so this
 release gate remains explicit rather than inferred from unit tests.
 - A-share T+1, suspension, limit, lot, fee and portfolio constraints in both
   signal simulation and the v2 LEAN intent path.

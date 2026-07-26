@@ -11,7 +11,6 @@ export { DocsPage } from "./docs";
 export { InsightsPage } from "./insights";
 export {
   MonitoringPage,
-  PaperPage,
   ReportsPage,
   SettingsPage,
   TasksPage

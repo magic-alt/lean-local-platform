@@ -263,38 +263,6 @@ def test_insight_run_persists_structured_report_and_signal(tmp_path, monkeypatch
     assert result["signal"]["guardrail"]["passed"] is True
 
 
-def test_insight_can_be_explicitly_handed_to_compatible_paper_session(tmp_path, monkeypatch):
-    configure_platform(tmp_path, monkeypatch)
-    import_daily_bars()
-    insights = configure_llm(monkeypatch)
-    from app.services import paper
-    from app.services.tasks import create_task
-
-    report = insights.create_report({"symbol": "AAPL", "assetClass": "equity", "market": "usa", "venue": "usa", "lookbackBars": 90})
-    task = create_task("insight", "Insight AAPL", {}, related_id=report["id"])
-    insights.attach_task(report["id"], task["id"])
-    insights.run_report(task["id"], report["id"])
-    session = paper.create_session({"name": "US paper", "symbol": "AAPL", "assetClass": "equity", "market": "usa", "venue": "usa", "cash": 100000})
-
-    handoff = insights.handoff_to_paper(report["id"], session["id"], 0.25)
-
-    assert handoff["created"] is True
-    assert handoff["paperSignal"]["side"] == "buy"
-    assert handoff["paperSignal"]["source"] == f"insight:{report['id']}"
-    assert insights.get_report(report["id"])["signal"]["status"] == "handed_off"
-
-    deleted = insights.delete_report(report["id"])
-    assert deleted["deleted"] is True
-    assert deleted["deletedDecisionSignal"] is True
-    assert deleted["paperAuditPreserved"] is True
-    with pytest.raises(KeyError, match="Insight report not found"):
-        insights.get_report(report["id"])
-    assert paper.list_signals(session["id"])[0]["id"] == handoff["paperSignal"]["id"]
-    from app.db import db
-    with db() as connection:
-        assert connection.execute("select count(*) as count from tasks where related_id = ?", (report["id"],)).fetchone()["count"] == 0
-
-
 def test_capabilities_never_return_api_key(monkeypatch):
     insights = configure_llm(monkeypatch)
 

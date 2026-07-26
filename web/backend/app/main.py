@@ -10,7 +10,7 @@ import logging
 import secrets
 import uuid
 
-from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, insights, level3plus, maintenance, object_store, observability, optimization, paper, paper_accounts, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
+from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, insights, level3plus, maintenance, object_store, observability, optimization, paper_accounts, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
 from .core.config import API_AUTH_REQUIRED, API_TOKEN, FRONTEND_DIST
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .core.request_context import reset_request_context, set_request_context
@@ -345,7 +345,6 @@ app.include_router(optimization.router)
 app.include_router(portfolios.router)
 app.include_router(compare.router)
 app.include_router(paper_accounts.router)
-app.include_router(paper.router)
 app.include_router(research.router)
 app.include_router(reports.router)
 app.include_router(ashare_tech_insights.router)

@@ -153,12 +153,11 @@ GET    /api/insights
 POST   /api/insights
 GET    /api/insights/{report_id}
 DELETE /api/insights/{report_id}
-POST   /api/insights/{report_id}/paper-signals
 ```
 
 `POST /api/insights` accepts `equity`, `crypto`, `crypto_future`, and `future`, currently at daily resolution. The optional `backtestRunId` must be a successful run for the same symbol, asset class, and venue. The response is HTTP 202 with the report and task identifiers.
 
-The model returns a candidate signal, but server-side guardrails own the final signal. Missing data, unsupported spot short exposure, invalid price plans, or missing evidence make the signal non-actionable. Nothing is sent to Paper automatically. The paper handoff endpoint is an explicit user action and currently supports equity and spot crypto sessions only.
+The model returns a candidate signal, but server-side guardrails own the final signal. Missing data, unsupported spot short exposure, invalid price plans, or missing evidence make the signal non-actionable. Insights remain advisory and are not sent to Paper.
 
 Environment variables:
 
@@ -306,35 +305,23 @@ These are useful research APIs but are not yet the core Level 3 acceptance chain
 ## Paper Trading
 
 ```text
-GET    /api/paper
-POST   /api/paper
-GET    /api/paper/candidates?projectId={project_id}
-POST   /api/paper/{session_id}/status
-GET    /api/paper/{session_id}
-GET    /api/paper/{session_id}/signals
-POST   /api/paper/{session_id}/signals
-GET    /api/paper/{session_id}/orders
-GET    /api/paper/{session_id}/positions
-GET    /api/paper/{session_id}/snapshots
-GET    /api/paper/{session_id}/reports
-GET    /api/paper/{session_id}/reports/{trade_date}
-POST   /api/paper/{session_id}/run-day
-POST   /api/paper/{session_id}/replay
-GET    /api/paper/{session_id}/runs
-GET    /api/paper/{session_id}/intents
-GET    /api/paper/{session_id}/intents/{intent_id}/transitions
+GET    /api/paper/accounts
+POST   /api/paper/accounts
+GET    /api/paper/accounts/candidates?projectId={project_id}
+GET    /api/paper/accounts/{account_id}/overview
+GET    /api/paper/accounts/{account_id}/performance
+GET    /api/paper/accounts/{account_id}/audit
+GET    /api/paper/accounts/{account_id}/deployments
+POST   /api/paper/accounts/{account_id}/deployments
+POST   /api/paper/deployments/{deployment_id}/run-now
 ```
 
-Creating a LEAN Paper session requires `projectId` and `sourceBacktestId`. The source run must belong to the project, have passed execution validation, contain complete data, and retain its strategy snapshot. Each A-share trading day runs that frozen project through the standard LEAN backtest worker and reconciles historical order fingerprints before the Paper ledger advances. Legacy replay sessions remain readable but cannot be resumed.
-
-`mode=lean_walkforward_v2` additionally requires
-`LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=1`. It records LEAN output as immutable
-intents, applies constraints before fill/ledger projection, appends legal state
-transitions, persists opening balance, principal, commission and position
-ledger entries, and rebuilds mutable cash/position read models from that ledger.
-It persists six recovery checkpoints. Pipeline v2 is the default; explicitly
-setting `LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED=0` is a degraded compatibility
-mode surfaced by dependency health.
+Creating a deployment requires `projectId` and `sourceBacktestId`. The source run
+must belong to the project, have passed execution validation, contain complete
+certified data, and retain its frozen strategy snapshot. The account workflow
+records immutable intents, legal transitions, fills and ledger entries, then
+rebuilds projections with point-in-time Source Gate prices and exact benchmark
+dates. Legacy session and replay endpoints are retired.
 
 ## Insights and A-share Technology Daily Report
 
@@ -344,7 +331,6 @@ GET  /api/insights
 POST /api/insights
 GET  /api/insights/{report_id}
 DELETE /api/insights/{report_id}
-POST /api/insights/{report_id}/paper-signals
 
 GET    /api/insights/ashare-tech/capabilities
 GET    /api/insights/ashare-tech/reports

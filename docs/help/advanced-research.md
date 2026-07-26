@@ -15,7 +15,6 @@ GET  /api/insights/capabilities
 GET  /api/insights
 POST /api/insights
 GET  /api/insights/{report_id}
-POST /api/insights/{report_id}/paper-signals
 ```
 
 API Key 不会通过 capabilities 返回，也不会写入 Settings 或报告。

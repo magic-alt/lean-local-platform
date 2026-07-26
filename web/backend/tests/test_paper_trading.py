@@ -704,86 +704,6 @@ def test_paper_replay_acceptance_script_creates_fill_and_reject(tmp_path, monkey
     assert "blacklisted" in output
 
 
-def test_paper_api_blocks_st_and_suspended_fixture_with_daily_bars(tmp_path, monkeypatch):
-    configure_temp_platform(tmp_path, monkeypatch)
-    import_rows_for_symbol("600519")
-    import_rows_for_symbol("000001")
-
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    client = TestClient(app)
-    status_response = client.post(
-        "/api/ashare/trade-status/import",
-        json={
-            "source": "official-fixture",
-            "records": [
-                {"symbol": "600519", "tradeDate": "2024-01-04", "isSt": True, "canBuy": True, "canSell": True},
-                {"symbol": "000001", "tradeDate": "2024-01-04", "isSuspended": True, "canBuy": False, "canSell": False},
-            ],
-        },
-    )
-    assert status_response.status_code == 200
-
-    session_response = client.post(
-        "/api/paper",
-        json={
-            "symbol": "600519",
-            "symbols": ["600519", "000001"],
-            "assetClass": "equity",
-            "market": "china",
-            "cash": 100000,
-            "allowStBuy": False,
-        },
-    )
-    assert session_response.status_code == 200
-    session_id = session_response.json()["id"]
-    for symbol in ("600519", "000001"):
-        signal_response = client.post(
-            f"/api/paper/{session_id}/signals",
-            json={"tradeDate": "2024-01-03", "side": "buy", "symbol": symbol, "targetPercent": 0.4},
-        )
-        assert signal_response.status_code == 200
-
-    run_response = client.post(f"/api/paper/{session_id}/run-day", json={"tradeDate": "2024-01-04", "autoSignal": False})
-
-    assert run_response.status_code == 200
-    reasons = {order["symbol"]: order["reason"] for order in run_response.json()["orders"]}
-    assert reasons == {"600519": "st_blocked", "000001": "suspended"}
-
-
-def test_paper_api_preserves_strategy_extra_parameters(tmp_path, monkeypatch):
-    configure_temp_platform(tmp_path, monkeypatch)
-
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/paper",
-        json={
-            "symbol": "600519",
-            "assetClass": "equity",
-            "market": "china",
-            "cash": 100000,
-            "maxPositionWeight": 0.03,
-            "signalTargetPercent": 0.03,
-            "fast": 3,
-            "slow": 5,
-            "strategy": "ema_cross",
-        },
-    )
-
-    assert response.status_code == 200
-    parameters = response.json()["parameters"]
-    assert parameters["signalTargetPercent"] == 0.03
-    assert parameters["fast"] == 3
-    assert parameters["slow"] == 5
-    assert parameters["strategy"] == "ema_cross"
-
-
 def test_paper_checkpoint_probe_filters_and_returns_current_run_status(
     tmp_path,
     monkeypatch,
@@ -842,11 +762,7 @@ def test_paper_checkpoint_probe_filters_and_returns_current_run_status(
         f"/api/paper/{session['id']}/checkpoints",
         params={"tradeDate": "2024-01-04", "phase": "intent_capture"},
     )
-    assert response.status_code == 200
-    assert [
-        (row["phase"], row["run_status"])
-        for row in response.json()
-    ] == [("intent_capture", "running")]
+    assert response.status_code == 404
 
 
 def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, monkeypatch):

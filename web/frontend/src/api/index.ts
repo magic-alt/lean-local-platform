@@ -41,10 +41,7 @@ import type {
   ResearchCheckResult,
   ReportRecord,
   ObjectStoreItem,
-  PaperSession,
-  PaperDailyReport,
   PaperBacktestCandidate,
-  PaperWalkforwardRun,
   PaperAccount,
   PaperDataTrust,
   PaperAccountOverview,
@@ -518,53 +515,8 @@ export const api = {
     }),
   deleteObjectStoreItem: (key: string) =>
     request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
-  paperSessions: () => request<PaperSession[]>("/api/paper?paged=false&limit=1000"),
-  deletePaperSession: (id: string) =>
-    request<{ deleted: boolean; id: string }>(`/api/paper/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  paperSession: (id: string) => request<PaperSession>(`/api/paper/${encodeURIComponent(id)}`),
   paperCandidates: (projectId: string) =>
-    request<PaperBacktestCandidate[]>(`/api/paper/candidates?projectId=${encodeURIComponent(projectId)}`),
-  createPaperSession: (payload: {
-    mode?: "signal_simulation" | "lean_walkforward";
-    name?: string;
-    projectId?: string;
-    symbol: string;
-    assetClass?: string;
-    market?: string;
-    venue?: string;
-    resolution?: string;
-    dataType?: string;
-    cash?: number;
-    executionPolicy?: string;
-    benchmarkSymbol?: string;
-    maxPositions?: number;
-    maxPositionWeight?: number;
-    maxIndustryWeight?: number;
-    maxVolumeParticipation?: number;
-    circuitBreakerDrawdown?: number;
-    minCash?: number;
-    blacklist?: string;
-    watchlist?: string;
-    observeOnlySymbols?: string;
-    allowStBuy?: boolean;
-    parameters?: Record<string, unknown>;
-    sourceBacktestId?: string;
-    startDate?: string;
-    autoAdvance?: boolean;
-  }) =>
-    request<PaperSession>("/api/paper", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  paperReports: (id: string) => request<PaperDailyReport[]>(`/api/paper/${encodeURIComponent(id)}/reports`),
-  paperRuns: (id: string) => request<PaperWalkforwardRun[]>(`/api/paper/${encodeURIComponent(id)}/runs`),
-  runPaperDay: (id: string, tradeDate: string, autoSignal = false) =>
-    request<PaperWalkforwardRun | Record<string, unknown>>(`/api/paper/${encodeURIComponent(id)}/run-day`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tradeDate, autoSignal })
-    }),
+    request<PaperBacktestCandidate[]>(`/api/paper/accounts/candidates?projectId=${encodeURIComponent(projectId)}`),
   paperAccounts: (filters?: {
     status?: string;
     market?: string;
@@ -690,18 +642,9 @@ export const api = {
   }),
   insight: (id: string) => request<InsightReport>(`/api/insights/${encodeURIComponent(id)}`),
   deleteInsight: (id: string) =>
-    request<{ deleted: boolean; id: string; deletedTasks: number; deletedDecisionSignal: boolean; paperAuditPreserved: boolean }>(
+    request<{ deleted: boolean; id: string; deletedTasks: number; deletedDecisionSignal: boolean }>(
       `/api/insights/${encodeURIComponent(id)}`,
       { method: "DELETE" }
-    ),
-  handoffInsightToPaper: (id: string, payload: { sessionId: string; targetPercent?: number }) =>
-    request<{ created: boolean; paperSignal?: Record<string, unknown>; report: InsightReport }>(
-      `/api/insights/${encodeURIComponent(id)}/paper-signals`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      }
     ),
   ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/insights/ashare-tech/capabilities"),
   ashareTechReports: () => request<AshareTechReportList>("/api/insights/ashare-tech/reports"),
@@ -729,12 +672,6 @@ export const api = {
   deleteAshareTechWatchlistItem: (code: string) =>
     request<{ deleted: boolean; code: string; watchlist: AshareTechWatchlist }>(`/api/insights/ashare-tech/watchlist/items/${encodeURIComponent(code)}`, { method: "DELETE" }),
   resetAshareTechWatchlist: () => request<AshareTechWatchlist>("/api/insights/ashare-tech/watchlist/reset", { method: "POST" }),
-  updatePaperSessionStatus: (id: string, status: string) =>
-    request<PaperSession>(`/api/paper/${encodeURIComponent(id)}/status`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status })
-    }),
   clearLocalHistory: (payload?: { dryRun?: boolean; force?: boolean; confirmation?: string }) =>
     request<MaintenanceHistoryClearResult>("/api/maintenance/clear-history", {
       method: "POST",

@@ -15,7 +15,7 @@ from ..repositories.market_data_repository import (
     benchmark_return as market_benchmark_return,
     close_price,
 )
-from . import paper as legacy_paper
+from . import paper as paper_runtime
 from .alerts import delivery_succeeded, emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
@@ -747,7 +747,7 @@ def clone_account(account_id: str, payload: dict[str, Any] | None = None) -> dic
 
 
 def _candidate(project_id: str, source_backtest_id: str) -> dict[str, Any]:
-    candidates = legacy_paper.trusted_backtest_candidates(project_id)
+    candidates = trusted_backtest_candidates(project_id)
     candidate = next((item for item in candidates if str(item["id"]) == source_backtest_id), None)
     if not candidate:
         raise ValueError("Deployment requires a successful, certified, validation-passed frozen backtest candidate.")
@@ -770,6 +770,11 @@ def _candidate(project_id: str, source_backtest_id: str) -> dict[str, Any]:
         "versions": versions,
         "snapshotDir": str(snapshot_dir),
     }
+
+
+def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
+    """Return frozen, certified candidates for the Paper Accounts workflow."""
+    return paper_runtime.trusted_backtest_candidates(project_id)
 
 
 def _next_market_close(trading_date: str | None = None) -> str:
@@ -1318,7 +1323,7 @@ def run_now(deployment_id: str, trading_date: str | None = None) -> dict[str, An
         trading_date = str(
             deployment.get("last_successful_trading_date")
             and next_trade_date("china", deployment["last_successful_trading_date"])
-            or (legacy_paper.get_session(account["shadow_session_id"]) or {}).get("start_date")
+            or (paper_runtime.get_session(account["shadow_session_id"]) or {}).get("start_date")
             or date.today().isoformat()
         )
     cycle = ensure_cycle(deployment_id, trading_date)
@@ -1386,7 +1391,7 @@ def begin_cycle(cycle_id: str) -> dict[str, Any]:
     if not session_id:
         return fail_cycle(cycle_id, "deployment_session_missing", "Frozen deployment session is unavailable.")
     try:
-        paper_run = legacy_paper.create_walkforward_run(session_id, cycle["trading_date"])
+        paper_run = paper_runtime.create_walkforward_run(session_id, cycle["trading_date"])
     except Exception as exc:
         message = str(exc)
         lower = message.lower()
@@ -1472,7 +1477,7 @@ def finalize_cycle(cycle_id: str) -> dict[str, Any]:
     account = get_account(cycle["paper_account_id"])
     deployment = get_deployment(cycle["deployment_id"])
     paper_run_id = str(cycle.get("paper_run_id") or "")
-    paper_run = legacy_paper.get_walkforward_run(paper_run_id)
+    paper_run = paper_runtime.get_walkforward_run(paper_run_id)
     if not paper_run or paper_run.get("status") != "success":
         raise ValueError("LEAN Paper run and six-phase finalization must succeed before cycle finalization.")
     with db() as connection:
@@ -2480,7 +2485,7 @@ def schedule_due_deployments(now: datetime | None = None) -> dict[str, Any]:
     waiting: list[str] = []
     for deployment in rows:
         account = get_account(deployment["paper_account_id"])
-        session = legacy_paper.get_session(account["shadow_session_id"]) or {}
+        session = paper_runtime.get_session(account["shadow_session_id"]) or {}
         next_date = (
             next_trade_date("china", deployment["last_successful_trading_date"])
             if deployment.get("last_successful_trading_date")
@@ -2534,7 +2539,7 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
     recovered: list[str] = []
     failed: list[str] = []
     for cycle in rows:
-        paper_run = legacy_paper.get_walkforward_run(str(cycle.get("paper_run_id") or ""))
+        paper_run = paper_runtime.get_walkforward_run(str(cycle.get("paper_run_id") or ""))
         try:
             if paper_run and paper_run.get("status") == "success":
                 finalize_cycle(cycle["id"])
@@ -2543,7 +2548,7 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
                 backtest = get_backtest(str(paper_run.get("backtest_run_id") or "")) or {}
                 backtest_status = str(backtest.get("status") or "")
                 if backtest_status == "success":
-                    legacy_paper.finalize_walkforward_run(str(paper_run["id"]))
+                    paper_runtime.finalize_walkforward_run(str(paper_run["id"]))
                     finalize_cycle(cycle["id"])
                     recovered.append(cycle["id"])
                     continue
@@ -2564,7 +2569,7 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
                         or (runner or {}).get("error")
                         or "Underlying LEAN execution failed before canonical finalization."
                     )
-                    legacy_paper.fail_walkforward_run(str(paper_run["id"]), reason)
+                    paper_runtime.fail_walkforward_run(str(paper_run["id"]), reason)
                     fail_cycle(cycle["id"], "orphaned_lean_run", reason)
                     failed.append(cycle["id"])
                     continue
@@ -3042,7 +3047,7 @@ def next_runs(deployment_id: str, count: int = 5) -> dict[str, Any]:
     session_account = get_account(deployment["paper_account_id"])
     current = str(
         deployment.get("last_successful_trading_date")
-        or (legacy_paper.get_session(session_account["shadow_session_id"]) or {}).get("start_date")
+        or (paper_runtime.get_session(session_account["shadow_session_id"]) or {}).get("start_date")
         or date.today().isoformat()
     )
     dates: list[str] = []

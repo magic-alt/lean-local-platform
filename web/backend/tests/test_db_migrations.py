@@ -58,6 +58,7 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "0010_lean_paper_walkforward" in revisions
     assert "0022_paper_order_pipeline_v2" in revisions
     assert "0029_paper_accounts" in revisions
+    assert "0033_retire_legacy_paper_sessions" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(

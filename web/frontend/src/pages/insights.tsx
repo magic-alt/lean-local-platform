@@ -19,7 +19,7 @@ import { DeleteOutlined, ReloadOutlined, SafetyCertificateOutlined } from "@ant-
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
-import type { InsightAgentSummary, InsightReport, InsightTechnicalReport, PaperSession } from "../api";
+import type { InsightAgentSummary, InsightReport, InsightTechnicalReport } from "../api";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
 import { FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
@@ -42,7 +42,7 @@ const guardrailLabels: Record<string, string> = {
 };
 
 function statusColor(status: string) {
-  if (status === "success" || status === "active" || status === "handed_off") return "green";
+  if (status === "success" || status === "active") return "green";
   if (status === "failed") return "red";
   if (status === "running") return "blue";
   return "default";
@@ -146,19 +146,15 @@ function GenericInsightsPage() {
     model: null,
     assetClasses: ["equity", "crypto", "crypto_future", "future"],
     resolutions: ["daily"],
-    paperHandoffAssetClasses: ["equity", "crypto"],
     promptVersion: "lean-insights-v2"
   });
   const reports = useAsyncData(loadInsights, emptyList);
-  const paperSessions = useAsyncData<PaperSession[]>(api.paperSessions, []);
   const [form] = Form.useForm();
   const assetClass = Form.useWatch("assetClass", form) || "equity";
   const market = Form.useWatch("market", form) || "china";
-  const [handoffForm] = Form.useForm();
   const [selected, setSelected] = useState<InsightReport | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [revealId, setRevealId] = useState<string | null>(null);
@@ -212,27 +208,12 @@ function GenericInsightsPage() {
     }
   }
 
-  async function handoff(values: { sessionId: string; targetPercent?: number }) {
-    if (!selected) return;
-    setHandoffSubmitting(true);
-    try {
-      const result = await api.handoffInsightToPaper(selected.id, values);
-      setSelected(result.report);
-      message.success(result.created ? "Paper signal created" : "Paper signal already exists");
-      await paperSessions.reload();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setHandoffSubmitting(false);
-    }
-  }
-
   async function deleteReport(item: InsightReport) {
     setDeletingId(item.id);
     try {
-      const result = await api.deleteInsight(item.id);
+      await api.deleteInsight(item.id);
       if (selected?.id === item.id) setSelected(null);
-      message.success(result.paperAuditPreserved ? "Insight 已删除；已进入 Paper 的审计记录继续保留" : "Insight 历史报告已删除");
+      message.success("Insight 历史报告已删除");
       await reports.reload();
     } catch (error) {
       message.error((error as Error).message);
@@ -242,14 +223,6 @@ function GenericInsightsPage() {
   }
 
   const finalSignal = selected?.signal?.finalSignal;
-  const compatibleSessions = paperSessions.data.filter(
-    (session) => session.mode !== "lean_walkforward"
-      && !session.legacy_read_only
-      && session.asset_class === selected?.asset_class
-      && session.venue === selected?.venue
-      && ((session.parameters?.symbols as string[] | undefined) || [session.symbol]).includes(selected?.symbol || "")
-  );
-
   return (
     <>
       <div className="toolbar">
@@ -263,7 +236,7 @@ function GenericInsightsPage() {
           ? `Structured analysis enabled: ${capabilities.data.provider} / ${capabilities.data.model}`
           : "Insights LLM is not configured"}
         description={capabilities.data.configured
-          ? "Reports use LEAN market data only. Signals remain advisory until you explicitly hand them to Paper."
+          ? "Reports use LEAN market data only. Signals are advisory research outputs."
           : "Set a DeepSeek, Zhipu, Kimi, OpenAI, or Anthropic API key for both API and worker."}
         style={{ marginBottom: 16 }}
       />
@@ -311,7 +284,7 @@ function GenericInsightsPage() {
               </Button>
               <Popconfirm
                 title={`Delete ${item.asset_class}/${item.symbol} insight?`}
-                description="The report, guarded signal, task, and task log will be deleted. Paper audit records are preserved."
+                description="The report, guarded signal, task, and task log will be deleted."
                 okText="Delete"
                 okButtonProps={{ danger: true }}
                 onConfirm={() => void deleteReport(item)}
@@ -390,20 +363,6 @@ function GenericInsightsPage() {
                   style={{ marginTop: 16 }}
                 />
               )}
-              {finalSignal?.actionable && capabilities.data.paperHandoffAssetClasses.includes(selected.asset_class) && !selected.signal.paper_signal_id && (
-                <Card type="inner" title="Confirm Paper Handoff" style={{ marginTop: 16 }}>
-                  <Form form={handoffForm} layout="inline" onFinish={handoff} initialValues={{ targetPercent: Math.max(finalSignal.targetExposure, 0.01) }}>
-                    <Form.Item name="sessionId" label="Paper Session" rules={[{ required: true }]}>
-                      <Select style={{ width: 280 }} options={compatibleSessions.map((session) => ({ value: session.id, label: `${session.name} (${session.symbol})` }))} />
-                    </Form.Item>
-                    <Form.Item name="targetPercent" label="Target" rules={[{ required: ["enter", "add"].includes(finalSignal.intent) }]}>
-                      <InputNumber min={0.01} max={1} step={0.05} />
-                    </Form.Item>
-                    <Button type="primary" htmlType="submit" loading={handoffSubmitting} disabled={compatibleSessions.length === 0}>Create Paper Signal</Button>
-                  </Form>
-                </Card>
-              )}
-              {selected.signal.paper_signal_id && <Alert type="success" showIcon message={`Paper signal created: ${selected.signal.paper_signal_id}`} style={{ marginTop: 16 }} />}
             </>
           )}
           <Divider />

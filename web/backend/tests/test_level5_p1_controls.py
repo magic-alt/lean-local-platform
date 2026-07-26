@@ -199,7 +199,7 @@ def test_paper_risk_limits_reject_capacity_industry_and_drawdown(monkeypatch):
     ) == "circuit_breaker"
 
 
-def test_paper_api_returns_gone_for_removed_same_close(tmp_path, monkeypatch):
+def test_retired_paper_session_api_rejects_same_close_requests(tmp_path, monkeypatch):
     _init_temp_db(tmp_path, monkeypatch)
     from app.main import app
 
@@ -211,9 +211,7 @@ def test_paper_api_returns_gone_for_removed_same_close(tmp_path, monkeypatch):
             "executionPolicy": "same_close",
         },
     )
-    assert response.status_code == 410
-    assert response.json()["error_code"] == "SAME_CLOSE_REMOVED"
-    assert response.json()["field"] == "executionPolicy"
+    assert response.status_code == 405
 
 
 def test_every_migration_declares_rollback_policy():
