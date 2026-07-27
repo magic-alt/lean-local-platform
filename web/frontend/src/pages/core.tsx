@@ -38,7 +38,6 @@ import {
 } from "@ant-design/icons";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactECharts from "echarts-for-react";
 import Editor from "@monaco-editor/react";
 
 import { api } from "../api";
@@ -90,6 +89,7 @@ import { RunDetailPanelBoundary } from "../components/backtests/RunDetailPanelBo
 import { ExampleGallery } from "../components/examples/ExampleGallery";
 import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
 import { candlestickOption } from "../charts/candlestick";
+import { LeanChart } from "../charts/LeanChart";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
 import { buildBacktestRequest, marketCostParameters } from "../domain/backtest-request";
@@ -842,7 +842,7 @@ function MarketDataDownloader({
                           <Tag>{queryResult.count.toLocaleString()} 根日线</Tag>
                           <Tag>{`${queryResult.items[0].timestamp.slice(0, 10)} → ${queryResult.items[queryResult.items.length - 1].timestamp.slice(0, 10)}`}</Tag>
                         </Space>
-                        <ReactECharts style={{ height: compact ? 360 : 540, marginBottom: 8 }} option={chartOption} />
+                        <LeanChart style={{ height: compact ? 360 : 540, marginBottom: 8 }} option={chartOption} />
                       </>
                     )}
                   </>
@@ -2356,6 +2356,11 @@ export function BacktestsPage() {
   const activeView = searchParams.get("view") === "history" ? "history" : "run";
   const runScope = searchParams.get("scope") === "batch" ? "batch" : "single";
   const searchParamsKey = searchParams.toString();
+  const backtestsReturnTo = `/backtests${searchParamsKey ? `?${searchParamsKey}` : ""}`;
+  const runDetailHref = (runId: string) => {
+    const detailParams = new URLSearchParams({ returnTo: backtestsReturnTo });
+    return `/runs/${runId}?${detailParams.toString()}`;
+  };
 
   const selectedProject = projects.data.find((item) => item.id === selectedProjectId);
   const selectedTemplate = projectTemplate(selectedProject, templates.data);
@@ -2476,7 +2481,7 @@ export function BacktestsPage() {
       setPreflight(readiness);
       const run = await api.createBacktest(payload);
       message.success("Backtest queued");
-      navigate(`/runs/${run.id}`);
+      navigate(runDetailHref(run.id));
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -2675,7 +2680,7 @@ export function BacktestsPage() {
           <Button htmlType="submit">Filter</Button>
           <Button onClick={() => { historyForm.resetFields(); applyHistoryFilters({}); }}>Clear</Button>
         </Form>
-        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(`/runs/${id}`)} onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }} />
+        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(runDetailHref(id))} onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }} />
               </Card>
             )
           }
@@ -2707,6 +2712,9 @@ function stableRecordKey(row: Record<string, unknown>, prefix: string) {
 export function RunDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = searchParams.get("returnTo") || "";
+  const returnTo = requestedReturnTo.startsWith("/backtests") ? requestedReturnTo : "/backtests";
   const [run, setRun] = useState<BacktestRun>();
   const [chart, setChart] = useState<ChartData>();
   const [chartError, setChartError] = useState<string>();
@@ -2926,7 +2934,7 @@ export function RunDetailPage() {
             className="run-hero__back"
             type="text"
             icon={<ArrowLeftOutlined />}
-            onClick={() => navigate("/backtests")}
+            onClick={() => navigate(returnTo)}
           >
             Backtests
           </Button>

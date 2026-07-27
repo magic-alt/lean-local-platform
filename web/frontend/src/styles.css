@@ -9,6 +9,11 @@ body {
   box-sizing: border-box;
 }
 
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 3px solid #0958d9;
+  outline-offset: 2px;
+}
+
 .skip-link {
   position: fixed;
   z-index: 1100;
@@ -101,10 +106,52 @@ body {
   gap: 16px;
 }
 
-.paper-account-card__schedule {
-  color: rgba(0, 0, 0, 0.55);
+.paper-automation-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #b7d5f5;
+  border-radius: 8px;
+  background: #f0f7ff;
+}
+
+.paper-automation-strip > div {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.paper-automation-strip span {
+  color: #334155;
   font-size: 12px;
-  margin-top: 12px;
+  font-weight: 600;
+}
+
+.paper-automation-strip strong {
+  overflow-wrap: anywhere;
+  color: #0f172a;
+}
+
+.paper-automation-strip--detail {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.paper-automation-strip--error {
+  border-color: #ff7875;
+  background: #fff2f0;
+}
+
+.paper-automation-strip--error .paper-automation-strip__failure strong {
+  color: #a8071a;
+}
+
+.paper-daily-run-status {
+  margin-bottom: 16px;
 }
 
 .paper-wizard-grid {
@@ -139,7 +186,8 @@ body {
 
   .paper-account-card__metrics,
   .paper-summary-metrics,
-  .paper-risk-metrics {
+  .paper-risk-metrics,
+  .paper-automation-strip--detail {
     grid-template-columns: repeat(2, minmax(100px, 1fr));
   }
 

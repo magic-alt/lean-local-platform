@@ -411,6 +411,24 @@ def list_accounts(
                    (select d.next_scheduled_at from paper_strategy_deployments d
                     where d.paper_account_id=account.id and d.is_primary=1
                     order by d.version desc limit 1) as next_scheduled_at,
+                   (select d.status from paper_strategy_deployments d
+                    where d.paper_account_id=account.id and d.is_primary=1
+                    order by d.version desc limit 1) as automation_status,
+                   (select d.consecutive_failures from paper_strategy_deployments d
+                    where d.paper_account_id=account.id and d.is_primary=1
+                    order by d.version desc limit 1) as consecutive_failures,
+                   (select cycle.status from paper_execution_cycles cycle
+                    where cycle.paper_account_id=account.id
+                    order by cycle.trading_date desc,cycle.created_at desc limit 1) as last_run_status,
+                   (select cycle.finished_at from paper_execution_cycles cycle
+                    where cycle.paper_account_id=account.id
+                    order by cycle.trading_date desc,cycle.created_at desc limit 1) as last_run_at,
+                   (select cycle.failure_code from paper_execution_cycles cycle
+                    where cycle.paper_account_id=account.id and cycle.status='failed'
+                    order by cycle.trading_date desc,cycle.created_at desc limit 1) as last_failure_code,
+                   (select cycle.failure_detail from paper_execution_cycles cycle
+                    where cycle.paper_account_id=account.id and cycle.status='failed'
+                    order by cycle.trading_date desc,cycle.created_at desc limit 1) as last_failure_detail,
                    (select count(*) from paper_strategy_signals paper_signal
                     where paper_signal.paper_account_id=account.id and paper_signal.disposition='next_session_pending') as pending_signal_count,
                    (select count(*) from paper_order_intents intent

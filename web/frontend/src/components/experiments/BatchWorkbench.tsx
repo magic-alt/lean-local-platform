@@ -3,9 +3,9 @@ import { DeleteOutlined, DownloadOutlined, PlayCircleOutlined, ReloadOutlined, S
 import { useEffect, useMemo, useState } from "react";
 import type { Key } from "react";
 import dayjs from "dayjs";
-import ReactECharts from "echarts-for-react";
 
 import { api } from "../../api";
+import { LeanChart } from "../../charts/LeanChart";
 import type { ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project, WorkflowExample } from "../../api";
 import { DateStringPicker } from "../DateStringPicker";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
@@ -259,9 +259,9 @@ export function BatchWorkbench({
           <FormSection title="批次与标的">
           <FormGrid>
             <Form.Item className="form-field--wide" name="name" label="批次名称" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="mode" label="运行模式"><Select options={MODES[kind]} onChange={() => setPreview(undefined)} /></Form.Item>
+            <Form.Item name="mode" label="运行模式"><Select virtual={false} options={MODES[kind]} onChange={() => setPreview(undefined)} /></Form.Item>
             {kind !== "research" && <Form.Item name="market" label="市场"><Select onChange={(value) => form.setFieldsValue({ benchmarkSymbol: defaultBenchmark(value), source: defaultSource(value) })} options={[{ value: "china", label: "A 股" }, { value: "hongkong", label: "港股" }, { value: "usa", label: "美股" }]} /></Form.Item>}
-            {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
+            {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select virtual={false} mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
             {kind !== "research" && <Form.Item name="symbolSource" label="标的来源"><Select options={[{ value: "symbols", label: "股票代码" }, { value: "universe", label: "PIT股票池" }]} /></Form.Item>}
             {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item className="form-field--wide" name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
             {kind !== "research" && (symbolSource === "universe" || mode === "dynamic_universe") && <Form.Item name="universeCode" label="股票池"><Select options={["CSI300", "CSI500", "CSI1000", "SSE50", "STAR50", "ALL_A"].map((value) => ({ value, label: value }))} /></Form.Item>}
@@ -382,7 +382,7 @@ export function BatchWorkbench({
             ]} />
           </Card>}
           {(selected.summary?.walkForward?.length || 0) > 0 && <Card size="small" title="Train / Validation / OOS 表现" style={{ marginTop: 12, marginBottom: 12 }}>
-            <ReactECharts style={{ height: 340 }} option={phaseOption([{
+            <LeanChart style={{ height: 340 }} option={phaseOption([{
               id: selected.id,
               name: selected.name,
               kind: selected.kind,
@@ -396,7 +396,7 @@ export function BatchWorkbench({
             }])} />
           </Card>}
           {(selected.summary?.parameterSensitivity || []).map((sensitivity) => <Card key={`${sensitivity.xParameter}:${sensitivity.yParameter}`} size="small" title={`参数敏感性 · ${sensitivity.xParameter} × ${sensitivity.yParameter}`} style={{ marginBottom: 12 }}>
-            <ReactECharts style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
+            <LeanChart style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
           </Card>)}
           <Table size="small" rowKey={(row) => String(row.itemId)} dataSource={ranking} pagination={{ pageSize: 20 }} columns={[
             { title: "股票", dataIndex: "symbol" }, { title: "项目", dataIndex: "projectId", ellipsis: true },
@@ -430,10 +430,10 @@ export function BatchWorkbench({
             ]}
           />
           {comparison.batches.some((batch) => batch.phaseSeries.length > 0) && <Card size="small" title="Train / Validation / OOS 并排表现" style={{ marginTop: 12 }}>
-            <ReactECharts style={{ height: 420 }} option={phaseOption(comparison.batches)} />
+            <LeanChart style={{ height: 420 }} option={phaseOption(comparison.batches)} />
           </Card>}
           {comparison.batches.flatMap((batch) => batch.parameterSensitivity.map((sensitivity) => ({ batch, sensitivity }))).map(({ batch, sensitivity }) => <Card key={`${batch.id}:${sensitivity.xParameter}:${sensitivity.yParameter}`} size="small" title={`${batch.name} · ${sensitivity.xParameter} × ${sensitivity.yParameter}`} style={{ marginTop: 12 }}>
-            <ReactECharts style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
+            <LeanChart style={{ height: 380 }} option={sensitivityOption(sensitivity)} />
           </Card>)}
         </>}
       </Modal>

@@ -440,7 +440,6 @@ cd web/frontend && npm run build
 | 6.8 | 编写四个用户旅程的 E2E spec：首次回测、实验与 Walk-Forward、多账户模拟盘、错误恢复（API 503 / worker 不可用 / Redis 不可用 / 数据缺失 / benchmark 缺失 / QA critical / 刷新 / 路由切换 / 重复提交 / 浏览器返回 / 任务取消 / 异常历史数据） | `tests/e2e/specs/15-*.spec.ts` ~ `18-*.spec.ts` |
 | 6.9 | 路由跳转保留筛选条件与用户上下文（URL query 持久化） | `pages/core.tsx`、`pages/paper-accounts.tsx` |
 | 6.10 | ECharts 按需引入，把 `vendor-echarts` 从 922 kB 降到 400 kB 以内 | `web/frontend/vite.config.ts`、`charts/*.ts` |
-| 6.11 | Legacy Paper 增加显式的「历史 / 只读」导航入口或在 Docs 中说明其归档状态 | `App.tsx`、`docs/help/paper.md` |
 
 ### migration / API 影响
 
@@ -473,6 +472,15 @@ python3 -c "import json;d=json.load(open('tests/e2e/reports/results.json'));prin
 - `results.json` 的 `expected` 数 ≥ 40（当前为 1）；
 - 每个交互控件都有可访问名称；
 - `vendor-echarts` < 400 kB。
+
+### 2026-07-27 实施状态
+
+- [x] 路由感知的 `selectedKeys` 与研究 / 回测 / 交易 / 系统四组中文导航。
+- [x] Paper 详情拆出策略部署、风控、每日运行，并在列表与详情显著展示自动运行、下次执行、上次结果和失败原因。
+- [x] Paper 与 Backtest 通过 URL query 保留筛选、页签和返回上下文。
+- [x] 补齐交互控件可访问名称、可见焦点样式、ECharts ARIA 描述，并关闭关键 Select 的虚拟化以保持键盘/读屏可达。
+- [x] Playwright 增加 1280×800、768×1024、390×844 项目及四个响应式用户旅程 spec。
+- [x] ECharts 改为 core 按需注册；构建产物 `vendor-echarts` 为 280.85 kB。
 
 ---
 
@@ -592,17 +600,16 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 - [ ] L5-ARCH-002 拆分 paper_accounts.py 与 data_sync.py 为 orchestrator + repository
 
 ### Wave 6 — UI 和商业产品差距
-- [ ] L5-UI-001 侧栏导航 selectedKeys 高亮当前路由
-- [ ] L5-UI-002 导航分为研究 / 回测 / 交易 / 系统四组
-- [ ] L5-UI-007 导航标签语言统一
-- [ ] L5-UI-006 Paper 详情增加策略部署与风控 tab
-- [ ] L5-UI-006 自动运行状态、下次执行时间、失败原因显著化
-- [ ] L5-UI-003 补齐 aria-label / label / 焦点顺序 / 对比度
-- [ ] L5-UI-004 Playwright 增加 1280×800 / 768×1024 / 390×844 三个 project
-- [ ] L5-UI-004 编写四个用户旅程 E2E spec
-- [ ] 路由跳转保留筛选条件与用户上下文
-- [ ] L5-PERF-001 ECharts 按需引入，vendor chunk < 400 kB
-- [ ] L5-UI-005 Legacy Paper 明确归档入口
+- [x] L5-UI-001 侧栏导航 selectedKeys 高亮当前路由
+- [x] L5-UI-002 导航分为研究 / 回测 / 交易 / 系统四组
+- [x] L5-UI-007 导航标签语言统一
+- [x] L5-UI-006 Paper 详情增加策略部署与风控 tab
+- [x] L5-UI-006 自动运行状态、下次执行时间、失败原因显著化
+- [x] L5-UI-003 补齐 aria-label / label / 焦点顺序 / 对比度
+- [x] L5-UI-004 Playwright 增加 1280×800 / 768×1024 / 390×844 三个 project
+- [x] L5-UI-004 编写四个用户旅程 E2E spec
+- [x] 路由跳转保留筛选条件与用户上下文
+- [x] L5-PERF-001 ECharts 按需引入，vendor chunk < 400 kB
 
 ### Wave 7 — 完整复审
 - [ ] 重跑全部只读探针

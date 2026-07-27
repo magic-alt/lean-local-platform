@@ -141,16 +141,16 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
     });
 
     await page.goto("/#/paper");
-    await expect(page.getByRole("heading", { name: "Paper Accounts" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "模拟账户" })).toBeVisible();
 
     for (const [name, cash] of [["E2E Account A", "1000000"], ["E2E Account B", "2500000"]] as const) {
       await page.getByRole("button", { name: "新建模拟账户" }).click();
       await page.getByLabel("账户名称").fill(name);
       await page.getByLabel("初始资金").fill(cash);
       await page.getByRole("button", { name: "下一步" }).click();
-      await page.getByLabel("Project").click();
+      await page.getByLabel("项目").click();
       await page.getByText("E2E Paper Strategy", { exact: true }).click();
-      await page.getByLabel("可信 Backtest Candidate").click();
+      await page.getByLabel("可信回测候选").click();
       await page.getByText(/Certified Frozen Candidate/).click();
       await page.getByRole("button", { name: "下一步" }).click();
       await page.getByRole("button", { name: "下一步" }).click();
@@ -286,22 +286,23 @@ test.describe("14 Paper multi-account brokerage workspace @paper @responsive", (
     await page.goto("/#/paper/accounts/account-1?tab=positions");
     await expect(page.getByRole("heading", { name: "E2E Account A" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "最新认证价格" })).toBeVisible();
-    await page.getByRole("tab", { name: "Signals" }).click();
+    await page.getByRole("tab", { name: "信号" }).click();
     await expect(page.getByRole("cell", { name: "no_signal", exact: true }).first()).toBeVisible();
-    await page.getByRole("tab", { name: "Risk Controls" }).click();
+    await page.getByRole("tab", { name: "风控" }).click();
     await expect(page.getByText("风控页只展示已持久化的拒单与阻断证据")).toBeVisible();
     await expect(page.getByText("拒绝 / 阻断信号")).toBeVisible();
     await expect(page.getByRole("cell", { name: "insufficient_cash" })).toBeVisible();
-    await page.getByRole("tab", { name: "Deployments" }).click();
-    await expect(page.getByRole("button", { name: /Run now/ })).toBeVisible();
-    await expect(page.getByRole("rowheader", { name: "Checkpoint" })).toBeVisible();
-    await page.getByRole("tab", { name: "Audit" }).click();
+    await page.getByRole("tab", { name: "策略部署" }).click();
+    await expect(page.getByRole("button", { name: /立即补跑/ })).toBeVisible();
+    await page.getByRole("tab", { name: "每日运行" }).click();
+    await expect(page.getByRole("rowheader", { name: "账本检查点" })).toBeVisible();
+    await page.getByRole("tab", { name: "审计" }).click();
     await expect(page.getByText("审计 局部加载失败")).toBeVisible();
     await expect(page.locator(".app-content")).not.toBeEmpty();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/#/paper");
-    await expect(page.getByRole("heading", { name: "Paper Accounts" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "模拟账户" })).toBeVisible();
     await expect(page.locator(".paper-account-card").first()).toBeVisible();
     await assertNoFrontendErrors();
   });

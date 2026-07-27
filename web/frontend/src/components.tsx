@@ -1,8 +1,8 @@
 import { Alert, Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
-import ReactECharts from "echarts-for-react";
 import { useState } from "react";
 import { BacktestRun, ChartData, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
+import { LeanChart } from "./charts/LeanChart";
 import { formatInteger, formatNumber, formatPercent, isRecord } from "./utils/display";
 
 export function StatusTag({ status }: { status: string }) {
@@ -345,7 +345,7 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
           />
         )}
         <div data-testid="equity-chart" data-point-count={strategyReturns.length}>
-          <ReactECharts
+          <LeanChart
             style={{ height: 380 }}
             option={cumulativeReturnOption(comparisonSeries)}
           />
@@ -354,7 +354,7 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
       {(candles.length > 0 || price.length > 0) && (
         <Card title="Asset Price, Orders & Indicators" style={{ marginTop: 16 }}>
           <div data-testid="price-chart" data-point-count={candles.length || price.length}>
-            <ReactECharts
+            <LeanChart
               style={{ height: backtestAssetChartHeight(normalizedChartData) }}
               option={backtestAssetOption(normalizedChartData)}
             />

@@ -17,7 +17,7 @@ test.describe("11 documentation screenshots", () => {
       ["/#/backtests", "Backtests", "backtest-workbench.png"],
       ["/#/optimization", "Optimization", "optimization-workbench.png"],
       ["/#/research", "Research", "research-workspace.png"],
-      ["/#/paper", "LEAN Paper", "paper-sessions.png"],
+      ["/#/paper", "模拟账户", "paper-accounts.png"],
       ["/#/reports", "Reports", "reports-library.png"]
     ];
     for (const [route, heading, filename] of pages) {

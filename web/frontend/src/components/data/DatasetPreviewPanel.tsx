@@ -1,11 +1,11 @@
 import { Alert, Button, Card, Empty, Input, Select, Space, Spin, Tag, message } from "antd";
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import ReactECharts from "echarts-for-react";
 
 import { api } from "../../api";
 import type { DataQueryRow, DatasetPreviewResult } from "../../api";
 import { candlestickOption } from "../../charts/candlestick";
+import { LeanChart } from "../../charts/LeanChart";
 
 export interface PreviewDatasetOption {
   key: "trade_cal" | "index_basic" | "index_daily" | "fut_basic" | "opt_basic";
@@ -247,7 +247,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         description={`共匹配 ${(result?.count ?? 0).toLocaleString()} 条记录${result?.updatedAt ? ` · 归档时间 ${result.updatedAt}` : ""}`}
       />
       {loadError && <Alert type="error" showIcon closable message="查询失败" description={loadError} style={{ marginBottom: 12 }} />}
-      {chartRows.length > 0 && <ReactECharts option={candlestickOption(chartRows, String(result?.items[0]?.ts_code || "指数"))} style={{ height: 520, marginBottom: 12 }} />}
+      {chartRows.length > 0 && <LeanChart option={candlestickOption(chartRows, String(result?.items[0]?.ts_code || "指数"))} style={{ height: 520, marginBottom: 12 }} />}
       <Spin spinning={loading}>
         <div className="dataset-preview-table-scroll">
           <table className="dataset-preview-table" style={{ minWidth: TABLE_WIDTH[dataset] ?? 900 }}>

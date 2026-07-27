@@ -37,11 +37,11 @@ import {
   ReloadOutlined,
   SwapOutlined
 } from "@ant-design/icons";
-import ReactECharts from "echarts-for-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
+import { LeanChart } from "../charts/LeanChart";
 import type {
   PaperAccount,
   PaperAccountComparison,
@@ -114,20 +114,27 @@ function AccountCard({
   account,
   selected,
   onSelect,
-  onDelete
+  onDelete,
+  detailHref
 }: {
   account: PaperAccount;
   selected: boolean;
   onSelect: (checked: boolean) => void;
   onDelete: () => Promise<void>;
+  detailHref: string;
 }) {
+  const failureReason = account.last_failure_detail || account.last_failure_code;
   return (
     <Card
       className="paper-account-card"
       title={(
         <Space>
-          <Checkbox checked={selected} onChange={(event) => onSelect(event.target.checked)} />
-          <Link to={`/paper/accounts/${account.id}`}>{account.name}</Link>
+          <Checkbox
+            aria-label={`选择账户 ${account.name}`}
+            checked={selected}
+            onChange={(event) => onSelect(event.target.checked)}
+          />
+          <Link to={detailHref}>{account.name}</Link>
         </Space>
       )}
       extra={(
@@ -168,8 +175,14 @@ function AccountCard({
         <span>信号 {account.pending_signal_count || 0}</span>
         <span>待成交 {account.pending_order_count || 0}</span>
       </Space>
-      <div className="paper-account-card__schedule">
-        最近成功：{account.last_successful_trading_date || "—"} · 下次运行：{account.next_scheduled_at || "—"}
+      <div className={`paper-automation-strip${failureReason ? " paper-automation-strip--error" : ""}`}>
+        <div><span>自动运行</span><StatusBadge value={account.automation_status || account.status} /></div>
+        <div><span>下次执行</span><strong>{account.next_scheduled_at || "未安排"}</strong></div>
+        <div><span>上次结果</span><StatusBadge value={account.last_run_status || "尚未运行"} /></div>
+        <div className="paper-automation-strip__failure">
+          <span>失败原因</span>
+          <strong>{failureReason || "无"}</strong>
+        </div>
       </div>
     </Card>
   );
@@ -316,7 +329,7 @@ function AccountWizard({
           <Form.Item name="initialCash" label="初始资金" rules={[{ required: true }]}>
             <InputNumber min={1} precision={2} stringMode style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="benchmarkSymbol" label="Benchmark" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="benchmarkSymbol" label="基准" rules={[{ required: true }]}><Input /></Form.Item>
         </div>
       )
     },
@@ -330,14 +343,14 @@ function AccountWizard({
             message="只显示成功、认证、验证通过并具有冻结项目快照的 Backtest。"
             style={{ marginBottom: 16 }}
           />
-          <Form.Item name="projectId" label="Project" rules={[{ required: true }]}>
+          <Form.Item name="projectId" label="项目" rules={[{ required: true }]}>
             <Select
               options={projects.map((item) => ({ value: item.id, label: item.display_name || item.name }))}
               showSearch
               optionFilterProp="label"
             />
           </Form.Item>
-          <Form.Item name="sourceBacktestId" label="可信 Backtest Candidate" rules={[{ required: true }]}>
+          <Form.Item name="sourceBacktestId" label="可信回测候选" rules={[{ required: true }]}>
             <Select
               disabled={!projectId}
               options={candidates.map((item) => ({
@@ -372,11 +385,11 @@ function AccountWizard({
           <Form.Item name="marketTimezone" label="市场时区"><Input disabled /></Form.Item>
           <Form.Item name="signalMode" label="模式" rules={[{ required: true }]}>
             <Radio.Group>
-              <Radio.Button value="paper_execute">Paper Execute</Radio.Button>
-              <Radio.Button value="signal_only">Signal Only</Radio.Button>
+              <Radio.Button value="paper_execute">模拟执行</Radio.Button>
+              <Radio.Button value="signal_only">仅生成信号</Radio.Button>
             </Radio.Group>
           </Form.Item>
-          <Form.Item name="deploymentName" label="Deployment 名称"><Input /></Form.Item>
+          <Form.Item name="deploymentName" label="部署名称"><Input /></Form.Item>
         </>
       )
     },
@@ -392,8 +405,8 @@ function AccountWizard({
           <Form.Item name="cashFloor" label="现金下限" rules={[{ required: true }]}><InputNumber min={0} stringMode /></Form.Item>
           <Form.Item name="maxOrderAmount" label="最大订单金额" rules={[{ required: true }]}><InputNumber min={1} stringMode /></Form.Item>
           <Form.Item name="maxDailyTurnover" label="最大日换手" rules={[{ required: true }]}><InputNumber min={0} max={5} step={0.05} /></Form.Item>
-          <Form.Item name="blacklist" label="Blacklist"><Select mode="tags" tokenSeparators={[","]} /></Form.Item>
-          <Form.Item name="observeOnly" label="Observe only" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="blacklist" label="证券黑名单"><Select mode="tags" tokenSeparators={[","]} /></Form.Item>
+          <Form.Item name="observeOnly" label="仅观察" valuePropName="checked"><Switch /></Form.Item>
           <Alert
             type="info"
             message="ST、停牌、涨跌停、整手、T+1、费用与滑点规则默认 fail-closed。"
@@ -408,7 +421,7 @@ function AccountWizard({
         <Descriptions bordered column={1}>
           <Descriptions.Item label="账户">{form.getFieldValue("name")}</Descriptions.Item>
           <Descriptions.Item label="初始资金">{money(form.getFieldValue("initialCash"))}</Descriptions.Item>
-          <Descriptions.Item label="Benchmark">{form.getFieldValue("benchmarkSymbol")}</Descriptions.Item>
+          <Descriptions.Item label="基准">{form.getFieldValue("benchmarkSymbol")}</Descriptions.Item>
           <Descriptions.Item label="策略快照">{candidateId || "—"}</Descriptions.Item>
           <Descriptions.Item label="执行">T close signal → T+1 certified next-open</Descriptions.Item>
           <Descriptions.Item label="配置冻结">
@@ -519,14 +532,15 @@ function ComparisonModal({
 }
 
 export function PaperAccountsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [accounts, setAccounts] = useState<PaperAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [view, setView] = useState<"cards" | "table">("cards");
+  const [view, setView] = useState<"cards" | "table">(() => searchParams.get("view") === "table" ? "table" : "cards");
   const [selected, setSelected] = useState<string[]>([]);
   const [comparisonOpen, setComparisonOpen] = useState(false);
-  const [keyword, setKeyword] = useState("");
-  const [status, setStatus] = useState<string>();
+  const [keyword, setKeyword] = useState(() => searchParams.get("keyword") || "");
+  const [status, setStatus] = useState<string | undefined>(() => searchParams.get("status") || undefined);
   const [dataTrust, setDataTrust] = useState<PaperDataTrust | null>(null);
 
   const load = useCallback(async () => {
@@ -547,6 +561,31 @@ export function PaperAccountsPage() {
     void load();
   }, [load]);
 
+  const searchParamsKey = searchParams.toString();
+  useEffect(() => {
+    const nextKeyword = searchParams.get("keyword") || "";
+    const nextStatus = searchParams.get("status") || undefined;
+    const nextView = searchParams.get("view") === "table" ? "table" : "cards";
+    setKeyword((current) => current === nextKeyword ? current : nextKeyword);
+    setStatus((current) => current === nextStatus ? current : nextStatus);
+    setView((current) => current === nextView ? current : nextView);
+  }, [searchParamsKey]);
+
+  function updateListContext(updates: { keyword?: string; status?: string; view?: "cards" | "table" }) {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    });
+    setSearchParams(next, { replace: true });
+  }
+
+  function detailHref(accountId: string) {
+    const returnTo = `/paper${searchParamsKey ? `?${searchParamsKey}` : ""}`;
+    const detailParams = new URLSearchParams({ returnTo });
+    return `/paper/accounts/${accountId}?${detailParams.toString()}`;
+  }
+
   function select(id: string, checked: boolean) {
     setSelected((items) => checked ? [...new Set([...items, id])] : items.filter((item) => item !== id));
   }
@@ -565,7 +604,7 @@ export function PaperAccountsPage() {
     <>
       <div className="toolbar paper-toolbar">
         <div>
-          <h1 className="page-title">Paper Accounts</h1>
+          <h1 className="page-title">模拟账户</h1>
           <Typography.Text type="secondary">多账户隔离的 LEAN 模拟券商工作台</Typography.Text>
         </div>
         <Space wrap>
@@ -590,7 +629,12 @@ export function PaperAccountsPage() {
             allowClear
             aria-label="搜索 Paper 账户"
             placeholder="搜索账户或说明"
-            onSearch={setKeyword}
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            onSearch={(value) => {
+              setKeyword(value);
+              updateListContext({ keyword: value });
+            }}
             style={{ width: 260 }}
           />
           <Select
@@ -598,11 +642,22 @@ export function PaperAccountsPage() {
             aria-label="筛选账户状态"
             placeholder="账户状态"
             style={{ width: 160 }}
-            onChange={setStatus}
+            value={status}
+            onChange={(value) => {
+              setStatus(value);
+              updateListContext({ status: value });
+            }}
             options={["draft", "active", "paused", "error", "archived"].map((value) => ({ value, label: value }))}
           />
           <Select aria-label="市场范围" value="china" disabled style={{ width: 150 }} options={[{ value: "china", label: "中国 A 股" }]} />
-          <Radio.Group aria-label="账户展示方式" value={view} onChange={(event) => setView(event.target.value)}>
+          <Radio.Group
+            aria-label="账户展示方式"
+            value={view}
+            onChange={(event) => {
+              setView(event.target.value);
+              updateListContext({ view: event.target.value });
+            }}
+          >
             <Radio.Button aria-label="卡片视图" value="cards"><AppstoreOutlined /></Radio.Button>
             <Radio.Button aria-label="表格视图" value="table"><BarsOutlined /></Radio.Button>
           </Radio.Group>
@@ -619,6 +674,7 @@ export function PaperAccountsPage() {
                 selected={selected.includes(account.id)}
                 onSelect={(checked) => select(account.id, checked)}
                 onDelete={() => deleteAccount(account)}
+                detailHref={detailHref(account.id)}
               />
             ))}
           </div>
@@ -629,7 +685,7 @@ export function PaperAccountsPage() {
             scroll={{ x: 1200 }}
             rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }}
             columns={[
-              { title: "账户", dataIndex: "name", fixed: "left", render: (value, row) => <Link to={`/paper/accounts/${row.id}`}>{value}</Link> },
+              { title: "账户", dataIndex: "name", fixed: "left", render: (value, row) => <Link to={detailHref(row.id)}>{value}</Link> },
               { title: "状态", dataIndex: "status", render: (value) => <StatusBadge value={value} /> },
               { title: "策略", dataIndex: "primary_strategy", render: (value) => value || "—" },
               { title: "总资产", dataIndex: "total_equity", render: (value, row) => money(value, row.base_currency) },
@@ -640,6 +696,9 @@ export function PaperAccountsPage() {
               { title: "持仓", dataIndex: "position_count" },
               { title: "健康", dataIndex: "health_status", render: (value) => <StatusBadge value={value} /> },
               { title: "最后运行", dataIndex: "last_successful_trading_date", render: (value) => value || "—" },
+              { title: "下次执行", dataIndex: "next_scheduled_at", render: (value) => value || "未安排" },
+              { title: "上次结果", dataIndex: "last_run_status", render: (value) => <StatusBadge value={value || "尚未运行"} /> },
+              { title: "失败原因", render: (_, account) => account.last_failure_detail || account.last_failure_code || "无" },
               {
                 title: "操作",
                 fixed: "right",
@@ -652,7 +711,15 @@ export function PaperAccountsPage() {
                     disabled={account.status === "active"}
                     onConfirm={() => deleteAccount(account)}
                   >
-                    <Button danger size="small" disabled={account.status === "active"} icon={<DeleteOutlined />}>删除</Button>
+                    <Button
+                      aria-label={`删除 ${account.name}`}
+                      danger
+                      size="small"
+                      disabled={account.status === "active"}
+                      icon={<DeleteOutlined />}
+                    >
+                      删除
+                    </Button>
                   </Popconfirm>
                 )
               }
@@ -691,7 +758,11 @@ export function PaperAccountDetailPage() {
   const activeAccountId = useRef(id);
   const navigate = useNavigate();
   const requestedTab = searchParams.get("tab") || "overview";
-  const activeTab = requestedTab === "automation" ? "deployments" : requestedTab;
+  const activeTab = requestedTab === "automation" ? "daily-runs" : requestedTab;
+  const requestedReturnTo = searchParams.get("returnTo") || "";
+  const returnTo = requestedReturnTo.startsWith("/paper") && !requestedReturnTo.startsWith("/paper/accounts/")
+    ? requestedReturnTo
+    : "/paper";
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -736,8 +807,9 @@ export function PaperAccountDetailPage() {
         ["cycles", api.paperAccountCycles(id)]
       );
     } else if (tab === "deployments") {
+      requests.push(["deployments", api.paperDeployments(id)]);
+    } else if (tab === "daily-runs") {
       requests.push(
-        ["deployments", api.paperDeployments(id)],
         ["cycles", api.paperAccountCycles(id)],
         ["dependencies", api.dependencyHealth()]
       );
@@ -840,6 +912,10 @@ export function PaperAccountDetailPage() {
     return disposition.includes("reject") || disposition.includes("block");
   });
   const rejectedCycleCount = cycles.reduce((total, item) => total + Number(item.rejected_count || 0), 0);
+  const latestCycle = cycles[0] || overview.latestCycle;
+  const latestFailure = cycles.find((item) => item.status === "failed")
+    || (overview.latestCycle?.status === "failed" ? overview.latestCycle : undefined);
+  const failureReason = latestFailure?.failure_detail || latestFailure?.failure_code;
   const riskEvidence: Array<Record<string, unknown>> = [
     ...rejectedOrders.map((item) => ({
       ...item,
@@ -855,7 +931,16 @@ export function PaperAccountDetailPage() {
   ];
 
   const positionColumns = [
-    { title: "证券代码", dataIndex: "symbol", fixed: "left" as const, render: (value: string, row: PaperPosition) => <Button type="link" onClick={() => setPositionDrawer(row)}>{value}</Button> },
+    {
+      title: "证券代码",
+      dataIndex: "symbol",
+      fixed: "left" as const,
+      render: (value: string, row: PaperPosition) => (
+        <Button aria-label={`查看 ${value} 持仓详情`} type="link" onClick={() => setPositionDrawer(row)}>
+          {value}
+        </Button>
+      )
+    },
     { title: "证券名称", dataIndex: "security_name", render: (value: string) => value || "—" },
     { title: "持仓数量", dataIndex: "quantity" },
     { title: "可卖数量", dataIndex: "sellable_quantity" },
@@ -872,13 +957,13 @@ export function PaperAccountDetailPage() {
   const tabItems = [
     {
       key: "overview",
-      label: "Overview",
+      label: "概览",
       children: (
         <>
           <DataError label="收益曲线" error={errors.performance} />
           <Card title="资产与收益">
             {chartPoints.length ? (
-              <ReactECharts option={{
+              <LeanChart option={{
                 tooltip: { trigger: "axis" },
                 xAxis: { type: "category", data: chartPoints.map((item) => item[0]) },
                 yAxis: { type: "value", axisLabel: { formatter: (value: number) => `${(value * 100).toFixed(1)}%` } },
@@ -894,7 +979,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "positions",
-      label: "Positions",
+      label: "持仓",
       children: (
         <>
           <DataError label="持仓" error={errors.positions} />
@@ -905,7 +990,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "orders",
-      label: "Orders",
+      label: "委托",
       children: (
         <>
           <DataError label="委托" error={errors.orders} />
@@ -934,7 +1019,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "trades",
-      label: "Trades",
+      label: "成交",
       children: (
         <>
           <DataError label="成交" error={errors.trades} />
@@ -963,7 +1048,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "signals",
-      label: "Signals",
+      label: "信号",
       children: (
         <>
           <DataError label="信号" error={errors.signals} />
@@ -989,7 +1074,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "performance",
-      label: "Performance",
+      label: "绩效",
       children: <Table rowKey={(row) => String(row.tradingDate || row.trading_date)} dataSource={performance} columns={[
         { title: "交易日", dataIndex: "tradingDate" },
         { title: "总资产", dataIndex: "totalEquity" },
@@ -1000,7 +1085,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "risk",
-      label: "Risk Controls",
+      label: "风控",
       children: (
         <>
           <DataError label="风险委托" error={errors.orders} />
@@ -1040,10 +1125,10 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "deployments",
-      label: "Deployments",
+      label: "策略部署",
       children: (
         <>
-          <DataError label="运行周期" error={errors.cycles} />
+          <DataError label="策略部署" error={errors.deployments} />
           {primary ? (
             <Card
               title={primary.name}
@@ -1052,42 +1137,62 @@ export function PaperAccountDetailPage() {
                 primary.status === "active"
                   ? <Button key="pause" icon={<PauseCircleOutlined />} onClick={() => void deploymentAction(primary, "pause")}>暂停策略</Button>
                   : <Button key="resume" icon={<PlayCircleOutlined />} onClick={() => void deploymentAction(primary, "resume")}>恢复策略</Button>,
-                <Button key="run" type="primary" icon={<PlayCircleOutlined />} disabled={primary.status !== "active"} onClick={() => void runNow(primary)}>Run now</Button>
+                <Button key="run" type="primary" icon={<PlayCircleOutlined />} disabled={primary.status !== "active"} onClick={() => void runNow(primary)}>立即补跑</Button>
               ]}
             >
-              <Alert type="info" showIcon message="Run now 只补跑缺失交易日；已成功日期返回幂等结果，不会重复扣费或修改已结算 ledger。" />
+              <Alert type="info" showIcon message="立即补跑只处理缺失交易日；已成功日期返回幂等结果，不会重复扣费或修改已结算账本。" />
               <Descriptions bordered size="small" column={2} style={{ marginTop: 16 }}>
-                <Descriptions.Item label="自动运行">{primary.schedule_type === "market_daily" ? "启用" : "手动"}</Descriptions.Item>
-                <Descriptions.Item label="市场时区">{primary.market_timezone}</Descriptions.Item>
-                <Descriptions.Item label="计划">{primary.schedule_expression}</Descriptions.Item>
-                <Descriptions.Item label="Next Run">{primary.next_scheduled_at || "—"}</Descriptions.Item>
-                <Descriptions.Item label="Last Success">{primary.last_successful_trading_date || "—"}</Descriptions.Item>
-                <Descriptions.Item label="Execution">{primary.execution_timing}</Descriptions.Item>
-                <Descriptions.Item label="Dataset">{primary.dataset_version_id}</Descriptions.Item>
-                <Descriptions.Item label="Failures">{primary.consecutive_failures}</Descriptions.Item>
-                <Descriptions.Item label="Data Watermark">{overview.dataReadiness?.watermark?.last_data_date || "未就绪"}</Descriptions.Item>
-                <Descriptions.Item label="QA Status">{overview.dataReadiness?.qa?.severity || "unknown"}</Descriptions.Item>
-                <Descriptions.Item label="Worker / Queue"><StatusBadge value={workerHealth} /></Descriptions.Item>
-                <Descriptions.Item label="Last Failure">
-                  {cycles.find((item) => item.status === "failed")?.failure_code || "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label="Checkpoint" span={2}>{account.source_checkpoint_digest || "—"}</Descriptions.Item>
+                <Descriptions.Item label="部署状态"><StatusBadge value={primary.status} /></Descriptions.Item>
+                <Descriptions.Item label="信号模式">{primary.signal_mode}</Descriptions.Item>
+                <Descriptions.Item label="执行时点">{primary.execution_timing}</Descriptions.Item>
+                <Descriptions.Item label="项目">{primary.project_id}</Descriptions.Item>
+                <Descriptions.Item label="策略版本">{primary.strategy_version_id || "—"}</Descriptions.Item>
+                <Descriptions.Item label="数据集">{primary.dataset_version_id}</Descriptions.Item>
+                <Descriptions.Item label="策略指纹" span={2}>{primary.strategy_fingerprint}</Descriptions.Item>
+                <Descriptions.Item label="部署指纹" span={2}>{primary.deployment_fingerprint}</Descriptions.Item>
               </Descriptions>
             </Card>
           ) : <Empty description="尚无策略部署" />}
+        </>
+      )
+    },
+    {
+      key: "daily-runs",
+      label: "每日运行",
+      children: (
+        <>
+          <DataError label="运行周期" error={errors.cycles} />
+          <Card className="paper-daily-run-status" title="自动运行状态">
+            <div className={`paper-automation-strip paper-automation-strip--detail${failureReason ? " paper-automation-strip--error" : ""}`}>
+              <div><span>自动运行</span><StatusBadge value={primary?.status || "未部署"} /></div>
+              <div><span>下次执行时间</span><strong>{primary?.next_scheduled_at || "未安排"}</strong></div>
+              <div><span>上次运行结果</span><StatusBadge value={latestCycle?.status || "尚未运行"} /></div>
+              <div className="paper-automation-strip__failure"><span>失败原因</span><strong>{failureReason || "无"}</strong></div>
+            </div>
+            <Descriptions bordered size="small" column={2} style={{ marginTop: 16 }}>
+              <Descriptions.Item label="市场时区">{primary?.market_timezone || "—"}</Descriptions.Item>
+              <Descriptions.Item label="运行计划">{primary?.schedule_expression || "—"}</Descriptions.Item>
+              <Descriptions.Item label="最近成功交易日">{primary?.last_successful_trading_date || "—"}</Descriptions.Item>
+              <Descriptions.Item label="连续失败">{primary?.consecutive_failures || 0}</Descriptions.Item>
+              <Descriptions.Item label="数据水位">{overview.dataReadiness?.watermark?.last_data_date || "未就绪"}</Descriptions.Item>
+              <Descriptions.Item label="QA 状态">{overview.dataReadiness?.qa?.severity || "unknown"}</Descriptions.Item>
+              <Descriptions.Item label="Worker / 队列"><StatusBadge value={workerHealth} /></Descriptions.Item>
+              <Descriptions.Item label="账本检查点">{account.source_checkpoint_digest || "—"}</Descriptions.Item>
+            </Descriptions>
+          </Card>
           <Table
             rowKey="id"
             style={{ marginTop: 16 }}
             dataSource={cycles}
             columns={[
-              { title: "Trading Date", dataIndex: "trading_date" },
-              { title: "Status", dataIndex: "status", render: (value) => <StatusBadge value={value} /> },
-              { title: "Signals", dataIndex: "signal_count" },
-              { title: "Intents", dataIndex: "intent_count" },
-              { title: "Orders", dataIndex: "order_count" },
-              { title: "Fills", dataIndex: "fill_count" },
-              { title: "Rejected", dataIndex: "rejected_count" },
-              { title: "Reason", render: (_, row) => row.failure_code || row.skip_reason || "—" }
+              { title: "交易日", dataIndex: "trading_date" },
+              { title: "状态", dataIndex: "status", render: (value) => <StatusBadge value={value} /> },
+              { title: "信号", dataIndex: "signal_count" },
+              { title: "意图", dataIndex: "intent_count" },
+              { title: "委托", dataIndex: "order_count" },
+              { title: "成交", dataIndex: "fill_count" },
+              { title: "拒绝", dataIndex: "rejected_count" },
+              { title: "原因", render: (_, row) => row.failure_detail || row.failure_code || row.skip_reason || "—" }
             ]}
           />
         </>
@@ -1095,7 +1200,7 @@ export function PaperAccountDetailPage() {
     },
     {
       key: "audit",
-      label: "Audit",
+      label: "审计",
       children: (
         <>
           <DataError label="审计" error={errors.audit} />
@@ -1126,19 +1231,20 @@ export function PaperAccountDetailPage() {
       <div className="toolbar paper-toolbar">
         <div>
           <Space>
-            <Button onClick={() => navigate("/paper")}>返回账户</Button>
+            <Button onClick={() => navigate(returnTo)}>返回账户</Button>
             <h1 className="page-title">{account.name}</h1>
             <StatusBadge value={account.status} />
           </Space>
           <Typography.Text type="secondary">
-            {account.market_scope.toUpperCase()} · {account.base_currency} · Benchmark {account.benchmark_symbol}
+            {account.market_scope.toUpperCase()} · {account.base_currency} · 基准 {account.benchmark_symbol}
           </Typography.Text>
         </div>
         <Space wrap>
           <Button icon={<CopyOutlined />} onClick={async () => {
             const clone = await api.clonePaperAccount(id);
             message.success("已克隆配置，新账户使用独立 Opening Ledger");
-            navigate(`/paper/accounts/${clone.id}`);
+            const cloneParams = new URLSearchParams({ returnTo });
+            navigate(`/paper/accounts/${clone.id}?${cloneParams.toString()}`);
           }}>克隆</Button>
           {account.status === "active" && <Button onClick={() => void accountAction("pause")}>暂停账户</Button>}
           {account.status === "paused" && <Button type="primary" onClick={() => void accountAction("resume")}>恢复账户</Button>}
@@ -1154,7 +1260,7 @@ export function PaperAccountDetailPage() {
               try {
                 await api.deletePaperAccount(id);
                 message.success("Paper 账户已删除");
-                navigate("/paper");
+                navigate(returnTo);
               } catch (error) {
                 message.error(`账户删除失败：${(error as Error).message}`);
               }
@@ -1177,6 +1283,13 @@ export function PaperAccountDetailPage() {
           <Metric title="持仓数" value={account.position_count} kind="number" />
         </div>
         <Divider />
+        <div className={`paper-automation-strip paper-automation-strip--detail${failureReason ? " paper-automation-strip--error" : ""}`}>
+          <div><span>自动运行</span><StatusBadge value={primary?.status || "未部署"} /></div>
+          <div><span>下次执行时间</span><strong>{primary?.next_scheduled_at || "未安排"}</strong></div>
+          <div><span>上次运行结果</span><StatusBadge value={overview.latestCycle?.status || "尚未运行"} /></div>
+          <div className="paper-automation-strip__failure"><span>失败原因</span><strong>{failureReason || "无"}</strong></div>
+        </div>
+        <Divider />
         <Space wrap>
           <StatusBadge value={overview.latestCycle?.status || account.health_status} />
           <span>最后估值：{account.last_valuation_at || "—"}</span>
@@ -1186,7 +1299,11 @@ export function PaperAccountDetailPage() {
       </Card>
       <Tabs
         activeKey={activeTab}
-        onChange={(tab) => setSearchParams({ tab })}
+        onChange={(tab) => {
+          const next = new URLSearchParams(searchParams);
+          next.set("tab", tab);
+          setSearchParams(next);
+        }}
         items={tabItems}
         className="paper-account-tabs"
       />

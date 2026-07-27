@@ -11,15 +11,6 @@ async function itemPositions(items: Locator) {
   return boxes;
 }
 
-async function selectAdjacentAntOption(control: Locator, key: "ArrowDown" | "ArrowUp") {
-  await control.click();
-  const page = control.page();
-  const dropdown = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").last();
-  await expect(dropdown).toBeVisible();
-  await page.keyboard.press(key);
-  await page.keyboard.press("Enter");
-}
-
 test.describe("12 responsive compact forms @responsive", () => {
   test("project form uses four, two, and one column layouts without losing advanced values", async ({ page }, testInfo) => {
     const assertNoFrontendErrors = attachFrontendGuards(page, testInfo);
@@ -71,23 +62,33 @@ test.describe("12 responsive compact forms @responsive", () => {
     await assertNoFrontendErrors();
   });
 
-  test("paper mode only exposes fields required by the active workflow", async ({ page }, testInfo) => {
+  test("paper account wizard exposes labeled controls in a stable focus order", async ({ page }, testInfo) => {
     const assertNoFrontendErrors = attachFrontendGuards(page, testInfo);
+    await page.route("**/api/paper/accounts?*", async (route) => {
+      await route.fulfill({
+        json: {
+          items: [],
+          count: 0,
+          limit: 50,
+          offset: 0,
+          dataTrust: { valuationTrusted: true, reason: null }
+        }
+      });
+    });
+    await page.route("**/api/projects?*", async (route) => {
+      await route.fulfill({ json: [] });
+    });
     await page.goto("/#/paper");
-    await expect(page.getByRole("heading", { name: "LEAN Paper" })).toBeVisible();
-
-    const createCard = page.locator(".ant-card").filter({ hasText: "Create Paper Session" }).first();
-    const mode = createCard.getByLabel("Mode", { exact: true });
-    await selectAdjacentAntOption(mode, "ArrowDown");
-    await expect(createCard.getByLabel("Market", { exact: true })).toBeVisible();
-    await expect(createCard.getByLabel("Symbol", { exact: true })).toBeVisible();
-    await expect(createCard.getByLabel("Initial Cash", { exact: true })).toBeVisible();
-    await expect(createCard.getByLabel("Project", { exact: true })).toHaveCount(0);
-
-    await selectAdjacentAntOption(mode, "ArrowUp");
-    await expect(createCard.getByLabel("Project", { exact: true })).toBeVisible();
-    await expect(createCard.getByLabel("Trusted Backtest", { exact: true })).toBeVisible();
-    await expect(createCard.getByLabel("Initial Cash", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "模拟账户" })).toBeVisible();
+    await page.getByRole("button", { name: "新建模拟账户" }).click();
+    const dialog = page.getByRole("dialog", { name: "新建模拟账户" });
+    await expect(dialog.getByRole("textbox", { name: /账户名称/ })).toBeVisible();
+    await expect(dialog.getByRole("spinbutton", { name: /初始资金/ })).toBeVisible();
+    await expect(dialog.getByRole("textbox", { name: /基准/ })).toBeVisible();
+    const firstFocusableLabels = await dialog.locator("input:not([disabled]), button:not([disabled])").evaluateAll(
+      (elements) => elements.slice(0, 4).map((element) => element.getAttribute("aria-label") || element.getAttribute("id") || element.textContent?.trim())
+    );
+    expect(firstFocusableLabels.some((label) => String(label).includes("name"))).toBeTruthy();
     await assertNoFrontendErrors();
   });
 });

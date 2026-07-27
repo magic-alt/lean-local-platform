@@ -955,6 +955,12 @@ export interface PaperAccount {
   primary_strategy?: string | null;
   last_successful_trading_date?: string | null;
   next_scheduled_at?: string | null;
+  automation_status?: string | null;
+  consecutive_failures?: number;
+  last_run_status?: string | null;
+  last_run_at?: string | null;
+  last_failure_code?: string | null;
+  last_failure_detail?: string | null;
   pending_signal_count?: number;
   pending_order_count?: number;
   last_valuation_at?: string | null;

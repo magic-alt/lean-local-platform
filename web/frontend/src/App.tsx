@@ -79,54 +79,48 @@ function AppShell() {
   const menuItems = useMemo(() => [
     {
       type: "group" as const,
-      label: "Workspace",
+      label: "研究",
       children: [
-        { key: "/", icon: <AppstoreOutlined />, label: navigationLink("/", "Dashboard", loadDashboardPage) }
+        { key: "/", icon: <AppstoreOutlined />, label: navigationLink("/", "概览", loadDashboardPage) },
+        { key: "/projects", icon: <FolderOpenOutlined />, label: navigationLink("/projects", "项目", loadCorePages) },
+        { key: "/data", icon: <DatabaseOutlined />, label: navigationLink("/data", "数据", loadCorePages) },
+        { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "研究", loadResearchPages) }
       ]
     },
     {
       type: "group" as const,
-      label: "Build & Validate",
+      label: "回测",
       children: [
-        { key: "/projects", icon: <FolderOpenOutlined />, label: navigationLink("/projects", "Projects", loadCorePages) },
-        { key: "/data", icon: <DatabaseOutlined />, label: navigationLink("/data", "Data", loadCorePages) },
-        { key: "/backtests", icon: <PlayCircleOutlined />, label: navigationLink("/backtests", "Backtests", loadCorePages) },
-        { key: "/optimization", icon: <SlidersOutlined />, label: navigationLink("/optimization", "Optimization", loadCorePages) }
+        { key: "/backtests", icon: <PlayCircleOutlined />, label: navigationLink("/backtests", "回测", loadCorePages) },
+        { key: "/optimization", icon: <SlidersOutlined />, label: navigationLink("/optimization", "优化", loadCorePages) },
+        { key: "/reports", icon: <FileTextOutlined />, label: navigationLink("/reports", "报告", loadOperationsPages) }
       ]
     },
     {
       type: "group" as const,
-      label: "Research & Execution",
+      label: "交易",
       children: [
-        { key: "/research", icon: <ExperimentOutlined />, label: navigationLink("/research", "Research", loadResearchPages) },
-        { key: "/insights", icon: <BulbOutlined />, label: navigationLink("/insights", "Insights", loadInsightsPages) },
-        { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "Paper Accounts", loadPaperAccountPages) }
+        { key: "/paper", icon: <ExperimentOutlined />, label: navigationLink("/paper", "模拟交易", loadPaperAccountPages) },
+        { key: "/insights", icon: <BulbOutlined />, label: navigationLink("/insights", "洞察", loadInsightsPages) }
       ]
     },
     {
       type: "group" as const,
-      label: "Operations",
+      label: "系统",
       children: [
-        { key: "/reports", icon: <FileTextOutlined />, label: navigationLink("/reports", "Reports", loadOperationsPages) },
-        { key: "/tasks", icon: <UnorderedListOutlined />, label: navigationLink("/tasks", "Tasks", loadOperationsPages) },
-        { key: "/monitoring", icon: <DashboardOutlined />, label: navigationLink("/monitoring", "Monitoring", loadOperationsPages) }
-      ]
-    },
-    {
-      type: "group" as const,
-      label: "Platform",
-      children: [
-        { key: "/docs", icon: <ReadOutlined />, label: navigationLink("/docs", "Docs", loadDocsPages) },
-        { key: "/settings", icon: <SettingOutlined />, label: navigationLink("/settings", "Settings", loadOperationsPages) }
+        { key: "/tasks", icon: <UnorderedListOutlined />, label: navigationLink("/tasks", "任务", loadOperationsPages) },
+        { key: "/monitoring", icon: <DashboardOutlined />, label: navigationLink("/monitoring", "监控", loadOperationsPages) },
+        { key: "/docs", icon: <ReadOutlined />, label: navigationLink("/docs", "文档", loadDocsPages) },
+        { key: "/settings", icon: <SettingOutlined />, label: navigationLink("/settings", "设置", loadOperationsPages) }
       ]
     }
   ], []);
   return (
     <Layout className="app-layout">
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       <Sider className="app-sidebar" breakpoint="lg" collapsedWidth="0">
         <div className="app-logo">LEAN Local</div>
-        <nav aria-label="Primary navigation">
+        <nav aria-label="主导航">
           <Menu theme="dark" mode="inline" items={menuItems} selectedKeys={selectedMenuKey ? [selectedMenuKey] : []} />
         </nav>
       </Sider>
@@ -135,7 +129,7 @@ function AppShell() {
           <Space className="app-header__content">
             <Button
               className="app-mobile-menu-button"
-              aria-label="Open navigation"
+              aria-label="打开导航"
               icon={<MenuOutlined />}
               onClick={() => setMobileNavigationOpen(true)}
             />
@@ -186,7 +180,7 @@ function AppShell() {
         open={mobileNavigationOpen}
         onClose={() => setMobileNavigationOpen(false)}
       >
-        <nav aria-label="Mobile navigation">
+        <nav aria-label="移动端导航">
           <Menu
             mode="inline"
             items={menuItems}

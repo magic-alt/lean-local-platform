@@ -47,13 +47,18 @@ export default defineConfig({
     },
     {
       name: "chromium-1280",
-      grep: /@viewport/,
+      grep: /@smoke|@responsive/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } }
     },
     {
-      name: "chromium-tablet",
-      grep: /@viewport/,
+      name: "tablet",
+      grep: /@smoke|@responsive/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } }
+    },
+    {
+      name: "mobile",
+      grep: /@smoke|@responsive/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } }
     }
   ],
   webServer: shouldStartServer ? {

@@ -46,8 +46,8 @@ test.describe("13 navigation data continuity @smoke", () => {
     await dashboard.open();
     await expect(page.getByText("42.00%", { exact: true })).toBeVisible();
 
-    await dashboard.navigateTo("Projects", "Projects");
-    await dashboard.navigateTo("Dashboard", "Dashboard");
+    await dashboard.navigateTo("项目", "Projects");
+    await dashboard.navigateTo("概览", "Dashboard");
 
     await expect(page.getByText("42.00%", { exact: true })).toBeVisible();
     await expect(page.getByText("N/A", { exact: true })).toHaveCount(0);

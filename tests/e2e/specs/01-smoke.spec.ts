@@ -12,17 +12,17 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
     await dashboard.screenshot(`smoke-dashboard-${testInfo.project.name}`);
 
     const routes: Array<[string, string | RegExp]> = [
-      ["Projects", "Projects"],
-      ["Data", "Data Library"],
-      ["Backtests", "Backtests"],
-      ["Optimization", "Optimization"],
-      ["Paper Accounts", "Paper Accounts"],
-      ["Research", "Research"],
-      ["Reports", "Reports"],
-      ["Insights", "Insights"],
-      ["Tasks", "Tasks"],
-      ["Monitoring", "Monitoring"],
-      ["Settings", "Settings"]
+      ["项目", "Projects"],
+      ["数据", "Data Library"],
+      ["回测", "Backtests"],
+      ["优化", "Optimization"],
+      ["模拟交易", "模拟账户"],
+      ["研究", "Research"],
+      ["报告", "Reports"],
+      ["洞察", "Insights"],
+      ["任务", "Tasks"],
+      ["监控", "Monitoring"],
+      ["设置", "Settings"]
     ];
 
     for (const [label, heading] of routes) {

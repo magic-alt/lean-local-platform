@@ -33,10 +33,10 @@ import {
 import Editor from "@monaco-editor/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
 import dayjs from "dayjs";
 
 import { api } from "../api";
+import { LeanChart } from "../charts/LeanChart";
 import type {
   AppSettings,
   AssetClassInfo,
@@ -660,7 +660,7 @@ export function ResearchPage() {
                     <Card><Statistic title="Net PnL" value={futuresContinuous.summary.totalNetPnl} precision={2} /></Card>
                   </div>
                   <Card title="Continuous Price and Net PnL" style={{ marginTop: 16 }}>
-                    <ReactECharts style={{ height: 380 }} option={{
+                    <LeanChart style={{ height: 380 }} option={{
                       tooltip: { trigger: "axis" },
                       legend: { data: ["Raw", "Adjusted", "Cumulative net PnL"] },
                       grid: { left: 64, right: 64, top: 44, bottom: 54 },

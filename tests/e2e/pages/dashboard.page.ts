@@ -14,19 +14,19 @@ export class DashboardPage extends BasePage {
 
   async expectShellNavigation() {
     for (const item of [
-      "Dashboard",
-      "Projects",
-      "Data",
-      "Backtests",
-      "Optimization",
-      "Paper Accounts",
-      "Legacy Paper",
-      "Research",
-      "Reports",
-      "Insights",
-      "Tasks",
-      "Monitoring",
-      "Settings"
+      "概览",
+      "项目",
+      "数据",
+      "研究",
+      "回测",
+      "优化",
+      "报告",
+      "模拟交易",
+      "洞察",
+      "任务",
+      "监控",
+      "文档",
+      "设置"
     ]) {
       await expect(this.page.getByRole("link", { name: item, exact: true })).toBeVisible();
     }

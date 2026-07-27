@@ -1,11 +1,11 @@
 import { Alert, Button, Card, Form, Select, Space, Table, Tabs, Tag, message } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
-import ReactECharts from "echarts-for-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { api } from "../api";
 import type { BacktestCompareResult, BacktestRun } from "../api";
 import { StatusTag } from "../components";
+import { LeanChart } from "../charts/LeanChart";
 import { useAsyncData } from "../hooks";
 
 
@@ -109,8 +109,8 @@ export function CompareRunsPanel() {
           <Card title="Curves" style={{ marginTop: 16 }}>
             <Tabs
               items={[
-                { key: "equity", label: "Equity", children: <ReactECharts option={compareChart(result, "equityCurve")} style={{ height: 360 }} /> },
-                { key: "drawdown", label: "Drawdown", children: <ReactECharts option={compareChart(result, "drawdownCurve")} style={{ height: 360 }} /> },
+                { key: "equity", label: "Equity", children: <LeanChart option={compareChart(result, "equityCurve")} style={{ height: 360 }} /> },
+                { key: "drawdown", label: "Drawdown", children: <LeanChart option={compareChart(result, "drawdownCurve")} style={{ height: 360 }} /> },
                 { key: "ranking", label: "Rankings", children: <Space direction="vertical">{Object.entries(result.rankings).map(([key, values]) => <div key={key}><strong>{key}</strong>: {values.join(", ")}</div>)}</Space> }
               ]}
             />

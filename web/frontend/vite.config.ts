@@ -15,10 +15,16 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return undefined;
           }
-          if (id.includes("/zrender/")) {
-            return "vendor-zrender";
+          if (id.includes("/echarts/lib/chart/")) {
+            return "vendor-echarts-charts";
           }
-          if (id.includes("/echarts")) {
+          if (id.includes("/echarts/lib/component/")) {
+            return "vendor-echarts-components";
+          }
+          if (id.includes("/zrender/")) {
+            return "vendor-echarts-renderer";
+          }
+          if (id.includes("/echarts/")) {
             return "vendor-echarts";
           }
           if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router-dom/")) {

@@ -33,7 +33,6 @@ import {
 import Editor from "@monaco-editor/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
 
 import { api } from "../api";
 import type {
