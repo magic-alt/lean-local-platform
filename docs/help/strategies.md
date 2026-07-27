@@ -23,7 +23,8 @@ Project 是可编辑、可版本化的策略工作区；Strategy Template 定义
 - RSI/Bollinger Mean Reversion；
 - ETF Momentum Rotation、Risk Parity、Turning Point Selection；
 - Crypto Momentum、Futures Trend；
-- PIT Dynamic Universe Portfolio。
+- PIT Dynamic Universe Portfolio；
+- Gap Buy · Source Replica 与 Gap Buy · A-Share Executable。
 
 每个模板位于 `strategies/templates/<key>/`，至少包含 `manifest.json` 和策略主体。文件格式与扩展规则见 [策略模板参考](../strategy_template.md)。
 
@@ -75,6 +76,19 @@ Project 是可编辑、可版本化的策略工作区；Strategy Template 定义
 - 股票池和财务数据必须按当时已公布且已生效的 PIT 记录解析。
 - 禁止未来函数；研究日期、信号日期和成交日期必须可解释。
 - 回测成功后仍需检查结果完整性、执行审计、数据证据和 admission gate。
+
+缺口买入模板刻意分为两条契约：
+
+| 模板 | 信号/收益口径 | 订单 | 准入 |
+| --- | --- | --- | --- |
+| `gap_buy_source_replica` | 当日正式 Open 选股、同一 Open 到当日 Close 的合成收益 | 不发送订单 | 永久禁止 |
+| `gap_buy_ashare_next_open` | 9:30—9:31 首分钟观察，9:32 提交保护性限价单，最早下一交易日退出 | 统一走 LEAN 和 `AShareExecutionHelper` | 仅在分钟覆盖、无同棒成交、T+1、部分成交/容量四项执行证据均通过后可参加 |
+
+两个模板都要求 PIT `universeSchedule`；推荐从 `A_SHARE_L3P_50` 生成。复现版只输出
+`GAP_SOURCE_SIGNAL` 审计日志和合成净值，不能把合成收益当作可成交的 LEAN
+组合业绩。可执行版要求 `market=china`、`assetClass=equity`、
+`resolution=minute`、`ashareRules=true`，并把选股和下单分在 9:31 与 9:32，
+避免同棒信号成交。
 
 ## 案例选择
 

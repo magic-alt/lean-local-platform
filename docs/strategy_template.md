@@ -111,6 +111,15 @@ The helper enforces:
 - cash buffer.
 - fee/slippage assumptions.
 
+For a guarded buy limit, multi-symbol A-share templates may call:
+
+```python
+self.ashare_execution.limit_buy(symbol, quantity, limit_price, tag="...")
+```
+
+The helper rechecks trade status, pending orders, lot size, cash and estimated
+buy costs before it forwards the limit order to LEAN.
+
 ## Benchmark Rule
 
 A-share templates must require a real benchmark. Constant benchmark fallback is disabled in generated production templates. Missing benchmark data should block the run before Docker execution.

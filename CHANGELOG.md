@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Add separate research-only and executable A-share gap-buy strategy templates, guarded LEAN limit-buy support, first-minute/next-minute timing, PIT-universe audit output, and an admission hard block for the source-replica contract.
 - Complete Level 5 Wave 6 with route-aware four-group Chinese navigation, persistent Backtest/Paper URL context, dedicated Paper deployment/risk/daily-run views and prominent automation failures, accessible focus/control/chart behavior, three responsive Playwright projects and four user journeys, plus modular ECharts chunks below 400 kB.
 - Retire the legacy Paper session API, navigation and Insight handoff surface; move trusted backtest candidates under Paper Accounts; purge unlinked legacy session records; and require newly rebuilt accounts to pass Source Gate and projection-history recertification before performance is trusted.
 - Distinguish interactive platform executability from unattended-operation readiness in dependency health, and prevent Dashboard loading state or a missing external alert webhook from falsely reporting that platform execution is blocked.

@@ -18,6 +18,7 @@ from .backtest_preflight import prepare_backtest_request
 from .backtest_validation import build_backtest_validation, build_experiment_record
 from .experiments import record_experiment_versions
 from .run_fingerprint import build_run_fingerprint
+from .strategies import get_template
 from .tasks import append_log, create_task, get_task, update_task
 
 
@@ -43,9 +44,45 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
     if project["language"] != "Python":
         raise LeanPlatformError("CSharp project execution is not enabled in this local web version yet.")
 
+    project_config = project.get("config") or {}
+    template_key = str(project_config.get("templateKey") or "").strip()
+    try:
+        template = get_template(template_key) if template_key else {}
+    except ValueError:
+        # Custom projects can outlive a file-backed template registration.
+        template = {}
+    required_market = str(template.get("requiredMarket") or "").lower()
+    requested_market = str(
+        request_data.get("market") or project_config.get("market") or ""
+    ).lower()
+    if required_market and requested_market != required_market:
+        raise LeanPlatformError(
+            f"strategy_template_market_mismatch:{template_key}:"
+            f"required={required_market}:requested={requested_market or 'missing'}"
+        )
+    required_resolution = str(template.get("requiredResolution") or "").lower()
+    requested_resolution = str(
+        request_data.get("resolution") or project_config.get("resolution") or "daily"
+    ).lower()
+    if required_resolution and requested_resolution != required_resolution:
+        raise LeanPlatformError(
+            f"strategy_template_resolution_mismatch:{template_key}:"
+            f"required={required_resolution}:requested={requested_resolution}"
+        )
+
     prepared = prepare_backtest_request(request_data, repair=True)
     parameters = prepared["parameters"]
     preflight = prepared["preflight"]
+    if template.get("requiresUniverseSchedule") and not parameters.get("universeSchedule"):
+        raise LeanPlatformError(
+            f"strategy_template_universe_schedule_required:{template_key}"
+        )
+    if template_key:
+        parameters["strategyTemplateKey"] = template_key
+        parameters["strategyMode"] = str(template.get("strategyMode") or "STANDARD")
+        parameters["researchOnly"] = bool(template.get("researchOnly", False))
+        parameters["tradable"] = bool(template.get("tradable", True))
+        parameters["admissionEligible"] = bool(template.get("admissionEligible", True))
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
     fingerprint_parameters = dict(parameters)

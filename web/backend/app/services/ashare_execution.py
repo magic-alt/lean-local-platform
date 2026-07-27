@@ -112,6 +112,9 @@ class AShareExecutionHelper:
     def _status(self, symbol):
         return self.status.get(_symbol_key(symbol), {}).get(_date_key(self.algorithm), {})
 
+    def trade_status(self, symbol):
+        return dict(self._status(symbol))
+
     def can_buy(self, symbol):
         item = self._status(symbol)
         if not item:
@@ -242,6 +245,38 @@ class AShareExecutionHelper:
                 return None
             return self.algorithm.market_order(symbol, quantity)
         return None
+
+    def limit_buy(self, symbol, quantity, limit_price, tag=""):
+        self._ensure_models(symbol)
+        if self._block_when_order_pending(symbol):
+            return None
+        can_trade, reason = self.can_buy(symbol)
+        if not can_trade:
+            self.algorithm.debug(f"AShare buy blocked {_symbol_key(symbol)} {reason}")
+            return None
+        price = float(limit_price)
+        if price <= 0:
+            self.algorithm.debug(f"AShare buy blocked {_symbol_key(symbol)} invalid_limit_price")
+            return None
+        rounded_quantity = self._round_to_lot(abs(int(quantity)))
+        if rounded_quantity <= 0:
+            self.algorithm.debug(f"AShare buy blocked {_symbol_key(symbol)} invalid_lot_quantity")
+            return None
+        trade_value = rounded_quantity * price
+        affordable_quantity = self._round_to_lot(
+            (self._available_cash() - self._buy_fee_buffer(trade_value)) / price
+        )
+        rounded_quantity = min(rounded_quantity, affordable_quantity)
+        rounded_quantity = self._round_to_lot(rounded_quantity)
+        if rounded_quantity <= 0:
+            self.algorithm.debug(f"AShare buy blocked {_symbol_key(symbol)} insufficient_cash_or_lot")
+            return None
+        return self.algorithm.limit_order(
+            symbol,
+            rounded_quantity,
+            price,
+            tag=tag,
+        )
 
     def exit(self, symbol):
         self._ensure_models(symbol)

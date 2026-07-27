@@ -151,6 +151,116 @@ def test_admission_requires_all_market_regimes():
         raise AssertionError("Expected an incomplete regime set to be rejected.")
 
 
+def test_source_replica_template_is_ineligible_for_admission():
+    from app import db as db_module
+    from app.db import json_dump
+    from app.services.strategy_admission import register_baseline
+
+    db_module.init_db()
+    run_ids, regimes = _seed_runs(db_module)
+    with db_module.db() as connection:
+        connection.execute(
+            "update projects set config_json = ? where id = ?",
+            (
+                json_dump({"templateKey": "gap_buy_source_replica"}),
+                "strategy-1",
+            ),
+        )
+
+    try:
+        register_baseline(
+            "strategy-1",
+            run_ids=run_ids,
+            regimes=regimes,
+            parameters={"fast": 10},
+        )
+    except ValueError as exc:
+        assert "research-only" in str(exc)
+        assert "cannot enter strategy admission" in str(exc)
+    else:
+        raise AssertionError("Expected SOURCE_REPLICA admission to be rejected.")
+
+
+def test_persisted_source_replica_contract_cannot_be_hidden_by_project_reconfiguration():
+    from app import db as db_module
+    from app.db import json_dump
+    from app.services.strategy_admission import register_baseline
+
+    db_module.init_db()
+    run_ids, regimes = _seed_runs(db_module)
+    with db_module.db() as connection:
+        for run_id in run_ids:
+            connection.execute(
+                "update backtest_runs set parameters_json = ? where id = ?",
+                (
+                    json_dump(
+                        {
+                            "ticker": "SPY",
+                            "start": "2024-01-01",
+                            "end": "2024-12-31",
+                            "fast": 10,
+                            "strategyTemplateKey": "gap_buy_source_replica",
+                            "strategyMode": "SOURCE_REPLICA",
+                            "researchOnly": True,
+                            "tradable": False,
+                            "admissionEligible": False,
+                        }
+                    ),
+                    run_id,
+                ),
+            )
+        connection.execute(
+            "update projects set config_json = ? where id = ?",
+            (
+                json_dump({"templateKey": "gap_buy_ashare_next_open"}),
+                "strategy-1",
+            ),
+        )
+
+    try:
+        register_baseline(
+            "strategy-1",
+            run_ids=run_ids,
+            regimes=regimes,
+            parameters={"fast": 10},
+        )
+    except ValueError as exc:
+        assert "SOURCE_REPLICA" in str(exc)
+        assert "cannot enter strategy admission" in str(exc)
+    else:
+        raise AssertionError("Expected the immutable SOURCE_REPLICA run contract to win.")
+
+
+def test_executable_gap_template_requires_intraday_execution_evidence():
+    from app import db as db_module
+    from app.db import json_dump
+    from app.services.strategy_admission import register_baseline
+
+    db_module.init_db()
+    run_ids, regimes = _seed_runs(db_module)
+    with db_module.db() as connection:
+        connection.execute(
+            "update projects set config_json = ? where id = ?",
+            (
+                json_dump({"templateKey": "gap_buy_ashare_next_open"}),
+                "strategy-1",
+            ),
+        )
+
+    try:
+        register_baseline(
+            "strategy-1",
+            run_ids=run_ids,
+            regimes=regimes,
+            parameters={"fast": 10},
+        )
+    except ValueError as exc:
+        assert "missing required admission execution gates" in str(exc)
+        assert "ashare_no_same_bar_signal_fill" in str(exc)
+    else:
+        raise AssertionError("Expected missing executable gap evidence to block admission.")
+
+
 def test_admitted_runs_can_be_used_by_portfolio_optimizer():
     from app import db as db_module
     from app.services.portfolio_optimization import optimize_portfolio

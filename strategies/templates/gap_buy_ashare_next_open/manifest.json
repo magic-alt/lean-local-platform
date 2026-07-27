@@ -1,0 +1,30 @@
+{
+  "key": "gap_buy_ashare_next_open",
+  "name": "Gap Buy · A-Share Executable",
+  "description": "PIT cross-sectional A-share gap strategy: observe the first minute, submit protected limit orders later, and exit no earlier than the next trade date.",
+  "executionScope": "dynamic_universe",
+  "strategyMode": "A_SHARE_EXECUTABLE",
+  "researchOnly": false,
+  "tradable": true,
+  "admissionEligible": true,
+  "requiredMarket": "china",
+  "requiredResolution": "minute",
+  "requiresUniverseSchedule": true,
+  "defaultUniverse": "A_SHARE_L3P_50",
+  "requiredAdmissionGates": [
+    "ashare_intraday_data_coverage",
+    "ashare_no_same_bar_signal_fill",
+    "ashare_t_plus_one",
+    "ashare_partial_fill_volume_cap"
+  ],
+  "parameters": [
+    {"key": "sigmaLookback", "label": "Sigma Lookback", "type": "number", "default": 90, "min": 2},
+    {"key": "maLookback", "label": "MA Lookback", "type": "number", "default": 20, "min": 2},
+    {"key": "gapSigma", "label": "Gap Sigma", "type": "number", "default": 1.0, "min": 0.1},
+    {"key": "topN", "label": "Top N", "type": "number", "default": 10, "min": 1},
+    {"key": "maxChaseBps", "label": "Max Chase (bps)", "type": "number", "default": 15, "min": 0},
+    {"key": "grossExposure", "label": "Gross Exposure", "type": "number", "default": 0.8, "min": 0.01, "max": 1},
+    {"key": "maxParticipation", "label": "First-Minute Participation", "type": "number", "default": 0.05, "min": 0.001, "max": 1},
+    {"key": "tickSize", "label": "Tick Size", "type": "number", "default": 0.01, "min": 0.001}
+  ]
+}

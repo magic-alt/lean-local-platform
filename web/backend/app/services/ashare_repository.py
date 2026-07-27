@@ -1133,6 +1133,8 @@ def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
                 "limit_down": row["limit_down"],
                 "is_limit_up": bool(row["is_limit_up"]),
                 "is_limit_down": bool(row["is_limit_down"]),
+                "is_one_word_limit_up": bool(row["is_one_word_limit_up"]),
+                "is_one_word_limit_down": bool(row["is_one_word_limit_down"]),
                 "can_buy": bool(row["can_buy"]),
                 "can_sell": bool(row["can_sell"]),
                 "is_st": bool(row["is_st"]),

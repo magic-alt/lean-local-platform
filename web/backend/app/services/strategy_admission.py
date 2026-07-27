@@ -9,6 +9,7 @@ from statistics import mean
 from typing import Any
 
 from ..db import db, json_dump, row_to_dict, utc_now
+from .strategies import get_template
 
 
 PROFILE_VERSION = "admission-v1"
@@ -81,6 +82,8 @@ _SCOPE_PARAMETERS = {
     "strategySnapshotAlgorithmClass", "strategySnapshotLanguage", "datasetVersion",
     "datasetCertified", "datasetProduction", "datasetEnvironment", "datasetQaStatus",
     "datasetQaReportId", "allowResearchSource", "preflight",
+    "strategyTemplateKey", "strategyMode", "researchOnly", "tradable",
+    "admissionEligible",
 }
 
 
@@ -156,10 +159,12 @@ def _load_run(run_id: str, strategy_id: str) -> dict[str, Any]:
             """
             select br.id, br.project_id, br.status, br.parameters_json, br.validation_json,
                    br.fingerprint_json, result.summary_metrics_json, result.performance_json,
-                   experiment.strategy_version_id, experiment.parameter_hash
+                   experiment.strategy_version_id, experiment.parameter_hash,
+                   project.config_json
             from backtest_runs br
             left join backtest_results result on result.job_id = br.id
             left join experiments experiment on experiment.run_id = br.id
+            left join projects project on project.id = br.project_id
             where br.id = ?
             """,
             (run_id,),
@@ -179,6 +184,54 @@ def _load_run(run_id: str, strategy_id: str) -> dict[str, Any]:
     return item
 
 
+def _assert_admission_eligible(runs: list[dict[str, Any]]) -> None:
+    for item in runs:
+        parameters = item.get("parameters") or {}
+        template_key = str(
+            parameters.get("strategyTemplateKey")
+            or (item.get("config") or {}).get("templateKey")
+            or ""
+        ).strip()
+        if parameters.get("admissionEligible") is False:
+            mode = str(parameters.get("strategyMode") or template_key or "unknown")
+            raise ValueError(
+                f"Strategy run {item['id']} ({mode}) is research-only "
+                "and cannot enter strategy admission."
+            )
+        if not template_key:
+            continue
+        try:
+            template = get_template(template_key)
+        except ValueError:
+            # Custom or retired templates retain the existing validation path.
+            continue
+        if template.get("admissionEligible", True) is False:
+            mode = str(template.get("strategyMode") or template_key)
+            raise ValueError(
+                f"Strategy template {template_key} ({mode}) is research-only "
+                "and cannot enter strategy admission."
+            )
+        required_gates = {
+            str(name)
+            for name in template.get("requiredAdmissionGates") or []
+            if str(name)
+        }
+        if required_gates:
+            observed_gates = {
+                str(gate.get("name")): bool(gate.get("passed"))
+                for gate in (item.get("validation") or {}).get("gates") or []
+                if gate.get("name")
+            }
+            missing_or_failed = sorted(
+                name for name in required_gates if not observed_gates.get(name, False)
+            )
+            if missing_or_failed:
+                raise ValueError(
+                    f"Strategy template {template_key} is missing required admission "
+                    f"execution gates: {', '.join(missing_or_failed)}"
+                )
+
+
 def _load_runs(strategy_id: str, run_ids: list[str], regimes: dict[str, str]) -> list[dict[str, Any]]:
     if not run_ids:
         raise ValueError("At least one completed run is required.")
@@ -191,6 +244,7 @@ def _load_runs(strategy_id: str, run_ids: list[str], regimes: dict[str, str]) ->
     if not REQUIRED_REGIMES <= covered:
         raise ValueError(f"Missing required regimes: {', '.join(sorted(REQUIRED_REGIMES - covered))}")
     runs = [_load_run(run_id, strategy_id) for run_id in run_ids]
+    _assert_admission_eligible(runs)
     if any(not item.get("strategy_version_id") for item in runs):
         raise ValueError("Every admission run must have a persisted strategy version.")
     versions = {item["strategy_version_id"] for item in runs}

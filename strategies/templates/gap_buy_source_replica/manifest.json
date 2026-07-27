@@ -1,0 +1,20 @@
+{
+  "key": "gap_buy_source_replica",
+  "name": "Gap Buy · Source Replica",
+  "description": "Research-only reproduction of the book's open-to-close gap rule. It records synthetic same-open returns and never submits orders.",
+  "executionScope": "dynamic_universe",
+  "strategyMode": "SOURCE_REPLICA",
+  "researchOnly": true,
+  "tradable": false,
+  "admissionEligible": false,
+  "requiredMarket": "china",
+  "requiredResolution": "daily",
+  "requiresUniverseSchedule": true,
+  "defaultUniverse": "A_SHARE_L3P_50",
+  "parameters": [
+    {"key": "sigmaLookback", "label": "Sigma Lookback", "type": "number", "default": 90, "min": 2},
+    {"key": "maLookback", "label": "MA Lookback", "type": "number", "default": 20, "min": 2},
+    {"key": "gapSigma", "label": "Gap Sigma", "type": "number", "default": 1.0, "min": 0.1},
+    {"key": "topN", "label": "Top N", "type": "number", "default": 10, "min": 1}
+  ]
+}
