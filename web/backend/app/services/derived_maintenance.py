@@ -155,6 +155,117 @@ def _canonical_stats(scope: dict[str, str]) -> dict[str, Any]:
     return dict(row) if row else {"row_count": 0, "first_date": None, "last_date": None}
 
 
+def _parquet_incremental_start(
+    scope: dict[str, str],
+    prior: dict[str, Any],
+    *,
+    current_row_count: int,
+) -> str | None:
+    """Choose the earliest year that may have changed since a proven export."""
+    prior_end = str(prior.get("materialized_end") or "")
+    dataset_id = str(prior.get("dataset_id") or "")
+    if not prior_end or not dataset_id:
+        return None
+
+    with db() as connection:
+        file_total = connection.execute(
+            "select sum(row_count) as row_count from parquet_files where dataset_id=?",
+            (dataset_id,),
+        ).fetchone()
+        registered_row_count = int(file_total["row_count"] or 0) if file_total else 0
+        successful = connection.execute(
+            """
+            select max(finished_at) as finished_at
+            from derived_maintenance_runs
+            where status='success' and requested_layers_json like ?
+            """,
+            ('%"parquet"%',),
+        ).fetchone()
+        last_success = str(successful["finished_at"] or "") if successful else ""
+        change_since = (
+            str(prior.get("completed_at") or "")
+            if registered_row_count == current_row_count
+            else last_success
+        ) or last_success
+        if not change_since:
+            return None
+
+        predicates = " and ".join(
+            f"{key}=?" for key in (
+                "asset_class",
+                "market",
+                "venue",
+                "resolution",
+                "data_type",
+                "adjust",
+                "source",
+            )
+        )
+        scope_values = [
+            scope[key] for key in (
+                "asset_class",
+                "market",
+                "venue",
+                "resolution",
+                "data_type",
+                "adjust",
+                "source",
+            )
+        ]
+        changed = connection.execute(
+            f"""
+            select min(trade_date) as first_date
+            from market_daily_bars
+            where {predicates} and created_at > ?
+            """,
+            [*scope_values, change_since],
+        ).fetchone()
+
+        candidate_years = {int(prior_end[:4])}
+        changed_date = str(changed["first_date"] or "") if changed else ""
+        if changed_date:
+            candidate_years.add(int(changed_date[:4]))
+
+        if registered_row_count != current_row_count:
+            canonical_years = connection.execute(
+                f"""
+                select substr(trade_date,1,4) as year,count(*) as row_count
+                from market_daily_bars
+                where {predicates}
+                group by substr(trade_date,1,4)
+                """,
+                scope_values,
+            ).fetchall()
+            parquet_years = connection.execute(
+                """
+                select substr(first_timestamp,1,4) as year,sum(row_count) as row_count
+                from parquet_files
+                where dataset_id=?
+                group by substr(first_timestamp,1,4)
+                """,
+                (dataset_id,),
+            ).fetchall()
+            canonical_counts = {
+                str(row["year"]): int(row["row_count"] or 0)
+                for row in canonical_years
+            }
+            parquet_counts = {
+                str(row["year"]): int(row["row_count"] or 0)
+                for row in parquet_years
+            }
+            mismatched_years = {
+                int(year)
+                for year in set(canonical_counts) | set(parquet_counts)
+                if canonical_counts.get(year, 0) != parquet_counts.get(year, 0)
+            }
+            if mismatched_years:
+                candidate_years.add(min(mismatched_years))
+            else:
+                return None
+
+    return f"{min(candidate_years):04d}-01-01"
+
+
 def _existing_layer_seed(layer: str, scope: dict[str, str], stats: dict[str, Any]) -> dict[str, Any]:
     """Adopt only an existing derived layer that exactly matches canonical coverage."""
     if layer == "parquet":
@@ -500,8 +611,11 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                 )
                 try:
                     if layer == "parquet":
-                        prior_end = prior.get("materialized_end")
-                        incremental_start = f"{str(prior_end)[:4]}-01-01" if prior_end else None
+                        incremental_start = _parquet_incremental_start(
+                            scope,
+                            prior,
+                            current_row_count=int(stats["row_count"]),
+                        )
                         output = export_market_daily_bars(
                             **scope,
                             start_date=incremental_start,

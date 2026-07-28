@@ -86,6 +86,53 @@ def test_celery_beat_schedules_weekday_derived_maintenance():
     assert "1-5" in str(schedule["schedule"])
 
 
+def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services import derived_maintenance
+    from app.services.market_repository import upsert_market_daily_bars
+
+    successful = derived_maintenance.create_maintenance_run(layers=["parquet"])
+    with db() as connection:
+        connection.execute(
+            """
+            update derived_maintenance_runs
+            set status='success',started_at=?,finished_at=?
+            where id=?
+            """,
+            ("2020-01-01T00:00:00+00:00", "2020-01-01T00:01:00+00:00", successful["id"]),
+        )
+    upsert_market_daily_bars(
+        [{"trade_date": "2005-04-08", "open": 10, "high": 11, "low": 9, "close": 10.5, "volume": 100}],
+        symbol="600519",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        source="tushare",
+    )
+    scope = {
+        "asset_class": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "data_type": "trade",
+        "adjust": "raw",
+        "source": "tushare",
+    }
+
+    incremental_start = derived_maintenance._parquet_incremental_start(
+        scope,
+        {
+            "materialized_end": "2026-07-22",
+            "dataset_id": "stale-parquet-dataset",
+        },
+        current_row_count=1,
+    )
+
+    assert incremental_start == "2005-01-01"
+
+
 def test_clickhouse_child_failure_marks_overall_run_partial(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

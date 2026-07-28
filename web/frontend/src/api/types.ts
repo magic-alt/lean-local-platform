@@ -468,6 +468,8 @@ export interface DependencyStatus {
 export interface DependencyHealth {
   status: "ok" | "degraded";
   executionStatus: "ok" | "degraded";
+  executionBlockers: string[];
+  operationalBlockers: string[];
   dependencies: DependencyStatus[];
   urls: {
     prometheus: string;

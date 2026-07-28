@@ -375,29 +375,59 @@ def _market_source_lineage(
         predicates.append("m.trade_date <= ?")
         params.append(end_date)
     with db() as connection:
-        rows = connection.execute(
+        grouped_rows = connection.execute(
             f"""
-            select m.batch_id, m.symbol, b.provider, b.status, b.config_json, b.qa_report_json,
-                   count(*) as row_count
+            select m.batch_id, m.symbol, count(*) as row_count
             from market_daily_bars m
-            left join data_import_batches b on b.id = m.batch_id
             where {" and ".join(predicates)}
-            group by m.batch_id, m.symbol, b.provider, b.status, b.config_json, b.qa_report_json
-            order by m.batch_id, m.symbol
+            group by m.batch_id, m.symbol
             """,
             params,
         ).fetchall()
+        batch_ids = sorted(
+            {
+                str(row["batch_id"])
+                for row in grouped_rows
+                if row["batch_id"]
+            }
+        )
+        batch_metadata: dict[str, dict[str, Any]] = {}
+        for offset in range(0, len(batch_ids), 400):
+            chunk = batch_ids[offset : offset + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            batch_rows = connection.execute(
+                f"""
+                select id, provider, status, config_json, qa_report_json
+                from data_import_batches
+                where id in ({placeholders})
+                """,
+                chunk,
+            ).fetchall()
+            batch_metadata.update(
+                {str(row["id"]): dict(row) for row in batch_rows}
+            )
     parsed_rows: list[tuple[Any, dict[str, Any], dict[str, Any]]] = []
     sync_run_ids: set[str] = set()
-    for row in rows:
-        try:
-            qa_report = json.loads(row["qa_report_json"] or "{}")
-        except (TypeError, json.JSONDecodeError):
-            qa_report = {}
-        try:
-            batch_config = json.loads(row["config_json"] or "{}")
-        except (TypeError, json.JSONDecodeError):
-            batch_config = {}
+    parsed_batch_metadata: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for grouped_row in grouped_rows:
+        batch_id = str(grouped_row["batch_id"] or "")
+        metadata = batch_metadata.get(batch_id) or {}
+        if batch_id not in parsed_batch_metadata:
+            try:
+                qa_report = json.loads(metadata.get("qa_report_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                qa_report = {}
+            try:
+                batch_config = json.loads(metadata.get("config_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                batch_config = {}
+            parsed_batch_metadata[batch_id] = (qa_report, batch_config)
+        qa_report, batch_config = parsed_batch_metadata[batch_id]
+        row = {
+            **dict(grouped_row),
+            "provider": metadata.get("provider"),
+            "status": metadata.get("status"),
+        }
         parsed_rows.append((row, qa_report, batch_config))
         provenance = batch_config.get("provenance") or {}
         sync_run_id = str(provenance.get("syncRunId") or "")
@@ -529,12 +559,18 @@ def _market_source_lineage(
             and int(governed_manifest.get("rejected_rows") or 0) == 0
         )
         evidence_valid = evidence_valid or run_level_evidence_valid
+        batch_controls_valid = bool(
+            (
+                str(row["status"] or "").lower() == "success"
+                and qa_report.get("passed") is True
+                and declared_environment == "production"
+            )
+            or run_level_evidence_valid
+        )
         valid = bool(
             row["batch_id"]
             and str(row["provider"] or "").lower() == PRIMARY_DATA_SOURCE
-            and str(row["status"] or "").lower() == "success"
-            and qa_report.get("passed") is True
-            and declared_environment == "production"
+            and batch_controls_valid
             and not synthetic
             and evidence_valid
         )
@@ -554,8 +590,8 @@ def _market_source_lineage(
             )
     return {
         "required": True,
-        "passed": bool(rows) and not invalid,
-        "batchCount": len(rows),
+        "passed": bool(grouped_rows) and not invalid,
+        "batchCount": len(grouped_rows),
         "invalidBatches": invalid[:100],
     }
 
@@ -1033,8 +1069,13 @@ def parquet_consistency_report(
         duckdb_counts = {"enabled": duckdb is not None, "rowCount": None, "firstDate": None, "lastDate": None, "error": None}
         if duckdb is not None and files and not missing_files:
             paths = ", ".join(_sql_string(str(item["visible_path"])) for item in resolved_files)
+            duckdb_connection = None
             try:
-                row = duckdb.connect(database=":memory:").execute(
+                duckdb_connection = duckdb.connect(database=":memory:")
+                duckdb_connection.execute("set memory_limit='128MB'")
+                duckdb_connection.execute("set threads=1")
+                duckdb_connection.execute("set preserve_insertion_order=false")
+                row = duckdb_connection.execute(
                     f"""
                     select count(*) as row_count, min(trade_date) as first_date, max(trade_date) as last_date
                     from read_parquet([{paths}])
@@ -1043,6 +1084,9 @@ def parquet_consistency_report(
                 duckdb_counts.update({"rowCount": row[0], "firstDate": str(row[1]) if row[1] is not None else None, "lastDate": str(row[2]) if row[2] is not None else None})
             except Exception as exc:
                 duckdb_counts["error"] = str(exc)
+            finally:
+                if duckdb_connection is not None:
+                    duckdb_connection.close()
         issues = []
         if missing_files:
             issues.append("missing_parquet_files")

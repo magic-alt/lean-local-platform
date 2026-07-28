@@ -29,6 +29,8 @@ export function Dashboard() {
   const dependencyHealth = useAsyncData(api.dependencyHealth, {
     status: "ok",
     executionStatus: "ok",
+    executionBlockers: [],
+    operationalBlockers: [],
     dependencies: [],
     urls: { prometheus: "", grafana: "" }
   });
@@ -43,12 +45,33 @@ export function Dashboard() {
   const tasksLoading = tasks.loading && tasks.data.length === 0;
   const dependencyChecksCompleted = dependencyHealth.data.dependencies.length > 0;
   const failedDependencies = dependencyHealth.data.dependencies.filter((item) => !item.ok);
-  const failedDependencyNames = failedDependencies.map((item) => item.service).join(", ");
   const executionBlocked = dependencyChecksCompleted && dependencyHealth.data.executionStatus !== "ok";
+  const reportedExecutionBlockers = dependencyHealth.data.executionBlockers ?? [];
+  const reportedOperationalBlockers = dependencyHealth.data.operationalBlockers ?? [];
+  const executionBlockers = reportedExecutionBlockers.length > 0
+    ? reportedExecutionBlockers
+    : (executionBlocked ? failedDependencies.map((item) => item.service) : []);
+  const infrastructureBlockers = executionBlockers.filter((service) => service !== "source_certification");
+  const sourceCertificationBlocked = executionBlockers.includes("source_certification");
   const operationallyDegraded = dependencyChecksCompleted
     && dependencyHealth.data.status !== "ok"
     && !executionBlocked;
-  const alertChannelMissing = failedDependencies.some((item) => item.service === "external_alert_channel");
+  const operationalBlockers = reportedOperationalBlockers.length > 0
+    ? reportedOperationalBlockers
+    : (operationallyDegraded ? failedDependencies.map((item) => item.service) : []);
+  const sourceCertification = failedDependencies.find((item) => item.service === "source_certification");
+  const sourceCertificationDetail = typeof sourceCertification?.detail === "object"
+    && sourceCertification.detail !== null
+    ? sourceCertification.detail as Record<string, unknown>
+    : undefined;
+  const uncertifiedScopes = Array.isArray(sourceCertificationDetail?.scopes)
+    ? sourceCertificationDetail.scopes
+      .filter((scope): scope is Record<string, unknown> => typeof scope === "object" && scope !== null)
+      .filter((scope) => Boolean(scope.certificationError))
+      .map((scope) => `${String(scope.assetClass ?? "market data")}: ${String(scope.certificationError)}`)
+      .join(", ")
+    : "";
+  const operationalBlockerNames = operationalBlockers.join(", ");
 
   return (
     <>
@@ -59,13 +82,31 @@ export function Dashboard() {
           <Button icon={<DeleteOutlined />} onClick={() => setHistoryOpen(true)}>Manage Local History</Button>
         </Space>
       </div>
-      {executionBlocked && (
+      {infrastructureBlockers.length > 0 && (
         <Alert
           type="error"
           showIcon
-          message="Platform execution is blocked or degraded"
-          description={failedDependencyNames}
+          message="Platform infrastructure is not executable"
+          description={infrastructureBlockers.join(", ")}
           action={<Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {sourceCertificationBlocked && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Production market data is awaiting recertification"
+          description={
+            uncertifiedScopes
+              || "A governed market-data update changed the certified dataset. Production-data runs remain fail-closed until derived-layer validation completes."
+          }
+          action={(
+            <Space>
+              <Button size="small" onClick={() => navigate("/data")}>Open Data</Button>
+              <Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>
+            </Space>
+          )}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -75,9 +116,9 @@ export function Dashboard() {
           showIcon
           message="Scheduled automation needs attention"
           description={
-            alertChannelMissing
+            operationalBlockers.includes("external_alert_channel")
               ? "External alert delivery is not configured. Interactive backtests remain available, but unattended schedules are not operationally ready."
-              : failedDependencyNames
+              : operationalBlockerNames
           }
           action={<Button size="small" onClick={() => void dependencyHealth.reload()}>Recheck</Button>}
           style={{ marginBottom: 16 }}

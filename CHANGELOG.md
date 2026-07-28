@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Keep Celery beat and Source Gate recovery active with a writable scheduler file and complete documented startup, make Parquet maintenance rewrite the earliest historically changed or count-mismatched year, let complete governed full-rebuild evidence supersede stale batch state without admitting synthetic data, tightly bound DuckDB consistency memory, fetch and parse large batch lineage metadata once per batch instead of duplicating it per symbol, remove the full grouping filesort, return exact execution and operational blockers from dependency health, and make Dashboard distinguish production-data recertification from infrastructure failure.
 - Add separate research-only and executable A-share gap-buy strategy templates, guarded LEAN limit-buy support, first-minute/next-minute timing, PIT-universe audit output, and an admission hard block for the source-replica contract.
 - Complete Level 5 Wave 6 with route-aware four-group Chinese navigation, persistent Backtest/Paper URL context, dedicated Paper deployment/risk/daily-run views and prominent automation failures, accessible focus/control/chart behavior, three responsive Playwright projects and four user journeys, plus modular ECharts chunks below 400 kB.
 - Retire the legacy Paper session API, navigation and Insight handoff surface; move trusted backtest candidates under Paper Accounts; purge unlinked legacy session records; and require newly rebuilt accounts to pass Source Gate and projection-history recertification before performance is trusted.

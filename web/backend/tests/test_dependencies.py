@@ -90,3 +90,29 @@ def test_missing_alert_channel_does_not_degrade_interactive_execution():
         )
         == "ok"
     )
+    assert dependencies._dependency_blockers(
+        checks,
+        dependencies.OPERATIONAL_CRITICAL_SERVICES,
+    ) == ["external_alert_channel"]
+    assert dependencies._dependency_blockers(
+        checks,
+        dependencies.EXECUTION_CRITICAL_SERVICES,
+    ) == []
+
+
+def test_source_certification_is_reported_as_the_exact_execution_blocker():
+    checks = [
+        {"service": "database", "ok": True},
+        {"service": "redis", "ok": True},
+        {"service": "source_certification", "ok": False},
+        {"service": "external_alert_channel", "ok": False},
+    ]
+
+    assert dependencies._dependency_blockers(
+        checks,
+        dependencies.EXECUTION_CRITICAL_SERVICES,
+    ) == ["source_certification"]
+    assert dependencies._dependency_blockers(
+        checks,
+        dependencies.OPERATIONAL_CRITICAL_SERVICES,
+    ) == ["source_certification", "external_alert_channel"]

@@ -237,6 +237,8 @@ export function MonitoringPage() {
   const health = useAsyncData<DependencyHealth>(api.dependencyHealth, {
     status: "ok",
     executionStatus: "ok",
+    executionBlockers: [],
+    operationalBlockers: [],
     dependencies: [],
     urls: {
       prometheus: "http://127.0.0.1:9090",

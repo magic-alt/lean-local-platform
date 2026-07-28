@@ -348,6 +348,34 @@ def test_source_lineage_uses_exact_governed_full_rebuild_evidence(
                 "payload", "archive", 27, 27, "gzip", "now",
             ),
         )
+        connection.execute(
+            """
+            insert into data_import_batches
+                (id, provider, market, asset_class, status, config_json, qa_report_json,
+                 started_at, finished_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "batch-before-governed-rebuild", "tushare", "china", "equity", "running",
+                '{"environment":"research","synthetic":false}',
+                '{}',
+                "2026-07-22T00:00:00+00:00", None,
+            ),
+        )
+        connection.execute(
+            """
+            insert into market_daily_bars
+                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                 data_type, open, high, low, close, volume, adjust, source, batch_id, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "inst-governed-lineage", "600519", "equity", "china", "china",
+                "2026-07-03", "daily", "trade", 100.0, 102.0, 99.0, 101.0,
+                10000, "raw", "tushare", "batch-before-governed-rebuild",
+                "2026-07-22T00:01:00+00:00",
+            ),
+        )
 
     lineage = parquet_lake._market_source_lineage(
         parquet_lake._normalize_scope(source="tushare"),
@@ -361,6 +389,16 @@ def test_source_lineage_uses_exact_governed_full_rebuild_evidence(
     assert lineage["runId"] == run["id"]
     assert lineage["responseRows"] == 1
     assert lineage["archivedRows"] == 1
+
+    fallback_lineage = parquet_lake._market_source_lineage(
+        parquet_lake._normalize_scope(source="tushare"),
+        "2026-07-03",
+        "2026-07-03",
+        expected_row_count=2,
+    )
+
+    assert fallback_lineage["passed"] is True
+    assert fallback_lineage["invalidBatches"] == []
 
 
 def test_rebuild_never_certifies_synthetic_tushare_fixture(tmp_path, monkeypatch):

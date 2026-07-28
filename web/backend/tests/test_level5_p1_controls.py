@@ -243,6 +243,13 @@ def test_compose_workers_hide_runtime_secrets_and_mount_workspace_read_only():
     assert "/workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700" in compose
 
 
+def test_compose_beat_uses_a_writable_scheduler_file():
+    compose = (Path(__file__).parents[3] / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "--schedule=/tmp/celerybeat-schedule" in compose
+    assert "/tmp:rw,noexec,nosuid,size=64m" in compose
+
+
 def test_restore_script_verifies_rows_and_checksums():
     restore = (Path(__file__).parents[3] / "scripts" / "restore_mysql.sh").read_text(
         encoding="utf-8"

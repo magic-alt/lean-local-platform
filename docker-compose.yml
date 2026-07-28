@@ -402,7 +402,7 @@ services:
     build:
       context: .
       dockerfile: web/backend/Dockerfile
-    command: celery -A app.tasks.celery_app beat --loglevel=info
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
@@ -433,6 +433,7 @@ services:
     volumes:
       - .:/workspace:ro
     tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
       - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     depends_on:
       redis:

@@ -332,6 +332,17 @@ def _dependency_status(
     return "ok" if all(item["ok"] for item in critical) else "degraded"
 
 
+def _dependency_blockers(
+    checks: list[dict[str, Any]],
+    critical_services: frozenset[str],
+) -> list[str]:
+    return [
+        str(item["service"])
+        for item in checks
+        if item["service"] in critical_services and not item["ok"]
+    ]
+
+
 def dependency_health() -> dict[str, Any]:
     checks = [
         _timed("database", check_database),
@@ -358,9 +369,13 @@ def dependency_health() -> dict[str, Any]:
             _timed("source_certification", check_source_certifications),
         ]
     )
+    execution_blockers = _dependency_blockers(checks, EXECUTION_CRITICAL_SERVICES)
+    operational_blockers = _dependency_blockers(checks, OPERATIONAL_CRITICAL_SERVICES)
     return {
-        "status": _dependency_status(checks, OPERATIONAL_CRITICAL_SERVICES),
-        "executionStatus": _dependency_status(checks, EXECUTION_CRITICAL_SERVICES),
+        "status": "ok" if not operational_blockers else "degraded",
+        "executionStatus": "ok" if not execution_blockers else "degraded",
+        "executionBlockers": execution_blockers,
+        "operationalBlockers": operational_blockers,
         "dependencies": checks,
         "urls": {
             "prometheus": PROMETHEUS_URL,
