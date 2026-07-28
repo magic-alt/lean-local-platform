@@ -234,10 +234,16 @@
         )
         selected = qualified[:self.top_n]
         selected_symbols = {self.screening_symbols[row["symbol"]] for row in selected}
+        exit_orders_submitted = False
         for symbol_value in self.screening_symbols.values():
             if self.portfolio[symbol_value].invested and symbol_value not in selected_symbols:
-                self.ashare_execution.exit(symbol_value) if self.ashare_execution else self.liquidate(symbol_value)
-        if selected_symbols:
+                ticket = (
+                    self.ashare_execution.exit(symbol_value)
+                    if self.ashare_execution
+                    else self.liquidate(symbol_value)
+                )
+                exit_orders_submitted = ticket is not None or exit_orders_submitted
+        if selected_symbols and not exit_orders_submitted:
             target = min(0.95 / len(selected_symbols), 0.10)
             for row in selected:
                 symbol_value = self.screening_symbols[row["symbol"]]
@@ -245,7 +251,8 @@
                     self.ashare_execution.target_percent(symbol_value, target) if self.ashare_execution else self.set_holdings(symbol_value, target)
         self.latest_screening = rows
         self.latest_selected = selected
-        self.last_rebalance = self.time.date()
+        if not exit_orders_submitted:
+            self.last_rebalance = self.time.date()
         self._publish_summary(rows, selected)
 
     def on_end_of_algorithm(self):

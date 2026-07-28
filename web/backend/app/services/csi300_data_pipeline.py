@@ -341,50 +341,51 @@ def run_csi300_research_import(config: dict[str, Any]) -> dict[str, Any]:
         for index, symbol in enumerate(import_symbols, start=1):
             is_index = symbol == CSI300_INDEX_SYMBOL
             try:
-                rows = adapter.daily_rows(symbol, start_date, end_date, adjust="raw")
-                if not rows:
-                    raise LeanWebError(f"No daily rows returned for {symbol}.")
-                suspend_rows: list[dict[str, Any]] = []
-                if "suspend" in datasets and not is_index:
-                    suspend_rows = _fetch_research_dataset(
-                        name="suspend",
-                        fetcher=lambda symbol=symbol: adapter.suspend_rows(symbol, start_date, end_date),
-                        strict=strict_market,
-                        warnings=warnings,
-                        degraded=degraded,
-                    )
-                    rows, suspend_warnings = _merge_suspensions(
-                        symbol=symbol,
-                        rows=rows,
-                        suspend_rows=suspend_rows,
-                        trade_dates=trade_dates,
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    warnings.extend(suspend_warnings)
-                    suspended_count += len(_suspend_trade_dates(suspend_rows, trade_dates, start_date, end_date))
-                if not dry_run:
-                    asset = import_ashare_research_data(
-                        symbol=symbol,
-                        provider="tushare",
-                        market="china",
-                        rows=rows,
-                        source=PIPELINE_SOURCE,
-                        overwrite=bool(config.get("overwrite", True)),
-                        adjust="raw",
-                        outputsize="",
-                        asset_class="equity",
-                        venue="china",
-                        resolution="daily",
-                        data_type="trade",
-                        start_date=start_date,
-                        end_date=end_date,
-                        suspension_evidence_rows=suspend_rows,
-                    )
-                    successes.append({"symbol": symbol, "rows": asset.get("rows"), "batchId": asset.get("batch_id")})
-                else:
-                    successes.append({"symbol": symbol, "rows": len(rows), "batchId": None})
-                market_rows += len(rows)
+                if "daily" in datasets:
+                    rows = adapter.daily_rows(symbol, start_date, end_date, adjust="raw")
+                    if not rows:
+                        raise LeanWebError(f"No daily rows returned for {symbol}.")
+                    suspend_rows: list[dict[str, Any]] = []
+                    if "suspend" in datasets and not is_index:
+                        suspend_rows = _fetch_research_dataset(
+                            name="suspend",
+                            fetcher=lambda symbol=symbol: adapter.suspend_rows(symbol, start_date, end_date),
+                            strict=strict_market,
+                            warnings=warnings,
+                            degraded=degraded,
+                        )
+                        rows, suspend_warnings = _merge_suspensions(
+                            symbol=symbol,
+                            rows=rows,
+                            suspend_rows=suspend_rows,
+                            trade_dates=trade_dates,
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        warnings.extend(suspend_warnings)
+                        suspended_count += len(_suspend_trade_dates(suspend_rows, trade_dates, start_date, end_date))
+                    if not dry_run:
+                        asset = import_ashare_research_data(
+                            symbol=symbol,
+                            provider="tushare",
+                            market="china",
+                            rows=rows,
+                            source=PIPELINE_SOURCE,
+                            overwrite=bool(config.get("overwrite", True)),
+                            adjust="raw",
+                            outputsize="",
+                            asset_class="equity",
+                            venue="china",
+                            resolution="daily",
+                            data_type="trade",
+                            start_date=start_date,
+                            end_date=end_date,
+                            suspension_evidence_rows=suspend_rows,
+                        )
+                        successes.append({"symbol": symbol, "rows": asset.get("rows"), "batchId": asset.get("batch_id")})
+                    else:
+                        successes.append({"symbol": symbol, "rows": len(rows), "batchId": None})
+                    market_rows += len(rows)
 
                 if not is_index and "daily_basic" in datasets:
                     daily_basic_rows = _fetch_research_dataset(
@@ -427,6 +428,8 @@ def run_csi300_research_import(config: dict[str, Any]) -> dict[str, Any]:
                         financial_count += import_financial_statements(financial_rows, source="tushare:financials")["count"]
                     else:
                         financial_count += len(financial_rows)
+                if "daily" not in datasets:
+                    successes.append({"symbol": symbol, "rows": 0, "batchId": batch_id if not dry_run else None})
             except Exception as exc:
                 failures.append({"symbol": symbol, "error": str(exc)})
                 if strict_market or symbol == CSI300_INDEX_SYMBOL:

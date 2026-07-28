@@ -1061,6 +1061,7 @@ def latest_batch_for_symbol(symbol: str, source: str | None = None) -> dict[str,
             join ashare_daily_bars d on d.batch_id = b.id
             where d.symbol = ?
               {source_clause}
+              and b.status in ('success', 'failed')
             order by b.started_at desc
             limit 1
             """,
@@ -1113,6 +1114,57 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw", source
         "market_first_date": market_row["first_date"] if market_row else None,
         "market_last_date": market_row["last_date"] if market_row else None,
     }
+
+
+def _execution_coverage_dates(
+    symbol: str,
+    start: str,
+    end: str,
+    adjust: str,
+    source: str | None,
+) -> tuple[set[str], dict[str, bool]]:
+    source_clause = "and source = ?" if source else ""
+    source_params: list[Any] = [source] if source else []
+    with db() as connection:
+        bar_rows = connection.execute(
+            f"""
+            select trade_date
+            from ashare_daily_bars
+            where symbol = ? and adjust = ? and trade_date >= ? and trade_date <= ?
+              {source_clause}
+            union
+            select trade_date
+            from market_daily_bars
+            where symbol = ? and asset_class = 'equity' and market = 'china'
+              and resolution = 'daily' and data_type = 'trade' and adjust = ?
+              and trade_date >= ? and trade_date <= ?
+              {source_clause}
+            """,
+            (
+                symbol,
+                adjust,
+                start,
+                end,
+                *source_params,
+                symbol,
+                adjust,
+                start,
+                end,
+                *source_params,
+            ),
+        ).fetchall()
+        status_rows = connection.execute(
+            """
+            select trade_date, is_suspended
+            from ashare_trade_status
+            where symbol = ? and trade_date >= ? and trade_date <= ?
+            """,
+            (symbol, start, end),
+        ).fetchall()
+    return (
+        {str(row["trade_date"]) for row in bar_rows},
+        {str(row["trade_date"]): bool(row["is_suspended"]) for row in status_rows},
+    )
 
 
 def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
@@ -1288,16 +1340,36 @@ def assert_ashare_ready(
     if bar_count <= 0:
         suffix = f" source={source}" if source else ""
         raise LeanWebError(f"A-share daily bars are missing for {symbol} in {start} -> {end}{suffix}.")
-    expected_dates = len(trade_dates) if trade_dates else bar_count
-    if bar_count < expected_dates:
+    bar_dates, status_by_date = _execution_coverage_dates(symbol, start, end, adjust, source)
+    missing_status_dates = sorted(bar_dates - set(status_by_date))
+    if missing_status_dates:
+        raise LeanWebError(
+            f"A-share trade status is incomplete for {symbol} in {start} -> {end}: "
+            f"missing {len(missing_status_dates)} bar date(s), examples={missing_status_dates[:5]}."
+        )
+    unresolved_dates = sorted(
+        trade_date
+        for trade_date in trade_dates
+        if trade_date not in bar_dates and not status_by_date.get(trade_date, False)
+    )
+    if unresolved_dates:
         raise LeanWebError(
             f"A-share daily bars are incomplete for {symbol} in {start} -> {end}: "
-            f"{bar_count} bars for {expected_dates} trade dates."
+            f"{len(bar_dates)} bars for {len(trade_dates)} trade dates; "
+            f"{len(unresolved_dates)} date(s) lack a bar or suspension status, "
+            f"examples={unresolved_dates[:5]}."
         )
-    if coverage["status_count"] < bar_count:
-        raise LeanWebError(f"A-share trade status is incomplete for {symbol} in {start} -> {end}.")
-    end_status = end_coverage_status("china", end, coverage.get("market_last_date") or coverage.get("last_date"))
-    if not end_status["passed"] and not allow_truncated:
+    end_status = end_coverage_status(
+        "china",
+        end,
+        coverage.get("market_last_date") or coverage.get("last_date"),
+    )
+    suspension_covered_end = bool(
+        end_status.get("calendarComplete")
+        and trade_dates
+        and not unresolved_dates
+    )
+    if not end_status["passed"] and not suspension_covered_end and not allow_truncated:
         raise LeanWebError(
             f"A-share daily bars are truncated for {symbol}: requested end {end}, "
             f"actual last date {end_status.get('actualLastDate')}, calendar latest "

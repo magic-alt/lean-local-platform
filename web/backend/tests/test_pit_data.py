@@ -44,6 +44,37 @@ def test_financial_factors_as_of_excludes_future_announcements(tmp_path, monkeyp
     assert snapshot["announce_date"] == "2024-04-20"
 
 
+def test_financial_import_discards_non_finite_provider_values(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.pit_data import import_financial_statements
+
+    imported = import_financial_statements(
+        [
+            {
+                "symbol": "000001",
+                "statement_type": "fina_indicator",
+                "report_date": "2024-03-31",
+                "announce_date": "2024-04-20",
+                "fields": {
+                    "roe": 0.12,
+                    "pe": float("nan"),
+                    "pb": float("inf"),
+                },
+            }
+        ],
+        source="unit",
+    )
+
+    assert imported["count"] == 1
+    with db() as connection:
+        rows = connection.execute(
+            "select field_name,value from financial_facts order by field_name"
+        ).fetchall()
+    assert [(row["field_name"], row["value"]) for row in rows] == [("roe", 0.12)]
+
+
 def test_index_members_as_of_respects_effective_date(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

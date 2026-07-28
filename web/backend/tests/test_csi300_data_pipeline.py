@@ -114,8 +114,14 @@ def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend
     configure_temp_platform(tmp_path, monkeypatch)
 
     from app.db import db
-    from app.services.ashare_repository import corporate_actions, index_weights, trade_status_as_of, universe_as_of
-    from app.services.csi300_data_pipeline import run_csi300_research_import
+    from app.services.ashare_repository import (
+        assert_ashare_ready,
+        corporate_actions,
+        index_weights,
+        trade_status_as_of,
+        universe_as_of,
+    )
+    from app.services.csi300_data_pipeline import PIPELINE_SOURCE, run_csi300_research_import
     from app.services.pit_data import financial_factors_as_of
 
     result = run_csi300_research_import(
@@ -149,6 +155,7 @@ def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend
         ).fetchone()
     assert factor["value"] == 20.0
     assert suspended_bar is None
+    assert_ashare_ready("600519", "2024-01-02", "2024-01-04", source=PIPELINE_SOURCE)
 
 
 def test_csi300_pipeline_dry_run_does_not_write_database(tmp_path, monkeypatch):
@@ -177,3 +184,52 @@ def test_csi300_pipeline_dry_run_does_not_write_database(tmp_path, monkeypatch):
     assert batches == 0
     assert bars == 0
     assert weights == 0
+
+
+def test_csi300_pipeline_research_only_refresh_does_not_fetch_or_write_daily_bars(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.ashare_repository import upsert_security, upsert_universe_membership
+    from app.services.csi300_data_pipeline import run_csi300_research_import
+
+    upsert_security(
+        symbol="600519",
+        name="贵州茅台",
+        exchange="SSE",
+        listed_date="2001-08-27",
+    )
+    upsert_universe_membership(
+        "CSI300",
+        "600519",
+        "2024-01-02",
+        None,
+        source="unit",
+        announce_date="2024-01-02",
+        effective_date="2024-01-02",
+    )
+
+    class ResearchOnlyAdapter(FakeCsi300Adapter):
+        def daily_rows(self, symbol, start_date, end_date, adjust="raw"):
+            raise AssertionError("daily_rows must not be called for a research-only refresh")
+
+    result = run_csi300_research_import(
+        {
+            "mode": "backfill",
+            "start": "2024-01-02",
+            "end": "2024-12-31",
+            "limit": 1,
+            "adapter": ResearchOnlyAdapter(),
+            "datasets": "daily_basic,financials",
+        }
+    )
+
+    assert result["qa"]["passed"] is True
+    assert result["coverage"]["marketRows"] == 0
+    assert result["coverage"]["factorValues"] == 2
+    assert result["coverage"]["financialStatements"] == 1
+    with db() as connection:
+        bars = connection.execute("select count(*) as count from ashare_daily_bars").fetchone()["count"]
+        facts = connection.execute("select count(*) as count from financial_facts").fetchone()["count"]
+    assert bars == 0
+    assert facts == 1

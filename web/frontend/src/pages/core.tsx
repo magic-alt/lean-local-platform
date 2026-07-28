@@ -1236,14 +1236,13 @@ export function ProjectsPage() {
         projectId: selectedProject.id,
         parameters: request.parameters,
       });
-      const readiness = await api.preflightBacktest(payload);
-      setPreflight(readiness);
-      if (readiness.repaired.length > 0) {
-        message.success(`Data repaired: ${readiness.repaired.join(", ")}`);
-      }
       const run = await api.createBacktest(payload);
       await projects.reload();
-      message.success("Backtest queued");
+      if (run.status === "failed") {
+        message.error(run.error_message || run.error || "Backtest preflight failed");
+      } else {
+        message.success("Backtest queued");
+      }
       navigate(`/runs/${run.id}`);
     } catch (error) {
       message.error((error as Error).message);
@@ -2477,10 +2476,12 @@ export function BacktestsPage() {
       const payload = buildBacktestRequest({
         ...values,
       }, { assetClass, market, venue, resolution, dataType, projectId: values.projectId });
-      const readiness = await api.preflightBacktest(payload);
-      setPreflight(readiness);
       const run = await api.createBacktest(payload);
-      message.success("Backtest queued");
+      if (run.status === "failed") {
+        message.error(run.error_message || run.error || "Backtest preflight failed");
+      } else {
+        message.success("Backtest queued");
+      }
       navigate(runDetailHref(run.id));
     } catch (error) {
       message.error((error as Error).message);

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -216,6 +217,50 @@ def test_ashare_screening_injects_only_pit_fundamentals_and_matching_benchmark(t
     assert all(row["effectiveDate"] <= "2022-01-01" for row in schedule)
     assert not any(row["effectiveDate"] == "2023-04-20" for row in schedule)
     assert any(row["metrics"].get("pe") == 14.0 for row in schedule)
+
+
+def test_direct_ashare_screening_request_injects_pit_inputs(tmp_path, monkeypatch):
+    db_module = configure(tmp_path, monkeypatch)
+    seed_universe(db_module)
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into financial_facts
+                (symbol,field_name,report_date,announce_date,effective_date,value,unit,source,batch_id,created_at)
+            values ('000001','roe','2019-12-31','2020-04-01','2020-04-01',0.12,'ratio','unit','batch','2026-01-01')
+            """
+        )
+
+    from app.services.backtest_service import enrich_strategy_backtest_request
+    from app.services.projects import create_project
+
+    project = create_project(
+        "direct screening",
+        template_key="ashare_index_screening",
+        market="china",
+    )
+    enriched = enrich_strategy_backtest_request(
+        {
+            "projectId": project["id"],
+            "symbol": "000001",
+            "market": "china",
+            "start": "2020-06-01",
+            "end": "2022-01-01",
+            "parameters": {"fastPeriod": 20},
+        }
+    )
+
+    assert enriched["benchmarkSymbol"] == "000300"
+    assert enriched["parameters"]["universeCode"] == "CSI300"
+    assert enriched["parameters"]["dynamicUniverse"] is True
+    assert json.loads(enriched["parameters"]["universeSchedule"])
+    assert json.loads(enriched["parameters"]["fundamentalSchedule"]) == [
+        {
+            "symbol": "000001",
+            "effectiveDate": "2020-04-01",
+            "metrics": {"roe": 0.12},
+        }
+    ]
 
 
 def test_walk_forward_expands_independent_validation_and_oos_with_lineage(tmp_path, monkeypatch):

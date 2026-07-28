@@ -1,4 +1,24 @@
 from app.services.backtest_preflight import prepare_backtest_request
+from app.lean_engine.config import validate_backtest_parameters
+
+
+def test_validate_backtest_parameters_preserves_normalized_universe_symbols(monkeypatch):
+    import app.lean_engine.config as config
+
+    monkeypatch.setattr(config, "has_lean_data", lambda request: True)
+
+    parameters = validate_backtest_parameters(
+        {
+            "ticker": "000300",
+            "assetClass": "equity",
+            "market": "china",
+            "start": "2026-04-01",
+            "end": "2026-07-24",
+            "universeSymbols": ["000001", "600000", "000001", ""],
+        }
+    )
+
+    assert parameters["universeSymbols"] == ["000001", "600000"]
 
 
 def test_preflight_repairs_symbol_and_benchmark_with_selected_source(monkeypatch):

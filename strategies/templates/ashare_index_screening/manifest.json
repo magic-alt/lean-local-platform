@@ -3,6 +3,7 @@
   "name": "A股指数技术面与基本面筛选",
   "description": "在沪深300、中证500、中证1000或科创50的历史时点成分中，结合趋势、RSI、波动率与公告后可见的基本面筛选股票，并构建Top-N组合。",
   "executionScope": "dynamic_universe",
+  "requiresUniverseSchedule": true,
   "assetClasses": ["equity"],
   "markets": ["china"],
   "resolutions": ["daily"],

@@ -27,6 +27,8 @@ def test_china_strategy_template_hard_fails_without_real_benchmark():
     assert "set_benchmark(lambda time: 1)" not in code
     assert "AccountType.CASH" in code
     assert "if not has_fresh_data(data, self.symbol)" in code
+    assert "if bar is None:" in code
+    assert "exit_orders_submitted" in code
 
 
 def test_demo_algorithm_hard_fails_without_real_ashare_benchmark():

@@ -160,4 +160,13 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
             continue
         if isinstance(value, (str, int, float, bool)):
             clean[key] = value
+    universe_symbols = parameters.get("universeSymbols")
+    if isinstance(universe_symbols, (list, tuple)):
+        clean["universeSymbols"] = list(
+            dict.fromkeys(
+                normalize_symbol(str(value), market).upper()
+                for value in universe_symbols
+                if str(value).strip()
+            )
+        )
     return clean

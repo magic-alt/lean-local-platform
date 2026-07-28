@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import shutil
@@ -36,7 +37,78 @@ def failure_metadata(stage: str, error: str, *, retryable: bool = False, details
     }
 
 
+def enrich_strategy_backtest_request(request_data: dict[str, Any]) -> dict[str, Any]:
+    """Inject server-owned PIT inputs required by the A-share screening template."""
+    project_id = str(request_data.get("projectId") or "").strip()
+    if not project_id:
+        raise LeanPlatformError("project_required: Select a project before starting a backtest.")
+    project = get_project(project_id)
+    project_config = project.get("config") or {}
+    template_key = str(project_config.get("templateKey") or "").strip()
+    if template_key != "ashare_index_screening":
+        return request_data
+
+    parameters = dict(request_data.get("parameters") or {})
+    if parameters.get("universeSchedule") and parameters.get("fundamentalSchedule"):
+        return request_data
+
+    from .experiment_batches import (
+        INDEX_BENCHMARKS,
+        _fundamental_schedule,
+        _membership_schedule,
+    )
+
+    example_defaults = project_config.get("exampleDefaults") or {}
+    universe_code = str(
+        parameters.get("universeCode")
+        or project_config.get("universeCode")
+        or example_defaults.get("universeCode")
+        or "CSI300"
+    ).upper()
+    if universe_code not in INDEX_BENCHMARKS:
+        raise LeanPlatformError(
+            "A-share index screening supports CSI300, CSI500, CSI1000 and STAR50."
+        )
+    start = str(request_data.get("start") or "")
+    end = str(request_data.get("end") or "")
+    schedule = _membership_schedule(universe_code, start, end)
+    if not schedule:
+        raise LeanPlatformError(
+            f"No historical PIT schedule is available for {universe_code} in the selected range."
+        )
+    universe_symbols = sorted({str(row["symbol"]).upper() for row in schedule})
+    fundamental_schedule = _fundamental_schedule(universe_symbols, start, end)
+    if not fundamental_schedule:
+        raise LeanPlatformError(
+            f"No point-in-time fundamentals are available for {universe_code} in the selected range. "
+            "Sync daily_basic, income, balancesheet and fina_indicator before running this case."
+        )
+    benchmark = INDEX_BENCHMARKS[universe_code]
+    enriched = dict(request_data)
+    enriched["benchmarkSymbol"] = benchmark
+    enriched["parameters"] = {
+        **parameters,
+        "benchmarkSymbol": benchmark,
+        "universeCode": universe_code,
+        "dynamicUniverse": True,
+        "universeSchedule": json.dumps(
+            schedule,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "universeSymbols": universe_symbols,
+        "fundamentalSchedule": json.dumps(
+            fundamental_schedule,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "fundamentalRecordCount": len(fundamental_schedule),
+    }
+    return enriched
+
+
 def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
+    request_data = enrich_strategy_backtest_request(request_data)
     project_id = str(request_data.get("projectId") or "").strip()
     if not project_id:
         raise LeanPlatformError("project_required: Select a project before starting a backtest.")

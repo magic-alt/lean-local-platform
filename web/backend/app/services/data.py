@@ -915,6 +915,7 @@ def import_ashare_research_batch(
     batch_id = str(batch["id"])
     normalized_by_symbol: dict[str, list[dict[str, Any]]] = {}
     qa_by_symbol: dict[str, dict[str, Any]] = {}
+    inferred_suspensions_by_symbol: dict[str, set[str]] = {}
     try:
         for entry in entries:
             symbol = str(entry["symbol"])
@@ -968,6 +969,7 @@ def import_ashare_research_batch(
                 batch_id=batch_id,
             )
             inferred_suspensions = set(preliminary.get("missing_trade_dates") or [])
+            inferred_suspensions_by_symbol[symbol] = inferred_suspensions
             report = validate_ashare_daily_rows(
                 rows,
                 calendar_dates=expected,
@@ -1035,6 +1037,18 @@ def import_ashare_research_batch(
             verified_factors = [row for row in changed_rows if row.get("adj_factor_verified", True)]
             if verified_factors:
                 upsert_adjustment_factors(verified_factors, source="tushare", batch_id=batch_id, bulk=True)
+        inferred_status_rows = [
+            row
+            for symbol, trade_dates in inferred_suspensions_by_symbol.items()
+            for row in _suspension_status_rows(symbol, trade_dates)
+        ]
+        if inferred_status_rows:
+            upsert_trade_status(
+                inferred_status_rows,
+                source="tushare:daily_absence_inferred",
+                batch_id=batch_id,
+                bulk=True,
+            )
 
         reconciled_rows = (
             _reconcile_ashare_daily_snapshot(entries, normalized_by_symbol)
@@ -1068,6 +1082,14 @@ def import_ashare_research_batch(
         }
     except DataQualityError as exc:
         finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
+        raise
+    except Exception as exc:
+        finish_import_batch(
+            batch_id,
+            "failed",
+            qa_report={"passed": False, "items": qa_by_symbol},
+            error=str(exc),
+        )
         raise
 
 

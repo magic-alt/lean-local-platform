@@ -15,6 +15,7 @@ from ..services.backtest_service import (
     cancel_backtest,
     create_failed_backtest_job,
     create_backtest_job,
+    enrich_strategy_backtest_request,
     fail_backtest_queue,
     mark_backtest_queued,
     query_backtests,
@@ -108,6 +109,7 @@ def preflight_backtest(request: BacktestRequest):
     payload = request.model_dump()
     payload["extra"] = request.model_extra or {}
     try:
+        payload = enrich_strategy_backtest_request(payload)
         return prepare_backtest_request(payload, repair=True)["preflight"]
     except Exception as exc:
         raise HTTPException(

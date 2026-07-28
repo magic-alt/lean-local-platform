@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import uuid
 from datetime import datetime
@@ -38,7 +39,8 @@ def _field_number(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 

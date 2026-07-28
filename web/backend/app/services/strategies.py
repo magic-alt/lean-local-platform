@@ -28,6 +28,8 @@ def has_fresh_data(data, symbol):
     if not data.contains_key(symbol):
         return False
     bar = data[symbol]
+    if bar is None:
+        return False
     return not bool(getattr(bar, "is_fill_forward", getattr(bar, "IsFillForward", False)))
 
 

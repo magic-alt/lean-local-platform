@@ -195,13 +195,19 @@ def test_ashare_import_writes_research_tables_and_restores_asof_universe(tmp_pat
 def test_bulk_tushare_import_records_authoritative_daily_absence_as_suspension(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import app.services.data as data_service
-    from app.services.ashare_repository import is_tradeable, upsert_trade_calendar
+    from app.services.ashare_repository import is_tradeable, upsert_security, upsert_trade_calendar
 
     upsert_trade_calendar(
         "china",
         ["2024-01-02", "2024-01-03", "2024-01-04"],
         source="test",
         batch_id="calendar",
+    )
+    upsert_security(
+        symbol="600138",
+        name="fixture",
+        exchange="SSE",
+        listed_date="2000-01-01",
     )
 
     class EmptySuspensionAdapter:
@@ -232,6 +238,41 @@ def test_bulk_tushare_import_records_authoritative_daily_absence_as_suspension(t
 
     assert asset["qa_report"]["passed"] is True
     assert "suspensions_inferred_from_authoritative_daily_absence=1" in asset["qa_report"]["warnings"]
+    assert is_tradeable("600138", "2024-01-03", "buy") == (False, "suspended")
+
+
+def test_production_batch_persists_inferred_suspension_status(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services.ashare_repository import is_tradeable, upsert_security, upsert_trade_calendar
+    from app.services.data import import_ashare_research_batch
+
+    upsert_trade_calendar(
+        "china",
+        ["2024-01-02", "2024-01-03", "2024-01-04"],
+        source="test",
+        batch_id="calendar",
+    )
+    upsert_security(
+        symbol="600138",
+        name="fixture",
+        exchange="SSE",
+        listed_date="2000-01-01",
+    )
+    result = import_ashare_research_batch(
+        [
+            {
+                "symbol": "600138",
+                "listed_date": "2000-01-01",
+                "rows": [
+                    {"date": "2024-01-02", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
+                    {"date": "2024-01-04", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
+                ],
+            }
+        ],
+        sync_run_id="sync-test",
+    )
+
+    assert result["qa"]["passed"] is True
     assert is_tradeable("600138", "2024-01-03", "buy") == (False, "suspended")
 
 
