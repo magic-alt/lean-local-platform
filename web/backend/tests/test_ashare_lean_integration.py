@@ -271,7 +271,6 @@ def test_real_lean_runs_index_screening_and_writes_report_artifacts(tmp_path, mo
         "fastPeriod": 20,
         "slowPeriod": 60,
         "rsiPeriod": 14,
-        "rebalanceDays": 20,
         "topN": 1,
         "technicalThreshold": 70,
         "fundamentalThreshold": 60,
@@ -306,23 +305,15 @@ def test_real_lean_runs_index_screening_and_writes_report_artifacts(tmp_path, mo
     assert by_symbol["600001"]["suitableToBuy"] is True
     assert by_symbol["000001"]["suitableToBuy"] is False
     assert screening["summary"]["selected"] == ["600001"]
+    assert screening["summary"]["asOfDate"] == "2024-06-28"
+    assert screening["summary"]["tradeSimulation"] is False
     events_path = Path(output["results_dir"]) / "screening-lean-integration-order-events.json"
-    events = json.loads(events_path.read_text(encoding="utf-8"))
+    events = json.loads(events_path.read_text(encoding="utf-8")) if events_path.exists() else []
     if isinstance(events, dict):
         events = list(events.values())
-    filled_buys = [
+    filled = [
         event for event in events
-        if str(event.get("status")).lower() == "filled" and str(event.get("direction")).lower() == "buy"
+        if str(event.get("status")).lower() == "filled"
     ]
-    assert any(
-        str(
-            event.get("symbolValue")
-            or (
-                event.get("symbol", {}).get("value")
-                if isinstance(event.get("symbol"), dict)
-                else event.get("symbol")
-            )
-        ) == "600001"
-        for event in filled_buys
-    )
+    assert filled == []
     assert "指数成分股技术面与基本面筛选" in Path(output["report_html_path"]).read_text(encoding="utf-8")

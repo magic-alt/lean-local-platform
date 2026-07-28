@@ -11,7 +11,6 @@
         self.fast_period = int(self.get_parameter("fastPeriod", 20))
         self.slow_period = int(self.get_parameter("slowPeriod", 60))
         self.rsi_period = int(self.get_parameter("rsiPeriod", 14))
-        self.rebalance_days = int(self.get_parameter("rebalanceDays", 20))
         self.top_n = int(self.get_parameter("topN", 20))
         self.technical_threshold = float(self.get_parameter("technicalThreshold", 70))
         self.fundamental_threshold = float(self.get_parameter("fundamentalThreshold", 60))
@@ -39,34 +38,38 @@
                     market_name,
                     data_normalization_mode=DataNormalizationMode.RAW,
                 )
-                if market_name == "china" and self.ashare_execution is not None:
-                    apply_ashare_models(self, asset)
             self.screening_symbols[ticker_value] = asset.symbol
             self.price_history[ticker_value] = []
 
         self.fundamentals = {}
         for row in sorted(self.fundamental_schedule, key=lambda value: (value["symbol"], value["effectiveDate"])):
             self.fundamentals.setdefault(row["symbol"], []).append(row)
-        self.last_rebalance = None
-        self.latest_screening = []
-        self.latest_selected = []
+        self.requested_end_date = datetime.strptime(
+            self.get_parameter("end", "2026-07-13"),
+            "%Y-%m-%d",
+        ).date()
+        self.last_observation_date = None
         self.history_size = max(self.slow_period + 1, self.rsi_period + 1, 21)
         self.set_warm_up(self.history_size, self.resolution)
+        self.debug(
+            "ASHARE_INDEX_SCREENING research_only=true tradable=false "
+            "admission_eligible=false evaluation=final_snapshot"
+        )
 
     @staticmethod
     def _percent(value):
         number = float(value)
         return number * 100.0 if abs(number) <= 1.0 else number
 
-    def _active_tickers(self):
-        today = self.time.date().isoformat()
+    def _active_tickers(self, as_of_date):
+        today = as_of_date.isoformat()
         return {
             row["symbol"] for row in self.universe_schedule
             if row["startDate"] <= today and (not row.get("endDate") or row["endDate"] >= today)
         }
 
-    def _fundamentals_as_of(self, ticker_value):
-        today = self.time.date().isoformat()
+    def _fundamentals_as_of(self, ticker_value, as_of_date):
+        today = as_of_date.isoformat()
         metrics = {}
         for row in self.fundamentals.get(ticker_value, []):
             if row["effectiveDate"] > today:
@@ -139,8 +142,8 @@
             "technicalReasons": [reason for passed, _weight, reason in checks if passed],
         }
 
-    def _fundamental_evaluation(self, ticker_value):
-        metrics = self._fundamentals_as_of(ticker_value)
+    def _fundamental_evaluation(self, ticker_value, as_of_date):
+        metrics = self._fundamentals_as_of(ticker_value, as_of_date)
         checks = []
         if metrics.get("roe") is not None:
             value = self._percent(metrics["roe"])
@@ -172,11 +175,11 @@
             "fundamentals": metrics,
         }
 
-    def _evaluate(self, active):
+    def _evaluate(self, active, as_of_date):
         rows = []
         for ticker_value in sorted(active):
             technical = self._technical_evaluation(ticker_value)
-            fundamental = self._fundamental_evaluation(ticker_value)
+            fundamental = self._fundamental_evaluation(ticker_value, as_of_date)
             suitable = (
                 technical["trend"] == "持续上涨"
                 and technical["technicalScore"] >= self.technical_threshold
@@ -215,48 +218,23 @@
         self.set_runtime_statistic("指数股票池", self.universe_code)
         self.set_runtime_statistic("评估股票数", str(len(rows)))
         self.set_runtime_statistic("符合标准数", str(sum(1 for row in rows if row["suitableToBuy"])))
-        self.set_runtime_statistic("当前持仓候选", ",".join(row["symbol"] for row in selected) or "无")
+        self.set_runtime_statistic("精选股票数", str(len(selected)))
+        self.set_runtime_statistic("精选股票", ",".join(row["symbol"] for row in selected) or "无")
 
     def on_data(self, data):
+        observed = False
         for ticker_value, symbol_value in self.screening_symbols.items():
             if has_fresh_data(data, symbol_value):
                 prices = self.price_history[ticker_value]
                 prices.append(float(data[symbol_value].close))
                 self.price_history[ticker_value] = prices[-self.history_size:]
-        if self.is_warming_up:
-            return
-        if self.last_rebalance is not None and (self.time.date() - self.last_rebalance).days < self.rebalance_days:
-            return
-        rows = self._evaluate(self._active_tickers())
-        qualified = sorted(
-            (row for row in rows if row["suitableToBuy"]),
-            key=lambda row: (-row["overallScore"], row["symbol"]),
-        )
-        selected = qualified[:self.top_n]
-        selected_symbols = {self.screening_symbols[row["symbol"]] for row in selected}
-        exit_orders_submitted = False
-        for symbol_value in self.screening_symbols.values():
-            if self.portfolio[symbol_value].invested and symbol_value not in selected_symbols:
-                ticket = (
-                    self.ashare_execution.exit(symbol_value)
-                    if self.ashare_execution
-                    else self.liquidate(symbol_value)
-                )
-                exit_orders_submitted = ticket is not None or exit_orders_submitted
-        if selected_symbols and not exit_orders_submitted:
-            target = min(0.95 / len(selected_symbols), 0.10)
-            for row in selected:
-                symbol_value = self.screening_symbols[row["symbol"]]
-                if has_fresh_data(data, symbol_value):
-                    self.ashare_execution.target_percent(symbol_value, target) if self.ashare_execution else self.set_holdings(symbol_value, target)
-        self.latest_screening = rows
-        self.latest_selected = selected
-        if not exit_orders_submitted:
-            self.last_rebalance = self.time.date()
-        self._publish_summary(rows, selected)
+                observed = True
+        if observed and not self.is_warming_up and self.time.date() <= self.requested_end_date:
+            self.last_observation_date = self.time.date()
 
     def on_end_of_algorithm(self):
-        rows = self._evaluate(self._active_tickers())
+        as_of_date = self.last_observation_date or self.requested_end_date
+        rows = self._evaluate(self._active_tickers(as_of_date), as_of_date)
         qualified = sorted(
             (row for row in rows if row["suitableToBuy"]),
             key=lambda row: (-row["overallScore"], row["symbol"]),
@@ -264,11 +242,14 @@
         selected = qualified[:self.top_n]
         self._publish_summary(rows, selected)
         summary = {
-            "schemaVersion": 1,
-            "asOfDate": self.time.date().isoformat(),
+            "schemaVersion": 2,
+            "mode": "screening",
+            "tradeSimulation": False,
+            "asOfDate": as_of_date.isoformat(),
             "universeCode": self.universe_code,
             "evaluated": len(rows),
             "qualified": len(qualified),
+            "qualifiedSymbols": [row["symbol"] for row in qualified],
             "selected": [row["symbol"] for row in selected],
         }
         self.debug("LEAN_SCREENING_SUMMARY|" + self._json.dumps(summary, ensure_ascii=False, separators=(",", ":")))

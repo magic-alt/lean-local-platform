@@ -148,6 +148,87 @@ def test_extract_chart_data_does_not_plot_zero_only_benchmark(tmp_path, monkeypa
     assert chart["seriesSources"]["benchmarkStatus"] == "unavailable"
 
 
+def test_multi_asset_chart_filters_orders_and_preserves_ashare_code(tmp_path, monkeypatch):
+    import app.lean_engine.results as results_module
+
+    result_json = tmp_path / "multi-asset.json"
+    result_json.write_text(
+        json.dumps(
+            {
+                "charts": {},
+                "orders": {
+                    "1": {
+                        "quantity": 100,
+                        "lastFillTime": "2024-01-02T07:00:00Z",
+                        "symbol": {"value": "792"},
+                        "price": 20,
+                        "status": 3,
+                    },
+                    "2": {
+                        "quantity": 200,
+                        "lastFillTime": "2024-01-02T07:00:00Z",
+                        "symbol": {"value": "600519"},
+                        "price": 1600,
+                        "status": 3,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    requested = []
+
+    def candles(symbol, *args, **kwargs):
+        requested.append(symbol)
+        close = 20 if symbol == "000792" else 1600
+        return [{
+            "time": "2024-01-02T07:00:00+00:00",
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": 100,
+        }]
+
+    monkeypatch.setattr(results_module, "read_lean_daily_candle_series", candles)
+
+    chart = results_module.extract_chart_data(
+        result_json,
+        symbol="000001",
+        market="china",
+        selected_symbol="792",
+        available_symbols=["000792", "600519"],
+        filter_orders=True,
+    )
+
+    assert requested == ["000792"]
+    assert [order["symbol"] for order in chart["orders"]] == ["000792"]
+    assert [marker["symbol"] for marker in chart["orderMarkers"]] == ["000792"]
+    assert chart["metadata"]["selectedSymbol"] == "000792"
+    assert chart["metadata"]["orderCounts"] == {"000792": 1, "600519": 1}
+
+
+def test_holdings_use_each_symbols_own_market_price():
+    from app.lean_engine.results import infer_holdings_from_orders
+
+    orders = [
+        {"time": "2024-01-02T07:00:00Z", "symbol": "000792", "quantity": 100, "price": 20},
+        {"time": "2024-01-02T07:00:00Z", "symbol": "600519", "quantity": 10, "price": 1600},
+    ]
+    prices = {
+        "000792": [{"time": "2024-01-02T07:00:00Z", "value": 21}],
+        "600519": [{"time": "2024-01-02T07:00:00Z", "value": 1700}],
+    }
+
+    holdings = infer_holdings_from_orders(orders, price_series_by_symbol=prices)
+    by_symbol = {item["symbol"]: item for item in holdings}
+
+    assert by_symbol["000792"]["marketPrice"] == 21
+    assert by_symbol["000792"]["marketValue"] == 2100
+    assert by_symbol["600519"]["marketPrice"] == 1700
+    assert by_symbol["600519"]["marketValue"] == 17000
+
+
 def test_parse_result_payload_extracts_core_sections(tmp_path):
     result_json = tmp_path / "job.json"
     result_json.write_text(

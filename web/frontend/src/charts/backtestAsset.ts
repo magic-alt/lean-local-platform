@@ -36,7 +36,7 @@ function orderMarkPoints(markers: OrderMarkerPoint[]) {
         label: { show: false },
         tooltip: {
           formatter: [
-            `${marker.side} ${marker.symbol}`,
+            `${marker.side} ${marker.symbolDisplay || [marker.symbol, marker.securityName].filter(Boolean).join(" ")}`,
             `Date: ${day(marker.time)}`,
             `Quantity: ${formatInteger(Math.abs(marker.quantity))}`,
             `Fill: ${formatNumber(fillPrice)}`,

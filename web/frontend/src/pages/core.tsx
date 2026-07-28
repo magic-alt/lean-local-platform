@@ -17,6 +17,7 @@ import {
   Tabs,
   Tag,
   Tooltip,
+  Typography,
   Upload,
   message
 } from "antd";
@@ -74,6 +75,7 @@ import type {
   Project,
   ReportRecord,
   SecurityProfile,
+  ScreeningReport,
   StrategyTemplate,
   Task,
   WorkflowExample,
@@ -2566,7 +2568,7 @@ export function BacktestsPage() {
           <FormSection title="Strategy" description="Select the project snapshot and give this run a recognizable name.">
           <FormGrid>
             <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true, message: "Project strategy is required" }]}><Select data-testid="backtest-project-select" virtual={false} showSearch optionFilterProp="label" allowClear onChange={(value) => { setSelectedProjectId(value); setPreflight(undefined); const project = projects.data.find((item) => item.id === value); if (project) { const nextMarket = projectMarket(project); const next = { assetClass: projectAssetClass(project), market: nextMarket, venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), benchmarkSymbol: defaultBenchmark(nextMarket), source: defaultBacktestSource(nextMarket), parameters: templateDefaults(projectTemplate(project, templates.data)) }; setAssetClass(next.assetClass); setMarket(next.market); setVenue(next.venue); setResolution(next.resolution); setDataType(next.dataType); form.setFieldsValue(next); } }} options={projects.data.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>
-            <Form.Item className="form-field--wide" name="name" label="Backtest Name" rules={[{ required: true, message: "Backtest name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
+            <Form.Item className="form-field--wide" name="name" label={selectedTemplate?.key === "ashare_index_screening" ? "Screening Name" : "Backtest Name"} rules={[{ required: true, message: "Name is required" }]}><Input data-testid="backtest-name-input" /></Form.Item>
           </FormGrid>
           </FormSection>
           <FormSection title="Instrument & data">
@@ -2657,7 +2659,7 @@ export function BacktestsPage() {
                 : `Data ready from ${preflight.effectiveSource || "the selected source"}.`}
             />
           )}
-          <FormActions><Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>Run Backtest</Button></FormActions>
+          <FormActions><Button data-testid="run-backtest-button" type="primary" icon={<PlayCircleOutlined />} htmlType="submit" loading={submitting} disabled={submitting}>{selectedTemplate?.key === "ashare_index_screening" ? "运行筛选" : "Run Backtest"}</Button></FormActions>
         </Form>
       </Card>
                 ) : (
@@ -2719,7 +2721,12 @@ export function RunDetailPage() {
   const [run, setRun] = useState<BacktestRun>();
   const [chart, setChart] = useState<ChartData>();
   const [chartError, setChartError] = useState<string>();
+  const [chartAssetLoading, setChartAssetLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult>();
+  const [screening, setScreening] = useState<ScreeningReport>();
+  const [screeningError, setScreeningError] = useState<string>();
+  const [screeningScope, setScreeningScope] = useState<"all" | "qualified" | "selected">("all");
+  const [screeningQuery, setScreeningQuery] = useState("");
   const [trust, setTrust] = useState<BacktestValidationResponse>();
   const [admission, setAdmission] = useState<BacktestAdmissionResponse>();
   const [logs, setLogs] = useState("");
@@ -2747,28 +2754,47 @@ export function RunDetailPage() {
       setLogs(nextLogs.logs);
       setTrust(nextTrust);
       setAdmission(nextAdmission);
+      const screeningMode = String(asRecord(next.parameters).strategyTemplateKey || "") === "ashare_index_screening";
 
       if (!next.result_json_path) {
         setChart(undefined);
         setChartError(undefined);
         setResult(undefined);
+        setScreening(undefined);
+        setScreeningError(undefined);
         setLastUpdated(new Date());
         return;
       }
 
-      const [chartOutcome, resultOutcome] = await Promise.allSettled([
-        api.chartData(requestedId),
-        api.backtestResult(requestedId)
+      const [chartOutcome, resultOutcome, screeningOutcome] = await Promise.allSettled([
+        screeningMode ? Promise.resolve(undefined) : api.chartData(requestedId),
+        screeningMode ? Promise.resolve(undefined) : api.backtestResult(requestedId),
+        screeningMode ? api.screening(requestedId) : Promise.resolve(undefined),
       ]);
       if (currentRunId.current !== requestedId) return;
-      if (chartOutcome.status === "fulfilled") {
+      if (!screeningMode && chartOutcome.status === "fulfilled") {
         setChart(chartOutcome.value);
         setChartError(undefined);
+      } else if (!screeningMode) {
+        setChart(undefined);
+        const reason = chartOutcome.status === "rejected" ? chartOutcome.reason : undefined;
+        setChartError(reason instanceof Error ? reason.message : "Chart data could not be loaded.");
       } else {
         setChart(undefined);
-        setChartError(chartOutcome.reason instanceof Error ? chartOutcome.reason.message : "Chart data could not be loaded.");
+        setChartError(undefined);
       }
-      setResult(resultOutcome.status === "fulfilled" ? resultOutcome.value.result : undefined);
+      setResult(resultOutcome.status === "fulfilled" ? resultOutcome.value?.result : undefined);
+      if (screeningMode && screeningOutcome.status === "fulfilled") {
+        setScreening(screeningOutcome.value);
+        setScreeningError(undefined);
+      } else if (screeningMode) {
+        setScreening(undefined);
+        const reason = screeningOutcome.status === "rejected" ? screeningOutcome.reason : undefined;
+        setScreeningError(reason instanceof Error ? reason.message : "Screening result could not be loaded.");
+      } else {
+        setScreening(undefined);
+        setScreeningError(undefined);
+      }
       setLastUpdated(new Date());
     };
 
@@ -2803,6 +2829,21 @@ export function RunDetailPage() {
       setRefreshing(false);
     }
   }
+  async function changeChartAsset(symbol: string) {
+    if (!id) return;
+    setChartAssetLoading(true);
+    try {
+      const next = await api.chartData(id, symbol);
+      if (currentRunId.current === id) {
+        setChart(next);
+        setChartError(undefined);
+      }
+    } catch (error) {
+      setChartError(error instanceof Error ? error.message : "Chart data could not be loaded.");
+    } finally {
+      setChartAssetLoading(false);
+    }
+  }
   async function copyText(value: string, label: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -2813,6 +2854,7 @@ export function RunDetailPage() {
   }
   if (!run) return <Alert type="info" message="Loading run..." />;
   const parameters = asRecord(run.parameters);
+  const isScreening = String(parameters.strategyTemplateKey || "") === "ashare_index_screening";
   const performance = asRecord(result?.performance);
   const validationSource = trust?.validation ?? run.validation ?? performance.validation;
   const validationRecord = asRecord(validationSource);
@@ -2830,7 +2872,7 @@ export function RunDetailPage() {
     ? experimentRecord as BacktestExperiment
     : undefined;
   const fingerprint = trust?.fingerprint ?? run.fingerprint;
-  const trustedMetrics = ["success", "succeeded"].includes(run.status) && validation?.passed !== false;
+  const trustedMetrics = !isScreening && ["success", "succeeded"].includes(run.status) && validation?.passed !== false;
   const summaryMetrics = asRecord(result?.summary_metrics);
   const runStatistics = asRecord(run.statistics);
   const sharpeMetric = summaryMetrics["Recomputed Sharpe"] ?? runStatistics["Sharpe Ratio"];
@@ -2891,17 +2933,28 @@ export function RunDetailPage() {
     trades: recordRows(result?.trades),
     holdings: recordRows(result?.holdings)
   };
+  const screeningSelected = new Set(screening?.summary.selected ?? []);
+  const normalizedScreeningQuery = screeningQuery.trim().toLowerCase();
+  const screeningRows = (screening?.items ?? []).filter((item) => {
+    if (screeningScope === "qualified" && !item.suitableToBuy) return false;
+    if (screeningScope === "selected" && !screeningSelected.has(item.symbol)) return false;
+    if (!normalizedScreeningQuery) return true;
+    return `${item.symbol} ${item.name || ""}`.toLowerCase().includes(normalizedScreeningQuery);
+  });
   function recordColumns(rows: Array<Record<string, unknown>>) {
-    const fields = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+    const fields = Array.from(new Set(rows.flatMap((row) => Object.keys(row))))
+      .filter((field) => !["securityName", "symbolDisplay"].includes(field));
     return fields.map((field) => ({
       title: humanizeField(field),
       dataIndex: field,
       key: field,
       width: /time|date/i.test(field) ? 170 : /id|tag|message/i.test(field) ? 190 : 120,
       ellipsis: true,
-      render: (value: unknown) => (
+      render: (value: unknown, row: Record<string, unknown>) => (
         <Tooltip title={typeof value === "object" && value != null ? JSON.stringify(value) : undefined}>
-          <span className={typeof value === "number" ? "numeric-cell" : undefined}>{shortValue(value, 48)}</span>
+          {/^(symbol|ticker)$/i.test(field)
+            ? <span>{String(row.symbolDisplay || [value, row.securityName].filter(Boolean).join(" ") || "—")}</span>
+            : <span className={typeof value === "number" ? "numeric-cell" : undefined}>{shortValue(value, 48)}</span>}
         </Tooltip>
       ),
     }));
@@ -2954,6 +3007,7 @@ export function RunDetailPage() {
           </div>
           <div className="run-hero__badges">
             <span data-testid="run-status"><StatusTag status={run.status} /></span>
+            {isScreening && <Tag color="purple">research screening</Tag>}
             <ValidationStatusTag validation={validation} />
             <Tag>{totalGates ? `${passedGates}/${totalGates} gates` : "no gates"}</Tag>
             <Tag>{artifactCount} files</Tag>
@@ -2985,7 +3039,7 @@ export function RunDetailPage() {
           style={{ marginBottom: 16 }}
         />
       )}
-      {!trustedMetrics && !active && (
+      {!isScreening && !trustedMetrics && !active && (
         <Alert
           type="warning"
           showIcon
@@ -3014,13 +3068,124 @@ export function RunDetailPage() {
         destroyOnHidden
         items={[
           {
-            key: "performance",
-            label: "Performance",
-            children: (
+            key: isScreening ? "screening" : "performance",
+            label: isScreening ? "筛选结果" : "Performance",
+            children: isScreening ? (
+              <RunDetailPanelBoundary panel="Screening" resetKey={`${run.id}:screening`}>
+                <div className="run-analysis" data-testid="screening-result-panel">
+                  {screeningError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="筛选结果加载失败"
+                      description={screeningError}
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
+                  {screening ? (
+                    <>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="研究型选股分析"
+                        description="该运行只在结束日分析股票池并输出合格与 Top-N 精选结果，不提交订单、不构建持仓。"
+                        style={{ marginBottom: 16 }}
+                      />
+                      <div className="backtest-kpi-grid">
+                        <BacktestMetricCard title="分析股票池" value={screening.universeCode || screening.summary.universeCode || "—"} kind="text" />
+                        <BacktestMetricCard title="分析日期" value={screening.asOfDate || screening.summary.asOfDate || "—"} kind="text" />
+                        <BacktestMetricCard title="评估股票" value={screening.summary.evaluated} kind="integer" />
+                        <BacktestMetricCard title="合格股票" value={screening.summary.qualified} kind="integer" featured />
+                        <BacktestMetricCard title="Top-N 精选" value={screening.summary.selected.length} kind="integer" />
+                      </div>
+                      <Card
+                        title="逐股筛选结果"
+                        className="run-section-card"
+                        extra={(
+                          <Space wrap>
+                            <Input
+                              allowClear
+                              value={screeningQuery}
+                              onChange={(event) => setScreeningQuery(event.target.value)}
+                              placeholder="搜索代码 / 公司名称"
+                              style={{ width: 210 }}
+                            />
+                            <Select
+                              value={screeningScope}
+                              style={{ width: 150 }}
+                              onChange={setScreeningScope}
+                              options={[
+                                { value: "all", label: `全部 ${screening.items.length}` },
+                                { value: "qualified", label: `合格 ${screening.qualified.length}` },
+                                { value: "selected", label: `精选 ${screening.selected.length}` },
+                              ]}
+                            />
+                          </Space>
+                        )}
+                      >
+                        <Table
+                          data-testid="screening-results-table"
+                          size="small"
+                          rowKey="symbol"
+                          dataSource={screeningRows}
+                          scroll={{ x: 1250 }}
+                          pagination={{ pageSize: 25, showSizeChanger: true, pageSizeOptions: [25, 50, 100], showTotal: (total) => `${total} stocks` }}
+                          columns={[
+                            {
+                              title: "股票",
+                              key: "security",
+                              fixed: "left",
+                              width: 160,
+                              render: (_, item) => (
+                                <div className="table-primary-cell">
+                                  <span>{item.symbol}</span>
+                                  <Typography.Text type="secondary">{item.name || "名称缺失"}</Typography.Text>
+                                </div>
+                              ),
+                            },
+                            { title: "走势", dataIndex: "trend", width: 110, render: (value) => <Tag>{value}</Tag> },
+                            { title: "技术分", dataIndex: "technicalScore", width: 90, align: "right", render: (value) => formatNumber(value, 1) },
+                            { title: "基本面分", dataIndex: "fundamentalScore", width: 100, align: "right", render: (value) => formatNumber(value, 1) },
+                            { title: "综合分", dataIndex: "overallScore", width: 90, align: "right", sorter: (left, right) => left.overallScore - right.overallScore, render: (value) => formatNumber(value, 1) },
+                            {
+                              title: "结果",
+                              key: "result",
+                              width: 110,
+                              render: (_, item) => screeningSelected.has(item.symbol)
+                                ? <Tag color="purple">Top-N 精选</Tag>
+                                : item.suitableToBuy
+                                  ? <Tag color="green">合格</Tag>
+                                  : <Tag>未通过</Tag>,
+                            },
+                            { title: "收盘", dataIndex: "close", width: 90, align: "right", render: (value) => formatNumber(value, 2) },
+                            { title: "RSI", dataIndex: "rsi", width: 80, align: "right", render: (value) => formatNumber(value, 2) },
+                            { title: "20日收益", dataIndex: "return20", width: 100, align: "right", render: (value) => formatPercent(value) },
+                            {
+                              title: "通过依据",
+                              dataIndex: "reasons",
+                              width: 260,
+                              ellipsis: true,
+                              render: (value: string[]) => <Tooltip title={(value || []).join("；")}><span>{(value || []).join("；") || "—"}</span></Tooltip>,
+                            },
+                            {
+                              title: "风险 / 缺失",
+                              dataIndex: "risks",
+                              width: 240,
+                              ellipsis: true,
+                              render: (value: string[]) => <Tooltip title={(value || []).join("；")}><span>{(value || []).join("；") || "—"}</span></Tooltip>,
+                            },
+                          ]}
+                        />
+                      </Card>
+                    </>
+                  ) : !screeningError ? <Alert type="info" message="筛选结果将在运行产物生成后显示。" /> : null}
+                </div>
+              </RunDetailPanelBoundary>
+            ) : (
               <RunDetailPanelBoundary panel="Performance" resetKey={`${run.id}:performance`}>
               <div className="run-analysis" data-testid="run-status-panel">
                 {chart
-                  ? <div className="run-charts"><BacktestCharts chartData={chart} /></div>
+                  ? <div className="run-charts"><BacktestCharts chartData={chart} assetLoading={chartAssetLoading} onAssetChange={changeChartAsset} /></div>
                   : <Alert
                       type={chartError ? "error" : "info"}
                       showIcon={Boolean(chartError)}
@@ -3080,7 +3245,7 @@ export function RunDetailPage() {
               </RunDetailPanelBoundary>
             )
           },
-          {
+          ...(isScreening ? [] : [{
             key: "trades",
             label: `Trades (${records.trades.length})`,
             children: (
@@ -3138,7 +3303,7 @@ export function RunDetailPage() {
               </div>
               </RunDetailPanelBoundary>
             )
-          },
+          }]),
           {
             key: "quality",
             label: "Research Quality",
@@ -3148,7 +3313,7 @@ export function RunDetailPage() {
                 <div className="run-overview-strip run-overview-strip--quality">
                   <div><span>Execution</span><StatusTag status={run.status} /></div>
                   <div><span>Validation</span><ValidationStatusTag validation={validation} /></div>
-                  <div><span>Promotion</span><strong>{humanizeField(String(promotionStage))}</strong></div>
+                  <div><span>Promotion</span><strong>{isScreening ? "research only" : humanizeField(String(promotionStage))}</strong></div>
                   <div><span>Validation gates</span><strong>{totalGates ? `${passedGates}/${totalGates}` : "not available"}</strong></div>
                 </div>
                 <Tabs
@@ -3160,11 +3325,11 @@ export function RunDetailPage() {
                       label: totalGates ? `Validation (${passedGates}/${totalGates})` : "Validation",
                       children: <div className="run-trust-panel"><BacktestTrustPanel validation={validation} experiment={experiment} fingerprint={fingerprint} /></div>
                     },
-                    {
+                    ...(!isScreening ? [{
                       key: "promotion",
                       label: "Strategy Promotion",
                       children: <StrategyAdmissionPanel value={admission} />
-                    }
+                    }] : [])
                   ]}
                 />
               </>

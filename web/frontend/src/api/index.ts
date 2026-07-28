@@ -53,6 +53,7 @@ import type {
   PagedResponse,
   ChartPoint,
   ChartData,
+  ScreeningReport,
   DataQueryRow,
   DataQueryResult,
   FactorEvaluationResult,
@@ -423,8 +424,10 @@ export const api = {
     request<{ deleted: boolean; id: string }>(`/api/backtests/${encodeURIComponent(id)}`, { method: "DELETE" }),
   logs: (id: string) =>
     request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
-  chartData: (id: string) =>
-    request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data`),
+  chartData: (id: string, symbol?: string) =>
+    request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
+  screening: (id: string) =>
+    request<ScreeningReport>(`/api/backtests/${encodeURIComponent(id)}/screening`),
   tasks: () => request<Task[]>("/api/tasks?paged=false&limit=1000"),
   task: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),

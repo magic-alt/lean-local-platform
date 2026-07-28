@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Convert A-share index technical/fundamental selection into a research-only final-date screen with complete qualified and Top-N result layers, dedicated screening UI/API/report output, security names and preserved six-digit A-share codes; add symbol-selectable multi-asset price charts with matching order markers and correct per-symbol holding valuation.
 - Route Research Jupyter container start, readiness, logs, stop and removal
   through the authenticated restricted runner so API and Celery containers no
   longer attempt to reach an unavailable Docker socket, while keeping the raw

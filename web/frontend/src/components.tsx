@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Empty, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useState } from "react";
 import { BacktestRun, ChartData, RunStatus } from "./api";
 import { backtestAssetChartHeight, backtestAssetOption } from "./charts/backtestAsset";
@@ -223,6 +223,7 @@ export function RunsTable({
               <Typography.Text strong>{run.name || run.symbol || "Unnamed backtest"}</Typography.Text>
               <Typography.Text type="secondary" copyable={{ text: run.id }}>{run.id}</Typography.Text>
               <span>{run.symbol}</span>
+              {run.parameters?.strategyTemplateKey === "ashare_index_screening" && <Tag color="purple">screening</Tag>}
             </div>
           },
           {
@@ -254,7 +255,9 @@ export function RunsTable({
           {
             title: "Result",
             width: "15%",
-            render: (_, run) => trusted(run)
+            render: (_, run) => run.parameters?.strategyTemplateKey === "ashare_index_screening"
+              ? <Typography.Text type="secondary">Research screening</Typography.Text>
+              : trusted(run)
               ? <div className="table-primary-cell"><span>Return {run.statistics?.["Net Profit"] ?? "-"}</span><Typography.Text type="secondary">Sharpe {run.statistics?.["Sharpe Ratio"] ?? "-"}</Typography.Text></div>
               : <Typography.Text type="secondary">Metrics unavailable</Typography.Text>
           },
@@ -289,7 +292,15 @@ export function RunsTable({
   );
 }
 
-export function BacktestCharts({ chartData }: { chartData: ChartData }) {
+export function BacktestCharts({
+  chartData,
+  assetLoading = false,
+  onAssetChange,
+}: {
+  chartData: ChartData;
+  assetLoading?: boolean;
+  onAssetChange?: (symbol: string) => void;
+}) {
   const series: Record<string, unknown> = isRecord(chartData?.series) ? chartData.series : {};
   const equity = chartPoints(series.equity);
   const benchmark = chartPoints(series.benchmark);
@@ -322,6 +333,14 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
     order_markers: Array.isArray(chartData?.order_markers) ? chartData.order_markers.filter(isRecord) as ChartData["order_markers"] : [],
   };
   const benchmarkLabel = String(chartData.metadata?.benchmarkSymbol || "Benchmark");
+  const availableAssets = Array.isArray(chartData.metadata?.availableAssets)
+    ? chartData.metadata.availableAssets
+    : [];
+  const selectedAsset = chartData.metadata?.selectedAsset;
+  const selectedSymbol = selectedAsset?.symbol || "";
+  const selectedLabel = selectedAsset?.display
+    || [selectedAsset?.symbol, selectedAsset?.name].filter(Boolean).join(" ")
+    || selectedSymbol;
   const comparisonSeries = [
     { name: "Strategy", points: strategyReturns },
     ...(benchmarkReturns.length ? [{ name: benchmarkLabel, points: benchmarkReturns }] : []),
@@ -352,7 +371,25 @@ export function BacktestCharts({ chartData }: { chartData: ChartData }) {
         </div>
       </Card>
       {(candles.length > 0 || price.length > 0) && (
-        <Card title="Asset Price, Orders & Indicators" style={{ marginTop: 16 }}>
+        <Card
+          title={`${selectedLabel ? `${selectedLabel} · ` : ""}Asset Price, Orders & Indicators`}
+          extra={availableAssets.length > 1 && onAssetChange ? (
+            <Select
+              showSearch
+              loading={assetLoading}
+              value={selectedSymbol || undefined}
+              style={{ width: 240 }}
+              optionFilterProp="label"
+              aria-label="Chart symbol"
+              onChange={onAssetChange}
+              options={availableAssets.map((asset) => ({
+                value: asset.symbol,
+                label: `${asset.display || [asset.symbol, asset.name].filter(Boolean).join(" ")}${asset.orderCount ? ` · ${asset.orderCount} orders` : ""}`,
+              }))}
+            />
+          ) : undefined}
+          style={{ marginTop: 16 }}
+        >
           <div data-testid="price-chart" data-point-count={candles.length || price.length}>
             <LeanChart
               style={{ height: backtestAssetChartHeight(normalizedChartData) }}

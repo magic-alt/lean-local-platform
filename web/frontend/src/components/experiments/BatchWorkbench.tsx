@@ -261,7 +261,7 @@ export function BatchWorkbench({
 
   return (
     <>
-      <Card title={kind === "backtest" ? "New Backtest" : kind === "optimization" ? "批量优化" : "快捷研究任务"} style={{ marginTop: 16 }}>
+      <Card title={isIndexScreening ? "新建选股分析" : kind === "backtest" ? "New Backtest" : kind === "optimization" ? "批量优化" : "快捷研究任务"} style={{ marginTop: 16 }}>
         <Form form={form} layout="vertical" onFinish={submit} initialValues={{
           name: kind === "backtest" ? "Batch Backtest" : kind === "optimization" ? "Batch Optimization" : "Research Analysis",
           mode: MODES[kind][0].value, symbolSource: "symbols", symbols: "000001", universeCode: "CSI300",
@@ -288,7 +288,7 @@ export function BatchWorkbench({
             {kind === "research" && <Form.Item className="form-field--wide" name="factorNames" label="因子/研究项"><Input placeholder="momentum,volatility" /></Form.Item>}
           </FormGrid>
           </FormSection>
-          {kind !== "research" && <FormSection title="回测范围">
+          {kind !== "research" && <FormSection title={isIndexScreening ? "分析区间" : "回测范围"}>
           <FormGrid>
             <Form.Item name="start" label="开始日期"><DateStringPicker /></Form.Item>
             <Form.Item name="end" label="结束日期"><DateStringPicker /></Form.Item>
@@ -306,8 +306,8 @@ export function BatchWorkbench({
                   { value: "yfinance", label: "YFinance" }
                 ]} /> : <Input placeholder="optional provider source" />}
               </Form.Item>
-              <Form.Item name="feeModel" label="费用模型"><Select options={[{ value: "default", label: "市场默认费用" }, { value: "zero", label: "零费用（仅研究）" }]} /></Form.Item>
-              <Form.Item name="slippageModel" label="滑点模型"><Select options={[{ value: "default", label: "默认" }, { value: "zero", label: "零滑点" }]} /></Form.Item>
+              {!isIndexScreening && <Form.Item name="feeModel" label="费用模型"><Select options={[{ value: "default", label: "市场默认费用" }, { value: "zero", label: "零费用（仅研究）" }]} /></Form.Item>}
+              {!isIndexScreening && <Form.Item name="slippageModel" label="滑点模型"><Select options={[{ value: "default", label: "默认" }, { value: "zero", label: "零滑点" }]} /></Form.Item>}
               <Form.Item className="form-field--full" name="allowResearchSource" valuePropName="checked" label="Research data override">
                 <Checkbox>允许显式选择未经认证的研究数据；生成的运行不可作为可信 Paper 输入</Checkbox>
               </Form.Item>
@@ -333,7 +333,7 @@ export function BatchWorkbench({
             </AdvancedFields>
           </>}
           {preview && <Alert style={{ marginBottom: 12 }} type={preview.withinLimit ? "success" : "error"} showIcon message={`将展开 ${preview.expandedCount} 个工作单元 · 上限 ${preview.limit} · 并发 ${preview.effectiveConcurrency}`} description={preview.warnings.join(" ") || "股票池和参数已经解析，可以排队。"} />}
-          <FormActions><Button onClick={runPreview}>预览展开</Button><Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={busy}>确认并排队</Button></FormActions>
+          <FormActions><Button onClick={runPreview}>预览展开</Button><Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={busy}>{isIndexScreening ? "运行筛选" : "确认并排队"}</Button></FormActions>
         </Form>
       </Card>
       <Card title="批次历史" style={{ marginTop: 16 }} extra={<Space>

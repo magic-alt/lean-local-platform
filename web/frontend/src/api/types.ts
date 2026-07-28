@@ -1404,6 +1404,8 @@ export interface OrderMarkerPoint {
   time: string;
   side: "BUY" | "SELL";
   symbol: string;
+  securityName?: string | null;
+  symbolDisplay?: string | null;
   quantity: number;
   price: number;
   fillPrice?: number;
@@ -1411,6 +1413,15 @@ export interface OrderMarkerPoint {
   equityValue?: number | null;
   priceValue?: number | null;
   tag?: string | null;
+}
+
+export interface ChartAsset {
+  symbol: string;
+  name?: string | null;
+  display?: string | null;
+  market?: string | null;
+  exchange?: string | null;
+  orderCount?: number;
 }
 
 export interface ChartData {
@@ -1437,6 +1448,8 @@ export interface ChartData {
     time: string;
     side: "BUY" | "SELL";
     symbol: string;
+    securityName?: string | null;
+    symbolDisplay?: string | null;
     quantity: number;
     price: number;
     fill_price?: number;
@@ -1447,8 +1460,55 @@ export interface ChartData {
   metadata?: {
     benchmarkSymbol?: string | null;
     comparisonBasis?: string;
+    multiAsset?: boolean;
+    availableAssets?: ChartAsset[];
+    selectedAsset?: ChartAsset | null;
     [key: string]: unknown;
   };
+}
+
+export interface ScreeningItem {
+  symbol: string;
+  name?: string | null;
+  symbolDisplay?: string | null;
+  trend: string;
+  technicalScore: number;
+  fundamentalScore: number;
+  fundamentalFieldCount?: number;
+  overallScore: number;
+  suitableToBuy: boolean;
+  close?: number | null;
+  smaFast?: number | null;
+  smaSlow?: number | null;
+  return20?: number | null;
+  rsi?: number | null;
+  volatility20?: number | null;
+  fundamentals?: Record<string, number>;
+  reasons?: string[];
+  risks?: string[];
+}
+
+export interface ScreeningReport {
+  schemaVersion: number;
+  sourceSchemaVersion?: number;
+  mode: "screening";
+  tradeSimulation: false;
+  asOfDate?: string | null;
+  universeCode?: string | null;
+  summary: {
+    schemaVersion?: number;
+    mode?: string;
+    tradeSimulation?: boolean;
+    asOfDate?: string | null;
+    universeCode?: string | null;
+    evaluated: number;
+    qualified: number;
+    qualifiedSymbols?: string[];
+    selected: string[];
+  };
+  items: ScreeningItem[];
+  qualified: ScreeningItem[];
+  selected: ScreeningItem[];
 }
 
 export interface DataQueryRow {

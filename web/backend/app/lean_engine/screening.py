@@ -51,7 +51,9 @@ def extract_screening_report(results_dir: Path) -> Path | None:
     ]
     selected_symbols = {str(symbol) for symbol in (summary or {}).get("selected") or []}
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": int((summary or {}).get("schemaVersion") or 1),
+        "mode": (summary or {}).get("mode") or "screening",
+        "tradeSimulation": bool((summary or {}).get("tradeSimulation", False)),
         "asOfDate": (summary or {}).get("asOfDate"),
         "universeCode": (summary or {}).get("universeCode"),
         "summary": summary or {},

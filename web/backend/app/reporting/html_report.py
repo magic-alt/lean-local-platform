@@ -313,7 +313,8 @@ def screening_section(screening):
         "持续上涨": sum(1 for item in items if item.get("trend") == "持续上涨"),
         "持续下跌": sum(1 for item in items if item.get("trend") == "持续下跌"),
         "横盘震荡": sum(1 for item in items if item.get("trend") == "横盘震荡"),
-        "适合买入": sum(1 for item in items if item.get("suitableToBuy")),
+        "合格": sum(1 for item in items if item.get("suitableToBuy")),
+        "精选": len(selected_symbols),
     }
     rows = []
     for item in sorted(
@@ -325,6 +326,8 @@ def screening_section(screening):
         ),
     ):
         symbol = str(item.get("symbol") or "")
+        name = str(item.get("name") or "").strip()
+        security_label = " ".join(value for value in (symbol, name) if value)
         suitable = bool(item.get("suitableToBuy"))
         metrics = item.get("fundamentals") or {}
         metric_text = " · ".join(
@@ -336,7 +339,7 @@ def screening_section(screening):
         risks = "；".join(map(str, item.get("risks") or [])) or "-"
         rows.append(
             "<tr>"
-            f"<td><strong>{html.escape(symbol)}</strong></td>"
+            f"<td><strong>{html.escape(security_label)}</strong></td>"
             f"<td><span class=\"trend-badge\">{html.escape(str(item.get('trend') or '-'))}</span></td>"
             f"<td>{float(item.get('technicalScore') or 0):.1f}</td>"
             f"<td>{float(item.get('fundamentalScore') or 0):.1f}</td>"
@@ -361,12 +364,12 @@ def screening_section(screening):
         f'<div class="screening-stats">{cards}</div>'
         '<details open><summary>查看全部逐股评估</summary><div class="screening-table-wrap">'
         "<table><thead><tr><th>股票</th><th>走势</th><th>技术分</th><th>基本面分</th>"
-        "<th>综合分</th><th>适合买入</th><th>组合</th><th>基本面快照</th><th>通过依据</th><th>风险/缺失</th>"
+        "<th>综合分</th><th>是否合格</th><th>精选</th><th>基本面快照</th><th>通过依据</th><th>风险/缺失</th>"
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details></section>"
     )
 
 
-def report_header(data, source_path, charts):
+def report_header(data, source_path, charts, screening=None):
     configuration = data.get("algorithmConfiguration") or {}
     parameters = configuration.get("parameters") or {}
     source = Path(source_path)
@@ -387,20 +390,24 @@ def report_header(data, source_path, charts):
     chart_names = [str(name) for name in charts]
     chart_chips = "".join(f'<li class="chart-chip">{html.escape(name)}</li>' for name in chart_names)
 
+    is_screening = bool(screening)
+    eyebrow = "QUANTCONNECT LEAN · 选股分析" if is_screening else "QUANTCONNECT LEAN · 回测分析"
+    subject_label = "分析股票池" if is_screening else "回测标的"
+    period_label = "分析区间" if is_screening else "回测区间"
     return f"""
 <header class="report-header" data-report-layout="{REPORT_LAYOUT_VERSION}">
   <div class="report-heading">
     <div>
-      <p class="eyebrow">QUANTCONNECT LEAN · 回测分析</p>
+      <p class="eyebrow">{eyebrow}</p>
       <h1>{html.escape(report_name)}</h1>
       <p class="report-subtitle">运行编号 <code>{html.escape(run_id)}</code></p>
     </div>
     <div class="report-badge">已生成报告</div>
   </div>
   <dl class="report-meta">
-    <div><dt>回测标的</dt><dd>{html.escape(symbol)}</dd></div>
+    <div><dt>{subject_label}</dt><dd>{html.escape(str((screening or {}).get("universeCode") or symbol))}</dd></div>
     <div><dt>市场</dt><dd>{html.escape(market)}</dd></div>
-    <div><dt>回测区间</dt><dd>{html.escape(start_date)} <span>至</span> {html.escape(end_date)}</dd></div>
+    <div><dt>{period_label}</dt><dd>{html.escape(start_date)} <span>至</span> {html.escape(end_date)}</dd></div>
     <div><dt>数据源</dt><dd>{html.escape(provider)}</dd></div>
     <div><dt>初始资金</dt><dd>{html.escape(cash_text)}</dd></div>
     <div><dt>报告生成时间</dt><dd>{html.escape(generated_at)}</dd></div>
@@ -529,35 +536,35 @@ th { color: #475569; font-weight: 700; }
 </style>
 """,
         "</head><body><main>",
-        report_header(data, source_path, charts.keys()),
-        f'<section class="stats">{stat_cards(statistics)}</section>',
+        report_header(data, source_path, charts.keys(), screening=screening),
+        "" if screening else f'<section class="stats">{stat_cards(statistics)}</section>',
         screening_section(screening),
-        make_svg(
+        "" if screening else make_svg(
             "Strategy Equity",
             {"Equity": equity_points},
             markers=markers,
         ),
-        make_svg(
+        "" if screening else make_svg(
             "EMA",
             {
                 "Fast": series_points(ema_chart, "Fast"),
                 "Slow": series_points(ema_chart, "Slow"),
             },
         ),
-        make_svg(
+        "" if screening else make_svg(
             "Drawdown",
             {"Drawdown": series_points(drawdown_chart, "Equity Drawdown")},
             y_unit="%",
         ),
-        make_svg(
+        "" if screening else make_svg(
             "Benchmark",
             {"Benchmark": benchmark_points},
         ),
         screening_chart_html,
-        f'<section class="orders"><h2>Orders</h2>{orders_table(markers)}</section>',
-        returns_table("Monthly Returns", period_returns(equity_points, "month")),
-        returns_table("Yearly Returns", period_returns(equity_points, "year")),
-        pnl_table(pnl_rows),
+        "" if screening else f'<section class="orders"><h2>Orders</h2>{orders_table(markers)}</section>',
+        "" if screening else returns_table("Monthly Returns", period_returns(equity_points, "month")),
+        "" if screening else returns_table("Yearly Returns", period_returns(equity_points, "year")),
+        "" if screening else pnl_table(pnl_rows),
         "</main></body></html>",
     ]
     return "\n".join(body)

@@ -71,3 +71,21 @@ def test_screening_markers_become_structured_artifact_and_html_section(tmp_path)
     assert "指数成分股技术面与基本面筛选" in html
     assert "600519" in html
     assert "基本面字段覆盖不足" in html
+
+
+def test_index_screening_template_is_research_only_and_never_submits_orders():
+    from app.services.strategies import get_template
+
+    template = get_template("ashare_index_screening")
+    body = template["body"]
+
+    assert template["strategyMode"] == "SCREENING"
+    assert template["researchOnly"] is True
+    assert template["tradable"] is False
+    assert template["admissionEligible"] is False
+    assert "rebalanceDays" not in body
+    assert "set_holdings" not in body
+    assert "target_percent" not in body
+    assert "liquidate(" not in body
+    assert ".exit(" not in body
+    assert "evaluation=final_snapshot" in body

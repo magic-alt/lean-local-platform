@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **238** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **239** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -37,9 +37,10 @@
 | `GET` | `/api/backtests/{run_id}/admission` | Admission | `run_id` (path, required)<br>`profile` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/artifacts/{name}` | Artifact | `run_id` (path, required)<br>`name` (path, required) | `200` - |
 | `POST` | `/api/backtests/{run_id}/cancel` | Cancel | `run_id` (path, required) | `200` - |
-| `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required) | `200` - |
+| `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required)<br>`symbol` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/result` | Result | `run_id` (path, required) | `200` - |
+| `GET` | `/api/backtests/{run_id}/screening` | Screening | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/status` | Status | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/validation` | Validation | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/versions` | Versions | `run_id` (path, required) | `200` - |

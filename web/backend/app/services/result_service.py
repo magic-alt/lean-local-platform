@@ -44,6 +44,8 @@ def _artifact_kind(path: Path) -> str:
         return "lean-data-requests-failed"
     if name == "report.html":
         return "html-report"
+    if name == "screening-report.json":
+        return "screening-report"
     if name == "ashare_trade_status.json":
         return "ashare-trade-status"
     if name == "ashare_execution.py":
@@ -69,6 +71,7 @@ def _artifact_paths(job_id: str, result_json: Path, summary_json: Path | None, r
         results_dir / "log.txt",
         results_dir / "stdout.log",
         results_dir / "report.html",
+        results_dir / "screening-report.json",
         results_dir / "artifact-manifest.json",
         work_dir / "config.json",
         work_dir / "ashare_trade_status.json",

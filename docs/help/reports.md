@@ -41,8 +41,8 @@ Reports 页面从 backtest run、parsed result 和 stored objects 生成 `report
 
 使用 `ashare_index_screening` 模板时，LEAN 日志中的结构化最终快照还会生成
 `screening-report.json`。同目录的 `report.html` 会增加逐股筛选章节，列出走势、
-技术分、基本面分、综合分、是否适合买入、Top-N 入选状态、通过依据和风险/缺失。
-该结论是策略规则输出，不构成投资建议。
+技术分、基本面分、综合分、是否合格、Top-N 精选状态、公司名称、通过依据和风险/缺失。
+筛选报告不显示收益、持仓或订单区块；该结论是研究规则输出，不构成投资建议。
 
 ## 生成与导出
 

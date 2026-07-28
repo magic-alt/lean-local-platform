@@ -25,6 +25,12 @@ from ..services.experiments import get_experiment_versions
 from ..services.history_resources import delete_backtest
 from ..services.result_service import result_for_job
 from ..services.run_paths import run_directory, run_file
+from ..services.screening_results import load_screening_result
+from ..services.security_identity import (
+    canonical_security_symbol,
+    enrich_symbol_records,
+    resolve_security_identities,
+)
 from ..services.projects import get_project
 from ..services.strategy_admission import admission_for_run
 from ..services.tasks import log_window, task_log_window
@@ -195,6 +201,45 @@ def result(run_id: str):
             result_record["holdings"] = []
     if not result_record.get("holdings"):
         result_record["holdings"] = []
+    parameters = run.get("parameters") or {}
+    market = parameters.get("market") or run.get("venue")
+    asset_class = str(parameters.get("assetClass") or run.get("asset_class") or "equity")
+    result_orders = result_record.get("orders")
+    order_symbols = {
+        canonical_security_symbol(row.get("symbol"), market)
+        for row in result_orders or []
+        if isinstance(row, dict) and row.get("symbol")
+    } if isinstance(result_orders, list) else set()
+    if len(order_symbols) > 1 and run.get("result_json_path"):
+        try:
+            corrected_chart = extract_chart_data(
+                run_file(
+                    run_id,
+                    run.get("result_json_path"),
+                    f"results/{run_id}.json",
+                ),
+                symbol=run.get("symbol"),
+                benchmark_symbol=parameters.get("benchmarkSymbol"),
+                market=market,
+                benchmark_market=parameters.get("benchmarkMarket"),
+                start=parameters.get("start"),
+                end=parameters.get("end"),
+                asset_class=parameters.get("assetClass"),
+                venue=parameters.get("venue"),
+                resolution=parameters.get("resolution"),
+                data_type=parameters.get("dataType"),
+            )
+            result_record["holdings"] = corrected_chart.get("holdings") or []
+        except Exception:
+            pass
+    for key in ("orders", "trades", "holdings"):
+        rows = result_record.get(key)
+        if isinstance(rows, list):
+            result_record[key] = enrich_symbol_records(
+                [row for row in rows if isinstance(row, dict)],
+                market=market,
+                asset_class=asset_class,
+            )
     return {"job": run, "result": result_record}
 
 
@@ -262,7 +307,7 @@ def logs(run_id: str, offset: int | None = None, cursor: str | None = None, limi
 
 
 @router.get("/{run_id}/chart-data")
-def chart_data(run_id: str):
+def chart_data(run_id: str, symbol: str | None = None):
     run = detail(run_id)
     result_path = run_file(
         run_id,
@@ -272,19 +317,101 @@ def chart_data(run_id: str):
     if not result_path.is_file():
         raise HTTPException(status_code=404, detail="Result JSON not found.")
     parameters = run.get("parameters") or {}
-    return extract_chart_data(
-        result_path,
-        symbol=run.get("symbol"),
-        benchmark_symbol=parameters.get("benchmarkSymbol"),
-        market=parameters.get("market"),
-        benchmark_market=parameters.get("benchmarkMarket"),
-        start=parameters.get("start"),
-        end=parameters.get("end"),
-        asset_class=parameters.get("assetClass"),
-        venue=parameters.get("venue"),
-        resolution=parameters.get("resolution"),
-        data_type=parameters.get("dataType"),
+    market = parameters.get("market") or run.get("venue")
+    raw_available_symbols = parameters.get("universeSymbols")
+    available_values = raw_available_symbols if isinstance(raw_available_symbols, list) else []
+    available_symbols = [
+        canonical_security_symbol(value, market)
+        for value in available_values
+        if str(value).strip()
+    ]
+    requested_symbol = canonical_security_symbol(symbol, market) if symbol else None
+    try:
+        payload = extract_chart_data(
+            result_path,
+            symbol=canonical_security_symbol(run.get("symbol"), market),
+            benchmark_symbol=parameters.get("benchmarkSymbol"),
+            market=market,
+            benchmark_market=parameters.get("benchmarkMarket"),
+            start=parameters.get("start"),
+            end=parameters.get("end"),
+            asset_class=parameters.get("assetClass"),
+            venue=parameters.get("venue"),
+            resolution=parameters.get("resolution"),
+            data_type=parameters.get("dataType"),
+            selected_symbol=requested_symbol,
+            available_symbols=available_symbols,
+            filter_orders=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    metadata = payload.get("metadata") or {}
+    discovered = [
+        canonical_security_symbol(value, market)
+        for value in metadata.get("availableSymbols") or []
+    ]
+    identities = resolve_security_identities(
+        discovered,
+        market=market,
+        asset_class=str(parameters.get("assetClass") or "equity"),
     )
+    order_counts = metadata.get("orderCounts") or {}
+    assets = [
+        {
+            **(identities.get(asset_symbol) or {
+                "symbol": asset_symbol,
+                "name": None,
+                "market": market,
+                "exchange": None,
+                "display": asset_symbol,
+            }),
+            "orderCount": int(order_counts.get(asset_symbol) or 0),
+        }
+        for asset_symbol in discovered
+    ]
+    selected = canonical_security_symbol(metadata.get("selectedSymbol"), market)
+    payload["metadata"] = {
+        **metadata,
+        "availableAssets": assets,
+        "selectedAsset": identities.get(selected) or {
+            "symbol": selected,
+            "name": None,
+            "market": market,
+            "exchange": None,
+            "display": selected,
+        },
+    }
+    payload["orders"] = enrich_symbol_records(
+        payload.get("orders") or [],
+        market=market,
+        asset_class=str(parameters.get("assetClass") or "equity"),
+    )
+    payload["orderMarkers"] = enrich_symbol_records(
+        payload.get("orderMarkers") or [],
+        market=market,
+        asset_class=str(parameters.get("assetClass") or "equity"),
+    )
+    return payload
+
+
+@router.get("/{run_id}/screening")
+def screening(run_id: str):
+    run = detail(run_id)
+    parameters = run.get("parameters") or {}
+    template_key = str(parameters.get("strategyTemplateKey") or "")
+    if template_key != "ashare_index_screening":
+        raise HTTPException(status_code=404, detail="Screening result is not available for this run.")
+    results_dir = run_directory(run_id, run.get("results_dir"), relative="results")
+    path = results_dir / "screening-report.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Screening result JSON not found.")
+    try:
+        return load_screening_result(
+            path,
+            market=str(parameters.get("market") or "china"),
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{run_id}/artifacts/{name}")

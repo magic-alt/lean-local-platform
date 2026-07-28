@@ -15,6 +15,7 @@ from ..lean_engine.results import extract_statistics
 from ..lean_engine.screening import extract_screening_report
 from ..services.ashare_execution import write_ashare_execution_artifacts
 from ..services.hk_execution import write_hk_execution_artifacts
+from ..services.screening_results import enrich_screening_file
 from .docker_runner import DockerRunResult, DockerRunner
 
 
@@ -224,7 +225,9 @@ class LeanRunner:
         docker_output = self.run(workspace, output_callback)
         artifacts = self.collect(workspace)
         if docker_output.exit_code == 0 and artifacts.result_json.exists():
-            extract_screening_report(workspace.results_dir)
+            screening_path = extract_screening_report(workspace.results_dir)
+            if screening_path is not None:
+                enrich_screening_file(screening_path)
             render_report(artifacts.result_json, artifacts.report_html)
         self.archive(workspace, docker_output, artifacts)
         return LeanExecutionResult(

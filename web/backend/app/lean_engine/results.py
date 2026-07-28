@@ -4,7 +4,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..core.errors import LeanWebError
 from ..domain.assets import (
@@ -195,9 +195,22 @@ def _nearest_value(points: list[dict[str, Any]], time_value: str | None) -> floa
     return float(nearest["value"])
 
 
+def _chart_symbol(value: Any, market: str | None) -> str:
+    text = str(value or "").strip().upper()
+    market_value = str(market or "").strip().lower()
+    if market_value in {"china", "cn", "a", "ashare"} and text.isdigit() and len(text) <= 6:
+        return text.zfill(6)
+    if market_value in {"hongkong", "hk", "hkg"} and text.isdigit() and len(text) <= 5:
+        return text.zfill(5)
+    return text
+
+
 def infer_holdings_from_orders(
     orders: list[dict[str, Any]],
-    price_series: list[dict[str, Any]],
+    price_series: list[dict[str, Any]] | None = None,
+    *,
+    price_series_by_symbol: dict[str, list[dict[str, Any]]] | None = None,
+    price_series_loader: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     def _order_time(order: dict[str, Any]) -> datetime:
         return _parse_time(order.get("time")) or datetime.min.replace(tzinfo=timezone.utc)
@@ -256,7 +269,12 @@ def infer_holdings_from_orders(
             average_price = 0
         latest_time = last_times.get(symbol)
         time_key = latest_time.isoformat() if latest_time else None
-        market_price = _nearest_value(price_series, time_key) or 0
+        symbol_prices = (price_series_by_symbol or {}).get(symbol)
+        if symbol_prices is None and price_series_loader is not None:
+            symbol_prices = price_series_loader(symbol)
+        if symbol_prices is None:
+            symbol_prices = price_series or []
+        market_price = _nearest_value(symbol_prices, time_key) or 0
         market_value = quantity * market_price if market_price else 0
         holdings.append(
             {
@@ -284,6 +302,9 @@ def extract_chart_data(
     venue: str | None = None,
     resolution: str | None = None,
     data_type: str | None = None,
+    selected_symbol: str | None = None,
+    available_symbols: list[str] | None = None,
+    filter_orders: bool = False,
 ) -> dict[str, Any]:
     data = load_json(result_json)
     charts = data.get("charts") or {}
@@ -325,7 +346,7 @@ def extract_chart_data(
             {
                 "time": time_value,
                 "side": "BUY" if quantity > 0 else "SELL",
-                "symbol": symbol,
+                "symbol": _chart_symbol(symbol, market),
                 "quantity": quantity,
                 "price": price,
                 "tag": order.get("tag") or "",
@@ -334,7 +355,33 @@ def extract_chart_data(
         )
     orders = [order for order in raw_orders if _is_filled_order(order)]
 
-    inferred_symbol = symbol or next((order["symbol"] for order in orders if order["symbol"]), None)
+    discovered_symbols = list(dict.fromkeys(
+        [
+            *[_chart_symbol(value, market) for value in available_symbols or [] if str(value).strip()],
+            *[_chart_symbol(order["symbol"], market) for order in orders if order["symbol"]],
+            *([_chart_symbol(symbol, market)] if symbol else []),
+        ]
+    ))
+    order_counts: dict[str, int] = {}
+    for order in orders:
+        order_symbol = _chart_symbol(order.get("symbol"), market)
+        if order_symbol:
+            order_counts[order_symbol] = order_counts.get(order_symbol, 0) + 1
+    requested_symbol = _chart_symbol(selected_symbol, market)
+    if requested_symbol and requested_symbol not in discovered_symbols:
+        raise ValueError(f"Symbol {requested_symbol} does not belong to this backtest.")
+    first_order_symbol = next((order["symbol"] for order in orders if order["symbol"]), None)
+    inferred_symbol = (
+        requested_symbol
+        or (first_order_symbol if filter_orders else symbol)
+        or first_order_symbol
+        or symbol
+    )
+    chart_orders = (
+        [order for order in orders if _chart_symbol(order.get("symbol"), market) == _chart_symbol(inferred_symbol, market)]
+        if filter_orders and inferred_symbol
+        else orders
+    )
     candles = (
         read_lean_daily_candle_series(
             inferred_symbol,
@@ -399,8 +446,27 @@ def extract_chart_data(
             "priceValue": order["price"] or _nearest_value(price, order["time"]),
             "equityValue": _nearest_value(equity_series, order["time"]),
         }
-        for order in orders
+        for order in chart_orders
     ]
+
+    price_cache: dict[str, list[dict[str, Any]]] = {}
+    if inferred_symbol:
+        price_cache[str(inferred_symbol).upper()] = price
+
+    def load_symbol_prices(order_symbol: str) -> list[dict[str, Any]]:
+        key = str(order_symbol).upper()
+        if key not in price_cache:
+            price_cache[key] = read_lean_daily_price_series(
+                key,
+                market,
+                start,
+                end,
+                asset_class=asset_class,
+                venue=venue,
+                resolution=resolution,
+                data_type=data_type,
+            )
+        return price_cache[key]
 
     return {
         "statistics": data.get("statistics") or {},
@@ -424,8 +490,16 @@ def extract_chart_data(
         "metadata": {
             "benchmarkSymbol": benchmark_symbol,
             "comparisonBasis": "cumulative_return",
+            "availableSymbols": discovered_symbols,
+            "selectedSymbol": inferred_symbol,
+            "multiAsset": len(discovered_symbols) > 1,
+            "orderCounts": order_counts,
         },
-        "orders": orders,
+        "orders": chart_orders,
         "orderMarkers": order_markers,
-        "holdings": infer_holdings_from_orders(orders, price_series=price),
+        "holdings": infer_holdings_from_orders(
+            chart_orders,
+            price_series=price,
+            price_series_loader=load_symbol_prices if not filter_orders else None,
+        ),
     }
