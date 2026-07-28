@@ -129,6 +129,8 @@ services:
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
       LEAN_API_TOKEN_FILE: /run/secrets/lean_api_token
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
+      LEAN_RUNNER_URL: http://lean-runner:8010
+      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
@@ -204,6 +206,7 @@ services:
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
       - lean_api_token
+      - lean_runner_token
     tmpfs:
       - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
     depends_on:
@@ -221,6 +224,8 @@ services:
         condition: service_started
       backtest-worker:
         condition: service_started
+      lean-runner:
+        condition: service_healthy
 
   worker:
     logging: *bounded-logging
@@ -365,6 +370,7 @@ services:
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
       LEAN_DOCKER_NETWORK: none
       LEAN_DOCKER_CPUS: ${LEAN_DOCKER_CPUS:-2}
       LEAN_DOCKER_MEMORY: ${LEAN_DOCKER_MEMORY:-4g}

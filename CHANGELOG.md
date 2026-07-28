@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Route Research Jupyter container start, readiness, logs, stop and removal
+  through the authenticated restricted runner so API and Celery containers no
+  longer attempt to reach an unavailable Docker socket, while keeping the raw
+  socket confined to `lean-runner`.
 - Fix direct A-share index-screening runs by persisting preflight failures,
   injecting the required PIT universe and fundamental schedules server-side,
   and allowing targeted CSI300 research-data refreshes without rewriting daily

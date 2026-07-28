@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import secrets
 import re
 import socket
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +27,81 @@ from ..core.config import (
     RESEARCH_DOCKER_PIDS_LIMIT,
 )
 from .errors import LeanPlatformError
+
+
+def research_container_name(session_id: str) -> str:
+    return f"lean-research-{session_id}"[:60]
+
+
+def _runner_url() -> str:
+    return os.environ.get("LEAN_RUNNER_URL", "").strip().rstrip("/")
+
+
+def _runner_token() -> str:
+    configured = os.environ.get("LEAN_RUNNER_TOKEN", "").strip()
+    if configured:
+        return configured
+    path = Path(
+        os.environ.get(
+            "LEAN_RUNNER_TOKEN_FILE",
+            "/workspace/web/runtime/secrets/runner_token",
+        )
+    )
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _remote_request(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout: int = 90,
+) -> dict[str, Any]:
+    runner_url = _runner_url()
+    token = _runner_token()
+    if not runner_url or not token:
+        raise LeanPlatformError("restricted_runner_not_configured")
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        runner_url + path,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            decoded = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = str(json.loads(detail).get("detail") or detail)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        raise LeanPlatformError(f"restricted_runner_research_failed: {detail}") from exc
+    except OSError as exc:
+        raise LeanPlatformError(f"restricted_runner_unavailable: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise LeanPlatformError("restricted_runner_invalid_response")
+    return decoded
+
+
+def _remote_session_id(container_id: str) -> str | None:
+    prefix = "lean-research-"
+    value = str(container_id or "").strip()
+    return value[len(prefix):] if value.startswith(prefix) else None
+
+
+def _host_platform_path(path: Path) -> Path:
+    try:
+        return HOST_PLATFORM_DIR / path.resolve().relative_to(PLATFORM_DIR.resolve())
+    except ValueError:
+        return path.resolve()
 
 
 def validate_research_docker_image(image: str) -> str:
@@ -43,24 +123,33 @@ def run_detached_research(
     output_callback,
     image: str = DEFAULT_RESEARCH_IMAGE,
 ) -> dict[str, Any]:
+    image = validate_research_docker_image(image)
+    host_project_dir = _host_platform_path(project_dir)
+    if _runner_url():
+        result = _remote_request(
+            "POST",
+            "/v1/research/start",
+            {
+                "sessionId": session_id,
+                "image": image,
+                "projectDir": str(host_project_dir),
+                "port": port,
+            },
+        )
+        for line in result.pop("output", []) or []:
+            output_callback(str(line))
+        return result
+
     docker = shutil.which("docker")
     if not docker:
         raise LeanPlatformError("docker command not found.")
-    image = validate_research_docker_image(image)
     token = secrets.token_urlsafe(24)
-    def host_platform_path(path: Path) -> Path:
-        try:
-            return HOST_PLATFORM_DIR / path.resolve().relative_to(PLATFORM_DIR.resolve())
-        except ValueError:
-            return path.resolve()
-
-    host_project_dir = host_platform_path(project_dir)
     command = [
         docker,
         "run",
         "-d",
         "--name",
-        f"lean-research-{session_id}"[:60],
+        research_container_name(session_id),
         "--cpus",
         RESEARCH_DOCKER_CPUS,
         "--memory",
@@ -121,6 +210,12 @@ def run_detached_research(
 
 
 def stop_container(container_id: str) -> None:
+    if _runner_url():
+        session_id = _remote_session_id(container_id)
+        if not session_id:
+            raise LeanPlatformError("restricted_runner_research_container_reference_invalid")
+        _remote_request("POST", f"/v1/research/{urllib.parse.quote(session_id, safe='')}/stop")
+        return
     docker = shutil.which("docker")
     if not docker:
         raise LeanPlatformError("docker command not found.")
@@ -128,6 +223,11 @@ def stop_container(container_id: str) -> None:
 
 
 def remove_container(container_id: str) -> None:
+    if _runner_url():
+        session_id = _remote_session_id(container_id)
+        if session_id:
+            _remote_request("DELETE", f"/v1/research/{urllib.parse.quote(session_id, safe='')}")
+        return
     docker = shutil.which("docker")
     if not docker:
         return
@@ -135,6 +235,11 @@ def remove_container(container_id: str) -> None:
 
 
 def container_state(container_id: str) -> dict[str, Any]:
+    if _runner_url():
+        session_id = _remote_session_id(container_id)
+        if not session_id:
+            return {"status": "missing", "running": False}
+        return _remote_request("GET", f"/v1/research/{urllib.parse.quote(session_id, safe='')}")
     docker = shutil.which("docker")
     if not docker or not container_id:
         return {"status": "missing", "running": False}
@@ -149,6 +254,15 @@ def container_state(container_id: str) -> dict[str, Any]:
 
 
 def container_logs(container_id: str, *, tail: int = 200) -> str:
+    if _runner_url():
+        session_id = _remote_session_id(container_id)
+        if not session_id:
+            return ""
+        payload = _remote_request(
+            "GET",
+            f"/v1/research/{urllib.parse.quote(session_id, safe='')}/logs?tail={max(1, min(tail, 2000))}",
+        )
+        return str(payload.get("logs") or "")
     docker = shutil.which("docker")
     if not docker or not container_id:
         return ""
@@ -174,6 +288,13 @@ def container_port_ready(container_id: str) -> bool:
 
 
 def find_available_port(preferred: int | None = None, *, start: int = 8888, end: int = 8999) -> int:
+    if _runner_url():
+        payload = _remote_request(
+            "POST",
+            "/v1/research/port",
+            {"preferred": preferred, "start": start, "end": end},
+        )
+        return int(payload["port"])
     used: set[int] = set()
     docker = shutil.which("docker")
     if docker:

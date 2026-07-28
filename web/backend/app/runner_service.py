@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import uuid
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .core.config import (
     ALLOWED_LEAN_DOCKER_IMAGES,
+    ALLOWED_RESEARCH_DOCKER_IMAGES,
     DATA_DIR,
     HOST_DATA_DIR,
     HOST_PLATFORM_DIR,
@@ -25,6 +27,16 @@ from .core.config import (
     PLATFORM_DIR,
 )
 from .db import db, json_dump, utc_now
+from .lean_engine.errors import LeanPlatformError
+from .lean_engine.research import (
+    container_logs as research_container_logs,
+    container_state as research_container_state,
+    find_available_port as find_research_port,
+    remove_container as remove_research_container,
+    research_container_name,
+    run_detached_research,
+    stop_container as stop_research_container,
+)
 from .runners.docker_runner import DockerRunner
 
 
@@ -62,6 +74,23 @@ class RunnerJob(BaseModel):
     timeoutSeconds: int = Field(ge=1, le=86400)
     traceId: str | None = Field(default=None, min_length=1, max_length=128)
     workflowId: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ResearchJob(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str = Field(min_length=1, max_length=48, pattern=r"^[A-Za-z0-9._-]+$")
+    image: str = Field(min_length=1, max_length=512)
+    projectDir: str = Field(min_length=1, max_length=4096)
+    port: int = Field(ge=1024, le=65535)
+
+
+class ResearchPortRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preferred: int | None = Field(default=None, ge=1024, le=65535)
+    start: int = Field(default=8888, ge=1024, le=65535)
+    end: int = Field(default=8999, ge=1024, le=65535)
 
 
 def _runner_token() -> str:
@@ -217,9 +246,133 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
     return spec
 
 
+def _validate_research_job(job: ResearchJob) -> dict[str, Any]:
+    if job.image not in ALLOWED_RESEARCH_DOCKER_IMAGES or "@sha256:" not in job.image:
+        raise HTTPException(status_code=400, detail="runner_research_image_invalid")
+    project_dir = _validated_path(
+        job.projectDir,
+        HOST_PLATFORM_DIR,
+        visible_root=PLATFORM_DIR,
+        label="research_project_dir",
+    )
+    visible_project_dir = (
+        PLATFORM_DIR / Path(project_dir).relative_to(HOST_PLATFORM_DIR)
+    ).resolve()
+    if not visible_project_dir.is_dir():
+        raise HTTPException(status_code=400, detail="runner_research_project_dir_missing")
+    return {
+        "sessionId": job.sessionId,
+        "containerName": research_container_name(job.sessionId),
+        "image": job.image,
+        "projectDir": project_dir,
+        "visibleProjectDir": str(visible_project_dir),
+        "port": job.port,
+    }
+
+
+def _research_session_id(value: str) -> str:
+    if not value or len(value) > 48 or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
+        raise HTTPException(status_code=400, detail="runner_research_session_id_invalid")
+    return value
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "networkPolicy": LEAN_DOCKER_NETWORK}
+
+
+@app.post("/v1/research/port")
+def available_research_port(
+    request: ResearchPortRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, int]:
+    _authenticate(authorization)
+    if request.start > request.end:
+        raise HTTPException(status_code=400, detail="runner_research_port_range_invalid")
+    try:
+        return {
+            "port": find_research_port(
+                request.preferred,
+                start=request.start,
+                end=request.end,
+            )
+        }
+    except LeanPlatformError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/research/start")
+def start_research(
+    job: ResearchJob,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authenticate(authorization)
+    spec = _validate_research_job(job)
+    output: list[str] = []
+    try:
+        result = run_detached_research(
+            spec["sessionId"],
+            Path(spec["visibleProjectDir"]),
+            spec["port"],
+            output.append,
+            image=spec["image"],
+        )
+    except LeanPlatformError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        **result,
+        "container_id": spec["containerName"],
+        "output": output[-2000:],
+    }
+
+
+@app.get("/v1/research/{session_id}")
+def research_state(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authenticate(authorization)
+    normalized = _research_session_id(session_id)
+    return research_container_state(research_container_name(normalized))
+
+
+@app.get("/v1/research/{session_id}/logs")
+def research_logs(
+    session_id: str,
+    tail: int = 200,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
+    _authenticate(authorization)
+    normalized = _research_session_id(session_id)
+    return {
+        "logs": research_container_logs(
+            research_container_name(normalized),
+            tail=max(1, min(tail, 2000)),
+        )
+    }
+
+
+@app.post("/v1/research/{session_id}/stop")
+def stop_research(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authenticate(authorization)
+    normalized = _research_session_id(session_id)
+    container_name = research_container_name(normalized)
+    stop_research_container(container_name)
+    return research_container_state(container_name)
+
+
+@app.delete("/v1/research/{session_id}")
+def delete_research(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authenticate(authorization)
+    normalized = _research_session_id(session_id)
+    remove_research_container(research_container_name(normalized))
+    return {"removed": True, "sessionId": normalized}
 
 
 @app.post("/v1/jobs/run")
