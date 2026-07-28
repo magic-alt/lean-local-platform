@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -173,3 +173,156 @@ class P0IntegrationAlgorithm(QCAlgorithm):
     assert "AShare sell blocked 600001 t_plus_1" in log_text
     assert "AShare sell blocked 600001 limit_down_or_blocked" in log_text
     assert "AShare buy blocked 600001 suspended" in log_text
+
+
+def test_real_lean_runs_index_screening_and_writes_report_artifacts(tmp_path, monkeypatch):
+    _configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.runners.lean_runner import LeanRunner
+    from app.services.data import import_ashare_research_data
+    from app.services.strategies import render_python_template
+
+    def daily_rows(symbol: str):
+        rows = []
+        cursor = date(2024, 1, 2)
+        index = 0
+        while cursor <= date(2024, 6, 28):
+            if cursor.weekday() < 5:
+                if symbol == "600001":
+                    close = 10.0 + index * 0.08
+                elif symbol == "000001":
+                    close = 12.0 - index * 0.015
+                else:
+                    close = 3500.0 + index * 1.5
+                rows.append(
+                    {
+                        "date": cursor.isoformat(),
+                        "open": f"{close * 0.998:.4f}",
+                        "high": f"{close * 1.01:.4f}",
+                        "low": f"{close * 0.99:.4f}",
+                        "close": f"{close:.4f}",
+                        "volume": "1000000",
+                        "canBuy": True,
+                        "canSell": True,
+                    }
+                )
+                index += 1
+            cursor += timedelta(days=1)
+        return rows
+
+    for symbol in ("000001", "600001", "000300"):
+        import_ashare_research_data(
+            symbol=symbol,
+            provider="unit",
+            market="china",
+            rows=daily_rows(symbol),
+            source="unit-official",
+            overwrite=True,
+            adjust="raw",
+            outputsize="",
+            asset_class="equity",
+            venue="china",
+            resolution="daily",
+            data_type="trade",
+            start_date=None,
+            end_date=None,
+        )
+
+    project_dir = tmp_path / "screening-project"
+    project_dir.mkdir()
+    (project_dir / "main.py").write_text(
+        render_python_template("AshareIndexScreeningIntegrationAlgorithm", "ashare_index_screening"),
+        encoding="utf-8",
+    )
+    universe_schedule = [
+        {"symbol": "000001", "startDate": "2024-01-02", "endDate": None, "weight": 0.5},
+        {"symbol": "600001", "startDate": "2024-01-02", "endDate": None, "weight": 0.5},
+    ]
+    fundamental_schedule = [
+        {
+            "symbol": "000001",
+            "effectiveDate": "2024-01-02",
+            "metrics": {"roe": 0.03, "revenueGrowth": -0.05, "debtRatio": 0.82, "pe": 80.0},
+        },
+        {
+            "symbol": "600001",
+            "effectiveDate": "2024-01-02",
+            "metrics": {"roe": 0.22, "revenueGrowth": 0.18, "debtRatio": 0.35, "pe": 20.0},
+        },
+    ]
+    run_dir = tmp_path / "runtime" / "runs" / "screening-lean-integration"
+    parameters = {
+        "ticker": "000001",
+        "assetClass": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": "2024-01-02",
+        "end": "2024-06-28",
+        "cash": 1_000_000,
+        "initialCash": 1_000_000,
+        "initial_cash": 1_000_000,
+        "benchmarkSymbol": "000300",
+        "universeCode": "CSI300",
+        "universeSymbols": ["000001", "600001"],
+        "universeSchedule": json.dumps(universe_schedule, separators=(",", ":")),
+        "fundamentalSchedule": json.dumps(fundamental_schedule, separators=(",", ":")),
+        "fastPeriod": 20,
+        "slowPeriod": 60,
+        "rsiPeriod": 14,
+        "rebalanceDays": 20,
+        "topN": 1,
+        "technicalThreshold": 70,
+        "fundamentalThreshold": 60,
+        "minFundamentalFields": 2,
+        "ashareRules": True,
+        "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
+        "commissionRate": 0.0001,
+        "minCommission": 5.0,
+        "stampTaxSell": 0.0005,
+        "transferFeeRate": 0.00001,
+        "slippageBps": 0.0,
+    }
+
+    output = LeanRunner(timeout_seconds=180).run_backtest(
+        "screening-lean-integration",
+        parameters,
+        run_dir,
+        output_callback=lambda _line: None,
+        algorithm_path=project_dir / "main.py",
+        algorithm_class="AshareIndexScreeningIntegrationAlgorithm",
+        language="Python",
+        project_dir=project_dir,
+    )
+
+    assert output["exit_code"] == 0
+    assert output["result_json_path"]
+    assert output["report_html_path"]
+    screening_path = Path(output["results_dir"]) / "screening-report.json"
+    screening = json.loads(screening_path.read_text(encoding="utf-8"))
+    by_symbol = {item["symbol"]: item for item in screening["items"]}
+    assert by_symbol["600001"]["trend"] == "持续上涨"
+    assert by_symbol["600001"]["suitableToBuy"] is True
+    assert by_symbol["000001"]["suitableToBuy"] is False
+    assert screening["summary"]["selected"] == ["600001"]
+    events_path = Path(output["results_dir"]) / "screening-lean-integration-order-events.json"
+    events = json.loads(events_path.read_text(encoding="utf-8"))
+    if isinstance(events, dict):
+        events = list(events.values())
+    filled_buys = [
+        event for event in events
+        if str(event.get("status")).lower() == "filled" and str(event.get("direction")).lower() == "buy"
+    ]
+    assert any(
+        str(
+            event.get("symbolValue")
+            or (
+                event.get("symbol", {}).get("value")
+                if isinstance(event.get("symbol"), dict)
+                else event.get("symbol")
+            )
+        ) == "600001"
+        for event in filled_buys
+    )
+    assert "指数成分股技术面与基本面筛选" in Path(output["report_html_path"]).read_text(encoding="utf-8")

@@ -11,11 +11,23 @@ from pathlib import Path
 
 COLORS = ["#2563eb", "#dc2626", "#059669", "#7c3aed", "#d97706", "#0891b2"]
 REPORT_LAYOUT_VERSION = "report-layout-v2"
+SCREENING_REPORT_NAME = "screening-report.json"
 
 
 def load_json(path):
     with Path(path).open() as file:
         return json.load(file)
+
+
+def load_screening(source_path):
+    path = Path(source_path).parent / SCREENING_REPORT_NAME
+    if not path.is_file():
+        return {}
+    try:
+        payload = load_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def unix_to_date(value):
@@ -291,6 +303,69 @@ def orders_table(markers):
     )
 
 
+def screening_section(screening):
+    items = screening.get("items") or []
+    if not items:
+        return ""
+    summary = screening.get("summary") or {}
+    selected_symbols = {str(value) for value in summary.get("selected") or []}
+    counts = {
+        "持续上涨": sum(1 for item in items if item.get("trend") == "持续上涨"),
+        "持续下跌": sum(1 for item in items if item.get("trend") == "持续下跌"),
+        "横盘震荡": sum(1 for item in items if item.get("trend") == "横盘震荡"),
+        "适合买入": sum(1 for item in items if item.get("suitableToBuy")),
+    }
+    rows = []
+    for item in sorted(
+        items,
+        key=lambda row: (
+            not bool(row.get("suitableToBuy")),
+            -float(row.get("overallScore") or 0),
+            str(row.get("symbol") or ""),
+        ),
+    ):
+        symbol = str(item.get("symbol") or "")
+        suitable = bool(item.get("suitableToBuy"))
+        metrics = item.get("fundamentals") or {}
+        metric_text = " · ".join(
+            f"{key}={float(value):.2f}"
+            for key, value in sorted(metrics.items())
+            if isinstance(value, (int, float))
+        ) or "缺失"
+        reasons = "；".join(map(str, item.get("reasons") or [])) or "-"
+        risks = "；".join(map(str, item.get("risks") or [])) or "-"
+        rows.append(
+            "<tr>"
+            f"<td><strong>{html.escape(symbol)}</strong></td>"
+            f"<td><span class=\"trend-badge\">{html.escape(str(item.get('trend') or '-'))}</span></td>"
+            f"<td>{float(item.get('technicalScore') or 0):.1f}</td>"
+            f"<td>{float(item.get('fundamentalScore') or 0):.1f}</td>"
+            f"<td>{float(item.get('overallScore') or 0):.1f}</td>"
+            f"<td>{'是' if suitable else '否'}</td>"
+            f"<td>{'Top-N' if symbol in selected_symbols else '-'}</td>"
+            f"<td>{html.escape(metric_text)}</td>"
+            f"<td>{html.escape(reasons)}</td>"
+            f"<td>{html.escape(risks)}</td>"
+            "</tr>"
+        )
+    cards = "".join(
+        f'<div class="screening-stat"><span>{html.escape(label)}</span><strong>{value}</strong></div>'
+        for label, value in counts.items()
+    )
+    return (
+        '<section class="screening-report">'
+        "<h2>指数成分股技术面与基本面筛选</h2>"
+        f"<p>股票池 {html.escape(str(screening.get('universeCode') or '-'))}，"
+        f"评估时点 {html.escape(str(screening.get('asOfDate') or '-'))}。"
+        "“适合买入”是本策略规则判断，不构成投资建议；缺失基本面不会自动通过。</p>"
+        f'<div class="screening-stats">{cards}</div>'
+        '<details open><summary>查看全部逐股评估</summary><div class="screening-table-wrap">'
+        "<table><thead><tr><th>股票</th><th>走势</th><th>技术分</th><th>基本面分</th>"
+        "<th>综合分</th><th>适合买入</th><th>组合</th><th>基本面快照</th><th>通过依据</th><th>风险/缺失</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details></section>"
+    )
+
+
 def report_header(data, source_path, charts):
     configuration = data.get("algorithmConfiguration") or {}
     parameters = configuration.get("parameters") or {}
@@ -364,6 +439,19 @@ def build_report(data, source_path):
     equity_points = series_points(equity_chart, "Equity")
     benchmark_points = series_points(benchmark_chart, "Benchmark", ignore_zero_values=True)
     pnl_rows = profit_loss_rows(data)
+    screening = load_screening(source_path)
+    screening_chart = get_chart(data, "Screening")
+    screening_chart_html = (
+        make_svg(
+            "Screening",
+            {
+                name: series_points(screening_chart, name)
+                for name in ("Universe", "Rising", "Falling", "Sideways", "Qualified")
+            },
+        )
+        if screening_chart
+        else ""
+    )
 
     body = [
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
@@ -402,6 +490,16 @@ h2 { margin: 0 0 14px; font-size: 18px; }
 .source-details code { white-space: normal; overflow-wrap: anywhere; }
 .stats { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .stat, .chart-card, .orders { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+.screening-report { margin-top: 16px; padding: 18px; background: #fff; border: 1px solid #dbe4ef; border-radius: 10px; }
+.screening-report > p { color: #475569; line-height: 1.6; }
+.screening-stats { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 10px; margin: 14px 0; }
+.screening-stat { padding: 12px; background: #f8fafc; border-radius: 8px; }
+.screening-stat span { display: block; color: #64748b; font-size: 12px; }
+.screening-stat strong { display: block; margin-top: 5px; font-size: 20px; }
+.screening-report summary { cursor: pointer; color: #1d4ed8; font-weight: 700; }
+.screening-table-wrap { margin-top: 12px; overflow-x: auto; }
+.screening-table-wrap table { min-width: 1320px; font-size: 12px; }
+.trend-badge { white-space: nowrap; }
 .stat-label { color: #64748b; font-size: 12px; margin-bottom: 6px; }
 .stat-value { font-size: 18px; font-weight: 700; }
 .chart-card { margin-top: 16px; }
@@ -412,6 +510,7 @@ th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; 
 th { color: #475569; font-weight: 700; }
 @media (max-width: 860px) {
   .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .screening-stats { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
   .report-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
@@ -432,6 +531,7 @@ th { color: #475569; font-weight: 700; }
         "</head><body><main>",
         report_header(data, source_path, charts.keys()),
         f'<section class="stats">{stat_cards(statistics)}</section>',
+        screening_section(screening),
         make_svg(
             "Strategy Equity",
             {"Equity": equity_points},
@@ -453,6 +553,7 @@ th { color: #475569; font-weight: 700; }
             "Benchmark",
             {"Benchmark": benchmark_points},
         ),
+        screening_chart_html,
         f'<section class="orders"><h2>Orders</h2>{orders_table(markers)}</section>',
         returns_table("Monthly Returns", period_returns(equity_points, "month")),
         returns_table("Yearly Returns", period_returns(equity_points, "year")),

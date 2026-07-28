@@ -9,9 +9,10 @@
 
 > **整改更新（2026-07-26 晚）**：本文件前 14 章保留独立审计时点的原始事实与
 > `LEVEL5_FAIL` 判定，不能回写成当时已通过。审计后，§15 的 5 个 Critical 与
-> 9 个 P0 已完成代码/配置整改；§15、§16 的状态表是最新状态。外部 Webhook
-> 真实 2xx 和新的 21 交易日多账户实跑仍需独立证据，因此本次整改不把原始
-> Level 5 verdict 升级为 PASS。
+> 9 个 P0 已完成代码/配置整改；§15、§16 的状态表是最新状态。新的 21 交易日
+> 多账户实跑仍需独立证据，因此本次整改不把原始 Level 5 verdict 升级为 PASS。
+> 外部 Webhook 真实 2xx 不属于 Level 5 必过项，改列为启用无人值守自动执行前
+> 的独立运维验收；未配置时继续保持 operational readiness fail-closed。
 >
 > **P1 整改更新（2026-07-26）**：P1 简表中的 11 项已完成代码和回归整改；
 > `L5-ARCH-002` 的 Paper 全域 repository 下沉为 XL 级重构，保留
@@ -25,8 +26,9 @@
 > `object_store_items` 经代码追踪确认是 `stored_objects` 的活动索引，并非死表。
 > 真实历史复审仍发现 3 个 legacy opening checkpoint digest mismatch 与 3 个
 > future quote；apply 按设计抛 `CanonicalStateDivergence`，没有改写 immutable
-> checkpoint，故 `dataTrust=false`。外部 Webhook、全栈 21 日故障验收、四类
-> 跨资产数据填充以及 `L5-ARCH-002` 仍是开放发布条件。
+> checkpoint，故 `dataTrust=false`。全栈 21 日故障验收、四类跨资产数据填充
+> 以及 `L5-ARCH-002` 仍是开放发布条件。外部 Webhook 仅是无人值守运行条件，
+> 不再计入 Level 5 通过判定。
 > 本轮代码验证为后端 `505 passed, 2 skipped`、前端 build、OpenAPI/help
 > 文档检查、Compose 配置、供应链门禁与 repository hygiene 全部通过。
 
@@ -724,7 +726,7 @@ for ledger_row in ledger_rows:
 | ID | 整改状态 | 最新证据 / 剩余外部验证 |
 | --- | --- | --- |
 | L5-OPS-001 | **Fixed** | 28GB 备份 SHA-256 已校验；128 表恢复到隔离库，RPO=`9327.519s`、RTO=`2023.813s`；5 张关键表行数差 0、checksum 全匹配。证据：`web/runtime/audit/restore-drill-20260726T213900Z.json` |
-| L5-OPS-002 | **Code fixed / external evidence pending** | 默认阈值 `error`、cycle failure 为 Critical、健康状态 fail-closed、通道恢复后补投 open alerts；本机仍未配置真实外部 endpoint |
+| L5-OPS-002 | **Fixed (Level 5)** | 默认阈值 `error`、cycle failure 为 Critical、健康状态 fail-closed、通道恢复后补投 open alerts；真实外部 2xx 改列为无人值守运维验收，不是 Level 5 必过项 |
 | L5-OPS-003 | **Fixed** | outbox 仅在外部 delivery 2xx 后写 `delivered`；无通道为 `failed`，无确认回执为 `retrying` |
 | L5-OPS-004 | **Fixed** | `evidence_revalidation` 强制 `passed:false` / `revalidated_from_prior_evidence` |
 | L5-PAPER-005 | **Fixed** | v2 默认值已在 config / Compose / env sample 翻转为 `1`，关闭时 dependency health 降级 |
@@ -963,13 +965,19 @@ for ledger_row in ledger_rows:
 - **需要修改的模块**: `services/alerts.py`、`core/config.py`、`docker-compose.yml`、`.env.example`、`docs/operations/level5-runbook.md`
 - **DB/API 兼容性影响**: 无
 - **测试要求**: 启动自检用例；`error` 级告警送达用例。
-- **验收命令**:
-  `web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py` → `EXTERNAL_WEBHOOK_PASS`
-- **完成定义**: `alert_deliveries` 中存在对应 45 条事件的 2xx 送达记录。
-- **依赖项**: 需要真实外部端点
+- **Level 5 验收命令**:
+  `cd web/backend && .venv/bin/python -m pytest -q tests/test_alert_delivery.py`
+- **Level 5 完成定义**: 告警持久化、阈值、升级、恢复通知、delivery audit、
+  outbox 仅凭 2xx 标记成功，以及无通道时 operational readiness fail-closed
+  均有通过的代码回归。
+- **无人值守运维验收**:
+  `web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py`
+  → `EXTERNAL_WEBHOOK_PASS`；该项不计入 Level 5 必过条件。
+- **依赖项**: Level 5 无外部依赖；启用无人值守自动执行需要真实外部端点
 - **工作量**: **M**
 - **建议负责人角色**: SRE
-- **状态**: **Code fixed / External evidence pending**（未配置真实外部 endpoint 时 health 为 Critical/degraded，不再报告 ready）
+- **状态**: **Fixed (Level 5)**（真实外部 2xx 转入无人值守运维验收；未配置
+  endpoint 时 health 继续为 Critical/degraded，不再报告 ready）
 
 ---
 

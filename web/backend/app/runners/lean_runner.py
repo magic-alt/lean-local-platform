@@ -12,6 +12,7 @@ from ..lean_engine.docker import docker_command
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.reports import render_report
 from ..lean_engine.results import extract_statistics
+from ..lean_engine.screening import extract_screening_report
 from ..services.ashare_execution import write_ashare_execution_artifacts
 from ..services.hk_execution import write_hk_execution_artifacts
 from .docker_runner import DockerRunResult, DockerRunner
@@ -223,6 +224,7 @@ class LeanRunner:
         docker_output = self.run(workspace, output_callback)
         artifacts = self.collect(workspace)
         if docker_output.exit_code == 0 and artifacts.result_json.exists():
+            extract_screening_report(workspace.results_dir)
             render_report(artifacts.result_json, artifacts.report_html)
         self.archive(workspace, docker_output, artifacts)
         return LeanExecutionResult(

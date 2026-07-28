@@ -29,6 +29,14 @@ const MODES = {
     { value: "factor_batch", label: "多因子批量评价" }
   ]
 };
+const UNIVERSE_OPTIONS = [
+  { value: "CSI300", label: "沪深300（CSI300）", benchmark: "000300" },
+  { value: "CSI500", label: "中证500（CSI500）", benchmark: "000905" },
+  { value: "CSI1000", label: "中证1000（CSI1000）", benchmark: "000852" },
+  { value: "STAR50", label: "科创50（STAR50）", benchmark: "000688" },
+  { value: "SSE50", label: "上证50（SSE50）", benchmark: "000016" },
+  { value: "ALL_A", label: "全A股（ALL_A）", benchmark: "000300" }
+];
 
 function sensitivityOption(sensitivity: ExperimentSensitivity) {
   const xIndex = new Map(sensitivity.xValues.map((value, index) => [value, index]));
@@ -122,6 +130,14 @@ export function BatchWorkbench({
   const symbolSource = Form.useWatch("symbolSource", form) || "symbols";
   const mode = Form.useWatch("mode", form) || MODES[kind][0].value;
   const market = Form.useWatch("market", form) || "china";
+  const selectedProjectIds = Form.useWatch("projectIds", form) || [];
+  const isIndexScreening = projects.some(
+    (project) => selectedProjectIds.includes(project.id)
+      && project.config?.templateKey === "ashare_index_screening"
+  );
+  const universeOptions = isIndexScreening
+    ? UNIVERSE_OPTIONS.filter((item) => ["CSI300", "CSI500", "CSI1000", "STAR50"].includes(item.value))
+    : UNIVERSE_OPTIONS;
 
   async function reload() {
     try {
@@ -264,7 +280,11 @@ export function BatchWorkbench({
             {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select virtual={false} mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
             {kind !== "research" && <Form.Item name="symbolSource" label="标的来源"><Select options={[{ value: "symbols", label: "股票代码" }, { value: "universe", label: "PIT股票池" }]} /></Form.Item>}
             {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item className="form-field--wide" name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
-            {kind !== "research" && (symbolSource === "universe" || mode === "dynamic_universe") && <Form.Item name="universeCode" label="股票池"><Select options={["CSI300", "CSI500", "CSI1000", "SSE50", "STAR50", "ALL_A"].map((value) => ({ value, label: value }))} /></Form.Item>}
+            {kind !== "research" && (symbolSource === "universe" || mode === "dynamic_universe") && <Form.Item name="universeCode" label="股票池"><Select options={universeOptions} onChange={(value) => {
+              const option = UNIVERSE_OPTIONS.find((item) => item.value === value);
+              if (option) form.setFieldValue("benchmarkSymbol", option.benchmark);
+              setPreview(undefined);
+            }} /></Form.Item>}
             {kind === "research" && <Form.Item className="form-field--wide" name="factorNames" label="因子/研究项"><Input placeholder="momentum,volatility" /></Form.Item>}
           </FormGrid>
           </FormSection>

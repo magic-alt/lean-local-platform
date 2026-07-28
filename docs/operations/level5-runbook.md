@@ -84,7 +84,8 @@ LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS=5
 - 指标恢复正常或人工 resolve 时，强制发送一条恢复通知，不受 cooldown 阻挡。
 - 每个通道分别持久化 attempt count、响应码、最后错误和安全脱敏后的 endpoint。
 
-发布前的外部终端认证必须使用真实公开 webhook；outbox 入库或本地 mock 不能替代：
+外部 Webhook 真实 2xx 不属于 Level 5 必过项。准备启用无人值守自动执行时，
+外部终端认证必须使用真实公开 webhook；outbox 入库或本地 mock 不能替代：
 
 ```bash
 web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py \

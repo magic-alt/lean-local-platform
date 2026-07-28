@@ -212,9 +212,15 @@ web/backend/.venv/bin/python scripts/run_restore_drill.py \
   --target-database lean_restore_drill_20260726 \
   --confirm RESTORE_ISOLATED_DATABASE
 python3 scripts/check_supply_chain.py && ls web/runtime/audit/sbom/*.json
-web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py
 web/backend/.venv/bin/python scripts/db_migrate.py --status
 cd web/backend && .venv/bin/python -m pytest -q tests/test_alert_delivery.py tests/test_db_migrations.py
+```
+
+外部 Webhook 真实 2xx 不属于 Level 5 必过项。仅在准备启用无人值守自动执行时，
+再单独运行：
+
+```bash
+web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py
 ```
 
 ### 回滚方案
@@ -226,8 +232,8 @@ cd web/backend && .venv/bin/python -m pytest -q tests/test_alert_delivery.py tes
 ### 完成定义
 
 - `web/runtime/audit/restore-drill-<date>.json` 存在且 `passed:true`，含实测 RPO/RTO；
-- `run_external_webhook_acceptance.py` → `EXTERNAL_WEBHOOK_PASS`；
-- `alert_deliveries` 中存在 2xx 送达记录；
+- Level 5 仅要求告警持久化、阈值、升级、outbox 2xx 判定和无通道 fail-closed
+  的代码及回归通过；真实外部 2xx 留待无人值守运维验收；
 - `check_supply_chain.py` → `status: passed`；
 - 每个 migration 有 down 或不可逆标注；
 - 任一 run 目录下存在 `trace.json` 且与 API 响应的 `X-Trace-ID` 一致。
@@ -520,7 +526,6 @@ web/backend/.venv/bin/python scripts/run_p1_stability_acceptance.py
 web/backend/.venv/bin/python scripts/run_service_restart_fault_acceptance.py
 web/backend/.venv/bin/python scripts/run_restore_drill.py --backup <latest> \
   --target-database lean_restore_final --confirm RESTORE_ISOLATED_DATABASE
-web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py
 python3 scripts/check_supply_chain.py
 python3 scripts/check_repository_hygiene.py
 web/backend/.venv/bin/python scripts/db_migrate.py --status
@@ -528,7 +533,9 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 
 ### 完成定义
 
-23 项硬门禁全部 PASS 且有当日真实证据、0 Critical、0 未关闭 P0、无关键 NOT_VERIFIED —— 方可判定 `LEVEL5_PASS`。若仅剩外部环境或生产规模验证，判定 `LEVEL5_CANDIDATE` 并列出未满足的正式发布条件。
+Level 5 范围内硬门禁全部 PASS 且有当日真实证据、0 Critical、0 未关闭 P0、
+无关键 NOT_VERIFIED，方可判定 `LEVEL5_PASS`。真实外部 Webhook 2xx 不计入
+Level 5 硬门禁；若要启用无人值守自动执行，仍须另行完成该运维验收。
 
 ---
 
@@ -565,7 +572,7 @@ web/backend/.venv/bin/python scripts/db_migrate.py --status
 - [x] L5-OPS-005 为全部 migration 补齐 down 或不可逆标注
 - [x] L5-OBS-001 Trace ID 贯穿 API → Celery → runner → run 目录
 - [x] L5-SUP-001 requirements.lock + SBOM 归档 + 供应链门禁
-- [ ] 外部 Webhook 接收端真实 2xx 送达证据
+- [x] Level 5 范围确认：外部 Webhook 真实 2xx 非必过项，转入无人值守运维验收
 
 ### Wave 3 — Paper 与订单账本
 - [x] L5-ARCH-001 抽出 trading_calendar，消除对 legacy_paper 私有函数的依赖

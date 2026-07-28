@@ -64,7 +64,7 @@ def test_all_backtest_examples_reference_renderable_strategy_templates():
 
     catalog = examples.list_examples("backtest")
 
-    assert len(catalog) == 10
+    assert len(catalog) == 11
     for example in catalog:
         template = get_template(example["templateKey"])
         assert template["key"] == example["templateKey"]
@@ -160,6 +160,62 @@ def test_dynamic_universe_persists_effective_membership_schedule(tmp_path, monke
     assert parameters["dynamicUniverse"] is True
     assert '"startDate":"2021-01-01"' in parameters["universeSchedule"]
     assert selection["asOfDate"] == "2020-06-01"
+
+
+def test_ashare_screening_injects_only_pit_fundamentals_and_matching_benchmark(tmp_path, monkeypatch):
+    db_module = configure(tmp_path, monkeypatch)
+    seed_universe(db_module)
+    with db_module.db() as connection:
+        connection.executemany(
+            """
+            insert into financial_facts
+                (symbol,field_name,report_date,announce_date,effective_date,value,unit,source,batch_id,created_at)
+            values (?,?,?,?,?,?,?,'unit','batch','2026-01-01')
+            """,
+            [
+                ("000001", "roe", "2019-12-31", "2020-04-01", "2020-04-01", 0.12, "ratio"),
+                ("000001", "or_yoy", "2020-12-31", "2021-04-01", "2021-04-01", 0.10, "ratio"),
+                ("600519", "roe", "2020-12-31", "2021-04-20", "2021-04-20", 0.22, "ratio"),
+                ("600519", "roe", "2022-12-31", "2023-04-20", "2023-04-20", 0.30, "ratio"),
+            ],
+        )
+        connection.executemany(
+            """
+            insert into factor_values
+                (symbol,trade_date,factor_name,value,source,batch_id,created_at)
+            values (?,?,?,?,'unit','batch','2026-01-01')
+            """,
+            [
+                ("000001", "2020-05-29", "pe_ttm", 12.0),
+                ("000001", "2020-06-30", "pe_ttm", 13.0),
+                ("000001", "2020-07-31", "pe_ttm", 14.0),
+            ],
+        )
+
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("screening", template_key="ashare_index_screening", market="china")
+    items, selection = experiment_batches.expand(
+        {
+            "kind": "backtest",
+            "mode": "dynamic_universe",
+            "projectId": project["id"],
+            "universeCode": "CSI300",
+            "start": "2020-06-01",
+            "end": "2022-01-01",
+        }
+    )
+
+    request = items[0]["parameters"]
+    schedule = __import__("json").loads(request["parameters"]["fundamentalSchedule"])
+    assert request["benchmarkSymbol"] == "000300"
+    assert request["parameters"]["benchmarkSymbol"] == "000300"
+    assert selection["fundamentalRecordCount"] == len(schedule)
+    assert {row["symbol"] for row in schedule} == {"000001", "600519"}
+    assert all(row["effectiveDate"] <= "2022-01-01" for row in schedule)
+    assert not any(row["effectiveDate"] == "2023-04-20" for row in schedule)
+    assert any(row["metrics"].get("pe") == 14.0 for row in schedule)
 
 
 def test_walk_forward_expands_independent_validation_and_oos_with_lineage(tmp_path, monkeypatch):

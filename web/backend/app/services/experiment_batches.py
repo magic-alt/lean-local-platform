@@ -25,6 +25,32 @@ TERMINAL = {"success", "failed", "skipped", "cancelled"}
 ACTIVE = {"dispatching", "queued", "running"}
 SELECTION_BLOCKED = "blocked_selection"
 
+FUNDAMENTAL_FIELD_ALIASES = {
+    "roe": "roe",
+    "roe_waa": "roe",
+    "roe_dt": "roe",
+    "or_yoy": "revenueGrowth",
+    "revenue_yoy": "revenueGrowth",
+    "q_sales_yoy": "revenueGrowth",
+    "tr_yoy": "revenueGrowth",
+    "netprofit_yoy": "profitGrowth",
+    "net_profit_yoy": "profitGrowth",
+    "q_profit_yoy": "profitGrowth",
+    "debt_to_assets": "debtRatio",
+    "debt_assets_ratio": "debtRatio",
+    "pe": "pe",
+    "pe_ttm": "pe",
+    "pb": "pb",
+    "n_income": "netProfit",
+    "net_profit": "netProfit",
+}
+INDEX_BENCHMARKS = {
+    "CSI300": "000300",
+    "CSI500": "000905",
+    "CSI1000": "000852",
+    "STAR50": "000688",
+}
+
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(
@@ -243,6 +269,107 @@ def _membership_schedule(universe_code: str, start: str, end: str) -> list[dict[
     ]
 
 
+def _chunks(values: list[str], size: int = 400) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
+def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict[str, Any]]:
+    """Build a compact PIT metric stream without exposing post-publication data early."""
+    tickers = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+    if not tickers:
+        return []
+    raw_fields = sorted(FUNDAMENTAL_FIELD_ALIASES)
+    field_rank = {field: index for index, field in enumerate(raw_fields)}
+    chosen: dict[tuple[str, str, str], tuple[int, float]] = {}
+    initial: dict[tuple[str, str], tuple[str, int, float]] = {}
+
+    for chunk in _chunks(tickers):
+        symbol_placeholders = ",".join("?" for _ in chunk)
+        field_placeholders = ",".join("?" for _ in raw_fields)
+        with db() as connection:
+            rows = connection.execute(
+                f"""
+                select symbol,field_name,effective_date,announce_date,report_date,value
+                from financial_facts
+                where symbol in ({symbol_placeholders})
+                  and field_name in ({field_placeholders})
+                  and announce_date<=effective_date
+                  and effective_date<=?
+                order by effective_date,announce_date,report_date,field_name
+                """,
+                [*chunk, *raw_fields, end],
+            ).fetchall()
+        for row in rows_to_dicts(rows):
+            symbol = str(row["symbol"]).upper()
+            raw_field = str(row["field_name"])
+            canonical = FUNDAMENTAL_FIELD_ALIASES[raw_field]
+            effective_date = str(row["effective_date"])[:10]
+            value = row.get("value")
+            if value is None:
+                continue
+            candidate = (effective_date, field_rank[raw_field], float(value))
+            if effective_date <= start:
+                key = (symbol, canonical)
+                current = initial.get(key)
+                if (
+                    current is None
+                    or effective_date > current[0]
+                    or (effective_date == current[0] and field_rank[raw_field] < current[1])
+                ):
+                    initial[key] = candidate
+            else:
+                key = (symbol, effective_date, canonical)
+                current = chosen.get(key)
+                if current is None or field_rank[raw_field] < current[0]:
+                    chosen[key] = (field_rank[raw_field], float(value))
+
+    for (symbol, canonical), (effective_date, rank, value) in initial.items():
+        chosen[(symbol, effective_date, canonical)] = (rank, value)
+
+    # Valuation factors are daily data. Retain the last observation in each
+    # calendar month plus the start-date snapshot to keep LEAN parameters bounded.
+    valuation_initial: dict[tuple[str, str], tuple[str, float]] = {}
+    valuation_monthly: dict[tuple[str, str, str], tuple[str, float]] = {}
+    for chunk in _chunks(tickers):
+        placeholders = ",".join("?" for _ in chunk)
+        with db() as connection:
+            rows = connection.execute(
+                f"""
+                select symbol,factor_name,trade_date,value
+                from factor_values
+                where symbol in ({placeholders})
+                  and factor_name in ('pe','pe_ttm','pb')
+                  and trade_date<=?
+                order by trade_date,factor_name
+                """,
+                [*chunk, end],
+            ).fetchall()
+        for row in rows_to_dicts(rows):
+            symbol = str(row["symbol"]).upper()
+            raw_field = str(row["factor_name"])
+            canonical = FUNDAMENTAL_FIELD_ALIASES[raw_field]
+            effective_date = str(row["trade_date"])[:10]
+            value = row.get("value")
+            if value is None:
+                continue
+            if effective_date <= start:
+                valuation_initial[(symbol, canonical)] = (effective_date, float(value))
+            else:
+                valuation_monthly[(symbol, canonical, effective_date[:7])] = (effective_date, float(value))
+    for (symbol, canonical), (effective_date, value) in valuation_initial.items():
+        chosen[(symbol, effective_date, canonical)] = (-1, value)
+    for (symbol, canonical, _month), (effective_date, value) in valuation_monthly.items():
+        chosen[(symbol, effective_date, canonical)] = (-1, value)
+
+    grouped: dict[tuple[str, str], dict[str, float]] = {}
+    for (symbol, effective_date, canonical), (_rank, value) in chosen.items():
+        grouped.setdefault((symbol, effective_date), {})[canonical] = value
+    return [
+        {"symbol": symbol, "effectiveDate": effective_date, "metrics": metrics}
+        for (symbol, effective_date), metrics in sorted(grouped.items())
+    ]
+
+
 def expand(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     kind = str(config.get("kind") or "backtest")
     mode = str(config.get("mode") or "independent")
@@ -267,7 +394,40 @@ def expand(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]
         schedule = _membership_schedule(universe_code, request["start"], request["end"])
         if not schedule:
             raise LeanWebError(f"No historical PIT schedule is available for {universe_code} in the selected range.")
-        request["parameters"].update({"universeCode": universe_code, "dynamicUniverse": True, "universeSchedule": __import__("json").dumps(schedule, ensure_ascii=False, separators=(",", ":")), "universeSymbols": sorted({row["symbol"] for row in schedule})})
+        universe_symbols = sorted({row["symbol"] for row in schedule})
+        request["parameters"].update({"universeCode": universe_code, "dynamicUniverse": True, "universeSchedule": __import__("json").dumps(schedule, ensure_ascii=False, separators=(",", ":")), "universeSymbols": universe_symbols})
+        project = get_project(projects[0])
+        if str((project.get("config") or {}).get("templateKey") or "") == "ashare_index_screening":
+            if universe_code not in INDEX_BENCHMARKS:
+                raise LeanWebError("A-share index screening supports CSI300, CSI500, CSI1000 and STAR50.")
+            fundamental_schedule = _fundamental_schedule(
+                universe_symbols,
+                request["start"],
+                request["end"],
+            )
+            if not fundamental_schedule:
+                raise LeanWebError(
+                    f"No point-in-time fundamentals are available for {universe_code} in the selected range. "
+                    "Sync daily_basic, income, balancesheet and fina_indicator before running this case."
+                )
+            benchmark = INDEX_BENCHMARKS[universe_code]
+            request["benchmarkSymbol"] = benchmark
+            request["parameters"].update(
+                {
+                    "benchmarkSymbol": benchmark,
+                    "fundamentalSchedule": json.dumps(
+                        fundamental_schedule,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "fundamentalRecordCount": len(fundamental_schedule),
+                }
+            )
+            selection = {
+                **selection,
+                "fundamentalRecordCount": len(fundamental_schedule),
+                "benchmarkSymbol": benchmark,
+            }
         return [{"key": f"{projects[0]}:dynamic:{universe_code}", "projectId": projects[0], "symbol": symbols[0], "parameters": request}], selection
 
     parameter_sets_by_project: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}

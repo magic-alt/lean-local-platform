@@ -1,0 +1,33 @@
+{
+  "key": "ashare_index_screening",
+  "name": "A股指数技术面与基本面筛选",
+  "description": "在沪深300、中证500、中证1000或科创50的历史时点成分中，结合趋势、RSI、波动率与公告后可见的基本面筛选股票，并构建Top-N组合。",
+  "executionScope": "dynamic_universe",
+  "assetClasses": ["equity"],
+  "markets": ["china"],
+  "resolutions": ["daily"],
+  "riskLevel": "medium",
+  "parameters": [
+    {"key": "fastPeriod", "label": "快速均线", "type": "number", "default": 20, "min": 5},
+    {"key": "slowPeriod", "label": "慢速均线", "type": "number", "default": 60, "min": 20},
+    {"key": "rsiPeriod", "label": "RSI周期", "type": "number", "default": 14, "min": 2},
+    {"key": "rebalanceDays", "label": "调仓间隔（日）", "type": "number", "default": 20, "min": 1},
+    {"key": "topN", "label": "最多持仓数", "type": "number", "default": 20, "min": 1},
+    {"key": "technicalThreshold", "label": "技术面最低分", "type": "number", "default": 70, "min": 0, "max": 100},
+    {"key": "fundamentalThreshold", "label": "基本面最低分", "type": "number", "default": 60, "min": 0, "max": 100},
+    {"key": "minFundamentalFields", "label": "最少基本面字段", "type": "number", "default": 2, "min": 1},
+    {"key": "minRoe", "label": "最低ROE（%）", "type": "number", "default": 8, "min": -100},
+    {"key": "maxDebtRatio", "label": "最高资产负债率（%）", "type": "number", "default": 70, "min": 0, "max": 100},
+    {"key": "maxPe", "label": "最高市盈率", "type": "number", "default": 60, "min": 1},
+    {"key": "maxPb", "label": "最高市净率", "type": "number", "default": 8, "min": 0.1},
+    {"key": "maxVolatility", "label": "最高20日波动率", "type": "number", "default": 0.04, "min": 0.001, "max": 1},
+    {"key": "trendThreshold", "label": "20日趋势阈值", "type": "number", "default": 0.02, "min": 0, "max": 1}
+  ],
+  "expectedArtifacts": ["result.json", "report.html", "screening-report.json"],
+  "minimumData": {
+    "bars": 80,
+    "benchmark": true,
+    "pitUniverse": true,
+    "pitFundamentals": true
+  }
+}
