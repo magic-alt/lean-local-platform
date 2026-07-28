@@ -57,9 +57,9 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 | `LEAN_MYSQL_REDO_LOG_CAPACITY` | 默认 `256M` |
 | `LEAN_MYSQL_CONNECT_ATTEMPTS` | 短暂连接故障的有界重试，默认 5 |
 | `LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS` | 重试基础间隔，默认 0.5 秒 |
-| `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` | 仅限制按需 MySQL 缓存，默认 50 GB |
+| `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` | 单次按需 MySQL 写入估算上限，默认 50 GiB；不与含全量同步数据的实例总大小比较 |
 
-一键更新不受 50 GB 上限限制，只服从磁盘安全线。Data 和 Monitoring 显示 MySQL 物理分配空间，不能与单表逻辑内容或有效载荷大小混为一谈。
+一键更新不受 50 GiB 单次按需写入上限限制；所有写入仍服从磁盘安全线。Data 和 Monitoring 显示 MySQL 物理分配空间，不能与按需缓存占用、单表逻辑内容或有效载荷大小混为一谈。
 
 ## 数据同步调优
 

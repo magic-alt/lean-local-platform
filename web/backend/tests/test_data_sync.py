@@ -327,23 +327,25 @@ def test_mysql_storage_metrics_prefer_physical_observer_directory(tmp_path, monk
     assert metrics["onDemandDatabaseLimitBytes"] == 50 * 1024**3
 
 
-def test_database_ceiling_applies_only_to_on_demand_writes(monkeypatch):
+def test_on_demand_ceiling_ignores_bulk_database_size_and_limits_single_write(monkeypatch):
     from app.services import data_sync
 
+    gib = 1024**3
     monkeypatch.setattr(
         data_sync,
         "_disk_metrics",
         lambda: {
-            "diskFreeBytes": 800 * 1024**3,
-            "diskTotalBytes": 1000 * 1024**3,
-            "databaseBytes": 60 * 1024**3,
-            "onDemandDatabaseLimitBytes": 50 * 1024**3,
+            "diskFreeBytes": 800 * gib,
+            "diskTotalBytes": 1000 * gib,
+            "databaseBytes": 153 * gib,
+            "onDemandDatabaseLimitBytes": 50 * gib,
         },
     )
 
     data_sync._assert_disk_capacity(1024)
+    data_sync._assert_disk_capacity(2 * 1024**2, enforce_database_limit=True)
     with pytest.raises(RuntimeError, match="on_demand_database_guard"):
-        data_sync._assert_disk_capacity(1024, enforce_database_limit=True)
+        data_sync._assert_disk_capacity(50 * gib + 1, enforce_database_limit=True)
 
 
 def test_disk_reserve_is_at_least_500_gib_or_half_the_disk(monkeypatch):

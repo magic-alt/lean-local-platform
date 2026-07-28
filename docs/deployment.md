@@ -202,11 +202,13 @@ aggregate 64 instruments or 500,000 rows. Initial `stk_limit` and `suspend_d`
 history use concurrent instrument prefetch plus a sequential batch writer;
 later increments use one market-wide request per missing trade date.
 
-The workstation profile treats on-demand MySQL writes as a bounded cache.
-`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 and applies only to on-demand
-fetches. One-click bulk synchronization has no database-size ceiling and stops
-only when the physical disk reserve would be breached. The reserve is the
-larger of 500 GiB and 50% of total disk capacity. The API and workers
+The workstation profile bounds each on-demand MySQL write estimate.
+`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 GiB and applies only to a
+single on-demand fetch. It is not compared with the whole MySQL instance because
+the canonical tables also contain governed bulk-sync data. One-click bulk
+synchronization has no database-size ceiling, and aggregate growth for both paths
+stops when the physical disk reserve would be breached. The reserve is the larger
+of 500 GiB and 50% of total disk capacity. The API and workers
 read the same MySQL data directory through a read-only observer mount, so the
 catalog and live progress both report its physical allocated size.
 The legacy `LEAN_MYSQL_MAX_DATABASE_GB` name remains a fallback for existing

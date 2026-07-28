@@ -82,7 +82,7 @@ AData、合成 fixture 等只能在显式 `allowResearchSource=true` 时用于�
 
 表单按数据来源、标的范围、时间范围和输出选项分组。API Key 与覆盖已有文件等低频选项位于高级设置；弹窗最多两列，小屏自动单列。
 
-系统不会无提示地固定写到电脑默认硬盘。`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` 默认 50 GB，只限制按需 MySQL 缓存，不限制一键建库。
+系统不会无提示地固定写到电脑默认硬盘。`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` 默认 50 GiB，限制单次按需 MySQL 写入估算，不限制一键建库，也不会用包含全量同步数据的 MySQL 实例总大小误判按需修复。所有写入仍受物理磁盘安全线保护。
 
 ## 数据集 Preview
 

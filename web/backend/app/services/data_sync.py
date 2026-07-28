@@ -1420,18 +1420,26 @@ def _assert_disk_capacity(estimated_write_bytes: int = 0, *, enforce_database_li
     free = int(metrics["diskFreeBytes"])
     total = int(metrics["diskTotalBytes"])
     hard_reserve = int(metrics.get("diskReserveBytes") or _disk_hard_reserve_bytes(total))
-    database_bytes = int(metrics.get("databaseBytes") or 0)
     database_limit = int(metrics.get("onDemandDatabaseLimitBytes") or 0)
-    if enforce_database_limit and database_limit and database_bytes + max(0, estimated_write_bytes) > database_limit:
+    estimated_write = max(0, estimated_write_bytes)
+    # Canonical tables contain both governed bulk-sync rows and on-demand
+    # repairs, so the physical size of the whole MySQL instance is not an
+    # on-demand cache usage measurement. Comparing that aggregate size with
+    # this limit permanently blocks small repairs as soon as a legitimate
+    # full sync grows beyond the default 50 GiB ceiling. Bound the individual
+    # on-demand write here; aggregate growth remains protected by the physical
+    # disk reserve below.
+    if enforce_database_limit and database_limit and estimated_write > database_limit:
         raise RuntimeError(
-            "on_demand_database_guard: local MySQL on-demand cache limit reached; "
-            f"database={database_bytes}, estimatedWrite={estimated_write_bytes}, limit={database_limit}. "
-            "Choose an external download target or move LEAN_MYSQL_DATA_DIR to external storage."
+            "on_demand_database_guard: estimated MySQL on-demand write exceeds the per-request limit; "
+            f"estimatedWrite={estimated_write}, limit={database_limit}. "
+            "Choose an external download target, reduce the requested range, or move "
+            "LEAN_MYSQL_DATA_DIR to external storage."
         )
-    if free - max(0, estimated_write_bytes) < hard_reserve:
+    if free - estimated_write < hard_reserve:
         raise RuntimeError(
             "data_sync_disk_guard: insufficient free space; "
-            f"free={free}, estimatedWrite={estimated_write_bytes}, reserve={hard_reserve}"
+            f"free={free}, estimatedWrite={estimated_write}, reserve={hard_reserve}"
         )
 
 

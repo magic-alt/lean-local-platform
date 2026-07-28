@@ -44,7 +44,11 @@ The small reference catalogs are fetched across every supported scope: index mar
 
 All registry entries outside the 10 bulk datasets use `sync_policy=on_demand`. They do not participate in one-click update. The user starts them explicitly, chooses an approved host-visible storage target, and may select a database or file/Parquet-oriented result according to the dataset workflow.
 
-The 50 GB default limit (`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB`) applies only to on-demand MySQL cache writes. It does not cap one-click construction.
+The 50 GiB default limit (`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB`) bounds each
+on-demand MySQL write estimate. It is not compared with the aggregate MySQL
+instance size, which also includes governed bulk-sync data, and it does not cap
+one-click construction. Aggregate growth remains subject to the physical disk
+reserve.
 
 ## Correctness and Audit Chain
 

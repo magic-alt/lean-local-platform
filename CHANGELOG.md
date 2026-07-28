@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Fix A-share backtest symbol repair after a governed MySQL library grows beyond 50 GiB: the on-demand guard now limits the individual write estimate instead of misclassifying the whole shared database as on-demand cache usage, while retaining the physical disk reserve.
 - Keep Celery beat and Source Gate recovery active with a writable scheduler file and complete documented startup, make Parquet maintenance rewrite the earliest historically changed or count-mismatched year, let complete governed full-rebuild evidence supersede stale batch state without admitting synthetic data, tightly bound DuckDB consistency memory, fetch and parse large batch lineage metadata once per batch instead of duplicating it per symbol, remove the full grouping filesort, return exact execution and operational blockers from dependency health, and make Dashboard distinguish production-data recertification from infrastructure failure.
 - Add an A-share index screening project case for CSI300, CSI500, CSI1000 and STAR50 with PIT membership/fundamental streams, per-stock trend and buy-suitability scoring, guarded Top-N LEAN execution, structured screening artifacts, and full screening tables in backtest HTML reports.
 - Add separate research-only and executable A-share gap-buy strategy templates, guarded LEAN limit-buy support, first-minute/next-minute timing, PIT-universe audit output, and an admission hard block for the source-replica contract.
