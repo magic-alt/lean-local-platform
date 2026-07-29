@@ -772,7 +772,21 @@ def recover_source_certifications_task():
             "dataSyncRunId": active_sync["id"],
         }
     if active:
-        return {"status": "recovery_in_progress", "scheduled": False, "runId": active["id"]}
+        active_status = str(active["status"])
+        lease_active = derived_maintenance.maintenance_lease_active()
+        if active_status == "queued" or database_backend() != "mysql" or lease_active:
+            return {"status": "recovery_in_progress", "scheduled": False, "runId": active["id"]}
+        orphaned_run_id = str(active["id"])
+        _discard_orphaned_maintenance_message(orphaned_run_id)
+        with db() as connection:
+            connection.execute(
+                """
+                update derived_maintenance_runs
+                set status='failed',error='orphaned_after_worker_restart',finished_at=?
+                where id=? and status='running'
+                """,
+                (utc_now(), orphaned_run_id),
+            )
     run = derived_maintenance.create_maintenance_run(
         layers=["parquet"],
         trigger_type="source_recertification",
@@ -784,6 +798,35 @@ def recover_source_certifications_task():
         "runId": run["id"],
         "taskId": dispatched.id,
     }
+
+
+def _broker_unacked_maintenance_tags(client: Any, run_id: str) -> list[str]:
+    needle = run_id.encode("utf-8")
+    task_name = b"lean_web.maintain_derived_layers"
+    return [
+        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
+        for tag, message in (client.hgetall("unacked") or {}).items()
+        if needle in message and task_name in message
+    ]
+
+
+def _discard_orphaned_maintenance_message(run_id: str) -> int:
+    try:
+        import redis
+
+        client = redis.Redis.from_url(
+            celery_app.conf.broker_url,
+            socket_connect_timeout=1,
+            socket_timeout=2,
+        )
+        client.ping()
+    except Exception:
+        return 0
+    tags = _broker_unacked_maintenance_tags(client, run_id)
+    if tags:
+        client.hdel("unacked", *tags)
+        client.zrem("unacked_index", *tags)
+    return len(tags)
 
 
 def _broker_contains_sync_run(client: Any, run_id: str) -> bool:

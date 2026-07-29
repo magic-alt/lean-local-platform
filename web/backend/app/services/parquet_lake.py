@@ -26,6 +26,34 @@ except Exception:  # pragma: no cover
 SCHEMA_VERSION = 1
 DATASET_NAMESPACE = uuid.UUID("0c36692c-1d8d-4e19-9dc0-7c4435b2b8a6")
 FILE_NAMESPACE = uuid.UUID("5bb3fc9a-6849-4d73-bd43-5d66d0b75f06")
+MARKET_DAILY_BAR_TEXT_COLUMNS = (
+    "instrument_id",
+    "symbol",
+    "asset_class",
+    "market",
+    "venue",
+    "trade_date",
+    "resolution",
+    "data_type",
+    "adjust",
+    "source",
+    "batch_id",
+    "created_at",
+)
+MARKET_DAILY_BAR_NUMERIC_COLUMNS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "settle",
+    "volume",
+    "amount",
+    "turnover_rate",
+    "open_interest",
+    "prev_close",
+    "pct_change",
+    "adj_factor",
+)
 
 
 def _clean(value: str | None, default: str = "") -> str:
@@ -673,6 +701,15 @@ def _write_partition(frame: Any, root: Path, year: int, *, part_name: str = "par
     }
 
 
+def _market_daily_bar_frame(rows: list[dict[str, Any]]) -> Any:
+    """Build a stable frame without sample-based numeric type inference."""
+    schema_overrides = {
+        **{column: pl.Utf8 for column in MARKET_DAILY_BAR_TEXT_COLUMNS},
+        **{column: pl.Float64 for column in MARKET_DAILY_BAR_NUMERIC_COLUMNS},
+    }
+    return pl.DataFrame(rows, schema_overrides=schema_overrides, strict=False)
+
+
 def _upsert_dataset(
     scope: dict[str, str],
     root: Path,
@@ -891,7 +928,7 @@ def export_market_daily_bars(
     for rows in _iter_market_row_batches(scope, start_date, end_date):
         if not rows:
             continue
-        frame = pl.DataFrame(rows).with_columns(
+        frame = _market_daily_bar_frame(rows).with_columns(
             pl.col("trade_date").str.slice(0, 4).cast(pl.Int32).alias("year")
         )
         # partition_by performs one linear split. Filtering the full 100k-row
@@ -1156,7 +1193,7 @@ def parquet_consistency_report(
 def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]:
     """Promote only immutable, non-empty TuShare datasets proven by a persisted QA report."""
     report_id = report.get("reportId")
-    if not report_id or not report.get("passed"):
+    if not report_id:
         return []
 
     certified_at = utc_now()

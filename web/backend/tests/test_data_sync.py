@@ -1900,6 +1900,7 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
         _broker_ready_contains_sync_run,
         _broker_ready_contains_materialization,
         _broker_unacked_materialization_tags,
+        _broker_unacked_maintenance_tags,
         _broker_unacked_sync_tags,
         sync_all_data_task,
     )
@@ -1934,6 +1935,7 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
             return {
                 b"delivery-run-unacked": b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}',
                 b"delivery-derived-unacked": b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived-unacked"}}',
+                b"delivery-maintenance-unacked": b'{"headers":{"task":"lean_web.maintain_derived_layers","argsrepr":"run-maintenance-unacked"}}',
             }
 
     assert _broker_contains_sync_run(FakeRedis(), "run-123") is True
@@ -1945,6 +1947,9 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert _broker_ready_contains_materialization(FakeRedis(), "run-derived") is True
     assert _broker_ready_contains_materialization(FakeRedis(), "run-derived-unacked") is False
     assert _broker_unacked_materialization_tags(FakeRedis(), "run-derived-unacked") == ["delivery-derived-unacked"]
+    assert _broker_unacked_maintenance_tags(FakeRedis(), "run-maintenance-unacked") == [
+        "delivery-maintenance-unacked"
+    ]
 
 
 def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):

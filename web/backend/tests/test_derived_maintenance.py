@@ -86,6 +86,59 @@ def test_celery_beat_schedules_weekday_derived_maintenance():
     assert "1-5" in str(schedule["schedule"])
 
 
+def test_source_certification_recovery_replaces_orphaned_maintenance_run(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from types import SimpleNamespace
+
+    from app.db import db
+    from app.services import derived_maintenance
+    from app.tasks import worker
+
+    orphaned = derived_maintenance.create_maintenance_run(
+        layers=["parquet"],
+        trigger_type="source_recertification",
+    )
+    with db() as connection:
+        connection.execute(
+            "update derived_maintenance_runs set status='running',started_at=? where id=?",
+            ("2026-07-29T13:57:47+00:00", orphaned["id"]),
+        )
+
+    discarded = []
+    monkeypatch.setattr(
+        worker,
+        "source_certification",
+        lambda *_args, **_kwargs: {"isCertified": False, "isProduction": False},
+    )
+    monkeypatch.setattr(worker, "database_backend", lambda: "mysql")
+    monkeypatch.setattr(derived_maintenance, "maintenance_lease_active", lambda: False)
+    monkeypatch.setattr(
+        worker,
+        "_discard_orphaned_maintenance_message",
+        lambda run_id: discarded.append(run_id) or 1,
+    )
+    monkeypatch.setattr(
+        worker.maintain_derived_layers_task,
+        "apply_async",
+        lambda **_kwargs: SimpleNamespace(id="celery-recovery"),
+    )
+
+    result = worker.recover_source_certifications_task()
+
+    assert result["status"] == "recovery_scheduled"
+    assert result["runId"] != orphaned["id"]
+    assert discarded == [orphaned["id"]]
+    with db() as connection:
+        stale = connection.execute(
+            "select status,error,finished_at from derived_maintenance_runs where id=?",
+            (orphaned["id"],),
+        ).fetchone()
+    assert stale["status"] == "failed"
+    assert stale["error"] == "orphaned_after_worker_restart"
+    assert stale["finished_at"]
+
+
 def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 

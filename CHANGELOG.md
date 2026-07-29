@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve authoritative A-share suspension evidence when `stk_limit` or inferred OHLC status rows are materialized later, preventing legitimate no-bar suspension sessions from failing execution coverage gates.
+- Fix derived Parquet recertification by enforcing stable numeric schemas during exports and certifying independently consistent production scopes when another scope fails validation.
+
 - Fix one-click TuShare increments to refresh the trading calendar before choosing the market cutoff, advance sparse `stk_limit`/`suspend_d` coverage for newly listed securities, requeue dated catalogs when resuming incremental checkpoints, index basic-contract listing dates for visible catalog ranges, and accept provider-native futures/option catalog nulls without discarding the full update.
 - Give Research Runs names a stable two-line column and preserve sensible row heights with horizontal table overflow on narrower layouts.
 - Unify Research around reproducible template Runs and a shared nested DataScope/Data Gateway contract; separate network-isolated, frozen-snapshot Notebook Workspaces from run history; add explicit Backtest handoff with renewed strategy/preflight requirements; retire Research experiment batches and direct factor, convertible-bond and futures analysis routes; and redesign the responsive Research UI as a dense brokerage-style workstation.

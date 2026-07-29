@@ -1122,6 +1122,160 @@ def test_official_trade_status_overrides_inferred_rules_and_missing_status_rejec
     assert reason == "trade_status_missing"
 
 
+def test_suspension_evidence_is_not_overwritten_by_stk_limit_status(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.ashare_repository import upsert_trade_status
+
+    suspended = {
+        "symbol": "000301",
+        "trade_date": "2021-12-22",
+        "is_suspended": True,
+        "can_buy": False,
+        "can_sell": False,
+    }
+    limit_status = {
+        "symbol": "000301",
+        "trade_date": "2021-12-22",
+        "is_suspended": False,
+        "can_buy": True,
+        "can_sell": True,
+        "limit_up": 25.41,
+        "limit_down": 20.79,
+    }
+
+    upsert_trade_status(
+        [suspended],
+        source="tushare:suspend_d",
+        batch_id="suspend-batch",
+    )
+    upsert_trade_status(
+        [limit_status],
+        source="tushare:stk_limit",
+        batch_id="limit-batch",
+    )
+
+    with db() as connection:
+        row = connection.execute(
+            "select * from ashare_trade_status where symbol=? and trade_date=?",
+            ("000301", "2021-12-22"),
+        ).fetchone()
+    assert row["is_suspended"] == 1
+    assert row["can_buy"] == 0
+    assert row["can_sell"] == 0
+    assert row["source"] == "tushare:suspend_d"
+
+
+def test_execution_coverage_uses_canonical_market_suspension_evidence(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services.ashare_repository import _execution_coverage_dates
+    from app.services.market_repository import upsert_market_trade_status
+
+    with db() as connection:
+        connection.execute(
+            """
+            insert into ashare_trade_status
+                (symbol,trade_date,is_suspended,can_buy,can_sell,source,batch_id)
+            values (?,?,?,?,?,?,?)
+            """,
+            ("000301", "2021-12-22", 0, 1, 1, "tushare:stk_limit", "limit-batch"),
+        )
+    upsert_market_trade_status(
+        [
+            {
+                "trade_date": "2021-12-22",
+                "is_suspended": True,
+                "can_buy": False,
+                "can_sell": False,
+            }
+        ],
+        symbol="000301",
+        asset_class="equity",
+        market="china",
+        source="tushare:suspend_d",
+        batch_id="suspend-batch",
+    )
+
+    _, statuses = _execution_coverage_dates(
+        "000301",
+        "2021-12-22",
+        "2021-12-22",
+        "raw",
+        "tushare",
+    )
+
+    assert statuses == {"2021-12-22": True}
+
+
+def test_execution_coverage_only_requires_listed_lifetime(monkeypatch):
+    from app.services import ashare_repository
+
+    requested_ranges = []
+    monkeypatch.setattr(
+        ashare_repository,
+        "get_security",
+        lambda _symbol: {
+            "listed_date": "2024-01-03",
+            "delisted_date": "2024-01-05",
+        },
+    )
+    monkeypatch.setattr(
+        ashare_repository,
+        "trade_dates_between",
+        lambda _market, start, end: requested_ranges.append((start, end))
+        or ["2024-01-03", "2024-01-04"],
+    )
+    monkeypatch.setattr(
+        ashare_repository,
+        "data_coverage",
+        lambda _symbol, start, end, _adjust, source=None: {
+            "bar_count": 2,
+            "market_bar_count": 2,
+            "last_date": end,
+            "market_last_date": end,
+        },
+    )
+    monkeypatch.setattr(
+        ashare_repository,
+        "_execution_coverage_dates",
+        lambda _symbol, start, end, _adjust, _source: (
+            {"2024-01-03", "2024-01-04"},
+            {"2024-01-03": False, "2024-01-04": False},
+        ),
+    )
+    monkeypatch.setattr(
+        ashare_repository,
+        "end_coverage_status",
+        lambda _market, requested_end, actual_end: {
+            "passed": requested_end == actual_end,
+            "calendarComplete": True,
+            "actualLastDate": actual_end,
+            "calendarLatestDate": actual_end,
+        },
+    )
+    monkeypatch.setattr(
+        ashare_repository,
+        "latest_batch_for_symbol",
+        lambda _symbol, source=None: {
+            "id": "batch",
+            "status": "success",
+            "qa_report": {"passed": True},
+        },
+    )
+
+    ashare_repository.assert_ashare_ready(
+        "001280",
+        "2021-07-29",
+        "2026-07-29",
+        source="tushare",
+    )
+
+    assert requested_ranges == [("2024-01-03", "2024-01-04")]
+
+
 def test_security_master_bulk_path_populates_all_canonical_tables(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db

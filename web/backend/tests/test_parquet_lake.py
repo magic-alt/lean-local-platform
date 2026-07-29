@@ -16,6 +16,23 @@ def configure_temp_db(tmp_path, monkeypatch):
     return db_module
 
 
+def test_market_daily_bar_frame_uses_stable_float_schema_after_integer_samples():
+    pytest.importorskip("polars")
+
+    from app.services import parquet_lake
+
+    rows = [
+        {"trade_date": "2026-07-28", "open": 4700}
+        for _ in range(101)
+    ]
+    rows.append({"trade_date": "2026-07-29", "open": 4717.2442})
+
+    frame = parquet_lake._market_daily_bar_frame(rows)
+
+    assert frame.schema["open"] == parquet_lake.pl.Float64
+    assert frame.get_column("open")[-1] == pytest.approx(4717.2442)
+
+
 def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypatch):
     pytest.importorskip("polars")
     pytest.importorskip("duckdb")
@@ -107,6 +124,78 @@ def test_export_market_daily_bars_to_parquet_and_query_duckdb(tmp_path, monkeypa
     assert consistency["datasetCount"] == 1
     assert consistency["items"][0]["mysql"]["rowCount"] == 3
     assert consistency["items"][0]["duckdb"]["rowCount"] == 3
+
+
+def test_partial_consistency_report_certifies_only_passing_production_scope(tmp_path, monkeypatch):
+    pytest.importorskip("polars")
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import parquet_lake
+
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(parquet_lake, "PARQUET_COMPRESSION", "uncompressed")
+    with db_module.db() as connection:
+        for asset_class, symbol in (("equity", "000001"), ("index", "000001.SH")):
+            connection.execute(
+                """
+                insert into market_daily_bars
+                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
+                     data_type, open, high, low, close, volume, adjust, source, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"{asset_class}-{symbol}",
+                    symbol,
+                    asset_class,
+                    "china",
+                    "china",
+                    "2026-07-29",
+                    "daily",
+                    "trade",
+                    10,
+                    11,
+                    9,
+                    10.5,
+                    1000,
+                    "raw",
+                    "tushare",
+                    "now",
+                ),
+            )
+
+    equity = parquet_lake.export_market_daily_bars(asset_class="equity", source="tushare")
+    index = parquet_lake.export_market_daily_bars(asset_class="index", source="tushare")
+    report = {
+        "reportType": "parquet_consistency",
+        "severity": "critical",
+        "passed": False,
+        "items": [
+            {
+                "datasetId": equity["id"],
+                "datasetRows": 1,
+                "passed": True,
+                "sourceLineage": {"passed": True},
+            },
+            {
+                "datasetId": index["id"],
+                "datasetRows": 1,
+                "passed": False,
+                "sourceLineage": {"passed": True},
+            },
+        ],
+    }
+    report["reportId"] = parquet_lake._persist_consistency_report(report)
+
+    certified = parquet_lake.certify_consistent_production_datasets(report)
+
+    assert certified == [equity["id"]]
+    with db_module.db() as connection:
+        rows = connection.execute(
+            "select id,is_certified,qa_status from parquet_datasets order by asset_class"
+        ).fetchall()
+    states = {row["id"]: (row["is_certified"], row["qa_status"]) for row in rows}
+    assert states[equity["id"]] == (1, "ok")
+    assert states[index["id"]] == (0, "pending")
 
 
 def test_rebuild_all_market_parquet_exports_all_matching_scopes_and_persists_report(tmp_path, monkeypatch):

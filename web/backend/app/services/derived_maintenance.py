@@ -9,6 +9,7 @@ from ..db import database_backend, db, json_dump, row_to_dict, rows_to_dicts, ut
 
 
 LAYERS = ("parquet", "clickhouse")
+MAINTENANCE_LOCK_NAME = "lean:derived:scheduled-maintenance"
 
 
 def _scope_key(scope: dict[str, str]) -> str:
@@ -704,11 +705,11 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                 include_research_sources=False,
                 persist=True,
             )
+            certified_ids = certify_consistent_production_datasets(consistency)
+            consistency["certifiedDatasetIds"] = certified_ids
             if not consistency.get("passed"):
                 errors.append({"layer": "parquet", "scopeKey": "*", "error": "parquet_consistency_failed"})
             else:
-                certified_ids = certify_consistent_production_datasets(consistency)
-                consistency["certifiedDatasetIds"] = certified_ids
                 production_dataset_ids = {
                     str(item.get("datasetId"))
                     for item in consistency.get("items") or []
@@ -760,15 +761,26 @@ def _run_locked(run_id: str) -> dict[str, Any]:
 def run_maintenance(run_id: str) -> dict[str, Any]:
     if database_backend() != "mysql":
         return _run_locked(run_id)
-    lock_name = "lean:derived:scheduled-maintenance"
     with db() as connection:
-        acquired = connection.execute("select get_lock(?,0) as acquired", (lock_name,)).fetchone()
+        acquired = connection.execute("select get_lock(?,0) as acquired", (MAINTENANCE_LOCK_NAME,)).fetchone()
         if int((acquired or {}).get("acquired") or 0) != 1:
             return {"id": run_id, "status": "already_running"}
         try:
             return _run_locked(run_id)
         finally:
-            connection.execute("select release_lock(?)", (lock_name,))
+            connection.execute("select release_lock(?)", (MAINTENANCE_LOCK_NAME,))
+
+
+def maintenance_lease_active() -> bool:
+    """Return whether a MySQL session still owns the maintenance lease."""
+    if database_backend() != "mysql":
+        return False
+    with db() as connection:
+        row = connection.execute(
+            "select is_used_lock(?) as owner",
+            (MAINTENANCE_LOCK_NAME,),
+        ).fetchone()
+    return bool(row and row.get("owner") is not None)
 
 
 def watermarks() -> dict[str, Any]:

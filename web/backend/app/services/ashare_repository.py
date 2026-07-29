@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ..core.errors import LeanWebError
@@ -548,14 +548,18 @@ def upsert_daily_bars(
 
 def _trade_status_source_priority(source: str) -> int:
     value = str(source or "").lower()
-    if any(token in value for token in ("official", "tushare", "jqdata", "rqdata", "ifind", "choice", "wind", "stk_limit", "suspend")):
+    if "suspend" in value or "daily_absence" in value:
+        return 120
+    if "official" in value:
+        return 110
+    if "inferred" in value or "ohlcv" in value:
+        return 10
+    if any(token in value for token in ("tushare", "jqdata", "rqdata", "ifind", "choice", "wind", "stk_limit")):
         return 100
     if "manual" in value:
         return 90
     if any(token in value for token in ("adata", "baostock", "akshare", "sina", "eastmoney")) and "inferred" not in value:
         return 70
-    if "inferred" in value or "ohlcv" in value:
-        return 10
     return 50
 
 
@@ -571,10 +575,10 @@ def upsert_trade_status(
     connection_factory = bulk_db if bulk else db
     with connection_factory() as connection:
         existing_sources: dict[tuple[str, str], str] = {}
-        # Priority 100 is the maximum possible value. Official TuShare status
-        # therefore cannot overwrite a higher-priority source and needs no
-        # read-before-write query. Lower-priority sources retain the guard.
-        if source_priority < 100:
+        # Priority 120 is reserved for explicit full-day suspension evidence.
+        # Nothing ranks above it, so those writes need no read-before-write
+        # query. Lower-priority sources retain the guard.
+        if source_priority < 120:
             keys = sorted({(str(row["symbol"]), str(row["trade_date"])) for row in rows})
             for key_chunk in _chunks(keys, LOOKUP_BATCH_SIZE):
                 placeholders = ",".join("(?,?)" for _ in key_chunk)
@@ -1155,11 +1159,20 @@ def _execution_coverage_dates(
         ).fetchall()
         status_rows = connection.execute(
             """
-            select trade_date, is_suspended
-            from ashare_trade_status
-            where symbol = ? and trade_date >= ? and trade_date <= ?
+            select trade_date, max(is_suspended) as is_suspended
+            from (
+                select trade_date, is_suspended
+                from ashare_trade_status
+                where symbol = ? and trade_date >= ? and trade_date <= ?
+                union all
+                select trade_date, is_suspended
+                from market_trade_status
+                where symbol = ? and asset_class = 'equity' and market = 'china'
+                  and trade_date >= ? and trade_date <= ?
+            ) effective_status
+            group by trade_date
             """,
-            (symbol, start, end),
+            (symbol, start, end, symbol, start, end),
         ).fetchall()
     return (
         {str(row["trade_date"]) for row in bar_rows},
@@ -1332,19 +1345,38 @@ def assert_ashare_ready(
     *,
     allow_truncated: bool = False,
 ) -> None:
-    if not get_security(symbol):
+    security = get_security(symbol)
+    if not security:
         raise LeanWebError(f"A-share security master is missing for {symbol}. Import or register the security first.")
-    trade_dates = trade_dates_between("china", start, end)
-    coverage = data_coverage(symbol, start, end, adjust, source=source)
+    required_start = max(start, str(security.get("listed_date") or start))
+    delisted_date = security.get("delisted_date")
+    last_listed_date = (
+        (date.fromisoformat(str(delisted_date)) - timedelta(days=1)).isoformat()
+        if delisted_date
+        else end
+    )
+    required_end = min(end, last_listed_date)
+    if required_start > required_end:
+        return
+    trade_dates = trade_dates_between("china", required_start, required_end)
+    coverage = data_coverage(symbol, required_start, required_end, adjust, source=source)
     bar_count = max(int(coverage["bar_count"] or 0), int(coverage["market_bar_count"] or 0))
     if bar_count <= 0:
         suffix = f" source={source}" if source else ""
-        raise LeanWebError(f"A-share daily bars are missing for {symbol} in {start} -> {end}{suffix}.")
-    bar_dates, status_by_date = _execution_coverage_dates(symbol, start, end, adjust, source)
+        raise LeanWebError(
+            f"A-share daily bars are missing for {symbol} in {required_start} -> {required_end}{suffix}."
+        )
+    bar_dates, status_by_date = _execution_coverage_dates(
+        symbol,
+        required_start,
+        required_end,
+        adjust,
+        source,
+    )
     missing_status_dates = sorted(bar_dates - set(status_by_date))
     if missing_status_dates:
         raise LeanWebError(
-            f"A-share trade status is incomplete for {symbol} in {start} -> {end}: "
+            f"A-share trade status is incomplete for {symbol} in {required_start} -> {required_end}: "
             f"missing {len(missing_status_dates)} bar date(s), examples={missing_status_dates[:5]}."
         )
     unresolved_dates = sorted(
@@ -1354,14 +1386,14 @@ def assert_ashare_ready(
     )
     if unresolved_dates:
         raise LeanWebError(
-            f"A-share daily bars are incomplete for {symbol} in {start} -> {end}: "
+            f"A-share daily bars are incomplete for {symbol} in {required_start} -> {required_end}: "
             f"{len(bar_dates)} bars for {len(trade_dates)} trade dates; "
             f"{len(unresolved_dates)} date(s) lack a bar or suspension status, "
             f"examples={unresolved_dates[:5]}."
         )
     end_status = end_coverage_status(
         "china",
-        end,
+        required_end,
         coverage.get("market_last_date") or coverage.get("last_date"),
     )
     suspension_covered_end = bool(
@@ -1371,7 +1403,7 @@ def assert_ashare_ready(
     )
     if not end_status["passed"] and not suspension_covered_end and not allow_truncated:
         raise LeanWebError(
-            f"A-share daily bars are truncated for {symbol}: requested end {end}, "
+            f"A-share daily bars are truncated for {symbol}: requested end {required_end}, "
             f"actual last date {end_status.get('actualLastDate')}, calendar latest "
             f"{end_status.get('calendarLatestDate')}. Set allowTruncatedData=true only for explicitly untrusted research."
         )
