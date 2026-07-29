@@ -1481,11 +1481,11 @@ def start_research_task(task_id: str, session_id: str):
         raise LeanPlatformError("Research requires a project.")
     port = int(task["parameters"].get("port", 8888))
     with db() as connection:
-        session_row = connection.execute("select workspace_path from research_sessions where id=?", (session_id,)).fetchone()
+        session_row = connection.execute("select workspace_path from research_workspaces where id=?", (session_id,)).fetchone()
     workspace_path = session_row["workspace_path"] if session_row and session_row["workspace_path"] else project["project_path"]
     update_task(task_id, status="running", started_at=utc_now())
     _update_table(
-        "research_sessions", session_id, status="starting", readiness_status="starting",
+        "research_workspaces", session_id, status="starting", readiness_status="starting",
         container_status="creating", started_at=utc_now(), last_checked_at=utc_now(),
     )
     try:
@@ -1497,7 +1497,7 @@ def start_research_task(task_id: str, session_id: str):
             image=str(get_settings().get("researchImage") or "quantconnect/research:latest"),
         )
         _update_table(
-            "research_sessions",
+            "research_workspaces",
             session_id,
             status="running",
             container_id=output["container_id"],
@@ -1513,7 +1513,7 @@ def start_research_task(task_id: str, session_id: str):
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         _update_table(
-            "research_sessions", session_id, status="failed", readiness_status="failed",
+            "research_workspaces", session_id, status="failed", readiness_status="failed",
             container_status="failed", error=str(exc), last_checked_at=utc_now(), finished_at=utc_now(),
         )
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())

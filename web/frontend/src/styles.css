@@ -763,6 +763,236 @@ body {
   margin-bottom: 10px;
 }
 
+.research-page {
+  display: grid;
+  gap: 16px;
+}
+
+.research-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 0;
+}
+
+.research-page-header p {
+  margin: 6px 0 0;
+  color: var(--text-secondary, #64748b);
+}
+
+.research-eyebrow,
+.research-section-label {
+  color: #1677ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+.research-flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.research-flow .is-current {
+  color: #1677ff;
+  font-weight: 700;
+}
+
+.research-navigation {
+  max-width: 720px;
+}
+
+.research-workbench {
+  display: grid;
+  grid-template-columns: 230px minmax(460px, 1fr) minmax(300px, .75fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.research-template-rail,
+.research-config-panel,
+.research-readiness-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.research-template-rail {
+  position: sticky;
+  top: 78px;
+}
+
+.research-template {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+
+.research-template:hover,
+.research-template.is-active {
+  border-color: #1677ff;
+  background: #f5f9ff;
+  box-shadow: 0 0 0 1px rgb(22 119 255 / 8%);
+}
+
+.research-template span {
+  display: flex;
+  align-items: center;
+  font-weight: 650;
+}
+
+.research-template small {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.research-boundary-note {
+  margin-top: 4px;
+}
+
+.research-config-card .ant-card-head {
+  min-height: 40px;
+}
+
+.research-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
+}
+
+.research-form-grid .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.research-readiness-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 8px;
+}
+
+.research-readiness-row span {
+  color: #64748b;
+}
+
+.research-readiness-row strong {
+  text-align: right;
+}
+
+.research-hash {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.research-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.research-summary-grid .ant-statistic-content {
+  font-size: 18px;
+}
+
+.research-history-layout {
+  display: grid;
+  grid-template-columns: minmax(620px, 1.2fr) minmax(360px, .8fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.research-run-name {
+  display: -webkit-box;
+  max-height: 40px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 20px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.research-log {
+  max-height: 65vh;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #dbeafe;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1280px) {
+  .research-workbench {
+    grid-template-columns: 210px minmax(480px, 1fr);
+  }
+
+  .research-readiness-panel {
+    grid-column: 1 / -1;
+    grid-template-columns: 320px 1fr;
+  }
+
+  .research-history-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .research-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .research-flow {
+    white-space: normal;
+  }
+
+  .research-workbench {
+    display: block;
+  }
+
+  .research-template-rail {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    margin-bottom: 12px;
+  }
+
+  .research-template-rail .research-section-label,
+  .research-boundary-note {
+    display: none;
+  }
+
+  .research-template {
+    min-width: 190px;
+  }
+
+  .research-form-grid,
+  .research-readiness-panel,
+  .research-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .research-readiness-panel {
+    margin-top: 12px;
+  }
+}
+
 .security-option {
   display: flex;
   align-items: center;

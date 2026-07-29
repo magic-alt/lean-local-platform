@@ -22,6 +22,7 @@ from ..core.config import (
     HOST_PLATFORM_DIR,
     PLATFORM_DIR,
     REPO_ROOT,
+    RESEARCH_DIR,
     RESEARCH_DOCKER_CPUS,
     RESEARCH_DOCKER_MEMORY,
     RESEARCH_DOCKER_PIDS_LIMIT,
@@ -144,10 +145,15 @@ def run_detached_research(
     if not docker:
         raise LeanPlatformError("docker command not found.")
     token = secrets.token_urlsafe(24)
+    snapshots_dir = RESEARCH_DIR / "snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    host_snapshots_dir = _host_platform_path(snapshots_dir)
     command = [
         docker,
         "run",
         "-d",
+        "--network",
+        "none",
         "--name",
         research_container_name(session_id),
         "--cpus",
@@ -168,6 +174,8 @@ def run_detached_research(
         f"{HOST_DATA_DIR}:/Lean/Data:ro",
         "-v",
         f"{HOST_PARQUET_DIR}:/Lean/Parquet:ro",
+        "-v",
+        f"{host_snapshots_dir}:/Lean/Snapshots:ro",
         "-v",
         f"{host_project_dir}:/Lean/Project",
         image,

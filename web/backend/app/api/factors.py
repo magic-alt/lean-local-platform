@@ -93,17 +93,14 @@ def _record(item: FactorValueRecord) -> dict[str, Any]:
     }
 
 
-@router.get("/engines")
 def engines():
     return {"available": factors.available_engines(), "selected": factors.selected_engine()}
 
 
-@router.get("/templates")
 def templates():
     return factor_templates()
 
 
-@router.post("/transform")
 def transform(request: FactorTransformRequest):
     try:
         return process_factor_rows(
@@ -122,7 +119,6 @@ def transform(request: FactorTransformRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/portfolio")
 def construct_portfolio(request: FactorPortfolioRequest):
     try:
         return construct_factor_portfolio(
@@ -146,7 +142,6 @@ def import_values(request: FactorValueImport):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/matrix")
 def matrix(request: FactorMatrixRequest):
     try:
         items = factors.factor_matrix(
@@ -161,7 +156,6 @@ def matrix(request: FactorMatrixRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/evaluate")
 def evaluate(request: FactorEvaluateRequest):
     try:
         return factors.evaluate_factor(
@@ -178,7 +172,6 @@ def evaluate(request: FactorEvaluateRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/evaluate-batch")
 def evaluate_batch(request: FactorBatchEvaluateRequest):
     try:
         return factors.batch_evaluate_factors(
@@ -194,7 +187,6 @@ def evaluate_batch(request: FactorBatchEvaluateRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/evaluations")
 def evaluations(limit: int = 50):
     try:
         items = factors.list_factor_evaluations(limit)

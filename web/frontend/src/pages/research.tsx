@@ -3,700 +3,574 @@ import {
   Button,
   Card,
   Checkbox,
+  Empty,
   Form,
   Input,
   InputNumber,
   Modal,
+  Segmented,
   Select,
   Space,
   Statistic,
   Table,
-  Tabs,
   Tag,
   Tooltip,
-  Upload,
   message
 } from "antd";
 import {
-  CloudDownloadOutlined,
+  ArrowRightOutlined,
+  CheckCircleOutlined,
+  CloudServerOutlined,
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   ExperimentOutlined,
-  FileTextOutlined,
-  FolderOpenOutlined,
   PlayCircleOutlined,
-  ReloadOutlined,
-  SettingOutlined,
-  SlidersOutlined
+  ReloadOutlined
 } from "@ant-design/icons";
-import Editor from "@monaco-editor/react";
-import { useNavigate, useParams } from "react-router-dom";
-import { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { LeanChart } from "../charts/LeanChart";
 import type {
-  AppSettings,
-  AssetClassInfo,
-  BacktestResult,
-  BacktestRun,
-  BacktestValidationResponse,
-  CBondPoolItem,
-  CBondRiskItem,
-  ChartData,
-  DataQueryResult,
-  DataProvider,
-  DatabaseHealth,
-  DependencyHealth,
-  FactorEvaluationResult,
-  FuturesContinuousResult,
-  FuturesMainItem,
-  IndexMember,
-  IndexMembersResult,
-  MarketInfo,
-  ObjectStoreItem,
-  OptimizationRun,
+  DataScope,
+  DataScopeResolution,
   Project,
-  ProjectFile,
-  ReportRecord,
-  ResearchSession,
-  StrategyTemplate,
-  Task,
-  Universe
+  ResearchRun,
+  ResearchTemplate,
+  ResearchWorkspace
 } from "../api";
-import { BacktestCharts, RunsTable, StatusTag } from "../components";
-import { DateStringPicker } from "../components/DateStringPicker";
-import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
-import { ExampleGallery } from "../components/examples/ExampleGallery";
-import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
-import { FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
-import { candlestickOption } from "../charts/candlestick";
-import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
 import { useAsyncData } from "../hooks";
-import { asRecord, shortValue } from "../utils/display";
-import {
-  defaultTemplateFor,
-  defaultVenueFor,
-  projectAssetClass,
-  projectDataType,
-  projectMarket,
-  projectResolution,
-  projectTemplate,
-  projectVenue,
-  strategyFields,
-  templateDefaults
-} from "../utils/strategy";
 
-function formatDecimal(value?: number | null, digits = 4) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+type ResearchView = "new" | "runs" | "workspaces";
+
+const defaultScope: DataScope = {
+  asset: {
+    assetClass: "equity",
+    market: "china",
+    venue: "china",
+    resolution: "daily",
+    dataType: "trade"
+  },
+  selection: { type: "symbols", values: ["000300.SH"] },
+  time: {
+    startDate: dayjs().subtract(1, "year").format("YYYY-MM-DD"),
+    endDate: dayjs().format("YYYY-MM-DD"),
+    asOfDate: dayjs().format("YYYY-MM-DD")
+  },
+  price: { adjust: "raw" },
+  provider: { source: "tushare", mode: "strict", allowResearchSource: false }
+};
+
+const categoryColors: Record<string, string> = {
+  market: "blue",
+  data: "cyan",
+  universe: "purple",
+  factor: "geekblue",
+  cbond: "gold",
+  futures: "volcano"
+};
+
+function viewFromPath(pathname: string): ResearchView {
+  if (pathname.includes("/workspaces")) return "workspaces";
+  if (pathname.includes("/runs")) return "runs";
+  return "new";
 }
 
-function formatPercent(value?: number | null) {
-  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
+function statusTag(status: string) {
+  const color = status === "success" || status === "running"
+    ? "green"
+    : status === "failed"
+      ? "red"
+      : status === "cancelled" || status === "stopped"
+        ? "default"
+        : "blue";
+  return <Tag color={color}>{status.toUpperCase()}</Tag>;
 }
 
-function detailText(detail: string | Record<string, unknown>) {
-  return typeof detail === "string" ? detail : JSON.stringify(detail);
+function concise(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(4);
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
-const A_SHARE_INDEX_OPTIONS = [
-  { value: "CSI300", label: "沪深300 / CSI300" },
-  { value: "CSI500", label: "中证500 / CSI500" },
-  { value: "CSI1000", label: "中证1000 / CSI1000" },
-  { value: "SSE50", label: "上证50 / SSE50" },
-  { value: "STAR50", label: "科创50 / STAR50" }
-];
+function TemplateParameters({ template }: { template: string }) {
+  if (template === "universe-pit") {
+    return (
+      <>
+        <Form.Item name={["parameters", "universeCode"]} label="指数股票池">
+          <Select options={["CSI300", "CSI500", "CSI1000", "SSE50", "STAR50", "ALL_A"].map((value) => ({ value, label: value }))} />
+        </Form.Item>
+        <Form.Item name={["parameters", "tradable"]} valuePropName="checked"><Checkbox>仅保留当日可交易证券</Checkbox></Form.Item>
+      </>
+    );
+  }
+  if (template === "factor-evaluation") {
+    return (
+      <>
+        <Form.Item name={["parameters", "factorNames"]} label="因子" rules={[{ required: true }]}>
+          <Select mode="tags" tokenSeparators={[","]} placeholder="momentum_20, value_pe" />
+        </Form.Item>
+        <Form.Item name={["parameters", "universeCode"]} label="股票池"><Input /></Form.Item>
+        <Form.Item name={["parameters", "forwardDays"]} label="前瞻周期"><InputNumber min={1} max={252} /></Form.Item>
+        <Form.Item name={["parameters", "quantiles"]} label="分位数"><InputNumber min={2} max={20} /></Form.Item>
+        <Form.Item name={["parameters", "engine"]} label="计算引擎">
+          <Select options={["python", "duckdb", "polars"].map((value) => ({ value, label: value }))} />
+        </Form.Item>
+      </>
+    );
+  }
+  if (template === "cbond-double-low") {
+    return (
+      <>
+        <Form.Item name={["parameters", "maxDoubleLow"]} label="双低上限"><InputNumber min={0} /></Form.Item>
+        <Form.Item name={["parameters", "excludeCallRisk"]} valuePropName="checked"><Checkbox>排除强赎风险</Checkbox></Form.Item>
+      </>
+    );
+  }
+  if (template === "futures-continuous") {
+    return (
+      <>
+        <Form.Item name={["parameters", "product"]} label="品种"><Input placeholder="RB" /></Form.Item>
+        <Form.Item name={["parameters", "exchange"]} label="交易所"><Input placeholder="SHFE" /></Form.Item>
+        <Form.Item name={["parameters", "adjustment"]} label="连续处理">
+          <Select options={[
+            { value: "backward_ratio", label: "后复权比例" },
+            { value: "backward_difference", label: "后复权价差" },
+            { value: "none", label: "不复权" }
+          ]} />
+        </Form.Item>
+      </>
+    );
+  }
+  return <Alert type="info" showIcon message="该模板无需额外参数，数据范围就是完整配置。" />;
+}
 
-export function ResearchPage() {
-  const projects = useAsyncData(api.projects, []);
-  const sessions = useAsyncData(api.researchSessions, []);
-  const engines = useAsyncData(api.factorEngines, { available: { python: true }, selected: "python" });
-  const evaluations = useAsyncData(api.factorEvaluations, { items: [], count: 0 });
-  const databaseHealth = useAsyncData<DatabaseHealth>(api.databaseHealth, {
-    service: "database",
-    ok: false,
-    detail: { engine: "", missingTables: [], counts: {}, csi300MembershipRows: 0 }
-  });
-  const [factorResult, setFactorResult] = useState<FactorEvaluationResult>();
-  const [cbondPool, setCbondPool] = useState<{ asOfDate: string; count: number; items: CBondPoolItem[] }>();
-  const [cbondRisk, setCbondRisk] = useState<{ asOfDate: string; count: number; items: CBondRiskItem[] }>();
-  const [futuresMonitor, setFuturesMonitor] = useState<{ asOfDate: string; count: number; missing: string[]; items: FuturesMainItem[] }>();
-  const [futuresContinuous, setFuturesContinuous] = useState<FuturesContinuousResult>();
-  const [pitMembers, setPitMembers] = useState<IndexMembersResult>();
-  const [sessionBusy, setSessionBusy] = useState<string>();
-  const [toolBusy, setToolBusy] = useState<string>();
-  const [researchLogs, setResearchLogs] = useState("");
-  const [logsOpen, setLogsOpen] = useState(false);
-  const today = dayjs().format("YYYY-MM-DD");
-  const researchStart = dayjs().subtract(2, "year").format("YYYY-MM-DD");
-  const hasActiveSession = sessions.data.some((item) => ["queued", "starting", "running"].includes(item.status));
+function ResultPanel({ run }: { run?: ResearchRun }) {
+  const result = run?.result;
+  if (!run) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="运行分析后，结果会固定在这里并进入历史记录" />;
+  if (run.status === "failed") return <Alert type="error" showIcon message="分析失败" description={run.error} />;
+  if (!result) return <Alert type="info" showIcon message={`任务状态：${run.status}`} />;
+  const summary = Object.entries(result.summary || {}).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value));
+  return (
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      {(result.warnings || []).map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
+      <div className="research-summary-grid">
+        {summary.slice(0, 6).map(([key, value]) => (
+          <Card size="small" key={key}><Statistic title={key} value={concise(value)} /></Card>
+        ))}
+      </div>
+      {(result.tables || []).map((table) => (
+        <Card key={table.name} size="small" title={table.name} extra={table.truncated ? <Tag>预览前 1000 行</Tag> : null}>
+          <Table
+            size="small"
+            rowKey={(_, index) => String(index)}
+            scroll={{ x: "max-content" }}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            dataSource={table.rows}
+            columns={table.columns.map((column) => ({
+              title: column,
+              dataIndex: column,
+              key: column,
+              render: concise
+            }))}
+          />
+        </Card>
+      ))}
+    </Space>
+  );
+}
+
+function NewResearch({
+  templates,
+  onCreated
+}: {
+  templates: ResearchTemplate[];
+  onCreated: (run: ResearchRun) => void;
+}) {
+  const [form] = Form.useForm();
+  const [selected, setSelected] = useState("market-eda");
+  const [resolution, setResolution] = useState<DataScopeResolution>();
+  const [busy, setBusy] = useState<"preview" | "run">();
+  const [latestRun, setLatestRun] = useState<ResearchRun>();
+  const current = templates.find((item) => item.key === selected);
 
   useEffect(() => {
-    if (!hasActiveSession) return;
-    const timer = window.setInterval(() => { void sessions.reload(); }, 4000);
-    return () => window.clearInterval(timer);
-  }, [hasActiveSession, sessions.reload]);
-
-  const databaseDetail = databaseHealth.data.detail;
-  const databaseDetailRecord = typeof databaseDetail === "object" && databaseDetail !== null && !Array.isArray(databaseDetail)
-    ? databaseDetail as Record<string, unknown>
-    : {};
-  const databaseCounts = (databaseDetailRecord.counts as Record<string, number>) ?? {};
-  const databaseEngine = (databaseDetailRecord.engine as string | undefined) || "unknown engine";
-  const databaseName = (databaseDetailRecord.database as string | undefined) || "unknown database";
-  const databaseHost = databaseDetailRecord.host as string | undefined;
-  const databasePort = databaseDetailRecord.port as number | undefined;
-  const missingTables = (databaseDetailRecord.missingTables as string[]) ?? [];
-  const csi300MembershipRows = (databaseDetailRecord.csi300MembershipRows as number | undefined) ?? 0;
-  const dailyBarsCount = databaseCounts.ashare_daily_bars ?? 0;
-  const pitRowsCount = databaseCounts.index_membership_pit ?? 0;
-
-  async function evaluate(values: {
-    factorName: string;
-    universeCode: string;
-    startDate: string;
-    endDate: string;
-    forwardDays: number;
-    quantiles: number;
-    engine?: string;
-  }) {
-    setToolBusy("factor");
-    try {
-      const result = await api.evaluateFactor({ ...values, persist: true });
-      setFactorResult(result);
-      evaluations.reload();
-      message.success("Factor evaluation saved");
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setToolBusy(undefined);
-    }
-  }
-
-  async function queryCbond(values: { date: string; maxDoubleLow: number; excludeCallRisk: boolean }) {
-    setToolBusy("cbond");
-    try {
-      const [pool, risk] = await Promise.all([
-        api.cbondDoubleLow({ ...values, limit: 100 }),
-        api.cbondCallRisk(values.date)
-      ]);
-      setCbondPool(pool);
-      setCbondRisk(risk);
-      if (!pool.count) message.info("该日期没有符合条件的可转债数据，请先在 Data 页同步 TuShare 数据。");
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setToolBusy(undefined);
-    }
-  }
-
-  async function queryFutures(values: { date: string; products?: string }) {
-    setToolBusy("futures");
-    try {
-      const result = await api.futuresAgriMain(values);
-      setFuturesMonitor(result);
-      if (!result.count) message.info("该日期没有期货主力数据，请先在 Data 页同步 TuShare 数据。");
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setToolBusy(undefined);
-    }
-  }
-
-  async function buildFutures(values: {
-    product: string;
-    exchange: string;
-    startDate: string;
-    endDate: string;
-    adjustment: "none" | "backward_ratio" | "backward_difference";
-    contracts: number;
-    openRate: number;
-    closeRate: number;
-    closeTodayRate: number;
-    perContract: number;
-    slippageTicks: number;
-    feeVersion: string;
-  }) {
-    setToolBusy("futures-continuous");
-    try {
-      await api.setFuturesFeeSchedule({
-        product: values.product,
-        exchange: values.exchange,
-        openRate: values.openRate,
-        closeRate: values.closeRate,
-        closeTodayRate: values.closeTodayRate,
-        perContract: values.perContract,
-        slippageTicks: values.slippageTicks,
-        version: values.feeVersion,
-        source: "research-ui"
+    const parameters = current?.parameterSchema || {};
+    const templateDefaults: Record<string, unknown> = {
+      template: selected,
+      name: current?.name,
+      parameters
+    };
+    if (selected === "universe-pit" || selected === "factor-evaluation") {
+      Object.assign(templateDefaults, {
+        asset: { ...defaultScope.asset, assetClass: "equity" },
+        selectionType: "universe",
+        selectionValues: selected === "universe-pit" ? "CSI300" : "ALL_A"
       });
-      const result = await api.buildFuturesContinuous({
-        product: values.product,
-        exchange: values.exchange,
-        startDate: values.startDate,
-        endDate: values.endDate,
-        adjustment: values.adjustment,
-        contracts: values.contracts,
-        strictMetadata: true
+    } else if (selected === "cbond-double-low") {
+      Object.assign(templateDefaults, {
+        asset: { ...defaultScope.asset, assetClass: "cbond" },
+        selectionType: "all",
+        selectionValues: ""
       });
-      setFuturesContinuous(result);
-      message.success(`连续合约已构建：${result.summary.bars} bars / ${result.summary.rolls} rolls`);
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setToolBusy(undefined);
-    }
-  }
-
-  async function queryPit(values: { universeCode: string; asOfDate: string }) {
-    setToolBusy("pit");
-    try {
-      const result = await api.indexMembersFromTushareAsOf(values.universeCode, values.asOfDate);
-      setPitMembers(result);
-      message.success(`TuShare Pro index members loaded${result.fetchedDate ? `: ${result.fetchedDate}` : ""}`);
-    } catch (error) {
-      message.warning(`TuShare Pro query failed; showing local PIT data. ${(error as Error).message}`);
-      setPitMembers(await api.indexMembersAsOf(values.universeCode, values.asOfDate));
-    } finally {
-      setToolBusy(undefined);
-    }
-  }
-
-  async function startResearchSession(values: { projectId: string; port?: number }) {
-    setSessionBusy("start");
-    try {
-      await api.startResearch(values);
-      message.success("Research 工作台正在启动，Jupyter 就绪后会显示 Running");
-      sessions.reload();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSessionBusy(undefined);
-    }
-  }
-
-  async function sessionAction(session: ResearchSession, action: "stop" | "restart") {
-    setSessionBusy(`${action}:${session.id}`);
-    try {
-      if (action === "stop") await api.stopResearch(session.id);
-      else await api.restartResearch(session.id);
-      message.success(action === "stop" ? "Research 已停止" : "Research 正在重新启动");
-      sessions.reload();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSessionBusy(undefined);
-    }
-  }
-
-  async function showLogs(session: ResearchSession) {
-    setSessionBusy(`logs:${session.id}`);
-    try {
-      setResearchLogs((await api.researchLogs(session.id)).logs || "No logs yet.");
-      setLogsOpen(true);
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSessionBusy(undefined);
-    }
-  }
-
-  async function checkSession(session: ResearchSession) {
-    setSessionBusy(`check:${session.id}`);
-    try {
-      const result = await api.runResearchChecks(session.id);
-      Modal.info({
-        title: result.passed ? "Research checks passed" : "Research checks failed",
-        width: 860,
-        content: <pre style={{ maxHeight: 480, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(result, null, 2)}</pre>
+    } else if (selected === "futures-continuous") {
+      Object.assign(templateDefaults, {
+        asset: { ...defaultScope.asset, assetClass: "future", market: "china", venue: "SHFE" },
+        selectionType: "products",
+        selectionValues: "RB"
       });
+    } else {
+      Object.assign(templateDefaults, {
+        asset: defaultScope.asset,
+        selectionType: defaultScope.selection.type,
+        selectionValues: defaultScope.selection.values.join(", ")
+      });
+    }
+    form.setFieldsValue(templateDefaults);
+    setResolution(undefined);
+  }, [current, form, selected]);
+
+  function payloadFrom(values: Record<string, any>) {
+    const valuesText = String(values.selectionValues || "");
+    const scope: DataScope = {
+      asset: values.asset,
+      selection: {
+        type: values.selectionType,
+        values: valuesText.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean)
+      },
+      time: values.time,
+      price: values.price,
+      provider: values.provider
+    };
+    return { template: selected, name: values.name, scope, parameters: values.parameters || {} };
+  }
+
+  async function preflight() {
+    try {
+      setBusy("preview");
+      const values = await form.validateFields();
+      setResolution(await api.previewResearchRun(payloadFrom(values)));
+      message.success("数据预检完成");
     } catch (error) {
-      message.error((error as Error).message);
+      if (error instanceof Error) message.error(error.message);
     } finally {
-      setSessionBusy(undefined);
+      setBusy(undefined);
     }
   }
 
-  function deleteSession(session: ResearchSession) {
-    Modal.confirm({
-      title: "删除 Research 记录？",
-      content: "容器会停止，研究工作区默认保留，方便恢复笔记。",
-      okText: "删除记录",
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await api.deleteResearch(session.id, false);
-          message.success("Research 记录已删除，工作区已保留");
-          sessions.reload();
-        } catch (error) {
-          message.error((error as Error).message);
-        }
-      }
-    });
+  async function run() {
+    try {
+      setBusy("run");
+      const values = await form.validateFields();
+      const payload = payloadFrom(values);
+      const preview = resolution || await api.previewResearchRun(payload);
+      setResolution(preview);
+      if ((preview.blocking || []).length) throw new Error(`预检未通过：${preview.blocking?.join(", ")}`);
+      const created = await api.createResearchRun(payload);
+      setLatestRun(created);
+      onCreated(created);
+      if (created.status === "success") message.success("研究分析已完成并固化");
+      else message.warning(created.error || `任务状态：${created.status}`);
+    } catch (error) {
+      if (error instanceof Error) message.error(error.message);
+    } finally {
+      setBusy(undefined);
+    }
   }
 
   return (
-    <>
-      <div className="toolbar">
-        <h1 className="page-title">Research</h1>
-        <Button icon={<ReloadOutlined />} onClick={() => { sessions.reload(); engines.reload(); evaluations.reload(); databaseHealth.reload(); }}>Refresh</Button>
-      </div>
-      <ExampleGallery kind="research" onCreated={() => projects.reload()} />
-      <BatchWorkbench kind="research" projects={projects.data} />
-      <Modal title="Research Logs" open={logsOpen} onCancel={() => setLogsOpen(false)} footer={<Button onClick={() => setLogsOpen(false)}>Close</Button>} width={900}>
-        <pre style={{ maxHeight: 520, overflow: "auto", whiteSpace: "pre-wrap" }}>{researchLogs}</pre>
-      </Modal>
-      <Tabs
-        items={[
+    <div className="research-workbench">
+      <aside className="research-template-rail" aria-label="研究模板">
+        <div className="research-section-label">分析模板</div>
+        {templates.map((item) => (
+          <button
+            type="button"
+            key={item.key}
+            className={`research-template ${selected === item.key ? "is-active" : ""}`}
+            onClick={() => setSelected(item.key)}
+          >
+            <span><Tag color={categoryColors[item.category]}>{item.category}</Tag>{item.name}</span>
+            <small>{item.description}</small>
+          </button>
+        ))}
+        <Alert className="research-boundary-note" type="info" showIcon message="研究 ≠ 回测" description="这里只做数据、信号与统计分析；订单、持仓、资金、费用和交易盈亏统一进入回测。" />
+      </aside>
+
+      <main className="research-config-panel">
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            template: selected,
+            name: "市场研究",
+            asset: defaultScope.asset,
+            selectionType: defaultScope.selection.type,
+            selectionValues: defaultScope.selection.values.join(", "),
+            time: defaultScope.time,
+            price: defaultScope.price,
+            provider: defaultScope.provider,
+            parameters: {}
+          }}
+        >
+          <Card size="small" title={<><ExperimentOutlined /> {current?.name || "新建分析"}</>} className="research-config-card">
+            <div className="research-form-grid">
+              <Form.Item name="name" label="研究名称" rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item name={["asset", "assetClass"]} label="资产类别">
+                <Select options={[
+                  { value: "equity", label: "股票" },
+                  { value: "cbond", label: "可转债" },
+                  { value: "future", label: "期货" },
+                  { value: "crypto", label: "数字资产" }
+                ]} />
+              </Form.Item>
+              <Form.Item name={["asset", "market"]} label="市场"><Input /></Form.Item>
+              <Form.Item name={["asset", "venue"]} label="场所 / 交易所"><Input /></Form.Item>
+              <Form.Item name={["asset", "resolution"]} label="频率">
+                <Select options={["daily", "hour", "minute"].map((value) => ({ value, label: value }))} />
+              </Form.Item>
+              <Form.Item name={["price", "adjust"]} label="价格口径">
+                <Select options={["raw", "qfq", "hfq"].map((value) => ({ value, label: value }))} />
+              </Form.Item>
+              <Form.Item name="selectionType" label="选择方式">
+                <Select options={[
+                  { value: "symbols", label: "证券代码" },
+                  { value: "universe", label: "PIT 股票池" },
+                  { value: "products", label: "期货品种" },
+                  { value: "all", label: "全部" }
+                ]} />
+              </Form.Item>
+              <Form.Item name="selectionValues" label="代码 / 股票池 / 品种"><Input placeholder="000001.SZ, 600000.SH" /></Form.Item>
+              <Form.Item name={["time", "startDate"]} label="开始日期"><Input type="date" /></Form.Item>
+              <Form.Item name={["time", "endDate"]} label="结束日期"><Input type="date" /></Form.Item>
+              <Form.Item name={["time", "asOfDate"]} label="PIT 截止日"><Input type="date" /></Form.Item>
+              <Form.Item name={["provider", "source"]} label="数据源"><Input /></Form.Item>
+              <Form.Item name={["provider", "mode"]} label="来源策略">
+                <Select options={[
+                  { value: "strict", label: "严格使用指定源" },
+                  { value: "fallback", label: "允许认证回退" }
+                ]} />
+              </Form.Item>
+              <Form.Item name={["provider", "allowResearchSource"]} valuePropName="checked">
+                <Checkbox>允许研究 / 非认证来源</Checkbox>
+              </Form.Item>
+            </div>
+          </Card>
+          <Card size="small" title="模板参数" className="research-config-card">
+            <div className="research-form-grid"><TemplateParameters template={selected} /></div>
+          </Card>
+          <Space>
+            <Button icon={<DatabaseOutlined />} loading={busy === "preview"} onClick={() => void preflight()}>数据预检</Button>
+            <Button type="primary" icon={<PlayCircleOutlined />} loading={busy === "run"} onClick={() => void run()}>运行并固化结果</Button>
+          </Space>
+        </Form>
+      </main>
+
+      <aside className="research-readiness-panel">
+        <Card size="small" title="数据就绪度" extra={resolution ? (resolution.ready ? <Tag color="green">READY</Tag> : <Tag color="red">BLOCKED</Tag>) : <Tag>待检查</Tag>}>
+          {resolution ? (
+            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <div className="research-readiness-row"><span>来源</span><strong>{resolution.source}</strong></div>
+              <div className="research-readiness-row"><span>记录</span><strong>{Number(resolution.coverage.rows || 0).toLocaleString()}</strong></div>
+              <div className="research-readiness-row"><span>证券</span><strong>{Number(resolution.coverage.symbols || 0).toLocaleString()}</strong></div>
+              <div className="research-readiness-row"><span>覆盖</span><strong>{resolution.coverage.first_date || "—"} → {resolution.coverage.last_date || "—"}</strong></div>
+              <Tooltip title={resolution.scopeHash}><div className="research-hash">SCOPE {resolution.scopeHash.slice(0, 12)}</div></Tooltip>
+              <Tooltip title={resolution.dataFingerprint}><div className="research-hash">DATA {resolution.dataFingerprint.slice(0, 12)}</div></Tooltip>
+            </Space>
+          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="先运行数据预检" />}
+        </Card>
+        <Card size="small" title="最新结果"><ResultPanel run={latestRun} /></Card>
+      </aside>
+    </div>
+  );
+}
+
+function RunHistory({ runs, reload }: { runs: ResearchRun[]; reload: () => void }) {
+  const navigate = useNavigate();
+  const [selected, setSelected] = useState<ResearchRun>();
+
+  async function handoff(item: ResearchRun) {
+    const draft = await api.researchBacktestDraft(item.id);
+    window.sessionStorage.setItem("lean.backtest.researchDraft", JSON.stringify(draft));
+    navigate(`/backtests?researchRunId=${encodeURIComponent(item.id)}`);
+  }
+
+  return (
+    <div className="research-history-layout">
+      <Card size="small" title="Research Runs" extra={<Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>}>
+        <Table
+          className="research-runs-table"
+          size="small"
+          rowKey="id"
+          dataSource={runs}
+          tableLayout="fixed"
+          scroll={{ x: 1210 }}
+          pagination={{ pageSize: 20 }}
+          onRow={(record) => ({ onClick: () => setSelected(record) })}
+          columns={[
+            { title: "状态", dataIndex: "status", width: 100, render: statusTag },
+            {
+              title: "名称",
+              dataIndex: "name",
+              width: 300,
+              render: (value) => {
+                const name = value ? String(value) : "—";
+                return <Tooltip title={name}><span className="research-run-name">{name}</span></Tooltip>;
+              }
+            },
+            { title: "模板", dataIndex: "template_key", width: 160 },
+            { title: "数据指纹", dataIndex: "data_fingerprint", width: 140, render: (value) => value ? <code>{String(value).slice(0, 12)}</code> : "—" },
+            { title: "创建时间", dataIndex: "created_at", width: 170 },
+            {
+              title: "操作",
+              key: "actions",
+              width: 340,
+              render: (_, item) => (
+                <Space onClick={(event) => event.stopPropagation()}>
+                  <Button size="small" icon={<ArrowRightOutlined />} disabled={item.status !== "success"} onClick={() => void handoff(item)}>转回测</Button>
+                  <Button size="small" icon={<CodeOutlined />} disabled={item.status !== "success"} onClick={async () => {
+                    const snapshot = await api.createResearchSnapshot(item.scope);
+                    await navigator.clipboard?.writeText(snapshot.snapshotId);
+                    message.success(`只读快照已生成：${snapshot.snapshotId.slice(0, 12)}（ID 已复制）`);
+                  }}>快照</Button>
+                  <Button size="small" icon={<DownloadOutlined />} href={api.researchRunExportUrl(item.id)}>CSV</Button>
+                  <Button size="small" onClick={async () => { await api.retryResearchRun(item.id); reload(); }}>重试</Button>
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={async () => { await api.deleteResearchRun(item.id); reload(); }}>删除</Button>
+                </Space>
+              )
+            }
+          ]}
+        />
+      </Card>
+      <Card size="small" title={selected ? selected.name : "运行详情"}>
+        <ResultPanel run={selected} />
+      </Card>
+    </div>
+  );
+}
+
+function Workspaces({ projects, workspaces, reload }: { projects: Project[]; workspaces: ResearchWorkspace[]; reload: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [logs, setLogs] = useState("");
+  const [form] = Form.useForm();
+
+  async function create() {
+    const values = await form.validateFields();
+    await api.startResearch(values);
+    setOpen(false);
+    form.resetFields();
+    reload();
+  }
+
+  return (
+    <Card
+      size="small"
+      title="Notebook Workspaces"
+      extra={<Space><Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button><Button type="primary" icon={<CodeOutlined />} onClick={() => setOpen(true)}>新建工作区</Button></Space>}
+    >
+      <Alert
+        type="info"
+        showIcon
+        message="Workspace 是交互式 Notebook 环境，不是 Research Run 的另一个名字。"
+        description="Run 固定输入和结果、适合审计与复用；Workspace 用于探索。容器禁用网络，数据以只读快照方式提供。"
+        style={{ marginBottom: 16 }}
+      />
+      <Table
+        size="small"
+        rowKey="id"
+        dataSource={workspaces}
+        scroll={{ x: "max-content" }}
+        columns={[
+          { title: "状态", dataIndex: "status", width: 110, render: statusTag },
+          { title: "项目", dataIndex: "project_name" },
+          { title: "端口", dataIndex: "port", width: 90 },
+          { title: "快照", dataIndex: "snapshot_id", render: (value) => value ? <code>{String(value).slice(0, 12)}</code> : "未绑定" },
+          { title: "创建时间", dataIndex: "created_at", width: 180 },
           {
-            key: "sessions",
-            label: "Research Sessions",
-            children: (
-              <>
-                <Card title="Start Research">
-                  <Form layout="vertical" onFinish={startResearchSession}>
-                    <FormSection title="Research environment">
-                    <FormGrid>
-                      <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true }]}>
-                        <Select placeholder="Project" options={projects.data.map((p) => ({ value: p.id, label: p.name }))} />
-                      </Form.Item>
-                      <Form.Item name="port" label="Preferred Port (optional)">
-                        <InputNumber min={1024} max={65535} style={{ width: "100%" }} />
-                      </Form.Item>
-                    </FormGrid>
-                    </FormSection>
-                    <FormActions><Button data-testid="start-research-button" type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={sessionBusy === "start"}>Start</Button></FormActions>
-                  </Form>
-                </Card>
-                <Card title="Sessions" style={{ marginTop: 16 }}>
-                  <Table<ResearchSession>
-                    rowKey="id"
-                    dataSource={sessions.data}
-                    size="small"
-                    columns={[
-                      { title: "Project", render: (_, session) => session.project_name || projects.data.find((item) => item.id === session.project_id)?.name || session.project_id },
-                      { title: "Status", dataIndex: "status", render: (status) => <StatusTag status={status} /> },
-                      { title: "Ready", dataIndex: "readiness_status", render: (status) => <StatusTag status={status || "pending"} /> },
-                      { title: "Port", dataIndex: "port" },
-                      { title: "URL", render: (_, session) => session.url && session.status === "running" ? <a href={session.url} target="_blank" rel="noreferrer">Open Jupyter</a> : "-" },
-                      { title: "Error", dataIndex: "error", ellipsis: true, render: (value) => value || "-" },
-                      { title: "Action", render: (_, session) => <Space>
-                        {session.status === "running" && <Button size="small" loading={sessionBusy === `stop:${session.id}`} onClick={() => sessionAction(session, "stop")}>Stop</Button>}
-                        {["stopped", "failed", "cancelled"].includes(session.status) && <Button size="small" loading={sessionBusy === `restart:${session.id}`} onClick={() => sessionAction(session, "restart")}>Restart</Button>}
-                        <Button size="small" loading={sessionBusy === `logs:${session.id}`} onClick={() => showLogs(session)}>Logs</Button>
-                        <Button size="small" loading={sessionBusy === `check:${session.id}`} onClick={() => checkSession(session)}>Check</Button>
-                        <Button
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          aria-label={`Delete research session ${session.project_name || session.id}`}
-                          disabled={["queued", "starting", "running"].includes(session.status)}
-                          onClick={() => deleteSession(session)}
-                        />
-                      </Space> }
-                    ]}
-                  />
-                </Card>
-              </>
-            )
-          },
-          {
-            key: "pit",
-            label: "CSI300 PIT",
-            children: (
-              <>
-                <div className="grid">
-                  <Card><Statistic title="Database" value={databaseHealth.data.ok ? "ready" : "check"} /></Card>
-                  <Card><Statistic title="CSI300 Rows" value={csi300MembershipRows} /></Card>
-                  <Card><Statistic title="Daily Bars" value={dailyBarsCount} /></Card>
-                  <Card><Statistic title="PIT Rows" value={pitRowsCount} /></Card>
-                </div>
-                <Card title="Database" style={{ marginTop: 16 }}>
-                  <Space wrap>
-                    <Tag color={databaseHealth.data.ok ? "success" : "error"}>{databaseHealth.data.ok ? "ready" : "not ready"}</Tag>
-                    <Tag>{databaseEngine}</Tag>
-                    <Tag>{databaseName}</Tag>
-                    {databaseHost && <Tag>{databaseHost}:{databasePort}</Tag>}
-                    {missingTables.map((table) => <Tag key={table} color="error">{table}</Tag>)}
-                  </Space>
-                  {Boolean(databaseDetailRecord.error) && (
-                    <Alert style={{ marginTop: 12 }} type="warning" showIcon message={String(databaseDetailRecord.error)} />
-                  )}
-                </Card>
-                <Card title="Point-in-Time Constituents" style={{ marginTop: 16 }}>
-                  <Form layout="inline" onFinish={queryPit} initialValues={{ universeCode: "CSI300", asOfDate: today }}>
-                    <Form.Item name="universeCode" rules={[{ required: true }]}>
-                      <Select style={{ width: 220 }} options={A_SHARE_INDEX_OPTIONS} />
-                    </Form.Item>
-                    <Form.Item name="asOfDate" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                    <Button type="primary" htmlType="submit" loading={toolBusy === "pit"}>Query</Button>
-                  </Form>
-                  <Alert
-                    style={{ marginTop: 12 }}
-                    type="info"
-                    showIcon
-                    message="Default query source is TuShare Pro index_weight. Results are saved into the local PIT table, then displayed from local storage. If TuShare is unavailable, existing local PIT data is shown."
-                  />
-                </Card>
-                <div className="grid" style={{ marginTop: 16 }}>
-                  <Card><Statistic title="Universe" value={pitMembers?.universe ?? "CSI300"} /></Card>
-                  <Card><Statistic title="As Of" value={pitMembers?.asOfDate ?? "-"} /></Card>
-                  <Card><Statistic title="Members" value={pitMembers?.count ?? 0} /></Card>
-                  <Card><Statistic title="Coverage" value={pitMembers && pitMembers.count === 0 ? "none" : "partial"} /></Card>
-                </div>
-                <Card title="Members" style={{ marginTop: 16 }}>
-                  <Table<IndexMember>
-                    size="small"
-                    rowKey={(row) => `${row.universe_code}-${row.symbol}-${row.start_date}`}
-                    dataSource={pitMembers?.items ?? []}
-                    pagination={{ pageSize: 20 }}
-                    columns={[
-                      { title: "Symbol", dataIndex: "symbol", width: 100 },
-                      { title: "Name", dataIndex: "name", ellipsis: true },
-                      { title: "Start", dataIndex: "start_date" },
-                      { title: "End", dataIndex: "end_date", render: (value) => value ?? "-" },
-                      { title: "Exchange", dataIndex: "exchange" },
-                      { title: "Listed", dataIndex: "listed_date", render: (value) => value ?? "-" },
-                      { title: "Status", dataIndex: "status" },
-                      { title: "ST", dataIndex: "is_st", render: (value) => <Tag color={value ? "warning" : "success"}>{value ? "yes" : "no"}</Tag> }
-                    ]}
-                  />
-                </Card>
-              </>
-            )
-          },
-          {
-            key: "factors",
-            label: "Factors",
-            children: (
-              <>
-                <Card title="Factor Evaluation">
-                  <Form layout="vertical" onFinish={evaluate} initialValues={{ factorName: "momentum", universeCode: "ALL_A", startDate: researchStart, endDate: today, forwardDays: 1, quantiles: 5, engine: engines.data.selected }}>
-                    <FormSection title="Factor and universe">
-                    <FormGrid>
-                      <Form.Item className="form-field--wide" name="factorName" label="Factor" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item className="form-field--wide" name="universeCode" label="Universe" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                      <Form.Item name="forwardDays" label="Forward Days"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="quantiles" label="Quantiles"><InputNumber min={2} max={20} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="engine" label="Engine">
-                        <Select
-                          options={Object.entries(engines.data.available).map(([key, available]) => ({
-                            value: key,
-                            label: available ? key : `${key} unavailable`,
-                            disabled: !available
-                          }))}
-                        />
-                      </Form.Item>
-                    </FormGrid>
-                    </FormSection>
-                    <FormActions><Button type="primary" icon={<ExperimentOutlined />} htmlType="submit" loading={toolBusy === "factor"}>Evaluate</Button></FormActions>
-                  </Form>
-                </Card>
-                {factorResult && (
-                  <>
-                    <div className="grid" style={{ marginTop: 16 }}>
-                      <Card><Statistic title="Observations" value={factorResult.observations} /></Card>
-                      <Card><Statistic title="Mean IC" value={formatDecimal(factorResult.mean_ic)} /></Card>
-                      <Card><Statistic title="Mean Rank IC" value={formatDecimal(factorResult.mean_rank_ic)} /></Card>
-                      <Card><Statistic title="Engine" value={factorResult.engine} /></Card>
-                    </div>
-                    <Card title="Quantile Returns" style={{ marginBottom: 16 }}>
-                      <Table
-                        size="small"
-                        pagination={false}
-                        rowKey="quantile"
-                        dataSource={factorResult.quantile_returns}
-                        columns={[
-                          { title: "Quantile", dataIndex: "quantile" },
-                          { title: "Mean Return", dataIndex: "mean_return", render: (value: number | null) => formatPercent(value) },
-                          { title: "Count", dataIndex: "count" }
-                        ]}
-                      />
-                    </Card>
-                  </>
-                )}
-                <Card title="Saved Evaluations">
-                  <Table
-                    size="small"
-                    rowKey="id"
-                    dataSource={evaluations.data.items}
-                    columns={[
-                      { title: "Factor", dataIndex: "factor_name" },
-                      { title: "Universe", dataIndex: "universe_code" },
-                      { title: "Observations", render: (_, row) => row.result?.observations ?? "-" },
-                      { title: "Mean IC", render: (_, row) => formatDecimal(row.result?.mean_ic) },
-                      { title: "Created", dataIndex: "created_at" }
-                    ]}
-                  />
-                </Card>
-              </>
-            )
-          },
-          {
-            key: "cbond",
-            label: "Convertible Bonds",
-            children: (
-              <>
-                <Card title="Double-Low Pool">
-                  <Form layout="inline" onFinish={queryCbond} initialValues={{ date: today, maxDoubleLow: 130, excludeCallRisk: true }}>
-                    <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                    <Form.Item name="maxDoubleLow"><InputNumber min={0} /></Form.Item>
-                    <Form.Item name="excludeCallRisk" valuePropName="checked"><Checkbox>Exclude Call Risk</Checkbox></Form.Item>
-                    <Button type="primary" htmlType="submit" loading={toolBusy === "cbond"}>Query</Button>
-                  </Form>
-                </Card>
-                <Card title="Pool" style={{ marginTop: 16 }}>
-                  <Table<CBondPoolItem>
-                    size="small"
-                    rowKey="bond_code"
-                    dataSource={cbondPool?.items ?? []}
-                    columns={[
-                      { title: "Bond", dataIndex: "bond_code" },
-                      { title: "Name", dataIndex: "bond_name" },
-                      { title: "Stock", dataIndex: "stock_symbol" },
-                      { title: "Date", dataIndex: "trade_date" },
-                      { title: "Close", dataIndex: "close" },
-                      { title: "Premium", dataIndex: "premium_rate", render: (value) => formatPercent(value) },
-                      { title: "Double Low", dataIndex: "double_low", render: (value) => formatDecimal(value, 2) },
-                      { title: "Remaining", dataIndex: "current_remaining_size" }
-                    ]}
-                  />
-                </Card>
-                <Card title="Call Risk" style={{ marginTop: 16 }}>
-                  <Table<CBondRiskItem>
-                    size="small"
-                    rowKey="id"
-                    dataSource={cbondRisk?.items ?? []}
-                    columns={[
-                      { title: "Bond", dataIndex: "bond_code" },
-                      { title: "Name", dataIndex: "bond_name" },
-                      { title: "Announce", dataIndex: "announce_date" },
-                      { title: "Status", dataIndex: "status" },
-                      { title: "Last Trade", dataIndex: "last_trade_date" }
-                    ]}
-                  />
-                </Card>
-              </>
-            )
-          },
-          {
-            key: "futures",
-            label: "Futures",
-            children: (
-              <>
-                <Card title="Agricultural Main Contracts">
-                  <Form layout="inline" onFinish={queryFutures} initialValues={{ date: today, products: "A,M,Y,P,C,CS,JD,LH,SR,CF,RM,OI,AP,CJ,PK" }}>
-                    <Form.Item name="date" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                    <Form.Item name="products"><Input style={{ width: 360 }} /></Form.Item>
-                    <Button type="primary" htmlType="submit" loading={toolBusy === "futures"}>Query</Button>
-                  </Form>
-                </Card>
-                <div className="grid" style={{ marginTop: 16 }}>
-                  <Card><Statistic title="Matched" value={futuresMonitor?.count ?? 0} /></Card>
-                  <Card><Statistic title="Missing" value={futuresMonitor?.missing.length ?? 0} /></Card>
-                </div>
-                <Card title="Main Contracts">
-                  <Table<FuturesMainItem>
-                    size="small"
-                    rowKey="contract_code"
-                    dataSource={futuresMonitor?.items ?? []}
-                    columns={[
-                      { title: "Product", dataIndex: "product" },
-                      { title: "Contract", dataIndex: "contract_code" },
-                      { title: "Exchange", dataIndex: "exchange" },
-                      { title: "Bar Date", dataIndex: "bar_date" },
-                      { title: "Close", dataIndex: "close" },
-                      { title: "Volume", dataIndex: "volume" },
-                      { title: "Open Interest", dataIndex: "open_interest" },
-                      { title: "Days To Expiry", dataIndex: "daysToExpiry" }
-                    ]}
-                  />
-                </Card>
-                <Card title="Continuous Contract / Margin / Fee / Roll Attribution" style={{ marginTop: 16 }}>
-                  <Form layout="vertical" onFinish={buildFutures} initialValues={{
-                    product: "M",
-                    exchange: "DCE",
-                    startDate: dayjs().subtract(1, "year").format("YYYY-MM-DD"),
-                    endDate: today,
-                    adjustment: "backward_ratio",
-                    contracts: 1,
-                    openRate: 0,
-                    closeRate: 0,
-                    closeTodayRate: 0,
-                    perContract: 0,
-                    slippageTicks: 1,
-                    feeVersion: "manual-v1"
-                  }}>
-                    <FormGrid>
-                      <Form.Item name="product" label="Product" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item name="exchange" label="Exchange" rules={[{ required: true }]}><Input /></Form.Item>
-                      <Form.Item name="startDate" label="Start" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                      <Form.Item name="endDate" label="End" rules={[{ required: true }]}><DateStringPicker /></Form.Item>
-                      <Form.Item name="adjustment" label="Adjustment"><Select options={[
-                        { value: "backward_ratio", label: "Backward ratio" },
-                        { value: "backward_difference", label: "Backward difference" },
-                        { value: "none", label: "Raw / none" }
-                      ]} /></Form.Item>
-                      <Form.Item name="contracts" label="Contracts"><InputNumber style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="openRate" label="Open fee rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="closeRate" label="Close fee rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="closeTodayRate" label="Close-today rate"><InputNumber min={0} step={0.000001} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="perContract" label="Fee / contract"><InputNumber min={0} step={0.1} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="slippageTicks" label="Slippage ticks"><InputNumber min={0} step={0.5} style={{ width: "100%" }} /></Form.Item>
-                      <Form.Item name="feeVersion" label="Fee schedule version" rules={[{ required: true }]}><Input /></Form.Item>
-                    </FormGrid>
-                    <FormActions><Button type="primary" htmlType="submit" loading={toolBusy === "futures-continuous"}>Build & attribute</Button></FormActions>
-                  </Form>
-                </Card>
-                {futuresContinuous && <>
-                  <div className="grid" style={{ marginTop: 16 }}>
-                    <Card><Statistic title="Rolls" value={futuresContinuous.summary.rolls} /></Card>
-                    <Card><Statistic title="Max Margin" value={futuresContinuous.summary.maxMarginRequired} precision={2} /></Card>
-                    <Card><Statistic title="Commission + Slippage" value={futuresContinuous.summary.totalCommission + futuresContinuous.summary.totalSlippage} precision={2} /></Card>
-                    <Card><Statistic title="Net PnL" value={futuresContinuous.summary.totalNetPnl} precision={2} /></Card>
-                  </div>
-                  <Card title="Continuous Price and Net PnL" style={{ marginTop: 16 }}>
-                    <LeanChart style={{ height: 380 }} option={{
-                      tooltip: { trigger: "axis" },
-                      legend: { data: ["Raw", "Adjusted", "Cumulative net PnL"] },
-                      grid: { left: 64, right: 64, top: 44, bottom: 54 },
-                      xAxis: { type: "category", data: futuresContinuous.bars.map((row) => row.trade_date) },
-                      yAxis: [{ type: "value", name: "Price" }, { type: "value", name: "PnL" }],
-                      series: [
-                        { name: "Raw", type: "line", showSymbol: false, data: futuresContinuous.bars.map((row) => row.raw_close) },
-                        { name: "Adjusted", type: "line", showSymbol: false, data: futuresContinuous.bars.map((row) => row.adjusted_close) },
-                        { name: "Cumulative net PnL", type: "line", yAxisIndex: 1, showSymbol: false, data: futuresContinuous.bars.map((row) => row.cumulative_net_pnl) }
-                      ]
-                    }} />
-                  </Card>
-                  <Card title="Roll Attribution" style={{ marginTop: 16 }}>
-                    <Table
-                      size="small"
-                      rowKey="id"
-                      dataSource={futuresContinuous.rollEvents}
-                      columns={[
-                        { title: "Date", dataIndex: "trade_date" },
-                        { title: "From", dataIndex: "from_contract" },
-                        { title: "To", dataIndex: "to_contract" },
-                        { title: "Gap", dataIndex: "roll_gap", render: (value) => formatDecimal(value) },
-                        { title: "Roll yield", dataIndex: "roll_yield", render: (value) => formatPercent(value) },
-                        { title: "Market PnL", dataIndex: "market_pnl", render: (value) => formatDecimal(value, 2) },
-                        { title: "Commission", dataIndex: "commission", render: (value) => formatDecimal(value, 2) },
-                        { title: "Slippage", dataIndex: "slippage", render: (value) => formatDecimal(value, 2) },
-                        { title: "Net PnL", dataIndex: "net_pnl", render: (value) => formatDecimal(value, 2) }
-                      ]}
-                    />
-                  </Card>
-                </>}
-              </>
+            title: "操作",
+            key: "actions",
+            width: 330,
+            render: (_, item) => (
+              <Space>
+                {item.url && <Button size="small" href={item.url} target="_blank">打开</Button>}
+                <Button size="small" onClick={async () => { const result = await api.researchLogs(item.id); setLogs(result.logs); }}>日志</Button>
+                {item.status === "running"
+                  ? <Button size="small" onClick={async () => { await api.stopResearch(item.id); reload(); }}>停止</Button>
+                  : <Button size="small" onClick={async () => { await api.restartResearch(item.id); reload(); }}>重启</Button>}
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={async () => { await api.deleteResearch(item.id); reload(); }}>删除</Button>
+              </Space>
             )
           }
         ]}
       />
-    </>
+      <Modal title="新建 Notebook Workspace" open={open} onCancel={() => setOpen(false)} onOk={() => void create()}>
+        <Form form={form} layout="vertical">
+          <Form.Item name="projectId" label="研究项目" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" options={projects.map((project) => ({ value: project.id, label: project.name }))} />
+          </Form.Item>
+          <Form.Item name="port" label="端口（可选）"><InputNumber min={1024} max={65535} /></Form.Item>
+          <Form.Item name="snapshotId" label="冻结数据快照 ID" rules={[{ required: true, message: "Workspace 必须绑定冻结快照" }]}>
+            <Input placeholder="从 Research Run 生成并粘贴快照 ID" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal title="Workspace 日志" open={Boolean(logs)} footer={null} onCancel={() => setLogs("")} width={900}>
+        <pre className="research-log">{logs}</pre>
+      </Modal>
+    </Card>
+  );
+}
+
+export function ResearchPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const view = viewFromPath(location.pathname);
+  const templates = useAsyncData(api.researchTemplates, { items: [], count: 0 });
+  const runs = useAsyncData(api.researchRuns, []);
+  const projects = useAsyncData(api.projects, []);
+  const workspaces = useAsyncData(api.researchSessions, []);
+  const activeWorkspaces = workspaces.data.filter((item) => ["queued", "starting", "running"].includes(item.status)).length;
+
+  useEffect(() => {
+    if (!activeWorkspaces) return;
+    const timer = window.setInterval(() => { void workspaces.reload(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [activeWorkspaces, workspaces.reload]);
+
+  const options = useMemo(() => [
+    { label: "新建分析", value: "new", icon: <ExperimentOutlined /> },
+    { label: `运行历史 ${runs.data.length}`, value: "runs", icon: <CheckCircleOutlined /> },
+    { label: `Notebook ${activeWorkspaces ? `· ${activeWorkspaces} 活跃` : ""}`, value: "workspaces", icon: <CloudServerOutlined /> }
+  ], [activeWorkspaces, runs.data.length]);
+
+  return (
+    <div className="research-page">
+      <div className="research-page-header">
+        <div>
+          <div className="research-eyebrow">RESEARCH WORKBENCH</div>
+          <h1 className="page-title">研究工作台</h1>
+          <p>用统一数据范围完成可复现分析；验证交易执行时，一键把同一数据口径交给回测。</p>
+        </div>
+        <div className="research-flow">
+          <span className="is-current">1 研究假设</span><ArrowRightOutlined /><span>2 回测验证</span><ArrowRightOutlined /><span>3 模拟交易</span>
+        </div>
+      </div>
+      <Segmented
+        block
+        className="research-navigation"
+        options={options}
+        value={view}
+        onChange={(value) => navigate(value === "new" ? "/research" : `/research/${value}`)}
+      />
+      {view === "new" && <NewResearch templates={templates.data.items} onCreated={() => void runs.reload()} />}
+      {view === "runs" && <RunHistory runs={runs.data} reload={() => void runs.reload()} />}
+      {view === "workspaces" && (
+        <Workspaces projects={projects.data} workspaces={workspaces.data} reload={() => void workspaces.reload()} />
+      )}
+    </div>
   );
 }

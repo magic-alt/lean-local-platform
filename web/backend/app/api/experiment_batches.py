@@ -28,6 +28,8 @@ class ExperimentBatchCompareRequest(BaseModel):
 def _payload(request: ExperimentBatchRequest) -> dict[str, Any]:
     payload = request.model_dump()
     payload.update(request.model_extra or {})
+    if str(payload.get("kind") or "").lower() == "research":
+        raise LeanWebError("research_batches_retired: use /api/research/runs")
     return payload
 
 

@@ -178,7 +178,7 @@ def _cancel_research(task: dict[str, Any]) -> None:
     if not session_id:
         return
     with db() as connection:
-        row = connection.execute("select container_id from research_sessions where id = ?", (session_id,)).fetchone()
+        row = connection.execute("select container_id from research_workspaces where id = ?", (session_id,)).fetchone()
     session = row_to_dict(row)
     if session and session.get("container_id"):
         try:
@@ -190,7 +190,7 @@ def _cancel_research(task: dict[str, Any]) -> None:
             append_log(task["id"], f"Research container stop failed: {exc}")
     with db() as connection:
         connection.execute(
-            "update research_sessions set status = ?, finished_at = coalesce(finished_at, ?) where id = ?",
+            "update research_workspaces set status = ?, finished_at = coalesce(finished_at, ?) where id = ?",
             (CANCELLED, utc_now(), session_id),
         )
 

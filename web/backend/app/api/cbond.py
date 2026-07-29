@@ -90,7 +90,6 @@ def import_call_events(request: CBondCallEventImport):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/double-low")
 def double_low(date: str, maxDoubleLow: float = 130.0, excludeCallRisk: bool = True, limit: int = 100):
     try:
         return cbond.double_low_pool(
@@ -103,7 +102,6 @@ def double_low(date: str, maxDoubleLow: float = 130.0, excludeCallRisk: bool = T
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/call-risk")
 def call_risk(date: str):
     try:
         return cbond.call_risk_monitor(date)

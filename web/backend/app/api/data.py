@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .common import dispatch_task
+from ..domain.data_scope import DataQueryRequest, DataScope
 from ..core.config import UPLOADS_DIR
 from ..core.errors import LeanWebError
 from ..db import db, rows_to_dicts, utc_now
@@ -53,6 +54,7 @@ from ..services.cross_asset_quality import latest_cross_asset_quality_status
 from ..services import derived_maintenance
 from ..services.tasks import create_task
 from ..services import data_sync
+from ..services import data_gateway
 from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, maintain_derived_layers_task, sync_all_data_task
 
 router = APIRouter(prefix="/api", tags=["data"])
@@ -123,6 +125,29 @@ class ParquetRebuildRequest(BaseModel):
     endDate: str | None = None
     continueOnError: bool = True
     persistReport: bool = True
+
+
+@router.post("/data/resolve")
+def resolve_data_scope(scope: DataScope):
+    """Resolve a shared, read-only data scope for Research and Backtest."""
+    try:
+        return data_gateway.resolve(scope)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data/query")
+def query_data_scope(request: DataQueryRequest):
+    """Run a bounded query through the same normalized data contract."""
+    try:
+        return data_gateway.query(
+            request.scope,
+            dataset=request.dataset,
+            fields=request.fields,
+            limit=request.limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ParquetConsistencyRequest(BaseModel):

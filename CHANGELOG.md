@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Give Research Runs names a stable two-line column and preserve sensible row heights with horizontal table overflow on narrower layouts.
+- Unify Research around reproducible template Runs and a shared nested DataScope/Data Gateway contract; separate network-isolated, frozen-snapshot Notebook Workspaces from run history; add explicit Backtest handoff with renewed strategy/preflight requirements; retire Research experiment batches and direct factor, convertible-bond and futures analysis routes; and redesign the responsive Research UI as a dense brokerage-style workstation.
 - Convert A-share index technical/fundamental selection into a research-only final-date screen with complete qualified and Top-N result layers, dedicated screening UI/API/report output, security names and preserved six-digit A-share codes; add symbol-selectable multi-asset price charts with matching order markers and correct per-symbol holding valuation.
 - Route Research Jupyter container start, readiness, logs, stop and removal
   through the authenticated restricted runner so API and Celery containers no

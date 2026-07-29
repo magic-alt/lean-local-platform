@@ -149,7 +149,7 @@ function AppShell() {
               <Route path="/optimization" element={<OptimizationPage />} />
               <Route path="/paper" element={<PaperAccountsPage />} />
               <Route path="/paper/accounts/:id" element={<PaperAccountDetailPage />} />
-              <Route path="/research" element={<ResearchPage />} />
+              <Route path="/research/*" element={<ResearchPage />} />
               <Route path="/docs" element={<Navigate to="/docs/index" replace />} />
               <Route path="/docs/:slug" element={<DocsPage />} />
               <Route path="/ashare-research" element={<Navigate to="/research" replace />} />

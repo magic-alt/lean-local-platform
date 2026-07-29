@@ -38,6 +38,11 @@ import type {
   BacktestCompareResult,
   OptimizationRun,
   ResearchSession,
+  ResearchRun,
+  ResearchTemplate,
+  ResearchWorkspace,
+  DataScope,
+  DataScopeResolution,
   ResearchCheckResult,
   ReportRecord,
   ObjectStoreItem,
@@ -475,19 +480,47 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  researchSessions: () => request<ResearchSession[]>("/api/research?paged=false&limit=1000"),
-  startResearch: (payload: { projectId: string; port?: number }) =>
-    request<ResearchSession>("/api/research", {
+  researchTemplates: () => request<{ items: ResearchTemplate[]; count: number }>("/api/research/templates"),
+  researchRuns: () => request<ResearchRun[]>("/api/research/runs?paged=false&limit=1000"),
+  researchRun: (id: string) => request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}`),
+  previewResearchRun: (payload: { template: string; name?: string; scope: DataScope; parameters: Record<string, unknown> }) =>
+    request<DataScopeResolution>(`/api/research/runs/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  createResearchRun: (payload: { template: string; name?: string; scope: DataScope; parameters: Record<string, unknown> }) =>
+    request<ResearchRun>("/api/research/runs", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  deleteResearchRun: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/research/runs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  retryResearchRun: (id: string) =>
+    request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+  cancelResearchRun: (id: string) =>
+    request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  researchRunExportUrl: (id: string) => `/api/research/runs/${encodeURIComponent(id)}/export.csv`,
+  researchBacktestDraft: (id: string) =>
+    request<{ sourceResearchRunId: string; dataScope: DataScope }>(`/api/research/runs/${encodeURIComponent(id)}/backtest-draft`),
+  resolveDataScope: (scope: DataScope) =>
+    request<DataScopeResolution>("/api/data/resolve", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope)
+    }),
+  researchSessions: () => request<ResearchWorkspace[]>("/api/research/workspaces?paged=false&limit=1000"),
+  createResearchSnapshot: (scope: DataScope) =>
+    request<{ snapshotId: string; dataFingerprint: string; count: number }>("/api/research/workspaces/snapshots", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope })
+    }),
+  startResearch: (payload: { projectId: string; port?: number; snapshotId?: string }) =>
+    request<ResearchWorkspace>("/api/research/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
   stopResearch: (id: string) =>
-    request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/stop`, { method: "POST" }),
+    request<ResearchWorkspace>(`/api/research/workspaces/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   restartResearch: (id: string) =>
-    request<ResearchSession>(`/api/research/${encodeURIComponent(id)}/restart`, { method: "POST" }),
+    request<ResearchWorkspace>(`/api/research/workspaces/${encodeURIComponent(id)}/restart`, { method: "POST" }),
   researchLogs: (id: string) =>
-    request<{ logs: string; sessionId: string }>(`/api/research/${encodeURIComponent(id)}/logs`),
+    request<{ logs: string; workspaceId: string }>(`/api/research/workspaces/${encodeURIComponent(id)}/logs`),
   runResearchChecks: (id: string, payload: { symbols?: string[]; startDate?: string; endDate?: string } = {}) =>
     request<ResearchCheckResult>(`/api/research/${encodeURIComponent(id)}/checks`, {
       method: "POST",
@@ -496,7 +529,7 @@ export const api = {
     }),
   deleteResearch: (id: string, purgeWorkspace = false) =>
     request<{ deleted: boolean; id: string; workspacePurged: boolean }>(
-      `/api/research/${encodeURIComponent(id)}?purgeWorkspace=${purgeWorkspace ? "true" : "false"}`,
+      `/api/research/workspaces/${encodeURIComponent(id)}?purgeWorkspace=${purgeWorkspace ? "true" : "false"}`,
       { method: "DELETE" }
     ),
   reports: () => request<ReportRecord[]>("/api/reports?paged=false&limit=1000"),

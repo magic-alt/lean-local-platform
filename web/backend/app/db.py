@@ -1467,6 +1467,61 @@ def init_db() -> None:
                 finished_at text
             );
 
+            create table if not exists research_workspaces (
+                id text primary key,
+                task_id text,
+                project_id text,
+                status text not null,
+                port integer not null,
+                container_id text,
+                url text,
+                log_path text,
+                error text,
+                created_at text not null,
+                started_at text,
+                finished_at text,
+                readiness_status text,
+                container_status text,
+                workspace_path text,
+                last_checked_at text,
+                project_name text,
+                snapshot_id text
+            );
+
+            create table if not exists research_runs (
+                id text primary key,
+                task_id text,
+                template_key text not null,
+                name text not null,
+                status text not null,
+                scope_json text not null,
+                parameters_json text not null,
+                result_json text,
+                summary_json text,
+                data_fingerprint text,
+                source_research_run_id text,
+                error text,
+                cancel_requested integer not null default 0,
+                created_at text not null,
+                started_at text,
+                finished_at text
+            );
+
+            create table if not exists research_run_items (
+                id text primary key,
+                run_id text not null,
+                item_index integer not null,
+                item_key text not null,
+                status text not null,
+                parameters_json text not null,
+                result_json text,
+                error text,
+                created_at text not null,
+                started_at text,
+                finished_at text,
+                unique(run_id, item_key)
+            );
+
             create table if not exists reports (
                 id text primary key,
                 task_id text,

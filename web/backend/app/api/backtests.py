@@ -9,6 +9,7 @@ from .common import dispatch_task, paged_items
 from ..core.config import DEFAULT_DOCKER_IMAGE
 from ..core.errors import NotFoundError
 from ..lean_engine.results import extract_chart_data, infer_holdings_from_orders
+from ..domain.data_scope import DataScope
 from ..repositories.backtest_repository import get_backtest
 from ..services.backtest_service import (
     backtest_status,
@@ -34,6 +35,7 @@ from ..services.security_identity import (
 from ..services.projects import get_project
 from ..services.strategy_admission import admission_for_run
 from ..services.tasks import log_window, task_log_window
+from ..services import data_gateway
 from ..tasks.worker import run_backtest_task
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -57,6 +59,44 @@ class BacktestRequest(BaseModel):
     dockerImage: str = DEFAULT_DOCKER_IMAGE
     projectId: str
     parameters: dict[str, Any] = Field(default_factory=dict)
+    dataScope: DataScope | None = None
+    sourceResearchRunId: str | None = None
+
+
+def _shared_scope_payload(request: BacktestRequest) -> dict[str, Any]:
+    payload = request.model_dump()
+    payload["extra"] = request.model_extra or {}
+    if request.dataScope is None:
+        return payload
+    resolved = data_gateway.resolve(request.dataScope)
+    scope = resolved["scope"]
+    asset = scope["asset"]
+    time = scope["time"]
+    values = scope["selection"]["values"]
+    if values:
+        payload["symbol"] = values[0]
+    payload.update(
+        {
+            "assetClass": asset["assetClass"],
+            "market": asset["market"],
+            "venue": asset["venue"],
+            "resolution": asset["resolution"],
+            "dataType": asset["dataType"],
+            "start": time.get("startDate") or payload["start"],
+            "end": time.get("endDate") or payload["end"],
+        }
+    )
+    payload["parameters"] = {
+        **payload.get("parameters", {}),
+        "source": resolved["source"],
+        "adjust": scope["price"]["adjust"],
+        "allowResearchSource": scope["provider"]["allowResearchSource"],
+        "dataScope": scope,
+        "scopeHash": resolved["scopeHash"],
+        "dataFingerprint": resolved["dataFingerprint"],
+        "sourceResearchRunId": request.sourceResearchRunId,
+    }
+    return payload
 
 
 def _with_artifacts(run: dict[str, Any]) -> dict[str, Any]:
@@ -92,8 +132,7 @@ def backtests(
 @router.post("")
 def create_backtest(request: BacktestRequest):
     get_project(request.projectId)
-    payload = request.model_dump()
-    payload["extra"] = request.model_extra or {}
+    payload = _shared_scope_payload(request)
     try:
         run = create_backtest_job(payload)
     except Exception as exc:
@@ -112,8 +151,7 @@ def create_backtest(request: BacktestRequest):
 @router.post("/preflight")
 def preflight_backtest(request: BacktestRequest):
     get_project(request.projectId)
-    payload = request.model_dump()
-    payload["extra"] = request.model_extra or {}
+    payload = _shared_scope_payload(request)
     try:
         payload = enrich_strategy_backtest_request(payload)
         return prepare_backtest_request(payload, repair=True)["preflight"]

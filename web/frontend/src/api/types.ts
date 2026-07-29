@@ -861,6 +861,89 @@ export interface ResearchSession {
   created_at: string;
 }
 
+export interface DataScope {
+  asset: {
+    assetClass: string;
+    market: string;
+    venue?: string | null;
+    resolution: string;
+    dataType: string;
+  };
+  selection: {
+    type: "symbols" | "universe" | "products" | "all";
+    values: string[];
+  };
+  time: {
+    startDate?: string | null;
+    endDate?: string | null;
+    asOfDate?: string | null;
+  };
+  price: { adjust: string };
+  provider: {
+    source: string;
+    mode: "strict" | "fallback";
+    allowResearchSource: boolean;
+  };
+}
+
+export interface DataScopeResolution {
+  scope: DataScope;
+  scopeHash: string;
+  dataFingerprint: string;
+  source: string;
+  ready: boolean;
+  coverage: { rows?: number; symbols?: number; first_date?: string | null; last_date?: string | null };
+  certification?: Record<string, unknown> | null;
+  sourceAttempts: Array<{ source: string; rows: number }>;
+  blocking?: string[];
+}
+
+export interface ResearchTemplate {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  parameterSchema: Record<string, unknown>;
+}
+
+export interface ResearchResultTable {
+  name: string;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  truncated?: boolean;
+}
+
+export interface ResearchRun {
+  id: string;
+  task_id?: string | null;
+  template_key: string;
+  name: string;
+  status: string;
+  scope: DataScope;
+  parameters: Record<string, unknown>;
+  result?: {
+    schemaVersion: string;
+    template: string;
+    scopeHash: string;
+    dataFingerprint: string;
+    source: string;
+    summary: Record<string, unknown>;
+    charts: Array<Record<string, unknown>>;
+    tables: ResearchResultTable[];
+    warnings: string[];
+  } | null;
+  summary?: Record<string, unknown> | null;
+  data_fingerprint?: string | null;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ResearchWorkspace extends ResearchSession {
+  snapshot_id?: string | null;
+}
+
 export interface ResearchCheckResult {
   sessionId: string;
   projectId: string;

@@ -155,7 +155,6 @@ def fee_schedule(exchange: str, product: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/continuous-contracts")
 def build_continuous_contract(request: FuturesContinuousRequest):
     try:
         return futures.build_continuous_contract(
@@ -171,7 +170,6 @@ def build_continuous_contract(request: FuturesContinuousRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/continuous-contracts/{build_id}")
 def continuous_contract(build_id: str):
     try:
         return futures.continuous_contract(build_id)
@@ -181,7 +179,6 @@ def continuous_contract(build_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/main/{product}")
 def main_contract(product: str, date: str, exchange: str | None = None):
     try:
         item = futures.main_contract(product, date, exchange)
@@ -194,7 +191,6 @@ def main_contract(product: str, date: str, exchange: str | None = None):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/agri-main")
 def agri_main(date: str, products: str | None = None):
     try:
         product_list = [item.strip().upper() for item in products.split(",") if item.strip()] if products else None
