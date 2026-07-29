@@ -119,6 +119,8 @@ def backtest_draft(run_id: str):
         return research_runs.backtest_draft(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/export.csv")

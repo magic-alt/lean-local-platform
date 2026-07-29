@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from .common import paged_items
 from ..core.errors import LeanWebError, NotFoundError
 from ..services import experiment_batches
+from ..services import data_gateway, research_runs
 from ..services.history_resources import delete_experiment_batch
+from ..services.workflow_lineage import record_edge
 from ..tasks.worker import dispatch_experiment_batch_task
 
 
@@ -30,6 +32,31 @@ def _payload(request: ExperimentBatchRequest) -> dict[str, Any]:
     payload.update(request.model_extra or {})
     if str(payload.get("kind") or "").lower() == "research":
         raise LeanWebError("research_batches_retired: use /api/research/runs")
+    if str(payload.get("kind") or "").lower() == "optimization":
+        raise LeanWebError("optimization_batches_moved: use /api/optimizations")
+    source_research_id = str(payload.get("sourceResearchRunId") or "").strip()
+    if source_research_id:
+        if str(payload.get("kind") or "backtest") != "backtest":
+            raise LeanWebError("Research handoff is only valid for backtest batches.")
+        if not payload.get("dataScope"):
+            raise LeanWebError("Research handoff requires dataScope.")
+        source = research_runs.get_run(source_research_id)
+        if source["status"] != "success":
+            raise LeanWebError("Only successful research can seed a backtest batch.")
+        resolved = data_gateway.resolve(payload["dataScope"])
+        if data_gateway.scope_hash(source["scope"]) != resolved["scopeHash"]:
+            raise LeanWebError("The batch dataScope does not match the source research run.")
+        if source.get("data_fingerprint") and source["data_fingerprint"] != resolved["dataFingerprint"]:
+            raise LeanWebError("Research data has changed; rerun research before creating the batch.")
+        payload["scopeHash"] = resolved["scopeHash"]
+        payload["dataFingerprint"] = resolved["dataFingerprint"]
+        payload["parameters"] = {
+            **dict(payload.get("parameters") or {}),
+            "dataScope": resolved["scope"],
+            "scopeHash": resolved["scopeHash"],
+            "dataFingerprint": resolved["dataFingerprint"],
+            "sourceResearchRunId": source_research_id,
+        }
     return payload
 
 
@@ -62,10 +89,24 @@ def compare(request: ExperimentBatchCompareRequest):
 @router.post("")
 def create(request: ExperimentBatchRequest):
     try:
-        batch = experiment_batches.create_batch(_payload(request))
+        payload = _payload(request)
+        batch = experiment_batches.create_batch(payload)
+        if payload.get("sourceResearchRunId"):
+            record_edge(
+                parent_type="research_run",
+                parent_id=str(payload["sourceResearchRunId"]),
+                child_type="experiment_batch",
+                child_id=batch["id"],
+                relation="validated_by",
+                contract=payload.get("dataScope"),
+                details={
+                    "scopeHash": payload.get("scopeHash"),
+                    "dataFingerprint": payload.get("dataFingerprint"),
+                },
+            )
         dispatch_experiment_batch_task.apply_async(args=[batch["id"]], queue="default")
         return experiment_batches.detail(batch["id"])
-    except LeanWebError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from ..core.config import DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
 from ..db import DatabaseUnavailableError, database_backend, db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
-from ..lean_engine.ids import new_run_id
 from ..lean_engine.reports import render_report
 from ..lean_engine.research import run_detached_research
 from ..lean_engine.results import extract_statistics
@@ -32,7 +31,6 @@ from ..services.experiments import record_experiment_versions
 from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache, ensure_lean_results_analyzer_reference_data
-from ..services.optimization import best_candidate, candidate_suffix, parameter_combinations
 from ..services.run_fingerprint import build_run_fingerprint
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
@@ -1330,190 +1328,6 @@ def run_backtest_task(self, task_id: str, run_id: str):
             reconcile_backtest(run_id)
         except Exception:
             logger.exception("Unable to reconcile experiment batch for backtest %s", run_id)
-
-
-@celery_app.task(name="lean_web.optimize")
-def optimize_task(task_id: str, optimization_id: str):
-    task = get_task(task_id)
-    parameters = task["parameters"]
-    project = _task_project(task)
-    if not project:
-        raise LeanPlatformError("Optimization requires a project.")
-
-    update_task(task_id, status="running", started_at=utc_now(), error=None)
-    _update_table("optimization_runs", optimization_id, status="running", started_at=utc_now(), error=None)
-    results = []
-    try:
-        parameter_grid = parameters.get("parameterGrid") or {}
-        base_parameters = {key: value for key, value in parameters.items() if key not in {"parameterGrid", "parameterSchema", "baseParameters", "maxCandidates"}}
-        candidates = parameter_combinations(base_parameters, parameter_grid)
-        grid_keys = list(parameter_grid)
-        append_log(task_id, f"Optimization expanded to {len(candidates)} candidate(s): {', '.join(grid_keys)}")
-        strategy_path = Path(project["project_path"]) / project["main_file"]
-        runner = LeanRunner(timeout_seconds=int(get_settings().get("jobTimeoutSeconds") or 7200))
-        for index, child_params in enumerate(candidates, start=1):
-            overrides = {key: child_params.get(key) for key in grid_keys}
-            child_params = {
-                **child_params,
-                "optimizationId": optimization_id,
-                "optimizationCandidateIndex": index,
-                "optimizationOverrides": overrides,
-            }
-            run_id = (
-                new_run_id(child_params["ticker"], child_params["start"], child_params["end"])
-                + "-"
-                + candidate_suffix(index, overrides)
-            )
-            run_dir = RUNS_DIR / run_id
-            now = utc_now()
-            with db() as connection:
-                connection.execute(
-                    """
-                    insert into backtest_runs
-                        (id, task_id, project_id, symbol, asset_class, venue, resolution, data_type,
-                         parameters_json, status, docker_image, name, work_dir, results_dir, created_at, queued_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        task_id,
-                        task.get("project_id"),
-                        child_params["ticker"],
-                        child_params.get("assetClass", "equity"),
-                        child_params.get("venue") or child_params.get("market"),
-                        child_params.get("resolution", "daily"),
-                        child_params.get("dataType", "trade"),
-                        json_dump(child_params),
-                        "queued",
-                        child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                        f"Optimization {optimization_id} candidate {index}",
-                        str(run_dir),
-                        str(run_dir / "results"),
-                        now,
-                        now,
-                    ),
-                )
-            append_log(task_id, f"Running candidate {index}/{len(candidates)} {overrides}")
-            update_backtest(run_id, status="running", started_at=utc_now(), work_dir=str(run_dir), results_dir=str(run_dir / "results"))
-            output = runner.run_backtest(
-                run_id,
-                child_params,
-                run_dir=run_dir,
-                output_callback=lambda line: append_log(task_id, line),
-                docker_image=child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                algorithm_path=strategy_path,
-                algorithm_class=project["algorithm_class"],
-                language=project["language"],
-                project_dir=Path(project["project_path"]),
-            )
-            raw_success = bool(output["exit_code"] == 0 and output["result_json_path"] and not output.get("timed_out"))
-            finished_at = utc_now()
-            fingerprint = build_run_fingerprint(
-                run_id=run_id,
-                parameters=child_params,
-                docker_image=child_params.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-                lean_cache={},
-                strategy_path=strategy_path,
-                config_path=run_dir / "config.json",
-            )
-            validation = build_backtest_validation(child_params, fingerprint)
-            execution_validation = (
-                audit_backtest_execution(Path(output["result_json_path"]), child_params, validation)
-                if raw_success
-                else None
-            )
-            if execution_validation is not None:
-                validation = merge_execution_validation(validation, execution_validation)
-            status = "success" if raw_success and execution_validation and execution_validation.get("passed") else "failed"
-            error = (
-                None
-                if status == "success"
-                else execution_failure_message(execution_validation or {})
-                or output.get("error")
-                or "Optimization candidate failed or did not produce result JSON."
-            )
-            experiment = build_experiment_record(
-                run_id=run_id,
-                parameters=child_params,
-                fingerprint=fingerprint,
-                project_id=task.get("project_id"),
-                strategy_path=str(strategy_path),
-                validation=validation,
-            )
-            # Optimization candidates follow the same readiness contract as
-            # regular backtests: success implies a queryable result ledger.
-            update_backtest(
-                run_id,
-                status="running",
-                result_json_path=output["result_json_path"],
-                summary_json_path=output["summary_json_path"],
-                report_html_path=output["report_html_path"],
-                statistics_json=output["statistics"],
-                exit_code=output["exit_code"],
-                error=error,
-                error_message=error,
-                container_name=output.get("container_name"),
-                work_dir=output.get("work_dir"),
-                results_dir=output.get("results_dir"),
-                fingerprint_json=fingerprint,
-                validation_json=validation,
-                experiment_json=experiment,
-            )
-            record_experiment_versions(
-                run_id=run_id,
-                project_id=task.get("project_id"),
-                fingerprint=fingerprint,
-                validation=validation,
-                experiment=experiment,
-            )
-            if raw_success and output["result_json_path"]:
-                persist_result(
-                    run_id,
-                    Path(output["result_json_path"]),
-                    Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
-                    get_backtest(run_id) or {},
-                )
-            update_backtest(run_id, status=status, finished_at=finished_at)
-            candidate_result = {
-                "runId": run_id,
-                "index": index,
-                "status": status,
-                "parameters": child_params,
-                "overrides": overrides,
-                "statistics": output["statistics"],
-                "resultJson": output["result_json_path"],
-                "summaryJson": output.get("summary_json_path"),
-                "reportHtml": output.get("report_html_path"),
-                "stdoutLog": output.get("stdout_log_path"),
-                "exitCode": output["exit_code"],
-                "error": error,
-            }
-            results.append(candidate_result)
-            if candidate_result["status"] != "success":
-                raise LeanPlatformError(f"Candidate {index} {overrides} failed: {error}")
-        best = best_candidate(results)
-        _update_table(
-            "optimization_runs",
-            optimization_id,
-            status="success",
-            result_json={
-                "parameterGrid": parameter_grid,
-                "parameterSchema": parameters.get("parameterSchema") or [],
-                "candidateCount": len(results),
-                "best": best,
-                "candidates": results,
-            },
-            finished_at=utc_now(),
-        )
-        update_task(task_id, status="success", artifacts_json=[], finished_at=utc_now())
-        _record_task_metric("optimization", "success")
-        return {"status": "success", "optimization_id": optimization_id}
-    except Exception as exc:
-        append_log(task_id, f"error: {exc}")
-        _update_table("optimization_runs", optimization_id, status="failed", error=str(exc), finished_at=utc_now())
-        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
-        _record_task_metric("optimization", "failed")
-        raise
 
 
 @celery_app.task(name="lean_web.start_research")

@@ -247,8 +247,49 @@ def test_compare_api_and_report_exports_use_parsed_backtest_results(tmp_path, mo
     assert 'filename="backtest-report-run-a.pdf"' in pdf.headers["content-disposition"]
 
 
-def test_optimization_worker_persists_child_backtest_runs(tmp_path, monkeypatch):
+def test_unified_optimization_expands_into_experiment_batch_items(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
+
+    import app.services.experiment_batches as batches_module
+    import app.services.projects as projects_module
+    from app.services.projects import create_project
+
+    monkeypatch.setattr(projects_module, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(batches_module, "RUNS_DIR", tmp_path / "runs")
+    project = create_project("Optimization Unit", template_key="ema_cross")
+    batch = batches_module.create_batch(
+        {
+            "kind": "optimization",
+            "name": "Unified Optimization",
+            "mode": "single_symbol_grid",
+            "projectIds": [project["id"]],
+            "symbols": ["SPY"],
+            "assetClass": "equity",
+            "market": "usa",
+            "venue": "usa",
+            "resolution": "daily",
+            "dataType": "trade",
+            "start": "2020-01-01",
+            "end": "2020-12-31",
+            "cash": 100000,
+            "dockerImage": "lean:test",
+            "parameterGrids": {project["id"]: {"fast": [5, 10]}},
+            "objective": "sharpe",
+        }
+    )
+    assert batch["kind"] == "optimization"
+    assert batch["total"] == 2
+    assert {item["status"] for item in batch["items"]} == {"pending"}
+    assert {
+        item["parameters"]["parameters"]["optimizationOverrides"]["fast"]
+        for item in batch["items"]
+    } == {5, 10}
+    with db_module.db() as connection:
+        assert connection.execute(
+            "select count(*) as count from experiment_batch_items where batch_id=?",
+            (batch["id"],),
+        ).fetchone()["count"] == 2
+    return
 
     import json
     import app.services.projects as projects_module

@@ -1,23 +1,53 @@
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import math
+import uuid
 from datetime import datetime
 from typing import Any
 
-from ..db import db, row_to_dict
+from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .strategy_admission import parameters_sha256
+from .workflow_lineage import record_edge
+
+
+MIN_ALIGNED_POINTS = 60
 
 
 def _date_key(value: Any) -> str:
     return str(value or "")[:10]
 
 
-def _load_nav(run_id: str) -> tuple[dict[str, Any], dict[str, float]]:
+def _account_currency(parameters: dict[str, Any]) -> str:
+    explicit = str(parameters.get("accountCurrency") or parameters.get("account_currency") or "").upper()
+    if explicit:
+        return explicit
+    market = str(parameters.get("market") or parameters.get("venue") or "usa").lower()
+    return "CNY" if market == "china" else "HKD" if market == "hongkong" else "USD"
+
+
+def _fingerprint(item: dict[str, Any]) -> str:
+    value = item.get("fingerprint") or {
+        "id": item["id"],
+        "parameters": item.get("parameters"),
+        "finishedAt": item.get("finished_at"),
+    }
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _load_nav(
+    run_id: str,
+    *,
+    require_admission: bool = True,
+) -> tuple[dict[str, Any], dict[str, float]]:
     with db() as connection:
         row = connection.execute(
             """
-            select br.id, br.project_id, br.status, br.parameters_json, result.equity_curve_json
+            select br.*, result.equity_curve_json
             from backtest_runs br
             left join backtest_results result on result.job_id = br.id
             where br.id = ?
@@ -27,19 +57,21 @@ def _load_nav(run_id: str) -> tuple[dict[str, Any], dict[str, float]]:
     item = row_to_dict(row)
     if not item:
         raise KeyError(f"Backtest run not found: {run_id}")
-    if item.get("status") not in {"success", "succeeded"}:
+    if item.get("status") != "success":
         raise ValueError(f"Backtest run {run_id} is not successful.")
     parameter_hash = parameters_sha256(item.get("parameters") or {})
     with db() as connection:
         admission = connection.execute(
             """
             select id from strategy_admissions
-            where strategy_id = ? and parameters_sha256 = ? and current_stage in ('admission_passed', 'paper_validated')
+            where strategy_id = ? and parameters_sha256 = ?
+              and current_stage in ('admission_passed', 'paper_validated')
             order by updated_at desc limit 1
             """,
             (item.get("project_id"), parameter_hash),
         ).fetchone()
-    if not admission:
+    item["admissionEligible"] = bool(admission)
+    if require_admission and not admission:
         raise ValueError(f"Backtest run {run_id} has not passed strategy admission.")
     curve: dict[str, float] = {}
     for point in item.get("equity_curve") or []:
@@ -52,7 +84,45 @@ def _load_nav(run_id: str) -> tuple[dict[str, Any], dict[str, float]]:
             curve[date] = value
     if len(curve) < 3:
         raise ValueError(f"Backtest run {run_id} has insufficient NAV history.")
+    parameters = item.get("parameters") or {}
+    item["accountCurrency"] = _account_currency(parameters)
+    item["effectiveResolution"] = str(parameters.get("resolution") or item.get("resolution") or "daily").lower()
+    item["inputFingerprint"] = _fingerprint(item)
     return item, curve
+
+
+def list_candidates(limit: int = 500) -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select id from backtest_runs
+            where status='success'
+            order by finished_at desc,created_at desc
+            limit ?
+            """,
+            (min(max(limit, 1), 500),),
+        ).fetchall()
+    candidates = []
+    for row in rows:
+        try:
+            item, curve = _load_nav(str(row["id"]), require_admission=False)
+        except (KeyError, ValueError):
+            continue
+        candidates.append(
+            {
+                "id": item["id"],
+                "name": item.get("name"),
+                "projectId": item.get("project_id"),
+                "symbol": item.get("symbol"),
+                "currency": item["accountCurrency"],
+                "resolution": item["effectiveResolution"],
+                "points": len(curve),
+                "admissionEligible": item["admissionEligible"],
+                "finishedAt": item.get("finished_at"),
+                "inputFingerprint": item["inputFingerprint"],
+            }
+        )
+    return candidates
 
 
 def _returns(curve: dict[str, float], dates: list[str]) -> list[float]:
@@ -100,6 +170,69 @@ def _weight_grid(count: int, step: float, max_weight: float) -> list[tuple[float
     return candidates
 
 
+def _inputs(
+    run_ids: list[str],
+    *,
+    step: float,
+    max_weight: float,
+    allow_short: bool,
+) -> tuple[list[tuple[dict[str, Any], dict[str, float]]], list[str], list[tuple[float, ...]]]:
+    if allow_short:
+        raise ValueError("Short portfolio weights are not enabled in the trusted research profile.")
+    if not 2 <= len(run_ids) <= 5:
+        raise ValueError("Portfolio optimization requires between 2 and 5 runIds.")
+    if len(run_ids) != len(set(run_ids)):
+        raise ValueError("runIds must be unique.")
+    if not 0 < step <= 0.5:
+        raise ValueError("step must be greater than 0 and no more than 0.5.")
+    if not 0 < max_weight <= 1:
+        raise ValueError("maxWeight must be in (0, 1].")
+    loaded = [_load_nav(run_id) for run_id in run_ids]
+    currencies = {item["accountCurrency"] for item, _ in loaded}
+    if len(currencies) != 1:
+        raise ValueError("Mixed account currencies require an explicit FX normalization contract.")
+    resolutions = {item["effectiveResolution"] for item, _ in loaded}
+    if len(resolutions) != 1:
+        raise ValueError("Portfolio inputs must use the same data resolution.")
+    common_dates = sorted(set.intersection(*(set(curve) for _, curve in loaded)))
+    if len(common_dates) < MIN_ALIGNED_POINTS:
+        raise ValueError(
+            f"Portfolio inputs require at least {MIN_ALIGNED_POINTS} aligned NAV points; "
+            f"only {len(common_dates)} are available."
+        )
+    return loaded, common_dates, _weight_grid(len(run_ids), step, max_weight)
+
+
+def preview_portfolio(
+    run_ids: list[str],
+    *,
+    objective: str = "sharpe",
+    step: float = 0.1,
+    max_weight: float = 1.0,
+    allow_short: bool = False,
+) -> dict[str, Any]:
+    if objective not in {"sharpe", "return", "drawdown"}:
+        raise ValueError("objective must be sharpe, return, or drawdown.")
+    loaded, common_dates, grid = _inputs(
+        run_ids,
+        step=step,
+        max_weight=max_weight,
+        allow_short=allow_short,
+    )
+    return {
+        "runIds": run_ids,
+        "objective": objective,
+        "baseCurrency": loaded[0][0]["accountCurrency"],
+        "resolution": loaded[0][0]["effectiveResolution"],
+        "alignedStart": common_dates[0],
+        "alignedEnd": common_dates[-1],
+        "alignedPoints": len(common_dates),
+        "candidateCount": len(grid),
+        "inputFingerprints": {item["id"]: item["inputFingerprint"] for item, _ in loaded},
+        "warnings": [],
+    }
+
+
 def optimize_portfolio(
     run_ids: list[str],
     *,
@@ -108,31 +241,34 @@ def optimize_portfolio(
     max_weight: float = 1.0,
     allow_short: bool = False,
 ) -> dict[str, Any]:
-    if allow_short:
-        raise ValueError("Short portfolio weights are not enabled in the trusted research profile.")
-    if not 2 <= len(run_ids) <= 5:
-        raise ValueError("Portfolio optimization requires between 2 and 5 runIds.")
-    if len(run_ids) != len(set(run_ids)):
-        raise ValueError("runIds must be unique.")
-    if objective not in {"sharpe", "return", "drawdown"}:
-        raise ValueError("objective must be sharpe, return, or drawdown.")
-    if not 0 < step <= 0.5:
-        raise ValueError("step must be greater than 0 and no more than 0.5.")
-    if not 0 < max_weight <= 1:
-        raise ValueError("maxWeight must be in (0, 1].")
-    loaded = [_load_nav(run_id) for run_id in run_ids]
-    common_dates = sorted(set.intersection(*(set(curve) for _, curve in loaded)))
-    if len(common_dates) < 3:
-        raise ValueError("runIds have fewer than three aligned NAV dates.")
+    report = preview_portfolio(
+        run_ids,
+        objective=objective,
+        step=step,
+        max_weight=max_weight,
+        allow_short=allow_short,
+    )
+    loaded, common_dates, grid = _inputs(
+        run_ids,
+        step=step,
+        max_weight=max_weight,
+        allow_short=allow_short,
+    )
     return_series = [_returns(curve, common_dates) for _, curve in loaded]
     candidates = []
-    for weights in _weight_grid(len(run_ids), step, max_weight):
+    for weights in grid:
         combined = [
             sum(weights[index] * series[offset] for index, series in enumerate(return_series))
             for offset in range(len(common_dates) - 1)
         ]
         metrics = _metrics(combined)
-        score = metrics["sharpe"] if objective == "sharpe" else metrics["annualReturn"] if objective == "return" else -metrics["maxDrawdown"]
+        score = (
+            metrics["sharpe"]
+            if objective == "sharpe"
+            else metrics["annualReturn"]
+            if objective == "return"
+            else -metrics["maxDrawdown"]
+        )
         candidates.append((score, weights, metrics, combined))
     _, best_weights, best_metrics, best_returns = max(candidates, key=lambda item: item[0])
     nav = 1.0
@@ -141,16 +277,129 @@ def optimize_portfolio(
         nav *= 1.0 + value
         curve.append({"time": date, "value": nav})
     return {
-        "schemaVersion": 1,
-        "objective": objective,
-        "runIds": run_ids,
+        "schemaVersion": 2,
+        **report,
         "weights": {run_id: best_weights[index] for index, run_id in enumerate(run_ids)},
         "metrics": best_metrics,
-        "alignedStart": common_dates[0],
-        "alignedEnd": common_dates[-1],
-        "alignedPoints": len(common_dates),
-        "candidateCount": len(candidates),
         "equityCurve": curve,
         "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
 
+
+def create_run(
+    *,
+    name: str,
+    run_ids: list[str],
+    objective: str,
+    step: float,
+    max_weight: float,
+    allow_short: bool,
+) -> dict[str, Any]:
+    run_id = str(uuid.uuid4())
+    constraints = {"step": step, "maxWeight": max_weight, "allowShort": allow_short}
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into portfolio_optimization_runs
+                (id,name,status,objective,run_ids_json,constraints_json,
+                 input_fingerprints_json,created_at,started_at)
+            values (?,?, 'running', ?,?,?,?, ?,?)
+            """,
+            (run_id, name, objective, json_dump(run_ids), json_dump(constraints), "{}", now, now),
+        )
+    try:
+        result = optimize_portfolio(
+            run_ids,
+            objective=objective,
+            step=step,
+            max_weight=max_weight,
+            allow_short=allow_short,
+        )
+        with db() as connection:
+            connection.execute(
+                """
+                update portfolio_optimization_runs
+                set status='success',input_fingerprints_json=?,result_json=?,
+                    base_currency=?,resolution=?,finished_at=?
+                where id=?
+                """,
+                (
+                    json_dump(result["inputFingerprints"]),
+                    json_dump(result),
+                    result["baseCurrency"],
+                    result["resolution"],
+                    utc_now(),
+                    run_id,
+                ),
+            )
+        for source_id in run_ids:
+            record_edge(
+                parent_type="backtest_run",
+                parent_id=source_id,
+                child_type="portfolio_optimization",
+                child_id=run_id,
+                relation="portfolio_input",
+                contract=result["inputFingerprints"].get(source_id),
+                details={"baseCurrency": result["baseCurrency"], "resolution": result["resolution"]},
+            )
+    except Exception as exc:
+        with db() as connection:
+            connection.execute(
+                """
+                update portfolio_optimization_runs
+                set status='failed',error=?,finished_at=?
+                where id=?
+                """,
+                (str(exc), utc_now(), run_id),
+            )
+        raise
+    return detail(run_id)
+
+
+def list_runs() -> list[dict[str, Any]]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select * from portfolio_optimization_runs
+            where archived_at is null
+            order by created_at desc
+            """
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def detail(run_id: str) -> dict[str, Any]:
+    with db() as connection:
+        row = connection.execute(
+            "select * from portfolio_optimization_runs where id=?",
+            (run_id,),
+        ).fetchone()
+    item = row_to_dict(row)
+    if item is None:
+        raise KeyError("Portfolio optimization run not found.")
+    return item
+
+
+def archive(run_id: str) -> dict[str, Any]:
+    detail(run_id)
+    with db() as connection:
+        connection.execute(
+            "update portfolio_optimization_runs set archived_at=? where id=?",
+            (utc_now(), run_id),
+        )
+    return {"archived": True, "id": run_id}
+
+
+def delete(run_id: str) -> dict[str, Any]:
+    detail(run_id)
+    with db() as connection:
+        connection.execute(
+            """
+            delete from workflow_lineage_edges
+            where child_type='portfolio_optimization' and child_id=?
+            """,
+            (run_id,),
+        )
+        connection.execute("delete from portfolio_optimization_runs where id=?", (run_id,))
+    return {"deleted": True, "id": run_id}

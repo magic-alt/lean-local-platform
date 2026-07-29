@@ -91,6 +91,7 @@ import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from 
 import { RunDetailPanelBoundary } from "../components/backtests/RunDetailPanelBoundary";
 import { ExampleGallery } from "../components/examples/ExampleGallery";
 import { BatchWorkbench } from "../components/experiments/BatchWorkbench";
+import { OptimizationCenter } from "../components/optimization/OptimizationCenter";
 import { candlestickOption } from "../charts/candlestick";
 import { LeanChart } from "../charts/LeanChart";
 import { defaultBarPreviewValues, defaultSettings } from "../config/defaults";
@@ -2352,7 +2353,7 @@ export function BacktestsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [preflight, setPreflight] = useState<BacktestPreflight>();
-  const [researchDraft, setResearchDraft] = useState<{ sourceResearchRunId: string; dataScope: DataScope }>();
+  const [researchDraft, setResearchDraft] = useState<{ sourceResearchRunId: string; dataScope: DataScope; target: "backtest" | "batch" }>();
   const [batchPreset, setBatchPreset] = useState<{
     example: WorkflowExample;
     project: Project;
@@ -2392,10 +2393,9 @@ export function BacktestsPage() {
       setResearchDraft(undefined);
       return;
     }
-    try {
-      const stored = window.sessionStorage.getItem("lean.backtest.researchDraft");
-      const draft = stored ? JSON.parse(stored) as { sourceResearchRunId: string; dataScope: DataScope } : undefined;
-      if (!draft || draft.sourceResearchRunId !== runId) return;
+    let active = true;
+    api.researchBacktestDraft(runId).then((draft) => {
+      if (!active) return;
       const scope = draft.dataScope;
       const nextAsset = scope.asset;
       const symbol = scope.selection.values[0];
@@ -2419,9 +2419,10 @@ export function BacktestsPage() {
         allowResearchSource: scope.provider.allowResearchSource
       });
       setPreflight(undefined);
-    } catch {
-      message.warning("Research handoff draft could not be restored.");
-    }
+    }).catch((error) => {
+      if (active) message.warning(`Research handoff could not be loaded: ${(error as Error).message}`);
+    });
+    return () => { active = false; };
   }, [form, searchParamsKey]);
 
   useEffect(() => {
@@ -2718,7 +2719,7 @@ export function BacktestsPage() {
         </Form>
       </Card>
                 ) : (
-                  <BatchWorkbench kind="backtest" projects={projects.data} preset={batchPreset} />
+                  <BatchWorkbench kind="backtest" projects={projects.data} preset={batchPreset} handoffDraft={researchDraft} />
                 )}
               </>
             )
@@ -3077,6 +3078,15 @@ export function RunDetailPage() {
             >
               Copy ID
             </Button>
+            {run.status === "success" && (
+              <Button
+                ghost
+                icon={<SlidersOutlined />}
+                onClick={() => navigate(`/optimization?sourceBacktestRunId=${encodeURIComponent(run.id)}`)}
+              >
+                Optimize
+              </Button>
+            )}
             {active && <Button danger onClick={cancelRun}>Cancel</Button>}
             <Button ghost loading={refreshing} onClick={refreshRun} icon={<ReloadOutlined />}>Refresh</Button>
           </Space>
@@ -3520,6 +3530,7 @@ export function RunDetailPage() {
 }
 
 export function OptimizationPage() {
+  return <OptimizationCenter />;
   const projects = useAsyncData(api.projects, []);
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
@@ -3577,13 +3588,14 @@ export function OptimizationPage() {
       .filter(Boolean);
     setPortfolioSubmitting(true);
     try {
-      setPortfolioResult(await api.optimizePortfolio({
+      setPortfolioResult((await api.optimizePortfolio({
+        name: "Legacy Portfolio Optimization",
         runIds,
         objective: values.objective,
         step: Number(values.step),
         maxWeight: Number(values.maxWeight),
         allowShort: false
-      }));
+      })).result || undefined);
       message.success("Portfolio weights optimized");
     } catch (error) {
       message.error((error as Error).message);
@@ -3706,19 +3718,19 @@ export function OptimizationPage() {
                         size="small"
                         pagination={false}
                         rowKey="runId"
-                        dataSource={Object.entries(portfolioResult.weights).map(([runId, weight]) => ({ runId, weight }))}
+                        dataSource={Object.entries(portfolioResult!.weights).map(([runId, weight]) => ({ runId, weight }))}
                         columns={[
                           { title: "Run ID", dataIndex: "runId" },
                           { title: "Weight", dataIndex: "weight", render: (value) => `${(Number(value) * 100).toFixed(1)}%` }
                         ]}
                       />
                     </Card>
-                    <Card title={`Metrics (${portfolioResult.candidateCount} candidates)`}>
+                    <Card title={`Metrics (${portfolioResult!.candidateCount} candidates)`}>
                       <Table
                         size="small"
                         pagination={false}
                         rowKey="metric"
-                        dataSource={Object.entries(portfolioResult.metrics).map(([metric, value]) => ({ metric, value }))}
+                        dataSource={Object.entries(portfolioResult!.metrics).map(([metric, value]) => ({ metric, value }))}
                         columns={[
                           { title: "Metric", dataIndex: "metric" },
                           { title: "Value", dataIndex: "value", render: (value) => shortValue(value) }

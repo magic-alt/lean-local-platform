@@ -134,9 +134,18 @@ def delete_run(run_id: str) -> None:
 
 def backtest_draft(run_id: str) -> dict[str, Any]:
     item = get_run(run_id)
+    if item["status"] != "success":
+        raise ValueError("Only a successful research run can create a backtest draft.")
+    resolved = data_gateway.resolve(item["scope"])
+    values = list((item["scope"].get("selection") or {}).get("values") or [])
+    selection_type = str((item["scope"].get("selection") or {}).get("type") or "symbols")
+    target = "backtest" if selection_type in {"symbols", "products"} and len(values) == 1 else "batch"
     return {
         "sourceResearchRunId": run_id,
         "dataScope": item["scope"],
+        "scopeHash": resolved["scopeHash"],
+        "dataFingerprint": item.get("data_fingerprint") or resolved["dataFingerprint"],
+        "target": target,
         "strategyRequired": True,
         "preflightRequired": True,
         "note": "Research data scope is preserved; order, fee, slippage and portfolio assumptions must be configured in Backtest.",

@@ -35,6 +35,7 @@
     "0031_paper_ledger_integrity": {"mode": "compensating", "action": "Drop uq_paper_account_ledger_sequence only after pausing Paper and checking duplicates."},
     "0032_api_idempotency_keys": {"mode": "compensating", "action": "Stop accepting idempotency keys, wait for in-flight writes, and drop api_idempotency_keys."},
     "0033_retire_legacy_paper_sessions": {"mode": "irreversible", "action": "Restore a verified pre-migration backup if retired legacy Paper evidence is required."},
-    "0034_unify_research_workflow": {"mode": "irreversible", "action": "Stop Research workloads and restore the verified pre-migration backup."}
+    "0034_unify_research_workflow": {"mode": "irreversible", "action": "Stop Research workloads and restore the verified pre-migration backup."},
+    "0035_unify_optimization_workflow": {"mode": "irreversible", "action": "Stop optimization workloads and restore the verified pre-migration backup."}
   }
 }

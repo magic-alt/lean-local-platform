@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from ..services.workflows import list_verifications, list_workflows, verification_detail, workflow_detail
+from ..services.workflow_lineage import graph
 
 router = APIRouter(prefix="/api", tags=["workflows"])
 
@@ -29,3 +30,8 @@ def verification(run_id: str):
         return verification_detail(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Verification run not found.") from exc
+
+
+@router.get("/lineage/{resource_type}/{resource_id}")
+def lineage(resource_type: str, resource_id: str):
+    return graph(resource_type, resource_id)

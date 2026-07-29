@@ -370,6 +370,8 @@ export interface ExperimentBatch {
     rankingMetric?: string;
     ranking?: Array<Record<string, any>>;
     candidates?: Array<Record<string, any>>;
+    bestCandidate?: Record<string, any> | null;
+    minCoverage?: number;
     parameterSensitivity?: ExperimentSensitivity[];
     walkForward?: Array<Record<string, any>>;
   } | null;
@@ -435,6 +437,8 @@ export interface ExperimentBatchPreview {
   kind: string;
   mode: string;
   expandedCount: number;
+  parameterCandidates?: number;
+  workUnits?: number;
   limit: number;
   withinLimit: boolean;
   effectiveConcurrency: number;
@@ -778,6 +782,40 @@ export interface PortfolioOptimizationResult {
   candidateCount: number;
   equityCurve: ChartPoint[];
   generatedAt: string;
+  baseCurrency: string;
+  resolution: string;
+  inputFingerprints: Record<string, string>;
+}
+
+export interface PortfolioOptimizationRun {
+  id: string;
+  name: string;
+  status: string;
+  objective: "sharpe" | "return" | "drawdown";
+  runIds: string[];
+  constraints: { step: number; maxWeight: number; allowShort: boolean };
+  inputFingerprints: Record<string, string>;
+  result?: PortfolioOptimizationResult | null;
+  base_currency?: string | null;
+  resolution?: string | null;
+  error?: string | null;
+  archived_at?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface PortfolioOptimizationCandidate {
+  id: string;
+  name?: string | null;
+  projectId?: string | null;
+  symbol?: string | null;
+  currency: string;
+  resolution: string;
+  points: number;
+  admissionEligible: boolean;
+  finishedAt?: string | null;
+  inputFingerprint: string;
 }
 
 export interface BacktestResult {
@@ -799,23 +837,53 @@ export interface BacktestResult {
   created_at: string;
 }
 
-export interface OptimizationRun {
-  id: string;
-  task_id?: string | null;
-  project_id: string;
-  status: string;
-  parameters: Record<string, unknown>;
+export interface OptimizationRun extends ExperimentBatch {
+  objective_metric?: "sharpe" | "return" | "drawdown" | null;
+  source_backtest_run_id?: string | null;
+  scope_hash?: string | null;
+  data_fingerprint?: string | null;
+  archived_at?: string | null;
+  /** Deprecated compatibility fields; new optimization runs use config/summary/items. */
+  project_id?: string;
+  parameters?: Record<string, unknown>;
   result?: {
     parameterGrid?: Record<string, unknown[]>;
     candidateCount?: number;
     best?: Record<string, unknown> | null;
     candidates?: Array<Record<string, unknown>>;
   } | null;
-  results_dir: string;
+  results_dir?: string;
   error?: string | null;
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
+}
+
+export interface OptimizationRequest {
+  name: string;
+  mode: "single_symbol_grid" | "universe_robust" | "walk_forward" | "multi_strategy";
+  projectIds: string[];
+  dataScope: DataScope;
+  execution: {
+    cash: number;
+    benchmarkSymbol?: string;
+    feeModel?: string;
+    slippageModel?: string;
+    dockerImage: string;
+  };
+  fixedParametersByProject: Record<string, Record<string, unknown>>;
+  parameterGrids: Record<string, Record<string, unknown>>;
+  objective: "sharpe" | "return" | "drawdown";
+  minCoverage: number;
+  maxCandidates: number;
+  walkForward?: { trainYears: number; testYears: number; stepYears: number; validationMonths?: number };
+  sourceBacktestRunId?: string;
+}
+
+export interface BacktestOptimizationDraft extends Partial<OptimizationRequest> {
+  sourceBacktestRunId: string;
+  projectIds: string[];
+  dataScope: DataScope;
+  parameterSchemas: Record<string, StrategyParameter[]>;
+  scopeHash: string;
+  dataFingerprint?: string | null;
 }
 
 export interface BacktestCompareItem {
@@ -831,7 +899,10 @@ export interface BacktestCompareItem {
   parameters: Record<string, unknown>;
   metrics: Record<string, number | string | boolean | null>;
   equityCurve?: ChartPoint[];
+  normalizedEquityCurve?: ChartPoint[];
   drawdownCurve?: ChartPoint[];
+  currency?: string;
+  resolution?: string;
   validation?: BacktestValidation | null;
   experiment?: BacktestExperiment | null;
   error?: string | null;
@@ -840,6 +911,13 @@ export interface BacktestCompareItem {
 export interface BacktestCompareResult {
   items: BacktestCompareItem[];
   rankings: Record<string, string[]>;
+  compatibility?: {
+    currencies: string[];
+    resolutions: string[];
+    rawNavComparable: boolean;
+    riskMetricComparable: boolean;
+    warnings: string[];
+  };
 }
 
 export interface ResearchSession {

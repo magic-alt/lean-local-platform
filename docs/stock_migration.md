@@ -50,7 +50,8 @@ POST /api/strategies/{strategyId}/admissions
 POST /api/strategies/{strategyId}/paper-validations
 GET  /api/strategies/{strategyId}/admission
 GET  /api/backtests/{runId}/admission
-POST /api/portfolios/optimize
+POST /api/portfolio-optimizations/preview
+POST /api/portfolio-optimizations
 ```
 
 Portfolio optimization deliberately rejects unadmitted runs and short weights.

@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **237** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **252** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -39,6 +39,7 @@
 | `POST` | `/api/backtests/{run_id}/cancel` | Cancel | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required)<br>`symbol` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
+| `GET` | `/api/backtests/{run_id}/optimization-draft` | Optimization Draft | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/result` | Result | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/screening` | Screening | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/status` | Status | `run_id` (path, required) | `200` - |
@@ -224,10 +225,17 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/optimize` | List Optimizations | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
-| `POST` | `/api/optimize` | Create Optimization | body `OptimizationRequest` | `200` - |
-| `DELETE` | `/api/optimize/{optimization_id}` | Delete | `optimization_id` (path, required) | `200` - |
-| `GET` | `/api/optimize/{optimization_id}` | Detail | `optimization_id` (path, required) | `200` - |
+| `GET` | `/api/optimizations` | List Optimizations | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
+| `POST` | `/api/optimizations` | Create Optimization | body `OptimizationRequest` | `200` - |
+| `POST` | `/api/optimizations/compare` | Compare | body `OptimizationCompareRequest` | `200` - |
+| `POST` | `/api/optimizations/preview` | Preview | body `OptimizationRequest` | `200` - |
+| `DELETE` | `/api/optimizations/{optimization_id}` | Delete | `optimization_id` (path, required) | `200` - |
+| `GET` | `/api/optimizations/{optimization_id}` | Detail | `optimization_id` (path, required) | `200` - |
+| `POST` | `/api/optimizations/{optimization_id}/archive` | Archive | `optimization_id` (path, required) | `200` - |
+| `POST` | `/api/optimizations/{optimization_id}/cancel` | Cancel | `optimization_id` (path, required) | `200` - |
+| `GET` | `/api/optimizations/{optimization_id}/export.csv` | Export | `optimization_id` (path, required) | `200` - |
+| `POST` | `/api/optimizations/{optimization_id}/restart` | Restart | `optimization_id` (path, required) | `200` - |
+| `POST` | `/api/optimizations/{optimization_id}/retry-failed` | Retry Failed | `optimization_id` (path, required) | `200` - |
 
 ## paper-accounts
 
@@ -278,11 +286,17 @@
 | `GET` | `/api/pit/index-members/{universe_code}/as-of/{as_of_date}/tushare` | Index Members Tushare As Of | `universe_code` (path, required)<br>`as_of_date` (path, required)<br>`lookbackDays` (query) | `200` - |
 | `GET` | `/api/pit/universes/coverage` | Offered Universe Coverage | - | `200` - |
 
-## portfolios
+## portfolio-optimizations
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/portfolios/optimize` | Optimize | body `PortfolioOptimizationRequest` | `200` - |
+| `GET` | `/api/portfolio-optimizations` | Runs | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
+| `POST` | `/api/portfolio-optimizations` | Create | body `PortfolioOptimizationRequest` | `200` - |
+| `GET` | `/api/portfolio-optimizations/candidates` | Candidates | `limit` (query) | `200` - |
+| `POST` | `/api/portfolio-optimizations/preview` | Preview | body `PortfolioOptimizationRequest` | `200` - |
+| `DELETE` | `/api/portfolio-optimizations/{run_id}` | Delete | `run_id` (path, required) | `200` - |
+| `GET` | `/api/portfolio-optimizations/{run_id}` | Detail | `run_id` (path, required) | `200` - |
+| `POST` | `/api/portfolio-optimizations/{run_id}/archive` | Archive | `run_id` (path, required) | `200` - |
 
 ## projects
 
@@ -377,6 +391,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
+| `GET` | `/api/lineage/{resource_type}/{resource_id}` | Lineage | `resource_type` (path, required)<br>`resource_id` (path, required) | `200` - |
 | `GET` | `/api/verifications` | Verifications | `limit` (query) | `200` - |
 | `GET` | `/api/verifications/{run_id}` | Verification | `run_id` (path, required) | `200` - |
 | `GET` | `/api/workflows` | Workflows | `limit` (query)<br>`status` (query) | `200` - |

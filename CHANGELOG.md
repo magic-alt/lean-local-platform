@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Replace the legacy optimization worker and split configuration pages with one Optimization Center backed by standard experiment-batch child backtests; add typed DataScope/execution/objective contracts, Research → Backtest → Optimization lineage and server-side handoff validation, persisted admission-gated portfolio optimization with currency/resolution/alignment safeguards, normalized run comparison, archival controls, and migration `0035` that retires `optimization_runs` and the old `/api/optimize` and `/api/portfolios/optimize` routes.
 - Preserve authoritative A-share suspension evidence when `stk_limit` or inferred OHLC status rows are materialized later, preventing legitimate no-bar suspension sessions from failing execution coverage gates.
 - Fix derived Parquet recertification by enforcing stable numeric schemas during exports and certifying independently consistent production scopes when another scope fails validation.
 

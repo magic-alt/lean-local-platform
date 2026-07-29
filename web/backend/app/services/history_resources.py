@@ -101,26 +101,6 @@ def delete_backtest(run_id: str) -> dict[str, Any]:
     return {"deleted": True, "id": run_id, "storedObjects": stored_objects}
 
 
-def delete_optimization(optimization_id: str) -> dict[str, Any]:
-    with db() as connection:
-        row = connection.execute("select * from optimization_runs where id = ?", (optimization_id,)).fetchone()
-        item = row_to_dict(row)
-        if item is None:
-            raise NotFoundError("Optimization run not found.")
-        if _is_active(item.get("status")):
-            raise ValueError("Active optimizations must finish or be cancelled before deletion.")
-        active_tasks = connection.execute(
-            "select count(*) as count from tasks where (related_id = ? or id = ?) and status in ('created','queued','running')",
-            (optimization_id, item.get("task_id")),
-        ).fetchone()
-        if active_tasks and int(active_tasks["count"] or 0) > 0:
-            raise ValueError("This optimization still has an active task. Cancel it before deletion.")
-        connection.execute("delete from tasks where related_id = ? or id = ?", (optimization_id, item.get("task_id")))
-        connection.execute("delete from optimization_runs where id = ?", (optimization_id,))
-    _remove_managed_path(item.get("results_dir"), RUNS_DIR)
-    return {"deleted": True, "id": optimization_id}
-
-
 def delete_generated_report(report_id: str) -> dict[str, Any]:
     with db() as connection:
         row = connection.execute("select * from reports where id = ?", (report_id,)).fetchone()

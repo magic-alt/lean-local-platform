@@ -5,7 +5,6 @@ from typing import Any
 from ..core.config import RUNS_DIR
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.backtest_job import CANCELLED, is_terminal
-from ..runners.docker_runner import DockerRunner
 
 
 def create_task(
@@ -143,36 +142,6 @@ def _revoke_celery(task: dict[str, Any]) -> None:
         append_log(task["id"], f"Celery revoke failed: {exc}")
 
 
-def _cancel_optimization(task: dict[str, Any]) -> None:
-    optimization_id = task.get("related_id")
-    now = utc_now()
-    with db() as connection:
-        if optimization_id:
-            connection.execute(
-                "update optimization_runs set status = ?, error = coalesce(error, ?), finished_at = coalesce(finished_at, ?) where id = ?",
-                (CANCELLED, "Cancellation requested by user.", now, optimization_id),
-            )
-        rows = connection.execute("select id, status, container_name from backtest_runs where task_id = ?", (task["id"],)).fetchall()
-    for row in rows_to_dicts(rows):
-        if is_terminal(row.get("status")):
-            continue
-        container_name = row.get("container_name")
-        if container_name:
-            try:
-                DockerRunner.stop_container(str(container_name), lambda line: append_log(task["id"], line))
-            except Exception as exc:
-                append_log(task["id"], f"Docker stop failed for {container_name}: {exc}")
-        with db() as connection:
-            connection.execute(
-                """
-                update backtest_runs
-                set status = ?, error = ?, error_message = ?, finished_at = coalesce(finished_at, ?)
-                where id = ?
-                """,
-                (CANCELLED, "Cancellation requested by user.", "Cancellation requested by user.", now, row["id"]),
-            )
-
-
 def _cancel_research(task: dict[str, Any]) -> None:
     session_id = task.get("related_id")
     if not session_id:
@@ -271,9 +240,7 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         return get_task(task_id)
 
     _revoke_celery(task)
-    if task.get("kind") == "optimization":
-        _cancel_optimization(task)
-    elif task.get("kind") == "research":
+    if task.get("kind") == "research":
         _cancel_research(task)
     elif task.get("kind") == "report":
         _cancel_report(task)

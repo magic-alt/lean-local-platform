@@ -8,7 +8,7 @@ Research 用于数据探索、股票池还原、因子评价和跨资产统计�
 2. 配置共同的 `DataScope`：资产、标的/股票池/品种、时间、价格口径和数据来源。
 3. 执行数据预检，确认覆盖、来源认证、scope hash 和 data fingerprint。
 4. 运行并固化 Research Run。
-5. 查看表格、警告和导出，或把同一 DataScope 显式交给 Backtest。
+5. 查看表格、警告和导出，或把同一 DataScope 显式交给 Backtest；单标的进入单次回测，多标的/股票池进入批量回测。
 
 当前标准模板包括市场探索、数据质量、PIT 股票池、因子评价、可转债双低筛选和期货连续合约研究。事件研究、回测敏感度和组合风险等开放式工作仍放在 Notebook。
 
@@ -73,4 +73,4 @@ history = data.history()
 | `POST` | `/api/research/workspaces/snapshots` | 创建冻结快照 |
 | `GET/POST` | `/api/research/workspaces` | Workspace 列表或创建 |
 
-从 Research 转到 Backtest 后仍必须选择策略项目并重新执行 preflight。Research 不推断交易执行参数。
+从 Research 转到 Backtest 后，页面通过服务端 draft 恢复 DataScope，不再依赖 `sessionStorage`。仍必须选择策略项目并重新执行 preflight；服务端会拒绝被篡改的 scope 或已经漂移的数据指纹。Research 不推断交易执行参数。

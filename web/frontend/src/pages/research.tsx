@@ -395,8 +395,7 @@ function RunHistory({ runs, reload }: { runs: ResearchRun[]; reload: () => void 
 
   async function handoff(item: ResearchRun) {
     const draft = await api.researchBacktestDraft(item.id);
-    window.sessionStorage.setItem("lean.backtest.researchDraft", JSON.stringify(draft));
-    navigate(`/backtests?researchRunId=${encodeURIComponent(item.id)}`);
+    navigate(`/backtests?researchRunId=${encodeURIComponent(item.id)}&scope=${draft.target === "batch" ? "batch" : "single"}`);
   }
 
   return (

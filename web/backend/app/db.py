@@ -109,6 +109,9 @@ JSON_COLUMNS = {
     "universe_config_json": "universeConfig",
     "projection_json": "projection",
     "evidence_json": "evidence",
+    "run_ids_json": "runIds",
+    "constraints_json": "constraints",
+    "input_fingerprints_json": "inputFingerprints",
 }
 
 
@@ -173,6 +176,9 @@ LONG_TEXT_COLUMNS = {
     "universe_config_json",
     "projection_json",
     "evidence_json",
+    "run_ids_json",
+    "constraints_json",
+    "input_fingerprints_json",
     "error",
     "error_message",
     "response_body",
@@ -1969,6 +1975,10 @@ def init_db() -> None:
         from .migrations.runner import run_migrations
 
         run_migrations(connection, utc_now)
+        # Revision 0035 retires the legacy table. The compatibility bootstrap
+        # above still creates it so older migrations can run on a fresh test
+        # database; remove it after the ordered migration chain is complete.
+        connection.execute("drop table if exists optimization_runs")
         _add_column(connection, "paper_portfolio_snapshots", "benchmark_return", "real")
         _add_column(connection, "universe_membership", "announce_date", "text")
         _add_column(connection, "universe_membership", "effective_date", "text")

@@ -169,7 +169,7 @@ def _merge_project(source: dict[str, Any], target: dict[str, Any]) -> None:
     source_id = str(source["id"])
     target_id = str(target["id"])
     with db() as connection:
-        for table in ("backtest_runs", "tasks", "optimization_runs", "research_sessions", "research_workspaces", "paper_sessions", "strategy_versions"):
+        for table in ("backtest_runs", "tasks", "experiment_batch_items", "research_sessions", "research_workspaces", "paper_sessions", "strategy_versions"):
             connection.execute(f"update {table} set project_id = ? where project_id = ?", (target_id, source_id))
         _merge_admissions(connection, source_id, target_id)
         connection.execute("delete from projects where id = ?", (source_id,))
@@ -379,7 +379,18 @@ def delete_project(project_id: str) -> dict[str, Any]:
             _remove_path(row["log_path"])
             deleted["tasks"] += 1
         connection.execute("delete from tasks where project_id = ?", (project_id,))
-        connection.execute("delete from optimization_runs where project_id = ?", (project_id,))
+        batch_rows = connection.execute(
+            "select distinct batch_id from experiment_batch_items where project_id = ?",
+            (project_id,),
+        ).fetchall()
+        for batch_row in batch_rows:
+            batch_id = batch_row["batch_id"]
+            connection.execute(
+                "delete from experiment_batch_attempts where item_id in (select id from experiment_batch_items where batch_id = ?)",
+                (batch_id,),
+            )
+            connection.execute("delete from experiment_batch_items where batch_id = ?", (batch_id,))
+            connection.execute("delete from experiment_batches where id = ?", (batch_id,))
         connection.execute("delete from research_sessions where project_id = ?", (project_id,))
         connection.execute("delete from research_workspaces where project_id = ?", (project_id,))
         connection.execute("delete from projects where id = ?", (project_id,))

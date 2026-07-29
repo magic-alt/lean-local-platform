@@ -35,8 +35,12 @@ import type {
   BacktestAdmissionResponse,
   BacktestResult,
   PortfolioOptimizationResult,
+  PortfolioOptimizationRun,
+  PortfolioOptimizationCandidate,
   BacktestCompareResult,
   OptimizationRun,
+  OptimizationRequest,
+  BacktestOptimizationDraft,
   ResearchSession,
   ResearchRun,
   ResearchTemplate,
@@ -438,48 +442,68 @@ export const api = {
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  optimizations: () => request<OptimizationRun[]>("/api/optimize?paged=false&limit=1000"),
+  optimizations: () => request<OptimizationRun[]>("/api/optimizations?paged=false&limit=1000"),
+  optimization: (id: string) => request<OptimizationRun>(`/api/optimizations/${encodeURIComponent(id)}`),
+  optimizationPreview: (payload: OptimizationRequest) =>
+    request<ExperimentBatchPreview & { scopeHash: string; dataFingerprint: string }>("/api/optimizations/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
   deleteOptimization: (id: string) =>
-    request<{ deleted: boolean; id: string }>(`/api/optimize/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  createOptimization: (payload: {
-    projectId: string;
-    symbol: string;
-    assetClass?: string;
-    market?: string;
-    venue?: string;
-    resolution?: string;
-    dataType?: string;
-    start: string;
-    end: string;
-    cash: number;
-    parameters?: Record<string, unknown>;
-    parameterGrid: Record<string, unknown[]>;
-    maxCandidates?: number;
-    dockerImage: string;
-  }) =>
-    request<OptimizationRun>("/api/optimize", {
+    request<{ deleted: boolean; id: string }>(`/api/optimizations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  archiveOptimization: (id: string) =>
+    request<{ archived: boolean; id: string }>(`/api/optimizations/${encodeURIComponent(id)}/archive`, { method: "POST" }),
+  cancelOptimization: (id: string) =>
+    request<OptimizationRun>(`/api/optimizations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryOptimization: (id: string) =>
+    request<OptimizationRun>(`/api/optimizations/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
+  createOptimization: (payload: OptimizationRequest) =>
+    request<OptimizationRun>("/api/optimizations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  compareOptimizations: (payload: { optimizationIds: string[]; metric?: string; xParameter?: string; yParameter?: string }) =>
+    request<ExperimentBatchComparison>("/api/optimizations/compare", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
+  optimizationExportUrl: (id: string) => `/api/optimizations/${encodeURIComponent(id)}/export.csv`,
+  backtestOptimizationDraft: (id: string) =>
+    request<BacktestOptimizationDraft>(`/api/backtests/${encodeURIComponent(id)}/optimization-draft`),
   compareBacktests: (payload: { runIds: string[]; includeCurves?: boolean }) =>
     request<BacktestCompareResult>("/api/compare/backtests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  portfolioOptimizationCandidates: () =>
+    request<{ items: PortfolioOptimizationCandidate[] }>("/api/portfolio-optimizations/candidates"),
+  portfolioOptimizations: () =>
+    request<PortfolioOptimizationRun[]>("/api/portfolio-optimizations?paged=false&limit=1000"),
+  previewPortfolioOptimization: (payload: {
+    name?: string;
+    runIds: string[];
+    objective?: "sharpe" | "return" | "drawdown";
+    step?: number;
+    maxWeight?: number;
+    allowShort?: boolean;
+  }) => request<PortfolioOptimizationResult>("/api/portfolio-optimizations/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    }),
   optimizePortfolio: (payload: {
+    name?: string;
     runIds: string[];
     objective?: "sharpe" | "return" | "drawdown";
     step?: number;
     maxWeight?: number;
     allowShort?: boolean;
   }) =>
-    request<PortfolioOptimizationResult>("/api/portfolios/optimize", {
+    request<PortfolioOptimizationRun>("/api/portfolio-optimizations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  archivePortfolioOptimization: (id: string) =>
+    request<{ archived: boolean; id: string }>(`/api/portfolio-optimizations/${encodeURIComponent(id)}/archive`, { method: "POST" }),
   researchTemplates: () => request<{ items: ResearchTemplate[]; count: number }>("/api/research/templates"),
   researchRuns: () => request<ResearchRun[]>("/api/research/runs?paged=false&limit=1000"),
   researchRun: (id: string) => request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}`),
@@ -499,7 +523,7 @@ export const api = {
     request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   researchRunExportUrl: (id: string) => `/api/research/runs/${encodeURIComponent(id)}/export.csv`,
   researchBacktestDraft: (id: string) =>
-    request<{ sourceResearchRunId: string; dataScope: DataScope }>(`/api/research/runs/${encodeURIComponent(id)}/backtest-draft`),
+    request<{ sourceResearchRunId: string; dataScope: DataScope; scopeHash: string; dataFingerprint: string; target: "backtest" | "batch" }>(`/api/research/runs/${encodeURIComponent(id)}/backtest-draft`),
   resolveDataScope: (scope: DataScope) =>
     request<DataScopeResolution>("/api/data/resolve", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope)

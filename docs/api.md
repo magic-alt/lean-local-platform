@@ -280,9 +280,19 @@ from per-dataset checkpoints. Only the 10 bulk datasets documented in
 ## Research, Optimization, Factors
 
 ```text
-GET    /api/optimize
-POST   /api/optimize
-GET    /api/optimize/{optimization_id}
+POST   /api/optimizations/preview
+GET    /api/optimizations
+POST   /api/optimizations
+GET    /api/optimizations/{optimization_id}
+POST   /api/optimizations/{optimization_id}/cancel
+POST   /api/optimizations/{optimization_id}/retry-failed
+POST   /api/optimizations/{optimization_id}/archive
+POST   /api/optimizations/compare
+
+GET    /api/portfolio-optimizations/candidates
+POST   /api/portfolio-optimizations/preview
+GET    /api/portfolio-optimizations
+POST   /api/portfolio-optimizations
 
 GET    /api/research
 POST   /api/research

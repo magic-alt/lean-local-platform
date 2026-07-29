@@ -47,7 +47,7 @@ POST /api/data/query
 
 ## 组合优化
 
-`POST /api/portfolios/optimize` 提供组合权重计算。输入收益/风险数据必须明确日期和成分口径，输出权重仍需通过持仓上限、流动性、交易规则和回测验证。
+`POST /api/portfolio-optimizations/preview` 校验组合输入，`POST /api/portfolio-optimizations` 计算并固化组合权重。输入必须来自已准入成功回测，且币种、频率与至少 60 个重叠净值点一致；输出仍需通过持仓上限、流动性、交易规则和回测验证。
 
 ## 期货和可转债
 

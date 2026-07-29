@@ -36,6 +36,9 @@ from ..services.projects import get_project
 from ..services.strategy_admission import admission_for_run
 from ..services.tasks import log_window, task_log_window
 from ..services import data_gateway
+from ..services import research_runs
+from ..services.strategies import get_template
+from ..services.workflow_lineage import record_edge
 from ..tasks.worker import run_backtest_task
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -66,9 +69,21 @@ class BacktestRequest(BaseModel):
 def _shared_scope_payload(request: BacktestRequest) -> dict[str, Any]:
     payload = request.model_dump()
     payload["extra"] = request.model_extra or {}
+    if request.sourceResearchRunId and request.dataScope is None:
+        raise ValueError("sourceResearchRunId requires the research dataScope.")
     if request.dataScope is None:
         return payload
     resolved = data_gateway.resolve(request.dataScope)
+    if request.sourceResearchRunId:
+        source = research_runs.get_run(request.sourceResearchRunId)
+        if source["status"] != "success":
+            raise ValueError("Only a successful research run can seed a backtest.")
+        source_scope_hash = data_gateway.scope_hash(source["scope"])
+        if source_scope_hash != resolved["scopeHash"]:
+            raise ValueError("The submitted dataScope does not match the source research run.")
+        source_fingerprint = source.get("data_fingerprint")
+        if source_fingerprint and source_fingerprint != resolved["dataFingerprint"]:
+            raise ValueError("Research data has changed since the source run; rerun research before backtesting.")
     scope = resolved["scope"]
     asset = scope["asset"]
     time = scope["time"]
@@ -132,12 +147,26 @@ def backtests(
 @router.post("")
 def create_backtest(request: BacktestRequest):
     get_project(request.projectId)
-    payload = _shared_scope_payload(request)
     try:
+        payload = _shared_scope_payload(request)
         run = create_backtest_job(payload)
     except Exception as exc:
+        payload = request.model_dump()
         run = create_failed_backtest_job(payload, str(exc))
         return detail(run["id"])
+    if request.sourceResearchRunId:
+        record_edge(
+            parent_type="research_run",
+            parent_id=request.sourceResearchRunId,
+            child_type="backtest_run",
+            child_id=run["id"],
+            relation="validated_by",
+            contract=request.dataScope.model_dump(mode="json") if request.dataScope else None,
+            details={
+                "scopeHash": (payload.get("parameters") or {}).get("scopeHash"),
+                "dataFingerprint": (payload.get("parameters") or {}).get("dataFingerprint"),
+            },
+        )
 
     try:
         dispatch_task(run_backtest_task.s(run["task_id"], run["id"]), run["task_id"])
@@ -150,9 +179,9 @@ def create_backtest(request: BacktestRequest):
 
 @router.post("/preflight")
 def preflight_backtest(request: BacktestRequest):
-    get_project(request.projectId)
-    payload = _shared_scope_payload(request)
     try:
+        get_project(request.projectId)
+        payload = _shared_scope_payload(request)
         payload = enrich_strategy_backtest_request(payload)
         return prepare_backtest_request(payload, repair=True)["preflight"]
     except Exception as exc:
@@ -165,6 +194,62 @@ def preflight_backtest(request: BacktestRequest):
                 "retryable": True,
             },
         ) from exc
+
+
+@router.get("/{run_id}/optimization-draft")
+def optimization_draft(run_id: str):
+    run = get_backtest(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Backtest run not found.")
+    if run.get("status") != "success":
+        raise HTTPException(status_code=409, detail="Only a successful backtest can seed an optimization.")
+    parameters = run.get("parameters") or {}
+    scope = parameters.get("dataScope") or {
+        "asset": {
+            "assetClass": parameters.get("assetClass") or run.get("asset_class") or "equity",
+            "market": parameters.get("market") or run.get("venue") or "usa",
+            "venue": parameters.get("venue") or run.get("venue"),
+            "resolution": parameters.get("resolution") or run.get("resolution") or "daily",
+            "dataType": parameters.get("dataType") or run.get("data_type") or "trade",
+        },
+        "selection": {"type": "symbols", "values": [run.get("symbol")]},
+        "time": {"startDate": parameters.get("start"), "endDate": parameters.get("end")},
+        "price": {"adjust": parameters.get("adjust") or "raw"},
+        "provider": {
+            "source": parameters.get("source") or "tushare",
+            "mode": "strict",
+            "allowResearchSource": bool(parameters.get("allowResearchSource")),
+        },
+    }
+    project = get_project(str(run["project_id"]))
+    template_key = str((project.get("config") or {}).get("templateKey") or "")
+    try:
+        schema = get_template(template_key).get("parameters") or []
+    except ValueError:
+        schema = []
+    fixed = {
+        str(field["key"]): parameters.get(field["key"], field.get("default"))
+        for field in schema
+        if field.get("key")
+    }
+    return {
+        "sourceBacktestRunId": run_id,
+        "name": f"{run.get('name') or run.get('symbol')} · optimization",
+        "projectIds": [run["project_id"]],
+        "dataScope": scope,
+        "execution": {
+            "cash": parameters.get("cash") or parameters.get("initialCash") or 100000,
+            "benchmarkSymbol": parameters.get("benchmarkSymbol"),
+            "feeModel": parameters.get("feeModel"),
+            "slippageModel": parameters.get("slippageModel"),
+            "dockerImage": run.get("docker_image") or DEFAULT_DOCKER_IMAGE,
+        },
+        "fixedParametersByProject": {run["project_id"]: fixed},
+        "parameterSchemas": {run["project_id"]: schema},
+        "objective": "sharpe",
+        "scopeHash": parameters.get("scopeHash") or data_gateway.scope_hash(scope),
+        "dataFingerprint": parameters.get("dataFingerprint"),
+    }
 
 
 @router.get("/{run_id}")

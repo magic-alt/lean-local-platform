@@ -262,7 +262,10 @@ def test_executable_gap_template_requires_intraday_execution_evidence():
 
 
 def test_admitted_runs_can_be_used_by_portfolio_optimizer():
+    from datetime import date, timedelta
+
     from app import db as db_module
+    from app.db import json_dump
     from app.services.portfolio_optimization import optimize_portfolio
     from app.services.strategy_admission import evaluate_admission, register_baseline
 
@@ -270,12 +273,26 @@ def test_admitted_runs_can_be_used_by_portfolio_optimizer():
     run_ids, regimes = _seed_runs(db_module)
     register_baseline("strategy-1", run_ids=run_ids, regimes=regimes, parameters={"fast": 10})
     evaluate_admission("strategy-1", run_ids=run_ids, regimes=regimes, parameters={"fast": 10})
+    start = date(2024, 1, 1)
+    with db_module.db() as connection:
+        for offset, run_id in enumerate(run_ids[:2]):
+            curve = [
+                {
+                    "time": (start + timedelta(days=index)).isoformat(),
+                    "value": 100 + index * (1 + offset * 0.1),
+                }
+                for index in range(65)
+            ]
+            connection.execute(
+                "update backtest_results set equity_curve_json=? where job_id=?",
+                (json_dump(curve), run_id),
+            )
 
     result = optimize_portfolio(run_ids[:2], step=0.2, max_weight=0.8)
 
     assert sum(result["weights"].values()) == 1.0
     assert set(result["weights"]) == set(run_ids[:2])
-    assert result["alignedPoints"] == 4
+    assert result["alignedPoints"] == 65
     assert result["candidateCount"] > 0
 
 

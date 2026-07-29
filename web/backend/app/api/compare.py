@@ -96,6 +96,15 @@ def _run_item(run_id: str, include_curves: bool) -> dict[str, Any]:
     if run is None:
         raise HTTPException(status_code=404, detail=f"Backtest run not found: {run_id}")
     result = row_to_dict(result_row) if result_row is not None else {}
+    if run.get("status") != "success":
+        raise HTTPException(status_code=409, detail=f"Backtest run is not successful: {run_id}")
+    if not result:
+        raise HTTPException(status_code=409, detail=f"Parsed backtest result is missing: {run_id}")
+    parameters = run.get("parameters") or {}
+    market = str(parameters.get("market") or run.get("venue") or "usa").lower()
+    currency = str(parameters.get("accountCurrency") or "").upper() or (
+        "CNY" if market == "china" else "HKD" if market == "hongkong" else "USD"
+    )
     item = {
         "runId": run["id"],
         "name": run.get("name"),
@@ -106,14 +115,30 @@ def _run_item(run_id: str, include_curves: bool) -> dict[str, Any]:
         "projectId": run.get("project_id"),
         "createdAt": run.get("created_at"),
         "finishedAt": run.get("finished_at"),
-        "parameters": run.get("parameters") or {},
+        "parameters": parameters,
+        "currency": currency,
+        "resolution": str(parameters.get("resolution") or run.get("resolution") or "daily").lower(),
         "validation": run.get("validation"),
         "experiment": run.get("experiment"),
         "metrics": _metrics(run, result),
-        "error": None if result else "Parsed backtest_result is missing.",
+        "error": None,
     }
     if include_curves:
-        item["equityCurve"] = result.get("equity_curve") or []
+        equity_curve = result.get("equity_curve") or []
+        item["equityCurve"] = equity_curve
+        first_value = next(
+            (
+                _float(point.get("value"))
+                for point in equity_curve
+                if isinstance(point, dict) and (_float(point.get("value")) or 0) > 0
+            ),
+            None,
+        )
+        item["normalizedEquityCurve"] = [
+            {**point, "value": (_float(point.get("value")) or 0) / first_value}
+            for point in equity_curve
+            if isinstance(point, dict) and first_value
+        ]
         item["drawdownCurve"] = result.get("drawdown_curve") or []
     return item
 
@@ -128,9 +153,26 @@ def _rank(items: list[dict[str, Any]], key: str, reverse: bool = True) -> list[s
 
 @router.post("/backtests")
 def compare_backtests(request: BacktestCompareRequest):
-    items = [_run_item(run_id, request.includeCurves) for run_id in request.runIds]
+    run_ids = list(dict.fromkeys(request.runIds))
+    if len(run_ids) != len(request.runIds):
+        raise HTTPException(status_code=400, detail="runIds must be unique.")
+    items = [_run_item(run_id, request.includeCurves) for run_id in run_ids]
+    currencies = sorted({str(item["currency"]) for item in items})
+    resolutions = sorted({str(item["resolution"]) for item in items})
+    warnings = []
+    if len(currencies) > 1:
+        warnings.append("Raw NAV values use different currencies; compare normalized curves and percentage metrics only.")
+    if len(resolutions) > 1:
+        warnings.append("Runs use different resolutions; risk metrics may not be directly comparable.")
     return {
         "items": items,
+        "compatibility": {
+            "currencies": currencies,
+            "resolutions": resolutions,
+            "rawNavComparable": len(currencies) == 1,
+            "riskMetricComparable": len(resolutions) == 1,
+            "warnings": warnings,
+        },
         "rankings": {
             "byTotalReturn": _rank(items, "totalReturn"),
             "bySharpe": _rank(items, "sharpeRatio"),

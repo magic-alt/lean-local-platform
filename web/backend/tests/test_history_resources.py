@@ -46,24 +46,23 @@ def test_delete_backtest_removes_only_managed_run_directory(tmp_path, monkeypatc
 
 def test_active_resources_cannot_be_deleted(tmp_path, monkeypatch):
     db_module = _init_db()
-    import app.services.history_resources as history
+    from app.services.history_resources import delete_experiment_batch
 
-    monkeypatch.setattr(history, "RUNS_DIR", tmp_path / "runs")
     with db_module.db() as connection:
         connection.execute(
             """
-            insert into optimization_runs
-                (id, project_id, status, parameters_json, results_dir, created_at)
-            values (?, ?, ?, ?, ?, ?)
+            insert into experiment_batches
+                (id,kind,mode,name,status,config_json,total,queued,created_at)
+            values (?, 'optimization', 'single_symbol_grid', ?, 'running', '{}', 1, 0, ?)
             """,
-            ("opt-1", "project-1", "running", "{}", str(tmp_path / "runs" / "opt-1"), "2026-07-21T00:00:00+00:00"),
+            ("opt-1", "Optimization", "2026-07-21T00:00:00+00:00"),
         )
 
-    with pytest.raises(ValueError, match="Active optimizations"):
-        history.delete_optimization("opt-1")
+    with pytest.raises(ValueError, match="Active experiment"):
+        delete_experiment_batch("opt-1")
 
     with db_module.db() as connection:
-        assert connection.execute("select count(*) as count from optimization_runs where id = ?", ("opt-1",)).fetchone()["count"] == 1
+        assert connection.execute("select count(*) as count from experiment_batches where id = ?", ("opt-1",)).fetchone()["count"] == 1
 
 
 def test_global_history_clear_requires_typed_confirmation():

@@ -1,6 +1,6 @@
 # Architecture
 
-Last reviewed: 2026-07-25.
+Last reviewed: 2026-07-29.
 
 This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
@@ -15,7 +15,7 @@ remain preserved:
 - Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
 - A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.
 - Strategy, dataset and experiment versions plus run fingerprints are persisted for reproducibility.
-- Backtests, optimization and research expose an example catalog and database-backed experiment batches.
+- Research, Backtest and Optimization share DataScope/fingerprint contracts and persisted lineage; Optimization candidates use database-backed experiment batches and standard child backtests.
 - Data synchronization is resumable and auditable through sync runs, checkpoints, heartbeats, watermarks, validation results and quarantined rows.
 - Paper Account adds isolated opening ledgers, frozen deployments, idempotent
   daily cycles and rebuildable projections on top of the existing Paper v2
@@ -72,7 +72,7 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0032; every
+  Ordered MySQL schema migrations. The current latest migration is 0035; every
   migration has a compensating or explicit irreversible recovery policy in
   `migrations/rollback_policy.json`. Applied SQL files remain checksum-immutable.
 
@@ -109,6 +109,27 @@ Project/template selection (projectId required)
   -> persist result, fingerprint, validation and experiment snapshots
   -> expose result, logs, objects, structured report and export APIs
 ```
+
+## Guided Research and Optimization Chain
+
+```text
+Research Run (DataScope + scopeHash + dataFingerprint)
+  -> server-generated backtest draft
+  -> one symbol: standard Backtest; multiple symbols/universe: batch wizard
+  -> verify unchanged scope and data fingerprint
+  -> standard Backtest preflight and LEAN execution
+  -> successful run may generate an optimization draft
+  -> Optimization experiment batch
+  -> standard backtest child runs for every candidate
+  -> single-objective ranking plus minimum-coverage gate
+  -> optional persisted Portfolio Optimization from admission-passed runs
+```
+
+`workflow_lineage_edges` records the transitions without making them mandatory.
+`experiment_batches` is the only strategy-optimization scheduler. The former
+`optimization_runs` table and `lean_web.optimize` worker are retired. Portfolio
+optimization persists input fingerprints and blocks mixed currencies without an
+explicit FX normalization contract.
 
 ## Paper Account Chain
 

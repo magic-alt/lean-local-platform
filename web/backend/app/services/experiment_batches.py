@@ -110,7 +110,11 @@ def _base_request(config: dict[str, Any], project_id: str, symbol: str) -> dict[
         "end": str(config.get("end") or date.today().isoformat()),
         "cash": float(config.get("cash") or 300000),
         "dockerImage": config.get("dockerImage") or get_settings()["dockerImage"],
-        "parameters": {**dict(project_config.get("parameters") or {}), **dict(config.get("parameters") or {})},
+        "parameters": {
+            **dict(project_config.get("parameters") or {}),
+            **dict(config.get("parameters") or {}),
+            **dict((config.get("fixedParametersByProject") or {}).get(project_id) or {}),
+        },
     }
     for key in (
         "benchmarkSymbol",
@@ -546,8 +550,12 @@ def _persist_walk_forward_plan(
             str(config["universeVersion"]),
             str(config["adjustmentContract"]),
             str(config["featurePipelineVersion"]),
-            str(config.get("selectionMetric") or "validationSharpe"),
-            str(config.get("selectionRule") or "max(validationSharpe); tie=minDrawdown,minTurnover,candidateKey"),
+            str(config.get("selectionMetric") or f"validation{str(config.get('objective') or 'sharpe').title()}"),
+            str(
+                config.get("selectionRule")
+                or f"best(validation{str(config.get('objective') or 'sharpe').title()}); "
+                "tie=minDrawdown,minTurnover,candidateKey"
+            ),
             now,
         ),
     )
@@ -687,10 +695,20 @@ def preview(config: dict[str, Any]) -> dict[str, Any]:
     items, selection = expand(config)
     limit = max(1, min(50000, int(get_settings().get("maxBatchRuns") or 5000)))
     count = len(items)
+    candidate_keys = {
+        (
+            item.get("projectId"),
+            ((item.get("parameters") or {}).get("parameters") or {}).get("optimizationCandidateKey"),
+        )
+        for item in items
+    }
+    candidate_keys.discard((None, None))
     return {
         "kind": str(config.get("kind") or "backtest"),
         "mode": str(config.get("mode") or "independent"),
         "expandedCount": count,
+        "parameterCandidates": len(candidate_keys),
+        "workUnits": count,
         "limit": limit,
         "withinLimit": count <= limit,
         "selection": selection,
@@ -857,7 +875,25 @@ def _parameter_sensitivity(
     ]
 
 
-def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _objective_value(item: dict[str, Any], objective: str) -> float | None:
+    return _number(item.get(objective))
+
+
+def _objective_score(item: dict[str, Any], objective: str) -> float:
+    value = _objective_value(item, objective)
+    if value is None:
+        return float("-inf")
+    return -abs(value) if objective == "drawdown" else value
+
+
+def _summary(
+    items: list[dict[str, Any]],
+    *,
+    objective: str = "sharpe",
+    min_coverage: float = 0.8,
+) -> dict[str, Any]:
+    if objective not in {"sharpe", "return", "drawdown"}:
+        objective = "sharpe"
     ranked = []
     for item in items:
         result = item.get("result") or {}
@@ -876,21 +912,40 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "fold": strategy_parameters.get("experimentFold"),
                 "phase": strategy_parameters.get("experimentPhase"),
                 "sharpe": _number(_metric(statistics, "Sharpe Ratio", "Sharpe")),
-                "return": _metric(statistics, "Net Profit", "Compounding Annual Return", "Total Return"),
-                "drawdown": _metric(statistics, "Drawdown", "Maximum Drawdown"),
+                "return": _number(_metric(statistics, "Net Profit", "Compounding Annual Return", "Total Return")),
+                "drawdown": _number(_metric(statistics, "Drawdown", "Maximum Drawdown")),
                 "trades": _metric(statistics, "Total Orders", "Total Trades"),
                 "error": item.get("error"),
             }
         )
-    ranked.sort(key=lambda item: item["sharpe"] if item["sharpe"] is not None else float("-inf"), reverse=True)
+    ranked.sort(key=lambda item: _objective_score(item, objective), reverse=True)
     candidate_groups: dict[str, list[dict[str, Any]]] = {}
     for item in ranked:
         if item.get("candidateKey"):
             candidate_groups.setdefault(f"{item.get('projectId')}:{item['candidateKey']}", []).append(item)
     candidates = []
     for key, group in candidate_groups.items():
-        successful = [item for item in group if item["status"] == "success" and item["sharpe"] is not None]
-        values = [float(item["sharpe"]) for item in successful]
+        successful = [
+            item
+            for item in group
+            if item["status"] == "success" and _objective_value(item, objective) is not None
+        ]
+        values = [float(_objective_value(item, objective)) for item in successful]
+        sharpe_values = [
+            float(item["sharpe"])
+            for item in group
+            if item["status"] == "success" and item.get("sharpe") is not None
+        ]
+        return_values = [
+            float(item["return"])
+            for item in group
+            if item["status"] == "success" and item.get("return") is not None
+        ]
+        drawdown_values = [
+            float(item["drawdown"])
+            for item in group
+            if item["status"] == "success" and item.get("drawdown") is not None
+        ]
         coverage = len(successful) / len(group) if group else 0.0
         candidates.append(
             {
@@ -901,12 +956,27 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "runs": len(group),
                 "successes": len(successful),
                 "coverage": coverage,
-                "valid": coverage >= 0.8,
-                "medianSharpe": stats_module.median(values) if values else None,
-                "p25Sharpe": sorted(values)[max(0, int(len(values) * 0.25) - 1)] if values else None,
+                "valid": coverage >= min_coverage,
+                "objective": objective,
+                "medianObjective": stats_module.median(values) if values else None,
+                "medianSharpe": stats_module.median(sharpe_values) if sharpe_values else None,
+                "medianReturn": stats_module.median(return_values) if return_values else None,
+                "medianDrawdown": stats_module.median(drawdown_values) if drawdown_values else None,
             }
         )
-    candidates.sort(key=lambda item: (bool(item["valid"]), item["medianSharpe"] if item["medianSharpe"] is not None else float("-inf")), reverse=True)
+    candidates.sort(
+        key=lambda item: (
+            bool(item["valid"]),
+            (
+                -abs(float(item["medianObjective"]))
+                if objective == "drawdown" and item["medianObjective"] is not None
+                else float(item["medianObjective"])
+                if item["medianObjective"] is not None
+                else float("-inf")
+            ),
+        ),
+        reverse=True,
+    )
     walk_forward = []
     folds = sorted(
         {
@@ -922,9 +992,9 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
             if item.get("fold") == fold
             and item.get("phase") == "validation"
             and item.get("status") == "success"
-            and item.get("sharpe") is not None
+            and _objective_value(item, objective) is not None
         ]
-        selected = max(validation, key=lambda item: float(item["sharpe"]), default=None)
+        selected = max(validation, key=lambda item: _objective_score(item, objective), default=None)
         if not selected:
             continue
 
@@ -947,7 +1017,7 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         walk_forward.append(
             {
                 "fold": fold,
-                "selectionMetric": "validationSharpe",
+                "selectionMetric": f"validation{objective.title()}",
                 "selected": selected.get("overrides"),
                 "trainSharpe": train.get("sharpe") if train else None,
                 "validationSharpe": selected.get("sharpe"),
@@ -958,9 +1028,11 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     return {
-        "rankingMetric": "sharpe",
+        "rankingMetric": objective,
         "ranking": ranked,
         "candidates": candidates,
+        "bestCandidate": next((item for item in candidates if item["valid"]), None),
+        "minCoverage": min_coverage,
         "parameterSensitivity": _parameter_sensitivity(ranked),
         "walkForward": walk_forward,
     }
@@ -1104,6 +1176,10 @@ def _validation_metrics(item: dict[str, Any]) -> dict[str, Any]:
 def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str, Any]]) -> bool:
     if str(batch.get("mode") or "") != "walk_forward" or batch.get("cancel_requested"):
         return False
+    config = batch.get("config") or {}
+    objective = str(batch.get("objective_metric") or config.get("objective") or "sharpe")
+    if objective not in {"sharpe", "return", "drawdown"}:
+        objective = "sharpe"
     changed = False
     now = utc_now()
     for (project_id, symbol, fold), phases in _walk_forward_item_groups(items).items():
@@ -1116,7 +1192,7 @@ def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str,
         for item in validation_items:
             parameters = (item.get("parameters") or {}).get("parameters") or {}
             metrics = _validation_metrics(item)
-            if metrics["sharpe"] is None:
+            if metrics[objective] is None:
                 continue
             ranked.append(
                 {
@@ -1130,7 +1206,7 @@ def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str,
             continue
         ranked.sort(
             key=lambda row: (
-                -float(row["sharpe"]),
+                -_objective_score(row, objective),
                 abs(float(row["drawdown"] or 0.0)),
                 float(row["turnover"] or 0.0),
                 row["candidateKey"],
@@ -1193,7 +1269,7 @@ def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str,
             selection_fingerprint = _digest(
                 {
                     "windowId": window["id"],
-                    "metric": "validationSharpe",
+                    "metric": f"validation{objective.title()}",
                     "tieBreak": "minDrawdown,minTurnover,candidateKey",
                     "ranking": ranking_payload,
                 }
@@ -1210,7 +1286,7 @@ def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str,
                     str(uuid.uuid4()),
                     window["id"],
                     selected_candidate["id"],
-                    "validationSharpe",
+                    f"validation{objective.title()}",
                     "minDrawdown,minTurnover,candidateKey",
                     json_dump(selected["parameters"]),
                     json_dump(ranking_payload),
@@ -1327,7 +1403,8 @@ def refresh(batch_id: str) -> dict[str, Any]:
     if not batch_row:
         raise NotFoundError("Experiment batch not found.")
     items = rows_to_dicts(item_rows)
-    if _advance_walk_forward_selection(dict(batch_row), items):
+    batch = row_to_dict(batch_row) or {}
+    if _advance_walk_forward_selection(batch, items):
         with db() as connection:
             item_rows = connection.execute(
                 "select * from experiment_batch_items where batch_id=? order by item_index",
@@ -1353,7 +1430,10 @@ def refresh(batch_id: str) -> dict[str, Any]:
     else:
         status = "running" if active or counts["success"] or counts["failed"] else "queued"
         finished_at = None
-    summary = _summary(items)
+    config = batch.get("config") or {}
+    objective = str(batch.get("objective_metric") or config.get("objective") or "sharpe")
+    min_coverage = float(config.get("minCoverage") or 0.8)
+    summary = _summary(items, objective=objective, min_coverage=min_coverage)
     with db() as connection:
         connection.execute(
             """
@@ -1492,6 +1572,18 @@ def _dispatch_item(batch: dict[str, Any], item: dict[str, Any]) -> None:
         connection.execute("update backtest_runs set batch_item_id=? where id=?", (item["id"], run["id"]))
         connection.execute("update experiment_batch_items set status='queued',attempt=?,related_id=?,task_id=? where id=?", (attempt, run["id"], run.get("task_id"), item["id"]))
         connection.execute("insert into experiment_batch_attempts (id,item_id,attempt,related_id,task_id,status,created_at) values (?,?,?,?,?,'queued',?)", (str(uuid.uuid4()), item["id"], attempt, run["id"], run.get("task_id"), utc_now()))
+    if batch["kind"] == "optimization":
+        from .workflow_lineage import record_edge
+
+        record_edge(
+            parent_type="optimization",
+            parent_id=batch["id"],
+            child_type="backtest_run",
+            child_id=run["id"],
+            relation="candidate",
+            contract=request,
+            details={"batchItemId": item["id"], "candidateKey": item.get("item_key")},
+        )
     try:
         result = run_backtest_task.apply_async(args=[run["task_id"], run["id"]], queue="backtest")
     except Exception as exc:

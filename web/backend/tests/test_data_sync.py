@@ -1912,7 +1912,7 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert routes["lean_web.recover_data_sync"]["queue"] == "default"
     assert routes["lean_web.fetch_data_batch"]["queue"] == "data-demand"
     assert routes["lean_web.run_backtest"]["queue"] == "backtest"
-    assert routes["lean_web.optimize"]["queue"] == "backtest"
+    assert "lean_web.optimize" not in routes
     assert sync_all_data_task.acks_late is True
     assert sync_all_data_task.reject_on_worker_lost is True
     assert celery_app.conf.broker_transport_options["visibility_timeout"] == 43_200

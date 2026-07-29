@@ -30,7 +30,8 @@ LEAN 是唯一正式回测执行器。Backtests 页现在只有一个 New Backte
 3. 先运行 preflight，修复数据、基准、项目或参数问题。
 4. 提交任务后在 Tasks 和 Run Detail 查看队列、日志和状态。
 5. 成功后检查指标、图表、订单、持仓、Validation、Admission 和 Fingerprint。
-6. 需要归档时从 Reports 生成统一报告。
+6. 需要寻优时点击详情页的 **Optimize**；Optimization Center 会从服务端继承项目、DataScope、执行假设和模板参数，并保留 `sourceBacktestRunId` 血缘。
+7. 需要归档时从 Reports 生成统一报告。
 
 New Backtest 将 Project/名称、标的与行情、周期与执行、策略参数分组。Fee、Slippage 和
 Data Source 保持在执行配置中，Docker Image 收入 Runtime environment；折叠高级区不改变

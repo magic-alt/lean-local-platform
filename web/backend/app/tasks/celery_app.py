@@ -75,7 +75,6 @@ celery_app.conf.update(
         "lean_web.recover_data_sync": {"queue": "default"},
         "lean_web.backup_mysql": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
-        "lean_web.optimize": {"queue": "backtest"},
         "lean_web.start_research": {"queue": "backtest"},
         "lean_web.dispatch_experiment_batch": {"queue": "default"},
         "lean_web.run_research_batch_item": {"queue": "default"},
