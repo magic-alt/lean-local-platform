@@ -51,8 +51,14 @@ def _date(value: Any) -> str | None:
 
 def _value(row: dict[str, Any], *names: str) -> Any:
     for name in names:
-        if row.get(name) not in (None, ""):
-            return row[name]
+        value = row.get(name)
+        if value in (None, ""):
+            continue
+        if isinstance(value, float) and not math.isfinite(value):
+            continue
+        if isinstance(value, str) and value.strip().lower() in {"nan", "nat", "none", "null"}:
+            continue
+        return value
     return None
 
 
@@ -229,17 +235,24 @@ def validate_cross_asset_rows(dataset_key: str, rows: list[dict[str, Any]]) -> d
             exchange = str(row.get("exchange") or "").upper()
             if exchange not in VALID_FUTURES_EXCHANGES:
                 errors.append(_issue(index, "unsupported_futures_exchange", exchange=exchange))
-            _positive(errors, index, row, "multiplier")
-            _positive(errors, index, row, "min_price_chg", "tick_size")
-            _date_order(
-                errors,
-                index,
-                row,
-                ("list_date", "listed_date"),
-                ("last_ddate", "last_trade_date", "delist_date"),
-                "futures_lifecycle_invalid",
-                required=True,
-            )
+            listed = _date(_value(row, "list_date", "listed_date"))
+            delisted = _date(_value(row, "last_ddate", "last_trade_date", "delist_date"))
+            if listed or delisted:
+                _positive(errors, index, row, "multiplier", "per_unit")
+                _date_order(
+                    errors,
+                    index,
+                    row,
+                    ("list_date", "listed_date"),
+                    ("last_ddate", "last_trade_date", "delist_date"),
+                    "futures_lifecycle_invalid",
+                    required=True,
+                )
+            else:
+                # TuShare includes continuous/main-contract aliases in
+                # fut_basic. They are useful catalog entries but do not carry
+                # an individual contract lifecycle or contract unit.
+                warnings.append(_issue(index, "futures_continuous_catalog_row"))
         elif key == "fut_mapping":
             if not _value(row, "mapping_ts_code", "mapping_code", "main_symbol", "con_code"):
                 errors.append(_issue(index, "mapped_contract_missing"))

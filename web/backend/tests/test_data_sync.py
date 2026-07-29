@@ -1128,6 +1128,196 @@ def test_stk_limit_increment_fetches_once_per_trade_date(tmp_path, monkeypatch):
     ]
 
 
+def test_sparse_increment_accepts_new_listings_after_existing_market_frontier(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["stk_limit"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "stk_limit")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03", "status": "listed"},
+            {"symbol": "920238", "listed_date": "2026-07-24", "status": "listed"},
+            {"symbol": "000003", "listed_date": "1991-01-14", "status": "delisted"},
+        ],
+    )
+    with db() as connection:
+        connection.executemany(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china',?,1,'test','test')",
+            [("2026-07-23",), ("2026-07-24",)],
+        )
+        connection.execute(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','stk_limit','000001','1991-04-03','2026-07-22',
+                    'old',0,'passed',?)
+            """,
+            (utc_now(),),
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def limit_prices_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            symbols = ["000001", *(["920238"] if trade_date == "2026-07-24" else [])]
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    "limit_up": 11.0,
+                    "limit_down": 9.0,
+                    "source": "tushare:stk_limit",
+                }
+                for symbol in symbols
+            ]
+
+    adapter = Adapter()
+    assert data_sync._sync_generic(adapter, spec, run["id"], run["id"], "2026-07-24") == (2, 3, 0, 0)
+    assert adapter.calls == ["2026-07-23", "2026-07-24"]
+    with db() as connection:
+        watermarks = connection.execute(
+            "select scope_key,coverage_start,coverage_end from provider_dataset_watermarks "
+            "where dataset_key='stk_limit' order by scope_key"
+        ).fetchall()
+    assert [(row["scope_key"], row["coverage_start"], row["coverage_end"]) for row in watermarks] == [
+        ("000001", "1991-04-03", "2026-07-24"),
+        ("920238", "2026-07-24", "2026-07-24"),
+    ]
+
+
+def test_catalog_basic_rows_store_listing_date_and_backfill_existing_index(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "index_basic")
+    row = {"ts_code": "000300.SH", "name": "沪深300", "list_date": "20050408"}
+
+    data_sync.ensure_catalog()
+    assert spec.date_field is None
+    assert spec.catalog_date_field == "list_date"
+    assert data_sync._save_raw(spec, [row], "index-basic-1", archive=False) == (1, 0)
+    with db() as connection:
+        connection.execute(
+            "update provider_raw_records set business_date=null where dataset_key='index_basic'"
+        )
+    assert data_sync._save_raw(spec, [row], "index-basic-2", archive=False) == (0, 1)
+    data_sync._set_catalog_coverage(spec)
+
+    with db() as connection:
+        record = connection.execute(
+            "select business_date from provider_raw_records where dataset_key='index_basic'"
+        ).fetchone()
+        catalog = connection.execute(
+            "select first_data_date,last_data_date from provider_dataset_catalog "
+            "where dataset_key='index_basic'"
+        ).fetchone()
+    assert record["business_date"] == "2005-04-08"
+    assert (catalog["first_data_date"], catalog["last_data_date"]) == ("2005-04-08", "2005-04-08")
+
+
+def test_incremental_resume_requeues_completed_dated_and_catalog_datasets(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, json_dump
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["index_basic", "index_daily"])
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set mode='incremental',status='partial' where id=?",
+            (run["id"],),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set status='success',processed=1,checkpoint_json=? where run_id=?
+            """,
+            (json_dump({"index": 1, "total": 1, "symbol": "global"}), run["id"]),
+        )
+        connection.executemany(
+            """
+            insert into data_sync_work_items
+                (run_id,dataset_key,work_key,sequence_no,status)
+            values (?,?,?,1,'committed')
+            """,
+            [
+                (run["id"], "index_basic", "global"),
+                (run["id"], "index_daily", "global"),
+            ],
+        )
+
+    resumed = data_sync.prepare_resume(run["id"])
+
+    assert {entry["dataset_key"]: entry["status"] for entry in resumed["items"]} == {
+        "index_basic": "queued",
+        "index_daily": "queued",
+    }
+    assert all(entry["checkpoint"] is None for entry in resumed["items"])
+    with db() as connection:
+        remaining = connection.execute(
+            "select count(*) count from data_sync_work_items where run_id=?",
+            (run["id"],),
+        ).fetchone()
+    assert remaining["count"] == 0
+
+
+def test_run_sync_refreshes_market_cutoff_after_trade_calendar(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["trade_cal", "index_daily"])
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-22',1,'test','old')"
+        )
+        connection.execute(
+            "update provider_dataset_catalog set permission_status='available' "
+            "where dataset_key in ('trade_cal','index_daily')"
+        )
+
+    monkeypatch.setattr(data_sync, "audit_existing_data", lambda: {})
+    monkeypatch.setattr(data_sync, "probe_permissions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        data_sync,
+        "_sync_completion_evidence",
+        lambda *args, **kwargs: {"passed": True, "items": []},
+    )
+    monkeypatch.setattr(data_sync, "_set_catalog_coverage", lambda spec: None)
+
+    def refresh_calendar(adapter, batch_id, end_date, *, full_refresh=False):
+        with db() as connection:
+            connection.execute(
+                "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+                "values ('china','2026-07-29',1,'test',?)",
+                (batch_id,),
+            )
+        return 1, 1, 0
+
+    received_end_dates = []
+
+    def sync_generic(adapter, spec, run_id, batch_id, end_date, *args, **kwargs):
+        received_end_dates.append((spec.key, end_date))
+        return 1, 1, 0, 0
+
+    monkeypatch.setattr(data_sync, "_sync_calendar", refresh_calendar)
+    monkeypatch.setattr(data_sync, "_sync_generic", sync_generic)
+
+    summary = data_sync.run_sync(run["id"], adapter=SimpleNamespace(pro=SimpleNamespace()))
+
+    assert summary["marketDataEndDate"] == "2026-07-29"
+    assert received_end_dates == [("index_daily", "2026-07-29")]
+
+
 def test_daily_derivatives_materialize_after_canonical_sync(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services import data, data_sync, lean_cache, market_data, parquet_lake

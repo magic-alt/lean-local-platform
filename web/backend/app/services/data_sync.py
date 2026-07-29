@@ -59,6 +59,7 @@ class DatasetSpec:
     incremental_fetch: str = "auto"
     rate_limit_per_hour: int | None = None
     retain_raw: bool = True
+    catalog_date_field: str | None = None
 
 
 # Versioned low-frequency registry for the local 5,000-point TuShare entitlement.
@@ -78,7 +79,7 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("forecast", "forecast", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH"}, ("ts_code", "end_date", "ann_date", "type"), "ann_date"),
     DatasetSpec("express", "express", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH"}, ("ts_code", "end_date", "ann_date"), "ann_date"),
     DatasetSpec("fina_indicator", "fina_indicator", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date"), "ann_date", normalizer="financial"),
-    DatasetSpec("index_basic", "index_basic", "指数", probe={"market": "SSE"}, key_fields=("ts_code",)),
+    DatasetSpec("index_basic", "index_basic", "指数", probe={"market": "SSE"}, key_fields=("ts_code",), catalog_date_field="list_date"),
     DatasetSpec("index_daily", "index_daily", "指数", "window", probe={"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="index_daily"),
     DatasetSpec("index_weight", "index_weight", "指数", "window", "monthly", {"index_code": "000300.SH", "start_date": "20260101", "end_date": "20260331"}, ("index_code", "con_code", "trade_date"), "trade_date", normalizer="index_weight"),
     DatasetSpec("fund_basic", "fund_basic", "基金", probe={"market": "E"}, key_fields=("ts_code",)),
@@ -88,10 +89,10 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("cb_basic", "cb_basic", "可转债", probe={}, key_fields=("ts_code",)),
     DatasetSpec("cb_daily", "cb_daily", "可转债", "window", probe={"start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
     DatasetSpec("cb_call", "cb_call", "可转债", "window", probe={"ann_date": "20260110"}, key_fields=("ts_code", "ann_date", "call_type"), date_field="ann_date"),
-    DatasetSpec("fut_basic", "fut_basic", "期货", probe={"exchange": "CFFEX"}, key_fields=("ts_code",)),
+    DatasetSpec("fut_basic", "fut_basic", "期货", probe={"exchange": "CFFEX"}, key_fields=("ts_code",), catalog_date_field="list_date"),
     DatasetSpec("fut_daily", "fut_daily", "期货", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
     DatasetSpec("fut_mapping", "fut_mapping", "期货", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
-    DatasetSpec("opt_basic", "opt_basic", "期权", probe={"exchange": "SSE"}, key_fields=("ts_code",)),
+    DatasetSpec("opt_basic", "opt_basic", "期权", probe={"exchange": "SSE"}, key_fields=("ts_code",), catalog_date_field="list_date"),
     DatasetSpec("opt_daily", "opt_daily", "期权", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
     DatasetSpec("hk_basic", "hk_basic", "港股", probe={"list_status": "L"}, key_fields=("ts_code",), sync_policy="on_demand", rate_limit_per_hour=1),
     DatasetSpec("hk_daily", "hk_daily", "港股", "window", probe={"start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", sync_policy="on_demand", rate_limit_per_hour=1),
@@ -213,6 +214,7 @@ def _catalog_metadata(spec: DatasetSpec) -> dict[str, Any]:
         "incrementalFetch": spec.incremental_fetch,
         "rateLimitPerHour": spec.rate_limit_per_hour,
         "retainRaw": spec.retain_raw,
+        "catalogDateField": spec.catalog_date_field,
     }
 
 
@@ -1117,6 +1119,7 @@ def _save_raw(
     prepared: dict[str, tuple[Any, ...]] = {}
     digests: dict[str, str] = {}
     canonical_rows: list[dict[str, Any]] = []
+    storage_date_field = spec.date_field or spec.catalog_date_field
     for raw in rows:
         row = {key: (value.item() if hasattr(value, "item") else value) for key, value in raw.items()}
         canonical_rows.append(row)
@@ -1127,7 +1130,7 @@ def _save_raw(
             "tushare",
             spec.key,
             key,
-            _iso(row.get(spec.date_field)) if spec.date_field else None,
+            _iso(row.get(storage_date_field)) if storage_date_field else None,
             instrument,
             "",
             digest,
@@ -1147,7 +1150,7 @@ def _save_raw(
     _assert_disk_capacity(len(prepared) * 512)
 
     with bulk_db() as connection:
-        existing: dict[str, str] = {}
+        existing: dict[str, tuple[str, str | None]] = {}
         keys = list(prepared)
         if not assume_new:
             lookup_size = 4000 if database_backend() == "mysql" else 500
@@ -1156,18 +1159,30 @@ def _save_raw(
                 placeholders = ",".join("?" for _ in chunk)
                 records = connection.execute(
                     f"""
-                    select record_key, content_sha256 from provider_raw_records
+                    select record_key, content_sha256, business_date from provider_raw_records
                     where provider='tushare' and dataset_key=? and record_key in ({placeholders})
                     """,
                     [spec.key, *chunk],
                 ).fetchall()
-                existing.update({str(record["record_key"]): str(record["content_sha256"]) for record in records})
+                existing.update(
+                    {
+                        str(record["record_key"]): (
+                            str(record["content_sha256"]),
+                            str(record["business_date"]) if record["business_date"] else None,
+                        )
+                        for record in records
+                    }
+                )
 
         # ``record_key`` is the clustered primary-key suffix in MySQL. Sorting
         # each chunk turns otherwise random hash-key insertion into an ordered
         # B-tree walk; secondary indexes can absorb the corresponding
         # non-clustered order more cheaply.
-        changed_keys = sorted(key for key in keys if existing.get(key) != digests[key])
+        changed_keys = sorted(
+            key
+            for key in keys
+            if existing.get(key) != (digests[key], prepared[key][3])
+        )
         if changed_keys:
             connection.executemany(
                 """
@@ -2566,6 +2581,62 @@ def _sync_adj_factor_fast(
     return processed, inserted, updated, failed
 
 
+def _advance_sparse_market_watermarks(
+    spec: DatasetSpec,
+    securities: list[dict[str, Any]],
+    *,
+    coverage_end: str,
+    run_id: str,
+) -> None:
+    """Record market-wide sparse endpoint coverage for every active security."""
+    now = utc_now()
+    parameters = []
+    for item in securities:
+        if str(item.get("status") or "listed") != "listed":
+            continue
+        listed_date = str(item.get("listed_date") or "1990-01-01")
+        if listed_date > coverage_end:
+            continue
+        parameters.append(
+            (
+                spec.key,
+                str(item["symbol"]),
+                listed_date,
+                coverage_end,
+                None,
+                run_id,
+                1 if spec.normalizer == "suspend_d" else 0,
+                "passed",
+                now,
+            )
+        )
+    if not parameters:
+        return
+    with bulk_db() as connection:
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_data_date,
+                 last_run_id,empty_result,validation_status,updated_at)
+            values ('tushare',?,?,?,?,?,?,?,?,?)
+            on conflict(provider,dataset_key,scope_key) do update set
+                coverage_start=case
+                    when provider_dataset_watermarks.coverage_start is null then excluded.coverage_start
+                    when excluded.coverage_start<provider_dataset_watermarks.coverage_start
+                        then excluded.coverage_start
+                    else provider_dataset_watermarks.coverage_start end,
+                coverage_end=case
+                    when excluded.coverage_end>provider_dataset_watermarks.coverage_end
+                        then excluded.coverage_end
+                    else provider_dataset_watermarks.coverage_end end,
+                last_run_id=excluded.last_run_id,
+                validation_status=excluded.validation_status,
+                updated_at=excluded.updated_at
+            """,
+            parameters,
+        )
+
+
 def _sync_stk_limit_fast(
     adapter: TushareAdapter,
     spec: DatasetSpec,
@@ -2609,21 +2680,40 @@ def _sync_stk_limit_fast(
 
     securities = _listed_securities()
     coverage_by_scope = {} if full_refresh else _coverage_watermarks(spec)
-    listed_scope_keys = {str(item["symbol"]) for item in securities}
+    active_securities = [
+        item for item in securities
+        if str(item.get("status") or "listed") == "listed"
+    ]
+    active_scope_keys = {str(item["symbol"]) for item in active_securities}
+    active_coverage = {
+        symbol: coverage_by_scope[symbol]
+        for symbol in active_scope_keys
+        if symbol in coverage_by_scope
+    }
+    market_start_after = min(active_coverage.values()) if active_coverage else None
+    uncovered_active = [
+        item
+        for item in active_securities
+        if str(item["symbol"]) not in active_coverage
+    ]
+    uncovered_started_after_frontier = bool(
+        market_start_after
+        and all(str(item.get("listed_date") or "") > market_start_after for item in uncovered_active)
+    )
     retry_failed_only = bool(checkpoint.get("retryFailedOnly"))
     date_fetch_name = "suspend_rows_for_date" if spec.normalizer == "suspend_d" else "limit_prices_for_date"
     date_mode = bool(
         not full_refresh
         and not retry_failed_only
-        and listed_scope_keys
-        and listed_scope_keys.issubset(coverage_by_scope)
+        and active_scope_keys
+        and market_start_after
+        and (not uncovered_active or uncovered_started_after_frontier)
         and hasattr(adapter, date_fetch_name)
     )
     existing_statuses = _work_status(run_id, spec.key)
     work: list[dict[str, Any]] = []
 
     if date_mode:
-        start_after = min(coverage_by_scope.values())
         with db() as connection:
             dates = connection.execute(
                 """
@@ -2631,7 +2721,7 @@ def _sync_stk_limit_fast(
                 where market='china' and is_open=1 and trade_date>? and trade_date<=?
                 order by trade_date
                 """,
-                (start_after, end_date),
+                (market_start_after, end_date),
             ).fetchall()
         for sequence, row in enumerate(dates, start=1):
             trade_date = str(row["trade_date"])
@@ -2722,6 +2812,7 @@ def _sync_stk_limit_fast(
     buffered: list[dict[str, Any]] = []
     buffered_rows = 0
     failure_samples: list[dict[str, Any]] = []
+    last_committed_date: str | None = None
 
     def changed_status_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if spec.normalizer != "stk_limit" or not rows:
@@ -2781,6 +2872,7 @@ def _sync_stk_limit_fast(
 
     def flush() -> None:
         nonlocal buffered, buffered_rows, inserted, updated, processed, committed, validated, empty_units
+        nonlocal last_committed_date
         if not buffered:
             return
         stage_started = time.perf_counter()
@@ -2835,6 +2927,7 @@ def _sync_stk_limit_fast(
                 row_counts=row_counts,
                 batch_id=batch_id,
             )
+            last_committed_date = str(metadata_entries[-1]["work_key"])
         else:
             _persist_instrument_batch_metadata(
                 run_id=run_id,
@@ -2954,6 +3047,14 @@ def _sync_stk_limit_fast(
                     pending[int(next_entry["sequence"])] = executor.submit(fetch, next_entry)
                     submit_cursor += 1
         flush()
+
+    if date_mode and last_committed_date:
+        _advance_sparse_market_watermarks(
+            spec,
+            securities,
+            coverage_end=last_committed_date,
+            run_id=run_id,
+        )
 
     return processed, inserted, updated, failed
 
@@ -3625,6 +3726,10 @@ def run_sync(
                 elif spec.key == "trade_cal":
                     values = _sync_calendar(adapter, batch_id, end_date, full_refresh=full_refresh)
                     result = (*values, 0)
+                    # The run may have started with a stale local calendar.
+                    # Recompute the market cutoff after trade_cal is refreshed
+                    # so the same click can fetch all newly known sessions.
+                    market_end_date = _latest_open_trade_date(end_date)
                 elif spec.key == "daily":
                     result = _sync_daily(
                         adapter,
@@ -4364,6 +4469,7 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
         raise ValueError("Only failed or cancelled data updates can be resumed.")
     summary = dict(item.get("summary") or {})
     summary["resumeBaseMode"] = summary.get("resumeBaseMode") or item.get("mode") or "incremental"
+    refresh_completed_catalogs = summary["resumeBaseMode"] == "incremental"
     with db() as connection:
         active = connection.execute("select id from data_sync_runs where id<>? and status in ('queued','running','cancelling') limit 1", (run_id,)).fetchone()
         if active:
@@ -4451,5 +4557,35 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
                     where run_id=? and dataset_key=?
                     """,
                     (run_id, entry["dataset_key"]),
+                )
+        if refresh_completed_catalogs:
+            specs = {spec.key: spec for spec in DATASET_REGISTRY}
+            refresh_keys = [
+                str(entry["dataset_key"])
+                for entry in item.get("items") or []
+                if entry.get("status") in {"success", "partial"}
+                and _checkpoint_complete(entry)
+                and (
+                    specs.get(str(entry["dataset_key"])).date_field
+                    or specs.get(str(entry["dataset_key"])).catalog_date_field
+                )
+            ]
+            for dataset_key in refresh_keys:
+                connection.execute(
+                    """
+                    update data_sync_items
+                    set status='queued',processed=0,inserted=0,updated=0,failed=0,
+                        checkpoint_json=null,metrics_json=null,error=null,
+                        started_at=null,finished_at=null
+                    where run_id=? and dataset_key=?
+                    """,
+                    (run_id, dataset_key),
+                )
+                # Persistent work items belong to the previous cutoff. A
+                # resumed incremental run must rebuild its work list so newly
+                # opened trade dates are not mistaken for completed work.
+                connection.execute(
+                    "delete from data_sync_work_items where run_id=? and dataset_key=?",
+                    (run_id, dataset_key),
                 )
     return sync_run(run_id) or {}

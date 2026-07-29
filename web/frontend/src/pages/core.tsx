@@ -1872,8 +1872,10 @@ export function DataPage() {
             ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
             : currentSync && ["failed", "cancelled", "partial"].includes(currentSync.status)
               ? <>
-                  <Button type="primary" loading={syncActionLoading} onClick={resumeFullSync}>继续检查点</Button>
-                  <Button loading={syncActionLoading} onClick={() => startFullSync("incremental")}>重新增量</Button>
+                  <Button type="primary" loading={syncActionLoading} onClick={() => startFullSync("incremental")}>开始新一轮增量</Button>
+                  <Tooltip title="保留已完成工作，仅重试失败项并追补新交易日">
+                    <Button loading={syncActionLoading} onClick={resumeFullSync}>继续上次检查点</Button>
+                  </Tooltip>
                   <Button danger loading={syncActionLoading} onClick={confirmRebuild}>全量重建</Button>
                 </>
               : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>{catalog.data.hasCompletedInitialSync ? "一键增量更新" : "一键全量更新"}</Button>}

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Fix one-click TuShare increments to refresh the trading calendar before choosing the market cutoff, advance sparse `stk_limit`/`suspend_d` coverage for newly listed securities, requeue dated catalogs when resuming incremental checkpoints, index basic-contract listing dates for visible catalog ranges, and accept provider-native futures/option catalog nulls without discarding the full update.
 - Give Research Runs names a stable two-line column and preserve sensible row heights with horizontal table overflow on narrower layouts.
 - Unify Research around reproducible template Runs and a shared nested DataScope/Data Gateway contract; separate network-isolated, frozen-snapshot Notebook Workspaces from run history; add explicit Backtest handoff with renewed strategy/preflight requirements; retire Research experiment batches and direct factor, convertible-bond and futures analysis routes; and redesign the responsive Research UI as a dense brokerage-style workstation.
 - Convert A-share index technical/fundamental selection into a research-only final-date screen with complete qualified and Top-N result layers, dedicated screening UI/API/report output, security names and preserved six-digit A-share codes; add symbol-selectable multi-asset price charts with matching order markers and correct per-symbol holding valuation.
