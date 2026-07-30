@@ -337,6 +337,12 @@ def screening_section(screening):
         ) or "缺失"
         reasons = "；".join(map(str, item.get("reasons") or [])) or "-"
         risks = "；".join(map(str, item.get("risks") or [])) or "-"
+        selection_risks = "；".join(map(str, item.get("selectionRisks") or []))
+        selection_text = (
+            "达标"
+            if item.get("selectionEligible") is True
+            else selection_risks or ("未达标" if item.get("selectionEligible") is False else "旧版未记录")
+        )
         rows.append(
             "<tr>"
             f"<td><strong>{html.escape(security_label)}</strong></td>"
@@ -346,6 +352,7 @@ def screening_section(screening):
             f"<td>{float(item.get('overallScore') or 0):.1f}</td>"
             f"<td>{'是' if suitable else '否'}</td>"
             f"<td>{'Top-N' if symbol in selected_symbols else '-'}</td>"
+            f"<td>{html.escape(selection_text)}</td>"
             f"<td>{html.escape(metric_text)}</td>"
             f"<td>{html.escape(reasons)}</td>"
             f"<td>{html.escape(risks)}</td>"
@@ -364,7 +371,7 @@ def screening_section(screening):
         f'<div class="screening-stats">{cards}</div>'
         '<details open><summary>查看全部逐股评估</summary><div class="screening-table-wrap">'
         "<table><thead><tr><th>股票</th><th>走势</th><th>技术分</th><th>基本面分</th>"
-        "<th>综合分</th><th>是否合格</th><th>精选</th><th>基本面快照</th><th>通过依据</th><th>风险/缺失</th>"
+        "<th>综合分</th><th>是否合格</th><th>精选</th><th>精选门槛</th><th>基本面快照</th><th>通过依据</th><th>风险/缺失</th>"
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details></section>"
     )
 

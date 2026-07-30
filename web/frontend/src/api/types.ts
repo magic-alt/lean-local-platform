@@ -1647,6 +1647,8 @@ export interface ScreeningItem {
   fundamentals?: Record<string, number>;
   reasons?: string[];
   risks?: string[];
+  selectionEligible?: boolean;
+  selectionRisks?: string[];
 }
 
 export interface ScreeningReport {
@@ -1666,6 +1668,14 @@ export interface ScreeningReport {
     qualified: number;
     qualifiedSymbols?: string[];
     selected: string[];
+    selectionCriteria?: {
+      topN: number;
+      minOverallScore: number;
+      rsiMin: number;
+      rsiMax: number;
+      maxVolatility: number;
+      maxRisks: number;
+    };
   };
   items: ScreeningItem[];
   qualified: ScreeningItem[];

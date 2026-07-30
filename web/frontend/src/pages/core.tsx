@@ -3088,7 +3088,9 @@ export function RunDetailPage() {
               </Button>
             )}
             {active && <Button danger onClick={cancelRun}>Cancel</Button>}
-            <Button ghost loading={refreshing} onClick={refreshRun} icon={<ReloadOutlined />}>Refresh</Button>
+            <Tooltip title="只重新读取当前运行的状态和已有结果，不会重新回测或更新分析日期。">
+              <Button ghost loading={refreshing} onClick={refreshRun} icon={<ReloadOutlined />}>刷新页面数据</Button>
+            </Tooltip>
           </Space>
           <span className="run-hero__updated">
             {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : "Loading latest result"}
@@ -3153,7 +3155,9 @@ export function RunDetailPage() {
                         type="info"
                         showIcon
                         message="研究型选股分析"
-                        description="该运行只在结束日分析股票池并输出合格与 Top-N 精选结果，不提交订单、不构建持仓。"
+                        description={screening.summary.selectionCriteria
+                          ? `合格池使用基础技术面与基本面门槛；精选还需综合分 ≥ ${screening.summary.selectionCriteria.minOverallScore}、RSI ${screening.summary.selectionCriteria.rsiMin}–${screening.summary.selectionCriteria.rsiMax}、20日波动率 ≤ ${formatPercent(screening.summary.selectionCriteria.maxVolatility)}、风险项 ≤ ${screening.summary.selectionCriteria.maxRisks}，再取最多 ${screening.summary.selectionCriteria.topN} 只。该运行不提交订单、不构建持仓。`
+                          : "该运行只在结束日分析股票池；精选是合格池按综合分截取的 Top-N。当前是旧版结果，若合格数不超过 Top-N，两组可能相同。该运行不提交订单、不构建持仓。"}
                         style={{ marginBottom: 16 }}
                       />
                       <div className="backtest-kpi-grid">
@@ -3161,7 +3165,7 @@ export function RunDetailPage() {
                         <BacktestMetricCard title="分析日期" value={screening.asOfDate || screening.summary.asOfDate || "—"} kind="text" />
                         <BacktestMetricCard title="评估股票" value={screening.summary.evaluated} kind="integer" />
                         <BacktestMetricCard title="合格股票" value={screening.summary.qualified} kind="integer" featured />
-                        <BacktestMetricCard title="Top-N 精选" value={screening.summary.selected.length} kind="integer" />
+                        <BacktestMetricCard title="精选推荐" value={screening.summary.selected.length} kind="integer" />
                       </div>
                       <Card
                         title="逐股筛选结果"
@@ -3221,6 +3225,16 @@ export function RunDetailPage() {
                                 : item.suitableToBuy
                                   ? <Tag color="green">合格</Tag>
                                   : <Tag>未通过</Tag>,
+                            },
+                            {
+                              title: "精选门槛",
+                              key: "selectionEligibility",
+                              width: 180,
+                              render: (_, item) => item.selectionEligible === true
+                                ? <Tag color="blue">达标</Tag>
+                                : item.selectionEligible === false
+                                  ? <Tooltip title={(item.selectionRisks || []).join("；")}><span>{(item.selectionRisks || []).join("；") || "未达标"}</span></Tooltip>
+                                  : <Typography.Text type="secondary">旧版结果未记录</Typography.Text>,
                             },
                             { title: "收盘", dataIndex: "close", width: 90, align: "right", render: (value) => formatNumber(value, 2) },
                             { title: "RSI", dataIndex: "rsi", width: 80, align: "right", render: (value) => formatNumber(value, 2) },

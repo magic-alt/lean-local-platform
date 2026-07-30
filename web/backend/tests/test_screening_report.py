@@ -83,9 +83,15 @@ def test_index_screening_template_is_research_only_and_never_submits_orders():
     assert template["researchOnly"] is True
     assert template["tradable"] is False
     assert template["admissionEligible"] is False
+    parameters = {item["key"]: item for item in template["parameters"]}
+    assert parameters["topN"]["default"] == 10
+    assert parameters["selectedMinScore"]["default"] == 85
+    assert parameters["selectedMaxRisks"]["default"] == 1
     assert "rebalanceDays" not in body
     assert "set_holdings" not in body
     assert "target_percent" not in body
     assert "liquidate(" not in body
     assert ".exit(" not in body
     assert "evaluation=final_snapshot" in body
+    assert "selectionEligible" in body
+    assert "selectionCriteria" in body
