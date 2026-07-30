@@ -27,12 +27,19 @@ const run = {
   created_at: "2026-07-27T09:05:00+08:00"
 };
 
+const duplicateProject = {
+  ...project,
+  id: "journey-project-duplicate",
+  created_at: "2026-07-26T09:00:00+08:00",
+  updated_at: "2026-07-26T09:00:00+08:00"
+};
+
 test.describe("15 首次回测用户旅程 @smoke @responsive", () => {
   test("配置、提交并从结果返回时保留回测上下文", async ({ page }) => {
     await page.route(/^https?:\/\/[^/]+\/api\/.*$/, async (route) => {
       const url = new URL(route.request().url());
       const method = route.request().method();
-      if (url.pathname === "/api/projects") return route.fulfill({ json: [project] });
+      if (url.pathname === "/api/projects") return route.fulfill({ json: [project, duplicateProject] });
       if (url.pathname === "/api/strategies/templates") {
         return route.fulfill({ json: [{ key: "sma_cross", name: "SMA Cross", description: "", parameters: [] }] });
       }
@@ -68,6 +75,9 @@ test.describe("15 首次回测用户旅程 @smoke @responsive", () => {
 
     const config = new BacktestConfigPage(page);
     await config.open();
+    await page.getByTestId("backtest-project-select").click();
+    await expect(page.getByRole("option", { name: project.name })).toHaveCount(1);
+    await page.keyboard.press("Escape");
     await config.fill({
       projectName: project.name,
       name: run.name,

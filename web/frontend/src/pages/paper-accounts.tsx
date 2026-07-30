@@ -54,6 +54,7 @@ import type {
   PaperSignal,
   Project
 } from "../api";
+import { projectSelectOptions } from "../utils/projects";
 
 
 const money = (value?: string | number | null, currency = "CNY") =>
@@ -345,7 +346,7 @@ function AccountWizard({
           />
           <Form.Item name="projectId" label="项目" rules={[{ required: true }]}>
             <Select
-              options={projects.map((item) => ({ value: item.id, label: item.display_name || item.name }))}
+              options={projectSelectOptions(projects)}
               showSearch
               optionFilterProp="label"
             />

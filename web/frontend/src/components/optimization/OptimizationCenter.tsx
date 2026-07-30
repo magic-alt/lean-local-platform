@@ -42,6 +42,7 @@ import type {
 import { defaultSettings } from "../../config/defaults";
 import { useAsyncData } from "../../hooks";
 import { shortValue } from "../../utils/display";
+import { projectSelectOptions } from "../../utils/projects";
 import { CompareRunsPanel } from "../../pages/compare";
 import { DateStringPicker } from "../DateStringPicker";
 import { ExampleGallery } from "../examples/ExampleGallery";
@@ -408,7 +409,7 @@ export function OptimizationCenter() {
                         <Form.Item className="form-field--wide" name="projectIds" label="策略项目" rules={[{ required: true }]}>
                           <Select
                             mode="multiple"
-                            options={projects.data.map((project) => ({ value: project.id, label: projectLabel(project) }))}
+                            options={projectSelectOptions(projects.data)}
                             onChange={(ids) => { initializeProjectParameters(ids); setPreview(undefined); }}
                           />
                         </Form.Item>

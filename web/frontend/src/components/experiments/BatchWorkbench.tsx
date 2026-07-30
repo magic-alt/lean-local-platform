@@ -10,6 +10,7 @@ import type { DataScope, ExperimentBatch, ExperimentBatchComparison, ExperimentB
 import { DateStringPicker } from "../DateStringPicker";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
 import { marketCostParameters } from "../../domain/backtest-request";
+import { projectSelectOptions } from "../../utils/projects";
 
 
 const MODES = {
@@ -305,7 +306,7 @@ export function BatchWorkbench({
             <Form.Item className="form-field--wide" name="name" label="批次名称" rules={[{ required: true }]}><Input /></Form.Item>
             <Form.Item name="mode" label="运行模式"><Select virtual={false} options={MODES[kind]} onChange={() => setPreview(undefined)} /></Form.Item>
             {kind !== "research" && <Form.Item name="market" label="市场"><Select onChange={(value) => form.setFieldsValue({ benchmarkSymbol: defaultBenchmark(value), source: defaultSource(value) })} options={[{ value: "china", label: "A 股" }, { value: "hongkong", label: "港股" }, { value: "usa", label: "美股" }]} /></Form.Item>}
-            {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select virtual={false} mode="multiple" options={projects.map((project) => ({ value: project.id, label: project.display_name || project.name }))} /></Form.Item>}
+            {activeProjectRequired && <Form.Item className="form-field--wide" name="projectIds" label="项目" rules={[{ required: true }]}><Select virtual={false} mode="multiple" options={projectSelectOptions(projects)} /></Form.Item>}
             {kind !== "research" && <Form.Item name="symbolSource" label="标的来源"><Select options={[{ value: "symbols", label: "股票代码" }, { value: "universe", label: "PIT股票池" }]} /></Form.Item>}
             {kind !== "research" && symbolSource === "symbols" && mode !== "dynamic_universe" && <Form.Item className="form-field--wide" name="symbols" label="股票代码"><Input.TextArea rows={2} placeholder="000001,600519" /></Form.Item>}
             {kind !== "research" && (symbolSource === "universe" || mode === "dynamic_universe") && <Form.Item name="universeCode" label="股票池"><Select options={universeOptions} onChange={(value) => {

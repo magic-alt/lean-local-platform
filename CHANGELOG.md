@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Deduplicate indistinguishable project names in project-selection suggestions across Backtest, Optimization, Research, Batch, History, and Paper workflows while preserving every underlying record in project management.
 - Split A-share index screening into a broad qualified pool and a stricter high-conviction shortlist using overall-score, RSI, volatility and risk-count gates before the Top-N cap; clarify that result-page refresh only reloads immutable run artifacts and does not rerun screening.
 - Fix the Optimization Center's unstable portfolio-candidate loader, preventing an unavailable candidates endpoint from triggering an endless request/render loop and repeated red `Not Found` notifications; show one retryable inline error in Portfolio Builder instead.
 - Replace the legacy optimization worker and split configuration pages with one Optimization Center backed by standard experiment-batch child backtests; add typed DataScope/execution/objective contracts, Research → Backtest → Optimization lineage and server-side handoff validation, persisted admission-gated portfolio optimization with currency/resolution/alignment safeguards, normalized run comparison, archival controls, and migration `0035` that retires `optimization_runs` and the old `/api/optimize` and `/api/portfolios/optimize` routes.

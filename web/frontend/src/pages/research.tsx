@@ -43,6 +43,7 @@ import type {
   ResearchWorkspace
 } from "../api";
 import { useAsyncData } from "../hooks";
+import { projectSelectOptions } from "../utils/projects";
 
 type ResearchView = "new" | "runs" | "workspaces";
 
@@ -509,7 +510,7 @@ function Workspaces({ projects, workspaces, reload }: { projects: Project[]; wor
       <Modal title="新建 Notebook Workspace" open={open} onCancel={() => setOpen(false)} onOk={() => void create()}>
         <Form form={form} layout="vertical">
           <Form.Item name="projectId" label="研究项目" rules={[{ required: true }]}>
-            <Select showSearch optionFilterProp="label" options={projects.map((project) => ({ value: project.id, label: project.name }))} />
+            <Select showSearch optionFilterProp="label" options={projectSelectOptions(projects)} />
           </Form.Item>
           <Form.Item name="port" label="端口（可选）"><InputNumber min={1024} max={65535} /></Form.Item>
           <Form.Item name="snapshotId" label="冻结数据快照 ID" rules={[{ required: true, message: "Workspace 必须绑定冻结快照" }]}>
