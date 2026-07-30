@@ -174,6 +174,12 @@ LEAN_INSIGHTS_LLM_PROVIDER=deepseek
 LEAN_INSIGHTS_LLM_BASE_URL=
 LEAN_INSIGHTS_LLM_MODEL=
 LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS=60
+
+# A-share technology daily report: hybrid_multi_agent or deterministic.
+LEAN_ASHARE_TECH_AGENT_MODE=hybrid_multi_agent
+# Matured 1/5/20-trading-day forecast evaluation schedule.
+LEAN_ASHARE_TECH_EVALUATION_HOUR=18
+LEAN_ASHARE_TECH_EVALUATION_MINUTE=45
 ```
 
 Configure only the key for the provider you want to use. Provider defaults are `deepseek-v4-flash`, `glm-5.2`, `kimi-k2.6`, `gpt-5-mini`, and `claude-sonnet-4-6`, respectively. `ZAI_API_KEY` and `MOONSHOT_API_KEY` are accepted as aliases for `ZHIPU_API_KEY` and `KIMI_API_KEY`. API keys are never returned by capabilities, stored in settings, or persisted with the report.
@@ -347,6 +353,12 @@ GET    /api/insights/ashare-tech/reports
 POST   /api/insights/ashare-tech/reports
 GET    /api/insights/ashare-tech/reports/{report_id}
 DELETE /api/insights/ashare-tech/reports/{report_id}
+POST   /api/insights/ashare-tech/model-diagnostics
+GET    /api/insights/ashare-tech/reports/{report_id}/agent-runs
+GET    /api/insights/ashare-tech/agent-runs/{run_id}
+GET    /api/insights/ashare-tech/evaluations
+GET    /api/insights/ashare-tech/evaluations/summary
+POST   /api/insights/ashare-tech/evaluations/refresh
 GET    /api/insights/ashare-tech/watchlist
 POST   /api/insights/ashare-tech/watchlist/items
 PATCH  /api/insights/ashare-tech/watchlist/items/{code}
@@ -365,9 +377,17 @@ latest close. DC/THS sector indexes are
 preferred; Eastmoney sector K-lines are a marked fallback. It runs at 17:30
 Asia/Shanghai on weekdays and retries at 18:00 and 18:30 when the full-pool
 close is incomplete. Exchange announcements and official government policy
-pages are checked over the latest seven calendar days. The rule engine owns all
-metrics, classifications and risk gates; an optional LLM may only add prose
-that cites report fact IDs. This workspace never creates Paper signals or orders.
+pages are checked over the latest seven calendar days.
+
+When a provider is configured, the default hybrid workflow runs structured
+technical, PIT-fundamental, bull, bear, risk, and final-selection stages. It
+stores stage status, input fingerprint, fact IDs, prompt/model versions, output,
+latency and usage, but never chain-of-thought or API keys. Technical forecasts
+cover 1, 5 and 20 actual trading days; the 18:45 weekday evaluator records
+direction accuracy, three-class Brier score, stock/benchmark return, excess
+return and Top-5 lift. Deterministic fallbacks stay visible but are excluded
+from model prediction metrics. Server-side risk gates always override model
+output, and this workspace never creates Paper signals or orders.
 
 ## Health and Observability
 

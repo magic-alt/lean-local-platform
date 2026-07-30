@@ -5,6 +5,8 @@ from celery.signals import before_task_publish, task_postrun, task_prerun
 from ..core.config import (
     ASHARE_TECH_REPORT_HOUR,
     ASHARE_TECH_REPORT_MINUTE,
+    ASHARE_TECH_EVALUATION_HOUR,
+    ASHARE_TECH_EVALUATION_MINUTE,
     DERIVED_MAINTENANCE_HOUR,
     DERIVED_MAINTENANCE_MINUTE,
     MYSQL_BACKUP_HOUR,
@@ -81,6 +83,7 @@ celery_app.conf.update(
         "lean_web.reconcile_experiment_batches": {"queue": "default"},
         "lean_web.run_paper_execution_cycle": {"queue": "default"},
         "lean_web.finalize_paper_execution_cycle": {"queue": "default"},
+        "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
     # Bulk sync/materialization tasks can legitimately run for several hours.
@@ -145,6 +148,14 @@ celery_app.conf.update(
             "schedule": crontab(
                 minute=ASHARE_TECH_REPORT_MINUTE,
                 hour=ASHARE_TECH_REPORT_HOUR,
+                day_of_week="1-5",
+            ),
+        },
+        "ashare-tech-prediction-evaluation": {
+            "task": "lean_web.refresh_ashare_tech_evaluations",
+            "schedule": crontab(
+                minute=ASHARE_TECH_EVALUATION_MINUTE,
+                hour=ASHARE_TECH_EVALUATION_HOUR,
                 day_of_week="1-5",
             ),
         },

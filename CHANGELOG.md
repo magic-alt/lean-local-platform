@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Fix MySQL migration parsing so semicolons in leading SQL comments cannot prevent a pending schema migration from applying and break Insights refreshes with missing-table errors.
+- Upgrade A-share Technology Daily from an opaque optional narrative into an auditable six-stage model workflow with environment-only DeepSeek-compatible diagnostics, PIT fundamentals, evidence-bound 1/5/20-trading-day forecasts, deterministic failover, hard server-side vetoes, Top-10/Top-5 selection, and scheduled direction/Brier/return evaluation in the Insights UI.
 - Deduplicate indistinguishable project names in project-selection suggestions across Backtest, Optimization, Research, Batch, History, and Paper workflows while preserving every underlying record in project management.
 - Split A-share index screening into a broad qualified pool and a stricter high-conviction shortlist using overall-score, RSI, volatility and risk-count gates before the Top-N cap; clarify that result-page refresh only reloads immutable run artifacts and does not rerun screening.
 - Fix the Optimization Center's unstable portfolio-candidate loader, preventing an unavailable candidates endpoint from triggering an endless request/render loop and repeated red `Not Found` notifications; show one retryable inline error in Portfolio Builder instead.

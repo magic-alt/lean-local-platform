@@ -95,6 +95,27 @@ def test_mysql_index_parser_handles_leading_migration_comment():
     )
 
 
+def test_mysql_script_splitter_ignores_semicolons_in_leading_comments():
+    import app.db as db_module
+
+    script = """
+    -- description: Add tables
+    -- compatibility: additive schema; legacy rows remain readable
+    alter table reports add column agent_run_id text;
+    create table if not exists agent_runs (id text primary key);
+    """
+
+    statements = [
+        db_module._strip_leading_sql_comments(statement)
+        for statement in db_module._split_sql_script(script)
+    ]
+
+    assert statements == [
+        "alter table reports add column agent_run_id text",
+        "create table if not exists agent_runs (id text primary key)",
+    ]
+
+
 def test_mysql_connect_retries_transient_handshake_failures(monkeypatch):
     import app.db as db_module
 

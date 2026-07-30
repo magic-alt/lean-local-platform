@@ -38,6 +38,7 @@ from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
 from ..services.tasks import append_log, create_task, get_task, update_task
 from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
+from ..services import ashare_tech_agents
 from ..services import paper as paper_service
 from ..services.trading_calendar import next_trade_date
 from ..services import paper_accounts
@@ -149,6 +150,32 @@ def schedule_ashare_tech_report_task():
     result = generate_ashare_tech_report_task.apply_async(args=[task["id"], report["id"]])
     update_task(task["id"], celery_task_id=result.id)
     return {"id": report["id"], "taskId": task["id"], "status": "queued"}
+
+
+@celery_app.task(name="lean_web.refresh_ashare_tech_evaluations")
+def refresh_ashare_tech_evaluations_task(task_id: str | None = None):
+    if task_id:
+        update_task(task_id, status="running", started_at=utc_now(), error=None)
+        append_log(task_id, "Refreshing matured A-share technology Agent predictions.")
+    try:
+        result = ashare_tech_agents.refresh_evaluations()
+        if task_id:
+            update_task(
+                task_id,
+                status="success",
+                artifacts_json=["ashare-tech-evaluations"],
+                finished_at=utc_now(),
+                error=None,
+            )
+            append_log(task_id, f"Completed prediction refresh: {json.dumps(result, ensure_ascii=False)}")
+        _record_task_metric("ashare_tech_evaluation", "success")
+        return result
+    except Exception as exc:
+        if task_id:
+            update_task(task_id, status="failed", finished_at=utc_now(), error=str(exc))
+            append_log(task_id, f"Prediction refresh failed: {exc}")
+        _record_task_metric("ashare_tech_evaluation", "failed")
+        raise
 
 
 @celery_app.task(name="lean_web.mark_paper_walkforward_running")

@@ -1379,7 +1379,16 @@ export interface AshareTechCapabilities {
   primarySource: string;
   crossCheckSource: string;
   promptVersion: string;
+  configured: boolean;
+  provider?: string | null;
   model?: string | null;
+  endpointHost?: string | null;
+  apiStyle: string;
+  agentMode: string;
+  defaultAnalysisMode: "hybrid_multi_agent" | "deterministic";
+  stages: Array<{ key: string; name: string; sequence: number }>;
+  evaluationHorizons: number[];
+  agentPromptVersion: string;
   llmOptional: boolean;
   paperHandoff: boolean;
   schedule: string;
@@ -1424,6 +1433,7 @@ export interface AshareTechStockRow {
   ma20DeviationPct?: number | null;
   ma60DeviationPct?: number | null;
   drawdown20Pct?: number | null;
+  volatility20?: number | null;
   volumeRatio20?: number | null;
   amountRatio20?: number | null;
   turnoverRate?: number | null;
@@ -1474,7 +1484,140 @@ export interface AshareTechReportPayload {
   modelNarrative?: Record<string, string>;
   narrativeStatus?: string;
   narrativeWarning?: string;
+  agentRunSummary?: AshareTechAgentRunSummary;
   disclaimer: string;
+}
+
+export interface AshareTechAgentStage {
+  id?: string;
+  stage_key: string;
+  sequence_no: number;
+  status: "running" | "success" | "fallback" | "failed" | "skipped";
+  provider?: string | null;
+  model?: string | null;
+  prompt_version: string;
+  latency_ms?: number | null;
+  attempt_count: number;
+  error_category?: string | null;
+  error?: string | null;
+  output?: Record<string, unknown> | null;
+  usage?: Record<string, number>;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface AshareTechAgentPrediction {
+  id: string;
+  symbol: string;
+  horizon_days: 1 | 5 | 20;
+  predicted_direction: "bullish" | "neutral" | "bearish";
+  probabilities: { bullish: number; neutral: number; bearish: number };
+  confidence: number;
+  trend_score: number;
+  rule_conclusion?: string | null;
+  selection_rank?: number | null;
+  selection_tier: "priority" | "watch" | "unranked";
+  rationale: string;
+  evidenceIds?: string[];
+  neutral_band_pct: number;
+  entry_date: string;
+  entry_close: number;
+  target_date?: string | null;
+  benchmark_code: string;
+  model: string;
+  prompt_version: string;
+}
+
+export interface AshareTechAgentRunSummary {
+  runId: string;
+  analysisMode: string;
+  status: string;
+  provider?: string | null;
+  model?: string | null;
+  promptVersion: string;
+  stages: AshareTechAgentStage[];
+  topSelections: Array<{
+    rank: number;
+    symbol: string;
+    tier: "priority" | "watch";
+    consensusScore: number;
+    rationale: string;
+    evidenceIds: string[];
+  }>;
+  marketRegime?: string;
+  summary?: string;
+  predictionCount?: number;
+  fallbackReason?: string | null;
+  usage?: Record<string, number>;
+}
+
+export interface AshareTechAgentRun {
+  id: string;
+  report_id: string;
+  requested_date: string;
+  analysis_date: string;
+  analysis_mode: string;
+  status: string;
+  provider?: string | null;
+  requested_model?: string | null;
+  prompt_version: string;
+  fallback_reason?: string | null;
+  stageSummary?: AshareTechAgentStage[];
+  usage?: Record<string, number>;
+  stages: AshareTechAgentStage[];
+  predictions: AshareTechAgentPrediction[];
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export interface AshareTechModelDiagnostic {
+  configured: boolean;
+  provider?: string | null;
+  model?: string | null;
+  endpointHost?: string | null;
+  apiStyle: string;
+  status: "ok" | "error" | "unconfigured";
+  structuredJson?: boolean;
+  latencyMs?: number;
+  usage?: Record<string, number>;
+  errorCategory?: string;
+  error?: string;
+  checkedAt: string;
+}
+
+export interface AshareTechEvaluationItem extends AshareTechAgentPrediction {
+  evaluation_status?: "pending" | "evaluated" | "failed" | null;
+  evaluated_date?: string | null;
+  exit_close?: number | null;
+  return_pct?: number | null;
+  benchmark_return_pct?: number | null;
+  excess_return_pct?: number | null;
+  realized_direction?: "bullish" | "neutral" | "bearish" | null;
+  direction_hit?: number | null;
+  brier_score?: number | null;
+  missing_reason?: string | null;
+}
+
+export interface AshareTechEvaluationSummary {
+  sampleSize: number;
+  pending: number;
+  sampleSufficient: boolean;
+  directionAccuracy?: number | null;
+  meanBrier?: number | null;
+  averageReturnPct?: number | null;
+  averageExcessReturnPct?: number | null;
+  selectedAverageReturnPct?: number | null;
+  top5AverageReturnPct?: number | null;
+  byHorizon: Array<{
+    horizonDays: number;
+    sampleSize: number;
+    directionAccuracy?: number | null;
+    meanBrier?: number | null;
+    averageReturnPct?: number | null;
+    averageExcessReturnPct?: number | null;
+    top5AverageReturnPct?: number | null;
+    top5LiftPct?: number | null;
+  }>;
 }
 
 export interface AshareTechMarketEnvironmentItem {
@@ -1525,6 +1668,10 @@ export interface AshareTechReport {
   sourceManifest?: Array<Record<string, unknown>>;
   report?: AshareTechReportPayload | null;
   model?: string | null;
+  analysis_mode?: string | null;
+  llm_status?: string | null;
+  active_agent_run_id?: string | null;
+  agentSummary?: AshareTechAgentRunSummary | null;
   prompt_version: string;
   input_fingerprint?: string | null;
   pool_fingerprint?: string | null;

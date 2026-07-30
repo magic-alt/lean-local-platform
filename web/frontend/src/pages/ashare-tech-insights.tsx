@@ -1,10 +1,11 @@
-import { Alert, Button, Card, Checkbox, Col, Descriptions, Divider, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, message } from "antd";
-import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Checkbox, Col, Descriptions, Divider, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Steps, Switch, Table, Tabs, Tag, Typography, message } from "antd";
+import { ApiOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
+import type { AshareTechAgentRun, AshareTechEvaluationItem, AshareTechEvaluationSummary, AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechModelDiagnostic, AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
 import { ApiError } from "../api/client";
+import { LeanChart } from "../charts/LeanChart";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
 import { FormActions, FormGrid } from "../components/forms/FormLayout";
@@ -12,6 +13,9 @@ import { useAsyncData } from "../hooks";
 
 const emptyList = { items: [], count: 0, limit: 50, offset: 0 };
 const emptyWatchlist = { items: [], count: 0, enabledCount: 0, maxSize: 60, groups: [], fingerprint: "" };
+const emptyEvaluationSummary: AshareTechEvaluationSummary = {
+  sampleSize: 0, pending: 0, sampleSufficient: false, byHorizon: []
+};
 const ruleTagOptions = [
   { value: "strong_ai", label: "强势AI" },
   { value: "storage", label: "存储" }
@@ -29,6 +33,19 @@ function labelColor(label: string) {
   if (["风险较高", "不追高"].includes(label)) return "red";
   if (label === "重点观察") return "blue";
   return "default";
+}
+
+function agentStatusColor(status?: string | null) {
+  if (status === "success" || status === "ok") return "green";
+  if (status === "degraded" || status === "fallback" || status === "unconfigured") return "orange";
+  if (status === "failed" || status === "error") return "red";
+  return "blue";
+}
+
+function directionTag(direction?: string | null) {
+  if (!direction) return <Tag>-</Tag>;
+  const labels: Record<string, string> = { bullish: "看多", neutral: "中性", bearish: "看空" };
+  return <Tag color={direction === "bullish" ? "red" : direction === "bearish" ? "green" : "default"}>{labels[direction] || direction}</Tag>;
 }
 
 const number = (value?: number | null) => value == null ? "-" : value.toFixed(2);
@@ -91,31 +108,61 @@ export function AshareTechInsights() {
   const reports = useAsyncData(api.ashareTechReports, emptyList, false);
   const capabilities = useAsyncData(api.ashareTechCapabilities, {
     poolSize: 26, totalPoolSize: 26, defaultPoolSize: 26, groups: [], primarySource: "TuShare Pro", crossCheckSource: "东方财富",
-    promptVersion: "ashare-tech-gpt56-v1", model: null, llmOptional: true, paperHandoff: false,
+    promptVersion: "ashare-tech-gpt56-v1", configured: false, provider: null, model: null, endpointHost: null,
+    apiStyle: "OpenAI-compatible chat/completions", agentMode: "hybrid_multi_agent" as const,
+    defaultAnalysisMode: "deterministic" as const, stages: [], evaluationHorizons: [1, 5, 20],
+    agentPromptVersion: "ashare-tech-agent-v2", llmOptional: true, paperHandoff: false,
     schedule: "工作日17:30", labels: []
   }, false);
   const watchlist = useAsyncData(api.ashareTechWatchlist, emptyWatchlist, false);
+  const loadEvaluations = useCallback(
+    () => api.ashareTechEvaluations({ limit: 500 }),
+    []
+  );
+  const evaluationSummary = useAsyncData(api.ashareTechEvaluationSummary, emptyEvaluationSummary, false);
+  const evaluations = useAsyncData<{ items: AshareTechEvaluationItem[]; count: number }>(
+    loadEvaluations,
+    { items: [], count: 0 },
+    false
+  );
   const [selected, setSelected] = useState<AshareTechReport | null>(null);
+  const [agentRun, setAgentRun] = useState<AshareTechAgentRun | null>(null);
+  const [diagnostic, setDiagnostic] = useState<AshareTechModelDiagnostic | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [refreshingEvaluations, setRefreshingEvaluations] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [detailWarning, setDetailWarning] = useState<string | null>(null);
   const [addForm] = Form.useForm();
 
-  const loadErrors = [reports.error, capabilities.error, watchlist.error].filter((item): item is Error => Boolean(item));
+  const loadErrors = [reports.error, capabilities.error, watchlist.error, evaluationSummary.error, evaluations.error].filter((item): item is Error => Boolean(item));
   const routeMissing = loadErrors.some((error) => error instanceof ApiError && error.status === 404);
 
   const refreshAll = useCallback(async () => {
-    const [nextReports] = await Promise.all([reports.reload(), capabilities.reload(), watchlist.reload()]);
+    const [nextReports] = await Promise.all([
+      reports.reload(), capabilities.reload(), watchlist.reload(), evaluationSummary.reload(), evaluations.reload()
+    ]);
     if (selected && nextReports && !nextReports.items.some((item) => item.id === selected.id)) {
       setSelected(null);
       setDetailWarning("该报告已不在历史列表中，已清空详情并停止自动轮询。");
     }
-  }, [capabilities, reports, selected, watchlist]);
+  }, [capabilities, evaluationSummary, evaluations, reports, selected, watchlist]);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
-      setSelected(await api.ashareTechReport(id));
+      const detail = await api.ashareTechReport(id);
+      setSelected(detail);
+      if (detail.active_agent_run_id) {
+        try {
+          setAgentRun(await api.ashareTechAgentRun(detail.active_agent_run_id));
+        } catch (agentError) {
+          setAgentRun(null);
+          message.warning(`报告已加载，但 Agent 审计记录读取失败：${(agentError as Error).message}`);
+        }
+      } else {
+        setAgentRun(null);
+      }
       setDetailWarning(null);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -133,7 +180,7 @@ export function AshareTechInsights() {
     return () => window.clearTimeout(timer);
   }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
-  async function create(values: { requestedDate?: string; force?: boolean }) {
+  async function create(values: { requestedDate?: string; force?: boolean; analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic" }) {
     setSubmitting(true);
     try {
       const result = await api.createAshareTechReport(values);
@@ -142,6 +189,36 @@ export function AshareTechInsights() {
       await loadDetail(result.id);
     } catch (error) { message.error((error as Error).message); }
     finally { setSubmitting(false); }
+  }
+
+  async function diagnoseModel() {
+    setDiagnosing(true);
+    try {
+      const result = await api.diagnoseAshareTechModel();
+      setDiagnostic(result);
+      if (result.status === "ok") message.success(`模型连接正常，耗时 ${result.latencyMs ?? "-"}ms`);
+      else message.warning(result.error || "模型尚未配置");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setDiagnosing(false);
+    }
+  }
+
+  async function refreshEvaluationData() {
+    setRefreshingEvaluations(true);
+    try {
+      await api.refreshAshareTechEvaluations();
+      message.success("预测评估刷新任务已进入队列");
+      window.setTimeout(() => {
+        void evaluationSummary.reload();
+        void evaluations.reload();
+      }, 2500);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRefreshingEvaluations(false);
+    }
   }
 
   async function addStock(values: { code: string; groupKey: AshareTechWatchlistItem["groupKey"]; ruleTags?: AshareTechRuleTag[] }) {
@@ -211,12 +288,82 @@ export function AshareTechInsights() {
   const expectedSectorKeywords = ["半导体", "存储", "CPO", "PCB", "AI服务器"];
   const coveredSectorKeywords = new Set(sectorEnvironment.map((item) => item.keyword).filter(Boolean));
   const missingSectorKeywords = expectedSectorKeywords.filter((keyword) => !coveredSectorKeywords.has(keyword));
+  const selectedSymbols = new Map((report?.fullPool || []).map((item) => [item.code, item]));
+  const predictionMap = new Map(
+    (agentRun?.predictions || []).map((item) => [`${item.symbol}:${item.horizon_days}`, item])
+  );
+  const topSelections = report?.agentRunSummary?.topSelections || selected?.agentSummary?.topSelections || [];
+  const topSelectionRows = topSelections.map((item) => ({
+    ...item,
+    name: selectedSymbols.get(item.symbol)?.name || item.symbol,
+    ruleConclusion: selectedSymbols.get(item.symbol)?.conclusion
+  }));
+  const stageItems = (agentRun?.stages || report?.agentRunSummary?.stages || []).map((stage) => ({
+    title: capabilities.data.stages.find((item) => item.key === stage.stage_key)?.name || stage.stage_key,
+    status: stage.status === "success" ? "finish" as const
+      : stage.status === "failed" ? "error" as const
+        : stage.status === "running" ? "process" as const
+          : "wait" as const,
+    description: <Space direction="vertical" size={0}>
+      <Tag color={agentStatusColor(stage.status)}>{stage.status}</Tag>
+      <span className="muted">{stage.model || capabilities.data.model || "-"} · {stage.latency_ms == null ? "-" : `${stage.latency_ms}ms`}</span>
+    </Space>
+  }));
+  const evaluationChartOption = {
+    tooltip: { trigger: "axis" },
+    legend: { data: ["方向命中率", "平均收益", "平均超额", "Top5提升"] },
+    xAxis: { type: "category", data: evaluationSummary.data.byHorizon.map((item) => `${item.horizonDays}日`) },
+    yAxis: [
+      { type: "value", name: "百分比", axisLabel: { formatter: "{value}%" } }
+    ],
+    series: [
+      {
+        name: "方向命中率", type: "bar",
+        data: evaluationSummary.data.byHorizon.map((item) => item.directionAccuracy == null ? null : item.directionAccuracy * 100)
+      },
+      {
+        name: "平均收益", type: "line",
+        data: evaluationSummary.data.byHorizon.map((item) => item.averageReturnPct ?? null)
+      },
+      {
+        name: "平均超额", type: "line",
+        data: evaluationSummary.data.byHorizon.map((item) => item.averageExcessReturnPct ?? null)
+      },
+      {
+        name: "Top5提升", type: "line",
+        data: evaluationSummary.data.byHorizon.map((item) => item.top5LiftPct ?? null)
+      }
+    ]
+  };
   return (
     <>
+      <Card
+        title={<Space><ApiOutlined />大模型与多 Agent 接口</Space>}
+        style={{ marginBottom: 16 }}
+        extra={<Button icon={<ApiOutlined />} loading={diagnosing} onClick={() => void diagnoseModel()}>检测连接</Button>}
+      >
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={6}><Statistic title="Provider / 模型" value={`${capabilities.data.provider || "未配置"} / ${capabilities.data.model || "-"}`} /></Col>
+          <Col xs={12} md={4}><Statistic title="连接配置" value={capabilities.data.configured ? "已配置" : "未配置"} valueStyle={{ color: capabilities.data.configured ? "#3f8600" : "#cf1322" }} /></Col>
+          <Col xs={12} md={4}><Statistic title="默认模式" value={capabilities.data.defaultAnalysisMode === "hybrid_multi_agent" ? "六阶段 Agent" : "确定性"} /></Col>
+          <Col xs={12} md={5}><Statistic title="接口" value={capabilities.data.apiStyle} /></Col>
+          <Col xs={12} md={5}><Statistic title="Prompt" value={capabilities.data.agentPromptVersion} /></Col>
+        </Row>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+          模型通过 {capabilities.data.endpointHost || "未配置端点"} 的结构化 JSON 接口运行。规则引擎提供事实和硬风险门禁；
+          Agent 负责技术趋势、基本面、多空复核、风险审查与研究排序。API Key 仅保存在服务环境变量中，页面不会读取或保存密钥。
+        </Typography.Paragraph>
+        {diagnostic && <Alert
+          showIcon style={{ marginTop: 12 }}
+          type={diagnostic.status === "ok" ? "success" : diagnostic.status === "unconfigured" ? "warning" : "error"}
+          message={`连接诊断：${diagnostic.status}${diagnostic.latencyMs == null ? "" : ` · ${diagnostic.latencyMs}ms`}`}
+          description={diagnostic.error || `${diagnostic.provider || "-"} / ${diagnostic.model || "-"} 已返回合法结构化 JSON`}
+        />}
+      </Card>
       <Alert
         showIcon type="info" style={{ marginBottom: 16 }}
-        message={`当前启用 ${capabilities.data.poolSize} / 总计 ${capabilities.data.totalPoolSize} 只｜${capabilities.data.schedule}`}
-        description="TuShare Pro 统一计算前复权日线、成交量、成交额和换手率；东方财富只核验最新收盘。规则引擎决定分类，模型未配置时仍生成确定性报告。本工作区没有 Paper 或自动下单入口。"
+        message={`当前启用 ${capabilities.data.poolSize} / 总计 ${capabilities.data.totalPoolSize} 只｜${capabilities.data.schedule}｜${capabilities.data.stages.length || 6} 个 Agent`}
+        description="TuShare Pro 提供量价与 PIT 基本面，东方财富只核验最新收盘。模型对观察池做研究排序，规则引擎保留最终风险门禁；任一 Agent 失败都会显式降级。本工作区没有 Paper 或自动下单入口。"
       />
       {loadErrors.length > 0 && <Alert
         showIcon type="error" style={{ marginBottom: 16 }}
@@ -227,8 +374,15 @@ export function AshareTechInsights() {
       />}
       {detailWarning && <Alert showIcon closable onClose={() => setDetailWarning(null)} type="warning" style={{ marginBottom: 16 }} message={detailWarning} />}
       <Card title="生成 A股科技股收盘日报" extra={<Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>刷新</Button>}>
-        <Form layout="inline" onFinish={create} initialValues={{ force: false }}>
+        <Form layout="inline" onFinish={create} initialValues={{ force: false, analysisMode: "auto" }}>
           <Form.Item name="requestedDate" label="报告日期"><DateStringPicker /></Form.Item>
+          <Form.Item name="analysisMode" label="分析模式">
+            <Select style={{ width: 190 }} options={[
+              { value: "auto", label: "自动（优先多 Agent）" },
+              { value: "hybrid_multi_agent", label: "混合六阶段 Agent" },
+              { value: "deterministic", label: "仅确定性规则" }
+            ]} />
+          </Form.Item>
           <Form.Item name="force" valuePropName="checked"><Checkbox>使用最新观察池强制重新生成</Checkbox></Form.Item>
           <Form.Item><Button type="primary" htmlType="submit" loading={submitting}>生成/打开日报</Button></Form.Item>
         </Form>
@@ -300,10 +454,157 @@ export function AshareTechInsights() {
           <Descriptions.Item label="截止">{selected.data_cutoff_at || "-"}</Descriptions.Item>
           <Descriptions.Item label="主源">{report?.primarySource || selected.primary_source}</Descriptions.Item>
           <Descriptions.Item label="交叉核验">{report?.crossCheckSource || "-"}</Descriptions.Item>
-          <Descriptions.Item label="模型">{selected.model || "确定性模板（未调用模型）"}</Descriptions.Item>
+          <Descriptions.Item label="模型">
+            <Space>
+              <span>{selected.model || capabilities.data.model || "未配置"}</span>
+              <Tag color={agentStatusColor(selected.llm_status)}>{selected.llm_status || "legacy / deterministic"}</Tag>
+            </Space>
+          </Descriptions.Item>
         </Descriptions>
         {selected.error && <Alert type="error" showIcon message={selected.error} style={{ marginTop: 16 }} />}
         {report?.summary && <Alert type="warning" showIcon message={report.summary} style={{ marginTop: 16 }} />}
+        <Tabs
+          style={{ marginTop: 16 }}
+          items={[
+            {
+              key: "decision",
+              label: "AI 决策台",
+              children: <>
+                {topSelectionRows.length === 0
+                  ? <Alert
+                    showIcon
+                    type={selected.llm_status === "degraded" ? "warning" : "info"}
+                    message={selected.llm_status === "degraded" ? "Agent 已降级，保留规则报告" : "该报告没有可用的 Agent 排名"}
+                    description={report?.agentRunSummary?.fallbackReason || selected.agentSummary?.fallbackReason || "旧报告或确定性模式不会生成模型排名。"}
+                  />
+                  : <Table
+                    rowKey="symbol"
+                    size="small"
+                    pagination={false}
+                    dataSource={topSelectionRows}
+                    columns={[
+                      { title: "排名", dataIndex: "rank", width: 70 },
+                      { title: "股票", render: (_, item) => <div className="table-primary-cell"><strong>{item.name}</strong><span>{item.symbol}</span></div> },
+                      { title: "规则结论", render: (_, item) => <Tag color={labelColor(item.ruleConclusion || "")}>{item.ruleConclusion || "-"}</Tag> },
+                      ...([1, 5, 20] as const).map((horizon) => ({
+                        title: `${horizon}日趋势`,
+                        render: (_: unknown, item: typeof topSelectionRows[number]) => {
+                          const prediction = predictionMap.get(`${item.symbol}:${horizon}`);
+                          return <div className="table-primary-cell">
+                            {directionTag(prediction?.predicted_direction)}
+                            <span>{prediction ? `置信 ${(prediction.confidence * 100).toFixed(0)}%` : "-"}</span>
+                          </div>;
+                        }
+                      })),
+                      { title: "共识分", dataIndex: "consensusScore", width: 85, render: (value: number) => number(value) },
+                      { title: "可审计摘要", dataIndex: "rationale", ellipsis: true }
+                    ]}
+                  />}
+                {topSelectionRows.length > 0 && <Alert
+                  style={{ marginTop: 12 }}
+                  type="info"
+                  showIcon
+                  message={report?.agentRunSummary?.marketRegime || selected.agentSummary?.marketRegime || "Agent 综合研究"}
+                  description={report?.agentRunSummary?.summary || selected.agentSummary?.summary}
+                />}
+              </>
+            },
+            {
+              key: "agents",
+              label: "Agent 过程",
+              children: <>
+                {stageItems.length > 0
+                  ? <Steps responsive size="small" items={stageItems} />
+                  : <Alert type="info" showIcon message="尚无 Agent 阶段记录" description="旧报告或确定性模式只显示规则输出。" />}
+                {(agentRun?.stages || []).length > 0 && <Table
+                  style={{ marginTop: 18 }}
+                  rowKey="stage_key"
+                  size="small"
+                  pagination={false}
+                  dataSource={agentRun?.stages}
+                  expandable={{
+                    expandedRowRender: (stage) => <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                      {JSON.stringify(stage.output || {}, null, 2)}
+                    </pre>
+                  }}
+                  columns={[
+                    { title: "阶段", render: (_, item) => capabilities.data.stages.find((stage) => stage.key === item.stage_key)?.name || item.stage_key },
+                    { title: "状态", render: (_, item) => <Tag color={agentStatusColor(item.status)}>{item.status}</Tag> },
+                    { title: "模型", dataIndex: "model" },
+                    { title: "耗时", render: (_, item) => item.latency_ms == null ? "-" : `${item.latency_ms}ms` },
+                    { title: "尝试", dataIndex: "attempt_count" },
+                    { title: "诊断", render: (_, item) => item.error ? `${item.error_category}: ${item.error}` : "结构校验通过" }
+                  ]}
+                />}
+                <Alert
+                  style={{ marginTop: 12 }}
+                  type="info"
+                  showIcon
+                  message="这里只展示结构化观点和证据引用"
+                  description="系统不保存或展示模型隐藏思维链。每个阶段只能引用服务端生成的 factId，规则风险否决拥有最终优先级。"
+                />
+              </>
+            },
+            {
+              key: "evaluation",
+              label: "效果评估",
+              children: <>
+                <Space style={{ marginBottom: 12 }}>
+                  <Button icon={<ReloadOutlined />} loading={refreshingEvaluations} onClick={() => void refreshEvaluationData()}>刷新成熟预测</Button>
+                  <Tag color={evaluationSummary.data.sampleSufficient ? "green" : "orange"}>
+                    {evaluationSummary.data.sampleSufficient ? "样本可评估" : "样本不足（少于20）"}
+                  </Tag>
+                  <Tag>全模型 / Prompt 版本汇总</Tag>
+                </Space>
+                <Row gutter={[16, 16]}>
+                  <Col xs={12} md={4}><Statistic title="成熟样本" value={evaluationSummary.data.sampleSize} /></Col>
+                  <Col xs={12} md={4}><Statistic title="待成熟" value={evaluationSummary.data.pending} /></Col>
+                  <Col xs={12} md={4}><Statistic title="方向命中" value={evaluationSummary.data.directionAccuracy == null ? "-" : evaluationSummary.data.directionAccuracy * 100} suffix={evaluationSummary.data.directionAccuracy == null ? "" : "%"} precision={1} /></Col>
+                  <Col xs={12} md={4}><Statistic title="Brier" value={evaluationSummary.data.meanBrier ?? "-"} precision={3} /></Col>
+                  <Col xs={12} md={4}><Statistic title="平均收益" value={evaluationSummary.data.averageReturnPct ?? "-"} suffix={evaluationSummary.data.averageReturnPct == null ? "" : "%"} precision={2} /></Col>
+                  <Col xs={12} md={4}><Statistic title="平均超额" value={evaluationSummary.data.averageExcessReturnPct ?? "-"} suffix={evaluationSummary.data.averageExcessReturnPct == null ? "" : "%"} precision={2} /></Col>
+                </Row>
+                {evaluationSummary.data.byHorizon.length > 0
+                  ? <LeanChart option={evaluationChartOption} style={{ height: 340, marginTop: 16 }} />
+                  : <Alert style={{ marginTop: 16 }} type="info" message="预测尚未到达1/5/20个交易日评估窗口" />}
+                <Table<AshareTechEvaluationItem>
+                  style={{ marginTop: 16 }}
+                  rowKey="id"
+                  size="small"
+                  dataSource={evaluations.data.items.slice(0, 50)}
+                  pagination={{ pageSize: 10 }}
+                  columns={[
+                    { title: "股票", dataIndex: "symbol" },
+                    { title: "周期", render: (_, item) => `${item.horizon_days}日` },
+                    { title: "模型 / Prompt", render: (_, item) => <div className="table-primary-cell"><span>{item.model}</span><span className="muted">{item.prompt_version}</span></div> },
+                    { title: "预测", render: (_, item) => directionTag(item.predicted_direction) },
+                    { title: "实际", render: (_, item) => directionTag(item.realized_direction) },
+                    { title: "收益", render: (_, item) => item.return_pct == null ? "-" : `${item.return_pct.toFixed(2)}%` },
+                    { title: "超额", render: (_, item) => item.excess_return_pct == null ? "-" : `${item.excess_return_pct.toFixed(2)}%` },
+                    { title: "结果", render: (_, item) => item.evaluation_status === "evaluated"
+                      ? <Tag color={item.direction_hit ? "green" : "red"}>{item.direction_hit ? "命中" : "未命中"}</Tag>
+                      : <Tag color="orange">{item.evaluation_status || "pending"}</Tag> }
+                  ]}
+                />
+              </>
+            },
+            {
+              key: "contract",
+              label: "接口与证据",
+              children: <Descriptions bordered size="small" column={2}>
+                <Descriptions.Item label="协议">{capabilities.data.apiStyle}</Descriptions.Item>
+                <Descriptions.Item label="端点主机">{capabilities.data.endpointHost || "-"}</Descriptions.Item>
+                <Descriptions.Item label="Provider / 模型">{capabilities.data.provider || "-"} / {capabilities.data.model || "-"}</Descriptions.Item>
+                <Descriptions.Item label="Prompt 版本">{capabilities.data.agentPromptVersion}</Descriptions.Item>
+                <Descriptions.Item label="预测周期">{capabilities.data.evaluationHorizons.join(" / ")} 个交易日</Descriptions.Item>
+                <Descriptions.Item label="安全边界">密钥仅在环境变量；无 Paper/下单接口</Descriptions.Item>
+                <Descriptions.Item label="输入事实" span={2}>
+                  量价与均线、PIT 基本面、官方公告/政策、市场与板块环境、数据完整性和规则结论。
+                </Descriptions.Item>
+              </Descriptions>
+            }
+          ]}
+        />
         {report?.conclusionFirst && <>
           <Divider>1. 结论先行</Divider>
           <Row gutter={16}>

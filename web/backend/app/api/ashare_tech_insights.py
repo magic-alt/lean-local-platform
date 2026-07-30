@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -6,8 +7,10 @@ from pydantic import BaseModel, Field
 
 from .common import dispatch_task
 from ..services import ashare_tech_insights as service
-from ..services.tasks import create_task
-from ..tasks.worker import generate_ashare_tech_report_task
+from ..services import ashare_tech_agents as agent_service
+from ..services.tasks import create_task, update_task
+from ..db import utc_now
+from ..tasks.worker import generate_ashare_tech_report_task, refresh_ashare_tech_evaluations_task
 
 
 router = APIRouter(prefix="/api/insights/ashare-tech", tags=["insights", "ashare-tech"])
@@ -17,6 +20,7 @@ legacy_router = APIRouter(prefix="/api/ashare-tech-insights", tags=["insights-le
 class AshareTechReportRequest(BaseModel):
     requestedDate: date | None = None
     force: bool = False
+    analysisMode: Literal["auto", "hybrid_multi_agent", "deterministic"] = "auto"
 
 
 class WatchlistItemCreate(BaseModel):
@@ -45,14 +49,23 @@ def list_reports(limit: int = 50, offset: int = 0):
 def create_report(request: AshareTechReportRequest):
     try:
         requested_date = request.requestedDate.isoformat() if request.requestedDate else None
-        report = service.create_report(requested_date, force=request.force)
+        report = service.create_report(
+            requested_date,
+            force=request.force,
+            analysis_mode=request.analysisMode,
+        )
         if not request.force and report.get("status") == "success":
             return {"id": report["id"], "taskId": report.get("task_id"), "status": "success", "reused": True}
         if report.get("status") in {"queued", "running", "waiting_data"} and report.get("task_id") and not request.force:
             return {"id": report["id"], "taskId": report["task_id"], "status": report["status"], "reused": True}
         task = create_task(
             "ashare_tech_report", f"A股科技股日报 {report['requested_date']}",
-            {"requestedDate": report["requested_date"], "force": request.force}, related_id=report["id"],
+            {
+                "requestedDate": report["requested_date"],
+                "force": request.force,
+                "analysisMode": request.analysisMode,
+            },
+            related_id=report["id"],
         )
         service.attach_task(report["id"], task["id"])
         try:
@@ -71,6 +84,74 @@ def report_detail(report_id: str):
         return service.get_report(report_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="A-share technology report not found.") from exc
+
+
+@router.post("/model-diagnostics")
+def model_diagnostics():
+    return agent_service.model_diagnostics()
+
+
+@router.get("/reports/{report_id}/agent-runs")
+def report_agent_runs(report_id: str):
+    try:
+        service.get_report(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="A-share technology report not found.") from exc
+    return {"items": agent_service.list_agent_runs(report_id)}
+
+
+@router.get("/agent-runs/{run_id}")
+def agent_run_detail(run_id: str):
+    try:
+        return agent_service.get_agent_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="A-share technology Agent run not found.") from exc
+
+
+@router.get("/evaluations")
+def prediction_evaluations(
+    horizonDays: Literal[1, 5, 20] | None = None,
+    symbol: str | None = None,
+    model: str | None = None,
+    promptVersion: str | None = None,
+    limit: int = 500,
+):
+    return agent_service.list_evaluations(
+        horizon_days=horizonDays,
+        symbol=symbol,
+        model=model,
+        prompt_version=promptVersion,
+        limit=limit,
+    )
+
+
+@router.get("/evaluations/summary")
+def prediction_evaluation_summary(
+    horizonDays: Literal[1, 5, 20] | None = None,
+    model: str | None = None,
+    promptVersion: str | None = None,
+):
+    return agent_service.evaluation_summary(
+        horizon_days=horizonDays,
+        model=model,
+        prompt_version=promptVersion,
+    )
+
+
+@router.post("/evaluations/refresh", status_code=202)
+def refresh_prediction_evaluations():
+    task = create_task(
+        "ashare_tech_evaluation",
+        "刷新A股科技日报预测评估",
+        {},
+        related_id="ashare-tech-evaluations",
+    )
+    try:
+        dispatch_task(refresh_ashare_tech_evaluations_task.s(task["id"]), task["id"])
+    except HTTPException:
+        update_task(task["id"], status="failed", error="Redis/Celery unavailable.", finished_at=utc_now())
+        raise
+    return {"taskId": task["id"], "status": "queued"}
 
 
 @router.delete("/reports/{report_id}")

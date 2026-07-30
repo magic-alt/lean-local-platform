@@ -16,11 +16,8 @@ from zoneinfo import ZoneInfo
 
 from ..core.config import (
     ASHARE_TECH_CLOSE_TOLERANCE_PCT,
-    INSIGHTS_LLM_API_KEY,
-    INSIGHTS_LLM_BASE_URL,
     INSIGHTS_LLM_MODEL,
     INSIGHTS_LLM_PROVIDER,
-    INSIGHTS_LLM_TIMEOUT_SECONDS,
 )
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .tasks import append_log, update_task
@@ -264,6 +261,8 @@ def reset_watchlist() -> dict[str, Any]:
 
 
 def capabilities() -> dict[str, Any]:
+    from .ashare_tech_agents import agent_capabilities
+
     watchlist = get_watchlist()
     return {
         "poolSize": watchlist["enabledCount"],
@@ -279,6 +278,7 @@ def capabilities() -> dict[str, Any]:
         "paperHandoff": False,
         "schedule": "A股工作日 17:30 Asia/Shanghai；数据未齐时 18:00、18:30 重试",
         "labels": list(ALLOWED_LABELS),
+        **agent_capabilities(),
     }
 
 
@@ -362,6 +362,12 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     lows = [_finite(item["low"]) or 0.0 for item in usable]
     volumes = [_finite(item.get("volume")) or 0.0 for item in usable]
     amounts = [_finite(item.get("amount")) or 0.0 for item in usable]
+    recent_returns = [
+        closes[index] / closes[index - 1] - 1
+        for index in range(max(1, len(closes) - 20), len(closes))
+        if closes[index - 1] > 0
+    ]
+    volatility20 = statistics.stdev(recent_returns) if len(recent_returns) >= 2 else None
     latest = usable[-1]
     close = closes[-1]
     mas = {period: _moving_average(closes, period) for period in (5, 10, 20, 60, 120)}
@@ -407,6 +413,7 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "high20": _round(high20), "low20": _round(low20), "high60": _round(high60), "low60": _round(low60),
         "ma20DeviationPct": _round(_pct(close, mas[20])), "ma60DeviationPct": _round(_pct(close, mas[60])),
         "drawdown20Pct": _round(_pct(close, high20)),
+        "volatility20": _round(volatility20, 6),
         "return5Pct": _round(_pct(close, closes[-6] if len(closes) >= 6 else None)),
         "return10Pct": _round(_pct(close, closes[-11] if len(closes) >= 11 else None)),
         "ma20Direction": _ma_direction(closes, 20), "ma60Direction": _ma_direction(closes, 60),
@@ -828,54 +835,12 @@ def build_report(
     }
 
 
-def _maybe_add_llm_narrative(report: dict[str, Any]) -> dict[str, Any] | None:
-    """Add prose only. Numeric facts, labels, supports and invalidations stay rule-owned."""
-    if not (INSIGHTS_LLM_BASE_URL and INSIGHTS_LLM_API_KEY and INSIGHTS_LLM_MODEL):
-        report["narrativeStatus"] = "deterministic-template"
-        return None
-    facts = report.get("facts") or []
-    allowed_ids = {str(item.get("id")) for item in facts if item.get("id")}
-    endpoint = INSIGHTS_LLM_BASE_URL.rstrip("/")
-    if not endpoint.endswith("/chat/completions"):
-        endpoint += "/chat/completions"
-    payload = {
-        "model": INSIGHTS_LLM_MODEL, "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": (
-                "你只负责润色A股科技股收盘复盘，不得修改或新增数字、结论等级、支撑位、观察区或失效位。"
-                "只能使用FACTS中的事实。返回JSON对象，键为headline、marketSummary、groupSummary、riskSummary；"
-                "每个事实句末必须附一个或多个[FACT-ID]。不得给出买卖指令或收益承诺。"
-            )},
-            {"role": "user", "content": json.dumps({"FACTS": facts, "ruleConclusions": report.get("conclusionFirst")}, ensure_ascii=False)},
-        ],
-    }
-    if INSIGHTS_LLM_PROVIDER == "kimi":
-        payload["thinking"] = {"type": "disabled"}
-    try:
-        request = Request(
-            endpoint, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), method="POST",
-            headers={"Authorization": f"Bearer {INSIGHTS_LLM_API_KEY}", "Content-Type": "application/json"},
-        )
-        with urlopen(request, timeout=INSIGHTS_LLM_TIMEOUT_SECONDS) as response:  # noqa: S310 - operator-configured endpoint
-            raw = json.loads(response.read().decode("utf-8"))
-        content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content"))
-        narrative = content if isinstance(content, dict) else json.loads(str(content or "{}").strip().removeprefix("```json").removesuffix("```").strip())
-        if not isinstance(narrative, dict) or not narrative:
-            raise ValueError("empty narrative")
-        references = set(re.findall(r"\[([A-Z]+-\d+)\]", json.dumps(narrative, ensure_ascii=False)))
-        if not references or not references <= allowed_ids:
-            raise ValueError("narrative contains missing or unknown fact IDs")
-        report["modelNarrative"] = narrative
-        report["narrativeStatus"] = "model-generated-from-facts"
-        return raw
-    except Exception as exc:
-        safe_error = str(exc).replace(INSIGHTS_LLM_API_KEY, "[REDACTED]")
-        report["narrativeStatus"] = "deterministic-fallback"
-        report["narrativeWarning"] = safe_error
-        return None
-
-
-def create_report(requested_date: str | None = None, *, force: bool = False) -> dict[str, Any]:
+def create_report(
+    requested_date: str | None = None,
+    *,
+    force: bool = False,
+    analysis_mode: str = "auto",
+) -> dict[str, Any]:
     requested_date = requested_date or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     try:
         date.fromisoformat(requested_date)
@@ -896,10 +861,11 @@ def create_report(requested_date: str | None = None, *, force: bool = False) -> 
                 """
                 update ashare_tech_reports
                 set status = ?, error = null, report_json = null, pool_snapshot_json = ?,
-                    pool_fingerprint = ?, updated_at = ?
+                    pool_fingerprint = ?, analysis_mode = ?, llm_status = null,
+                    active_agent_run_id = null, agent_summary_json = null, updated_at = ?
                 where id = ?
                 """,
-                ("queued", json_dump(snapshot), snapshot["fingerprint"], now, report_id),
+                ("queued", json_dump(snapshot), snapshot["fingerprint"], analysis_mode, now, report_id),
             )
     else:
         with db() as connection:
@@ -907,11 +873,12 @@ def create_report(requested_date: str | None = None, *, force: bool = False) -> 
                 """
                 insert into ashare_tech_reports
                     (id, requested_date, market_status, status, data_completeness_json, source_conflicts_json,
-                     source_manifest_json, pool_snapshot_json, pool_fingerprint, prompt_version, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_manifest_json, pool_snapshot_json, pool_fingerprint, prompt_version, analysis_mode,
+                     created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (report_id, requested_date, "pending", "queued", "{}", "[]", "[]", json_dump(snapshot),
-                 snapshot["fingerprint"], PROMPT_VERSION, now, now),
+                 snapshot["fingerprint"], PROMPT_VERSION, analysis_mode, now, now),
             )
     return get_report(report_id)
 
@@ -940,6 +907,8 @@ def list_reports(limit: int = 50, offset: int = 0) -> dict[str, Any]:
 
 
 def delete_report(report_id: str, *, force: bool = False) -> dict[str, Any]:
+    from .ashare_tech_agents import delete_agent_data
+
     with db() as connection:
         report_row = connection.execute("select * from ashare_tech_reports where id = ?", (report_id,)).fetchone()
         report = row_to_dict(report_row)
@@ -960,6 +929,7 @@ def delete_report(report_id: str, *, force: bool = False) -> dict[str, Any]:
         for task in active_tasks:
             cancel_task(str(task["id"]))
     recovered_orphan = str(report.get("status")) in active_statuses and not active_tasks
+    delete_agent_data(report_id)
     with db() as connection:
         connection.execute("delete from ashare_tech_reports where id = ?", (report_id,))
         connection.execute(
@@ -1159,8 +1129,31 @@ def _finish_report(
     task_id: str, report_id: str, report: dict[str, Any], completion: dict[str, Any], conflicts: list[dict[str, Any]],
     manifest: list[dict[str, Any]], analysis_date: str, market_status: str,
 ) -> dict[str, Any]:
+    from .ashare_tech_agents import run_agent_pipeline
+
     now = utc_now()
-    raw_response = _maybe_add_llm_narrative(report) if report.get("facts") else None
+    current = get_report(report_id)
+    agent_summary = None
+    if report.get("fullPool"):
+        agent_summary = run_agent_pipeline(
+            task_id=task_id,
+            report_id=report_id,
+            report=report,
+            requested_mode=current.get("analysis_mode") or "auto",
+        )
+        report["agentRunSummary"] = agent_summary
+        if agent_summary.get("summary"):
+            report["modelNarrative"] = {
+                "headline": str(agent_summary.get("marketRegime") or "多 Agent 研究结论"),
+                "summary": str(agent_summary["summary"]),
+            }
+        report["narrativeStatus"] = (
+            "multi-agent-generated" if agent_summary.get("status") == "success"
+            else "multi-agent-degraded" if agent_summary.get("status") == "degraded"
+            else "deterministic-template"
+        )
+    else:
+        report["narrativeStatus"] = "deterministic-template"
     fingerprint = hashlib.sha256(json_dump({"report": report, "promptVersion": PROMPT_VERSION}).encode("utf-8")).hexdigest()
     sector_sources = sorted({
         str(item.get("source")) for item in report.get("marketEnvironment", [])
@@ -1173,13 +1166,20 @@ def _finish_report(
             update ashare_tech_reports
             set analysis_date = ?, market_status = ?, status = 'success', data_cutoff_at = ?, sector_source = ?,
                 data_completeness_json = ?, source_conflicts_json = ?, source_manifest_json = ?,
-                raw_response_json = ?, report_json = ?, model = ?, input_fingerprint = ?, error = null, finished_at = ?, updated_at = ?
+                raw_response_json = null, report_json = ?, model = ?, input_fingerprint = ?,
+                active_agent_run_id = ?, llm_status = ?, agent_summary_json = ?,
+                error = null, finished_at = ?, updated_at = ?
             where id = ?
             """,
-            (analysis_date, market_status, now, sector_source, json_dump(completion), json_dump(conflicts), json_dump(manifest),
-             json_dump(raw_response) if raw_response else None, json_dump(report),
-             INSIGHTS_LLM_MODEL if report.get("narrativeStatus") == "model-generated-from-facts" else None,
-             fingerprint, now, now, report_id),
+            (
+                analysis_date, market_status, now, sector_source, json_dump(completion), json_dump(conflicts),
+                json_dump(manifest), json_dump(report),
+                agent_summary.get("model") if agent_summary and agent_summary.get("status") in {"success", "degraded"} else None,
+                fingerprint, agent_summary.get("runId") if agent_summary else None,
+                agent_summary.get("status") if agent_summary else "deterministic",
+                json_dump(agent_summary) if agent_summary else "{}",
+                now, now, report_id,
+            ),
         )
     update_task(task_id, status="success", artifacts_json=[f"ashare-tech-report:{report_id}"], finished_at=now, error=None)
     append_log(task_id, f"Completed A-share technology report for {analysis_date}; {completion.get('covered', 0)} stocks.")

@@ -80,6 +80,10 @@ import type {
   AshareTechRuleTag,
   AshareTechWatchlist,
   AshareTechWatchlistItem,
+  AshareTechAgentRun,
+  AshareTechModelDiagnostic,
+  AshareTechEvaluationItem,
+  AshareTechEvaluationSummary,
   SecurityProfile,
   DatasetPreviewResult,
   WorkflowExample,
@@ -715,12 +719,56 @@ export const api = {
       `/api/insights/ashare-tech/reports/${encodeURIComponent(id)}${force ? "?force=true" : ""}`,
       { method: "DELETE" }
     ),
-  createAshareTechReport: (payload: { requestedDate?: string; force?: boolean }) =>
+  createAshareTechReport: (payload: {
+    requestedDate?: string;
+    force?: boolean;
+    analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic";
+  }) =>
     request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/insights/ashare-tech/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  diagnoseAshareTechModel: () =>
+    request<AshareTechModelDiagnostic>("/api/insights/ashare-tech/model-diagnostics", { method: "POST" }),
+  ashareTechAgentRuns: (reportId: string) =>
+    request<{ items: AshareTechAgentRun[] }>(
+      `/api/insights/ashare-tech/reports/${encodeURIComponent(reportId)}/agent-runs`
+    ),
+  ashareTechAgentRun: (runId: string) =>
+    request<AshareTechAgentRun>(`/api/insights/ashare-tech/agent-runs/${encodeURIComponent(runId)}`),
+  ashareTechEvaluations: (params: {
+    horizonDays?: 1 | 5 | 20;
+    symbol?: string;
+    model?: string;
+    promptVersion?: string;
+    limit?: number;
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (params.horizonDays) query.set("horizonDays", String(params.horizonDays));
+    if (params.symbol) query.set("symbol", params.symbol);
+    if (params.model) query.set("model", params.model);
+    if (params.promptVersion) query.set("promptVersion", params.promptVersion);
+    query.set("limit", String(params.limit ?? 500));
+    return request<{ items: AshareTechEvaluationItem[]; count: number }>(
+      `/api/insights/ashare-tech/evaluations?${query.toString()}`
+    );
+  },
+  ashareTechEvaluationSummary: (params: {
+    horizonDays?: 1 | 5 | 20;
+    model?: string;
+    promptVersion?: string;
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (params.horizonDays) query.set("horizonDays", String(params.horizonDays));
+    if (params.model) query.set("model", params.model);
+    if (params.promptVersion) query.set("promptVersion", params.promptVersion);
+    return request<AshareTechEvaluationSummary>(
+      `/api/insights/ashare-tech/evaluations/summary?${query.toString()}`
+    );
+  },
+  refreshAshareTechEvaluations: () =>
+    request<{ taskId: string; status: string }>("/api/insights/ashare-tech/evaluations/refresh", { method: "POST" }),
   ashareTechWatchlist: () => request<AshareTechWatchlist>("/api/insights/ashare-tech/watchlist"),
   addAshareTechWatchlistItem: (payload: { code: string; groupKey: AshareTechWatchlistItem["groupKey"]; ruleTags: AshareTechRuleTag[] }) =>
     request<AshareTechWatchlistItem>("/api/insights/ashare-tech/watchlist/items", {

@@ -108,6 +108,13 @@ JSON_COLUMNS = {
     "endpoint_counts_json": "endpointCounts",
     "universe_config_json": "universeConfig",
     "projection_json": "projection",
+    "agent_summary_json": "agentSummary",
+    "stage_summary_json": "stageSummary",
+    "usage_json": "usage",
+    "input_fact_ids_json": "inputFactIds",
+    "probabilities_json": "probabilities",
+    "evidence_ids_json": "evidenceIds",
+    "output_json": "output",
     "evidence_json": "evidence",
     "run_ids_json": "runIds",
     "constraints_json": "constraints",
@@ -458,8 +465,26 @@ def _split_sql_script(script: str) -> list[str]:
     current: list[str] = []
     in_single = False
     in_double = False
+    in_line_comment = False
     previous = ""
-    for char in script:
+    for index, char in enumerate(script):
+        if in_line_comment:
+            current.append(char)
+            if char in {"\n", "\r"}:
+                in_line_comment = False
+            previous = char
+            continue
+        if (
+            char == "-"
+            and index + 1 < len(script)
+            and script[index + 1] == "-"
+            and not in_single
+            and not in_double
+        ):
+            in_line_comment = True
+            current.append(char)
+            previous = char
+            continue
         if char == "'" and not in_double and previous != "\\":
             in_single = not in_single
         elif char == '"' and not in_single and previous != "\\":
