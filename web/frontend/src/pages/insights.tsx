@@ -179,11 +179,11 @@ function GenericInsightsPage() {
 
   useEffect(() => {
     if (!selected || !["queued", "running"].includes(selected.status)) return;
-    const timer = window.setTimeout(() => {
+    const timer = window.setInterval(() => {
       void loadDetail(selected.id);
       void reports.reload();
     }, 2000);
-    return () => window.clearTimeout(timer);
+    return () => window.clearInterval(timer);
   }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
   async function submit(values: {

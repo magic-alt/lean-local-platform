@@ -1131,7 +1131,7 @@ def _finish_report(
 ) -> dict[str, Any]:
     from .ashare_tech_agents import run_agent_pipeline
 
-    now = utc_now()
+    data_cutoff_at = utc_now()
     current = get_report(report_id)
     agent_summary = None
     if report.get("fullPool"):
@@ -1160,6 +1160,7 @@ def _finish_report(
         if item.get("category") == "sector" and item.get("source") and not item.get("unresolved")
     })
     sector_source = ",".join(sector_sources) if sector_sources else "观察池等权代理（正式板块数据缺失）"
+    finished_at = utc_now()
     with db() as connection:
         connection.execute(
             """
@@ -1172,15 +1173,21 @@ def _finish_report(
             where id = ?
             """,
             (
-                analysis_date, market_status, now, sector_source, json_dump(completion), json_dump(conflicts),
+                analysis_date, market_status, data_cutoff_at, sector_source, json_dump(completion), json_dump(conflicts),
                 json_dump(manifest), json_dump(report),
                 agent_summary.get("model") if agent_summary and agent_summary.get("status") in {"success", "degraded"} else None,
                 fingerprint, agent_summary.get("runId") if agent_summary else None,
                 agent_summary.get("status") if agent_summary else "deterministic",
                 json_dump(agent_summary) if agent_summary else "{}",
-                now, now, report_id,
+                finished_at, finished_at, report_id,
             ),
         )
-    update_task(task_id, status="success", artifacts_json=[f"ashare-tech-report:{report_id}"], finished_at=now, error=None)
+    update_task(
+        task_id,
+        status="success",
+        artifacts_json=[f"ashare-tech-report:{report_id}"],
+        finished_at=finished_at,
+        error=None,
+    )
     append_log(task_id, f"Completed A-share technology report for {analysis_date}; {completion.get('covered', 0)} stocks.")
     return get_report(report_id)

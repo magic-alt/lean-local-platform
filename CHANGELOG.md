@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Keep generic and A-share Technology Insight details polling until their tasks reach a terminal state, so reports no longer remain visually stuck on `running`; record report/task completion after the optional Agent pipeline instead of backdating it to the market-data cutoff.
 - Fix MySQL migration parsing so semicolons in leading SQL comments cannot prevent a pending schema migration from applying and break Insights refreshes with missing-table errors.
 - Upgrade A-share Technology Daily from an opaque optional narrative into an auditable six-stage model workflow with environment-only DeepSeek-compatible diagnostics, PIT fundamentals, evidence-bound 1/5/20-trading-day forecasts, deterministic failover, hard server-side vetoes, Top-10/Top-5 selection, and scheduled direction/Brier/return evaluation in the Insights UI.
 - Deduplicate indistinguishable project names in project-selection suggestions across Backtest, Optimization, Research, Batch, History, and Paper workflows while preserving every underlying record in project management.

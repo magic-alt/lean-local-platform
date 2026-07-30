@@ -176,8 +176,11 @@ export function AshareTechInsights() {
 
   useEffect(() => {
     if (!selected || !["queued", "running", "waiting_data"].includes(selected.status)) return;
-    const timer = window.setTimeout(() => { void loadDetail(selected.id); void reports.reload(); }, 3000);
-    return () => window.clearTimeout(timer);
+    const timer = window.setInterval(() => {
+      void loadDetail(selected.id);
+      void reports.reload();
+    }, 3000);
+    return () => window.clearInterval(timer);
   }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
   async function create(values: { requestedDate?: string; force?: boolean; analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic" }) {

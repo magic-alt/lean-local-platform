@@ -139,6 +139,51 @@ def test_full_run_persists_all_26_stocks_and_source_metadata(tmp_path, monkeypat
     assert result["dataCompleteness"]["fullPoolDateAligned"] is True
 
 
+def test_finish_report_records_completion_after_agent_pipeline(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import ashare_tech_agents, ashare_tech_insights as service
+    from app.services.tasks import create_task
+
+    report_row = service.create_report("2026-07-14", analysis_mode="hybrid_multi_agent")
+    task = create_task("ashare_tech_report", "fixture", {}, related_id=report_row["id"])
+    service.attach_task(report_row["id"], task["id"])
+    timestamps = iter(("2026-07-14T08:00:00+00:00", "2026-07-14T08:05:00+00:00"))
+    monkeypatch.setattr(service, "utc_now", lambda: next(timestamps))
+    monkeypatch.setattr(
+        ashare_tech_agents,
+        "run_agent_pipeline",
+        lambda **_kwargs: {
+            "status": "degraded",
+            "model": "fixture-model",
+            "runId": None,
+            "summary": "fixture summary",
+            "marketRegime": "fixture regime",
+        },
+    )
+
+    result = service._finish_report(
+        task["id"],
+        report_row["id"],
+        {"fullPool": [{"code": "002475"}], "marketEnvironment": []},
+        {"complete": True, "covered": 1},
+        [],
+        [],
+        "2026-07-14",
+        "交易日",
+    )
+
+    assert result["data_cutoff_at"] == "2026-07-14T08:00:00+00:00"
+    assert result["finished_at"] == "2026-07-14T08:05:00+00:00"
+    with db() as connection:
+        persisted_task = connection.execute(
+            "select status,finished_at from tasks where id = ?",
+            (task["id"],),
+        ).fetchone()
+    assert persisted_task["status"] == "success"
+    assert persisted_task["finished_at"] == "2026-07-14T08:05:00+00:00"
+
+
 def test_specialized_api_route_precedes_generic_dynamic_route(tmp_path, monkeypatch):
     configure_platform(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient
