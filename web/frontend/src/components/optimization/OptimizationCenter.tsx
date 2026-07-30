@@ -100,8 +100,10 @@ export function OptimizationCenter() {
   const templates = useAsyncData<StrategyTemplate[]>(api.strategyTemplates, []);
   const optimizations = useAsyncData<OptimizationRun[]>(api.optimizations, []);
   const portfolioCandidates = useAsyncData<PortfolioOptimizationCandidate[]>(
-    () => api.portfolioOptimizationCandidates().then((result) => result.items),
+    api.portfolioOptimizationCandidates,
     [],
+    false,
+    "portfolio-optimization:candidates",
   );
   const portfolioRuns = useAsyncData<PortfolioOptimizationRun[]>(api.portfolioOptimizations, []);
   const [form] = Form.useForm();
@@ -539,6 +541,16 @@ export function OptimizationCenter() {
                     message="只能选择已通过策略准入、币种一致、频率一致且至少有 60 个重叠净值点的回测。混合币种必须先定义 FX 归一化契约。"
                     style={{ marginBottom: 16 }}
                   />
+                  {portfolioCandidates.error && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="组合候选加载失败"
+                      description={portfolioCandidates.error.message}
+                      action={<Button size="small" onClick={() => void portfolioCandidates.reload()}>重试</Button>}
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
                   <Form form={portfolioForm} layout="vertical" onFinish={createPortfolio} initialValues={{ name: "Portfolio Optimization", objective: "sharpe", step: 0.1, maxWeight: 1 }}>
                     <FormGrid>
                       <Form.Item className="form-field--wide" name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>

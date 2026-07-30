@@ -476,7 +476,8 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   portfolioOptimizationCandidates: () =>
-    request<{ items: PortfolioOptimizationCandidate[] }>("/api/portfolio-optimizations/candidates"),
+    request<{ items: PortfolioOptimizationCandidate[] }>("/api/portfolio-optimizations/candidates")
+      .then((result) => result.items),
   portfolioOptimizations: () =>
     request<PortfolioOptimizationRun[]>("/api/portfolio-optimizations?paged=false&limit=1000"),
   previewPortfolioOptimization: (payload: {
