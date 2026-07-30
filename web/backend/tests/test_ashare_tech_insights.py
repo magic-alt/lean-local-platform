@@ -184,7 +184,7 @@ def test_finish_report_records_completion_after_agent_pipeline(tmp_path, monkeyp
     assert persisted_task["finished_at"] == "2026-07-14T08:05:00+00:00"
 
 
-def test_specialized_api_route_precedes_generic_dynamic_route(tmp_path, monkeypatch):
+def test_ashare_insight_api_is_canonical_and_generic_routes_are_removed(tmp_path, monkeypatch):
     configure_platform(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient
     from app.main import app
@@ -201,6 +201,33 @@ def test_specialized_api_route_precedes_generic_dynamic_route(tmp_path, monkeypa
     assert detail.status_code == 200
     assert detail.json()["requested_date"] == "2026-07-14"
     assert client.get("/api/insights/ashare-tech/capabilities").status_code == 200
+    assert client.get("/api/insights").status_code == 404
+    assert client.get("/api/insights/capabilities").status_code == 404
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "/api/insights" not in paths
+    assert "/api/insights/{report_id}" not in paths
+    assert "/api/insights/ashare-tech/prompt-templates" in paths
+    assert "/api/insights/ashare-tech/production-profile" in paths
+
+
+def test_generic_insight_tables_are_permanently_removed_by_migration(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    from app.db import db
+
+    with db() as connection:
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "select name from sqlite_master where type='table'"
+            ).fetchall()
+        }
+    assert "insight_reports" not in tables
+    assert "decision_signals" not in tables
+    assert {
+        "ashare_tech_prompt_templates",
+        "ashare_tech_agent_profiles",
+        "ashare_tech_candidate_signals",
+    } <= tables
 
 
 def test_watchlist_defaults_adds_updates_deletes_and_resets(tmp_path, monkeypatch):

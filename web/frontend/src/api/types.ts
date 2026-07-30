@@ -1261,116 +1261,6 @@ export interface PaperAccountComparison {
   }>;
 }
 
-export interface InsightCapabilities {
-  configured: boolean;
-  provider?: string | null;
-  model?: string | null;
-  assetClasses: Array<"equity" | "crypto" | "crypto_future" | "future">;
-  resolutions: string[];
-  promptVersion: string;
-}
-
-export interface InsightEvidence {
-  fact: string;
-  sourceKey: "price" | "technical" | "data_quality" | "backtest";
-}
-
-export interface InsightSignalPayload {
-  stance: "bullish" | "neutral" | "bearish";
-  direction: "long" | "flat" | "short";
-  intent: "enter" | "add" | "hold" | "reduce" | "exit";
-  targetExposure: number;
-  confidence: number;
-  score: number;
-  horizon: string;
-  entryLow?: number | null;
-  entryHigh?: number | null;
-  stopLoss?: number | null;
-  targetPrice?: number | null;
-  invalidation?: string;
-  reason?: string;
-  actionable?: boolean;
-}
-
-export interface InsightSignalRecord {
-  id: string;
-  insight_report_id: string;
-  status: string;
-  rawSignal: Record<string, unknown>;
-  finalSignal: InsightSignalPayload;
-  guardrail: { passed: boolean; adjusted: boolean; violations: string[]; normalizedFields?: string[] };
-}
-
-export interface InsightTechnicalReport {
-  metrics: Record<string, number | null>;
-  assessment: {
-    trend?: string;
-    momentum?: string;
-    volume?: string;
-    volumeRatio20?: number | null;
-    rangePosition20Pct?: number | null;
-  };
-  modelNotes?: string[];
-}
-
-export interface InsightAgentSummary {
-  workflowVersion: string;
-  objective: string;
-  steps: Array<{ key: string; label: string; status: "complete" | "warning"; detail: string }>;
-  evidenceCoverage: { factCount: number; sourceKeys: string[]; dataSources: string[] };
-  uncertainties: string[];
-  decision: {
-    stance?: string;
-    intent?: string;
-    horizon?: string;
-    score?: number;
-    confidence?: number;
-    actionable?: boolean;
-    summary?: string;
-  };
-}
-
-export interface InsightReport {
-  id: string;
-  task_id?: string | null;
-  symbol: string;
-  asset_class: string;
-  market?: string | null;
-  venue: string;
-  resolution: string;
-  data_type: string;
-  as_of_date?: string | null;
-  lookback_bars: number;
-  backtest_run_id?: string | null;
-  status: string;
-  model?: string | null;
-  prompt_version: string;
-  input_fingerprint?: string | null;
-  context?: Record<string, unknown> | null;
-  report?: {
-    summary?: { headline?: string; thesis?: string; score?: number };
-    technical?: InsightTechnicalReport;
-    agent?: InsightAgentSummary;
-    risks?: string[];
-    catalysts?: string[];
-    evidence?: InsightEvidence[];
-    dataQuality?: { level?: string; sources?: string[]; warnings?: string[] };
-    disclaimer?: string;
-  } | null;
-  signal?: InsightSignalRecord | null;
-  error?: string | null;
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface InsightListResponse {
-  items: InsightReport[];
-  count: number;
-  limit: number;
-  offset: number;
-}
-
 export interface AshareTechCapabilities {
   poolSize: number;
   totalPoolSize: number;
@@ -1393,6 +1283,32 @@ export interface AshareTechCapabilities {
   paperHandoff: boolean;
   schedule: string;
   labels: string[];
+  providers: Array<{
+    provider: string;
+    defaultModel: string;
+    models: Array<{ id: string; label: string }>;
+  }>;
+  productionProfile?: AshareTechProductionProfile | null;
+}
+
+export interface AshareTechPromptTemplate {
+  id: string;
+  templateKey: string;
+  name: string;
+  description: string;
+  version: number;
+  stagePrompts: Record<string, string>;
+  fingerprint: string;
+  createdAt?: string | null;
+  builtin: boolean;
+}
+
+export interface AshareTechProductionProfile {
+  provider: string;
+  model: string;
+  promptVersionId: string;
+  updatedAt?: string | null;
+  source: "published" | "legacy-environment";
 }
 
 export type AshareTechRuleTag = "strong_ai" | "storage";
@@ -1434,6 +1350,9 @@ export interface AshareTechStockRow {
   ma60DeviationPct?: number | null;
   drawdown20Pct?: number | null;
   volatility20?: number | null;
+  realizedVolatility20dPct?: number | null;
+  rsi14?: number | null;
+  rangePosition20Pct?: number | null;
   volumeRatio20?: number | null;
   amountRatio20?: number | null;
   turnoverRate?: number | null;
@@ -1526,6 +1445,59 @@ export interface AshareTechAgentPrediction {
   benchmark_code: string;
   model: string;
   prompt_version: string;
+  provider?: string | null;
+}
+
+export interface AshareTechCandidateSignal {
+  id: string;
+  run_id: string;
+  report_id: string;
+  symbol: string;
+  provider?: string | null;
+  model?: string | null;
+  prompt_version: string;
+  source_type: "model" | "deterministic";
+  status: "active" | "observation" | "veto";
+  rawSignal: Record<string, unknown>;
+  finalSignal: {
+    stance: "bullish" | "neutral" | "bearish";
+    direction: "long" | "flat" | "short";
+    intent: "enter" | "add" | "hold" | "reduce" | "exit";
+    targetExposure: number;
+    confidence: number;
+    score: number;
+    horizon: string;
+    entryLow?: number | null;
+    entryHigh?: number | null;
+    stopLoss?: number | null;
+    targetPrice?: number | null;
+    invalidation?: string;
+    reason?: string;
+    evidenceIds?: string[];
+    actionable: boolean;
+  };
+  guardrail: {
+    passed: boolean;
+    adjusted: boolean;
+    violations: string[];
+    normalizedFields?: string[];
+    riskStatus?: string;
+  };
+  created_at: string;
+}
+
+export interface AshareTechStockInsight {
+  symbol: string;
+  name: string;
+  metrics: AshareTechStockRow;
+  technical?: Record<string, unknown> | null;
+  fundamental?: Record<string, unknown> | null;
+  bull?: Record<string, unknown> | null;
+  bear?: Record<string, unknown> | null;
+  risk?: Record<string, unknown> | null;
+  selection?: Record<string, unknown> | null;
+  predictions: AshareTechAgentPrediction[];
+  signal?: AshareTechCandidateSignal | null;
 }
 
 export interface AshareTechAgentRunSummary {
@@ -1566,6 +1538,12 @@ export interface AshareTechAgentRun {
   usage?: Record<string, number>;
   stages: AshareTechAgentStage[];
   predictions: AshareTechAgentPrediction[];
+  candidateSignals?: AshareTechCandidateSignal[];
+  stockInsights?: AshareTechStockInsight[];
+  facts?: Array<Record<string, unknown>>;
+  promptVersionId?: string | null;
+  promptSnapshot?: Record<string, string> | null;
+  prompt_fingerprint?: string | null;
   created_at: string;
   finished_at?: string | null;
 }
@@ -1671,6 +1649,9 @@ export interface AshareTechReport {
   analysis_mode?: string | null;
   llm_status?: string | null;
   active_agent_run_id?: string | null;
+  requested_provider?: string | null;
+  requested_model?: string | null;
+  prompt_version_id?: string | null;
   agentSummary?: AshareTechAgentRunSummary | null;
   prompt_version: string;
   input_fingerprint?: string | null;

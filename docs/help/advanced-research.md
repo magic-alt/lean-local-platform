@@ -2,28 +2,13 @@
 
 本页汇总不属于基础回测链路的高级能力。部分能力以 API 为主，成熟度和质量门禁可能低于 A 股日线回测主链路。
 
-## Insights
-
-Insights 从 LEAN 所有的日线数据和可选历史回测生成结构化研究报告。支持 equity、crypto、crypto future 和 future，并可配置 DeepSeek、Zhipu、Kimi、OpenAI 或 Anthropic。
-
-模型只生成叙述和候选信号；服务端规则拥有最终风险门禁。缺失数据、不支持的空头、无效价格计划或缺少证据都会使信号不可执行。
-
-配置相应 Provider API Key 后，通过：
-
-```text
-GET  /api/insights/capabilities
-GET  /api/insights
-POST /api/insights
-GET  /api/insights/{report_id}
-```
-
-API Key 不会通过 capabilities 返回，也不会写入 Settings 或报告。
-
-## A 股科技日报
+## A 股科技日报与结构化 Insight
 
 A 股科技日报是观察池内的每日截面研究，不是全市场自动选股，也不会创建 Paper 信号或订单。行情与复权来自 TuShare Pro，个股最新收盘价由东方财富交叉核验；板块优先使用 TuShare 的 DC/THS 指数，东方财富板块 K 线只作为显式降级。公告来自交易所，政策证据来自政府官方网站；财务与因子只读取分析日当时已经公告或生效的 PIT 记录。
 
-配置 Insights Provider 后，默认在现有观察池上运行六阶段结构化 Agent：
+原通用结构化 Insight 已合并到本页并下线。配置任意数量的 Provider 后，每次运行可以选择一个 Provider、一个模型和一个不可变 Prompt 版本；六个阶段在同一次运行中使用同一模型。DeepSeek 的 `deepseek-v4-flash` 和 `deepseek-v4-pro` 共用 `DEEPSEEK_API_KEY`。发布的生产配置用于工作日 17:30 定时运行，API Key 不会通过 capabilities 返回，也不会写入数据库或报告。
+
+默认在现有观察池上运行六阶段结构化 Agent：
 
 1. 技术趋势 Agent 给出每只股票 1、5、20 个交易日的上涨、震荡、下跌概率。
 2. PIT 基本面 Agent 评价质量、覆盖度、催化和风险，不允许使用分析日之后披露的数据。
@@ -31,7 +16,7 @@ A 股科技日报是观察池内的每日截面研究，不是全市场自动选
 4. 风险 Agent 检查公告、数据完整性、回撤等约束。
 5. 最终选择 Agent 输出 Top 10 排名，其中 Top 5 是优先观察层。
 
-每个阶段持久化 Provider、模型、Prompt 版本、输入指纹、引用 fact ID、结构化输出、耗时、用量和错误分类，不保存模型思维链。服务端硬风险门禁拥有最终否决权。模型未配置或单阶段失败时页面会明确显示 `deterministic` / `degraded`，并保留规则报告；技术 Agent 的降级概率不会进入模型效果统计。API Key 仅从 API、worker 和 beat 的运行环境读取。
+每个阶段持久化 Provider、模型、Prompt 版本及完整快照、输入指纹、引用 fact ID、结构化输出、耗时、用量和错误分类，不保存模型思维链。Prompt 编辑会另存为新版本，不覆盖已用于历史报告的版本。技术阶段为全观察池每只股票生成候选信号，包含独立目标敞口、入场区间、止损/目标价、失效条件和证据 ID；这些敞口不做组合归一化。服务端硬风险门禁拥有最终否决权。模型未配置或单阶段失败时页面会明确显示 `deterministic` / `degraded`，并保留规则报告；技术 Agent 的降级概率不会进入模型效果统计。
 
 预测在第 1、5、20 个实际 A 股交易日成熟，以前复权个股收盘价计算收益、以板块映射指数计算超额收益，并统计方向命中率、三分类 Brier 分数、平均收益和 Top 5 lift。评测从预测创建后开始，不反向伪造历史预测；样本少于 20 条时页面标记为样本不足。工作日 17:30 生成日报，18:45 刷新已成熟预测，也可以从页面手动触发。
 
@@ -41,6 +26,10 @@ Watchlist 项目必须先通过 TuShare 验证为在市 A 股，名称由系统�
 
 ```text
 GET  /api/insights/ashare-tech/capabilities
+GET  /api/insights/ashare-tech/prompt-templates
+POST /api/insights/ashare-tech/prompt-templates/{template_key}/versions
+GET  /api/insights/ashare-tech/production-profile
+PUT  /api/insights/ashare-tech/production-profile
 POST /api/insights/ashare-tech/model-diagnostics
 GET  /api/insights/ashare-tech/reports/{report_id}/agent-runs
 GET  /api/insights/ashare-tech/agent-runs/{run_id}

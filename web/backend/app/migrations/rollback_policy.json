@@ -37,6 +37,7 @@
     "0033_retire_legacy_paper_sessions": {"mode": "irreversible", "action": "Restore a verified pre-migration backup if retired legacy Paper evidence is required."},
     "0034_unify_research_workflow": {"mode": "irreversible", "action": "Stop Research workloads and restore the verified pre-migration backup."},
     "0035_unify_optimization_workflow": {"mode": "irreversible", "action": "Stop optimization workloads and restore the verified pre-migration backup."},
-    "0036_ashare_tech_agents": {"mode": "compensating", "action": "Stop report and evaluation workers, archive Agent and prediction evidence, then drop the added tables and report columns in a reviewed forward migration."}
+    "0036_ashare_tech_agents": {"mode": "compensating", "action": "Stop report and evaluation workers, archive Agent and prediction evidence, then drop the added tables and report columns in a reviewed forward migration."},
+    "0037_merge_structured_insights": {"mode": "irreversible", "action": "Stop report workers and restore a verified pre-migration database backup if the permanently deleted generic Insight history or tables are required."}
   }
 }

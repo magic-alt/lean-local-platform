@@ -71,10 +71,9 @@ import type {
   FuturesMainItem,
   FuturesContinuousResult,
   MaintenanceHistoryClearResult,
-  InsightCapabilities,
-  InsightListResponse,
-  InsightReport,
   AshareTechCapabilities,
+  AshareTechPromptTemplate,
+  AshareTechProductionProfile,
   AshareTechReport,
   AshareTechReportList,
   AshareTechRuleTag,
@@ -681,37 +680,39 @@ export const api = {
     ids.forEach((id) => query.append("accountId", id));
     return request<PaperAccountComparison>(`/api/paper/accounts/compare?${query.toString()}`);
   },
-  insightCapabilities: () => request<InsightCapabilities>("/api/insights/capabilities"),
-  insights: (filters?: { assetClass?: string; symbol?: string; status?: string; limit?: number; offset?: number }) => {
-    const query = new URLSearchParams();
-    Object.entries(filters ?? {}).forEach(([key, value]) => {
-      if (value !== undefined && value !== "") query.set(key, String(value));
-    });
-    const suffix = query.toString() ? `?${query.toString()}` : "";
-    return request<InsightListResponse>(`/api/insights${suffix}`);
-  },
-  createInsight: (payload: {
-    symbol: string;
-    assetClass: "equity" | "crypto" | "crypto_future" | "future";
-    market?: string;
-    venue?: string;
-    resolution?: "daily";
-    dataType?: string;
-    asOfDate?: string;
-    lookbackBars?: number;
-    backtestRunId?: string;
-  }) => request<{ id: string; taskId: string; status: string }>("/api/insights", {
-    method: "POST",
+  ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/insights/ashare-tech/capabilities"),
+  ashareTechPromptTemplates: () =>
+    request<{ items: AshareTechPromptTemplate[]; count: number }>("/api/insights/ashare-tech/prompt-templates"),
+  ashareTechPromptTemplateVersions: (templateKey: string) =>
+    request<{ items: AshareTechPromptTemplate[]; count: number }>(
+      `/api/insights/ashare-tech/prompt-templates/${encodeURIComponent(templateKey)}/versions`
+    ),
+  saveAshareTechPromptTemplate: (payload: {
+    name: string;
+    description?: string;
+    templateKey?: string;
+    stagePrompts: Record<string, string>;
+  }) => request<AshareTechPromptTemplate>(
+    payload.templateKey
+      ? `/api/insights/ashare-tech/prompt-templates/${encodeURIComponent(payload.templateKey)}/versions`
+      : "/api/insights/ashare-tech/prompt-templates",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  ),
+  ashareTechProductionProfile: () =>
+    request<AshareTechProductionProfile | null>("/api/insights/ashare-tech/production-profile"),
+  updateAshareTechProductionProfile: (payload: {
+    provider: string;
+    model: string;
+    promptVersionId: string;
+  }) => request<AshareTechProductionProfile>("/api/insights/ashare-tech/production-profile", {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }),
-  insight: (id: string) => request<InsightReport>(`/api/insights/${encodeURIComponent(id)}`),
-  deleteInsight: (id: string) =>
-    request<{ deleted: boolean; id: string; deletedTasks: number; deletedDecisionSignal: boolean }>(
-      `/api/insights/${encodeURIComponent(id)}`,
-      { method: "DELETE" }
-    ),
-  ashareTechCapabilities: () => request<AshareTechCapabilities>("/api/insights/ashare-tech/capabilities"),
   ashareTechReports: () => request<AshareTechReportList>("/api/insights/ashare-tech/reports"),
   ashareTechReport: (id: string) => request<AshareTechReport>(`/api/insights/ashare-tech/reports/${encodeURIComponent(id)}`),
   deleteAshareTechReport: (id: string, force = false) =>
@@ -723,14 +724,21 @@ export const api = {
     requestedDate?: string;
     force?: boolean;
     analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic";
+    provider?: string;
+    model?: string;
+    promptVersionId?: string;
   }) =>
     request<{ id: string; taskId?: string | null; status: string; reused: boolean }>("/api/insights/ashare-tech/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  diagnoseAshareTechModel: () =>
-    request<AshareTechModelDiagnostic>("/api/insights/ashare-tech/model-diagnostics", { method: "POST" }),
+  diagnoseAshareTechModel: (payload?: { provider?: string; model?: string }) =>
+    request<AshareTechModelDiagnostic>("/api/insights/ashare-tech/model-diagnostics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {})
+    }),
   ashareTechAgentRuns: (reportId: string) =>
     request<{ items: AshareTechAgentRun[] }>(
       `/api/insights/ashare-tech/reports/${encodeURIComponent(reportId)}/agent-runs`
@@ -740,6 +748,7 @@ export const api = {
   ashareTechEvaluations: (params: {
     horizonDays?: 1 | 5 | 20;
     symbol?: string;
+    provider?: string;
     model?: string;
     promptVersion?: string;
     limit?: number;
@@ -747,6 +756,7 @@ export const api = {
     const query = new URLSearchParams();
     if (params.horizonDays) query.set("horizonDays", String(params.horizonDays));
     if (params.symbol) query.set("symbol", params.symbol);
+    if (params.provider) query.set("provider", params.provider);
     if (params.model) query.set("model", params.model);
     if (params.promptVersion) query.set("promptVersion", params.promptVersion);
     query.set("limit", String(params.limit ?? 500));
@@ -756,11 +766,13 @@ export const api = {
   },
   ashareTechEvaluationSummary: (params: {
     horizonDays?: 1 | 5 | 20;
+    provider?: string;
     model?: string;
     promptVersion?: string;
   } = {}) => {
     const query = new URLSearchParams();
     if (params.horizonDays) query.set("horizonDays", String(params.horizonDays));
+    if (params.provider) query.set("provider", params.provider);
     if (params.model) query.set("model", params.model);
     if (params.promptVersion) query.set("promptVersion", params.promptVersion);
     return request<AshareTechEvaluationSummary>(

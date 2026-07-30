@@ -90,6 +90,22 @@ def valid_requester(system, payload):
                     "evidenceIds": [f"TECH-{symbol}"],
                     "invalidation": "跌破支撑",
                 } for horizon in (1, 5, 20)],
+                "candidateSignal": {
+                    "stance": "bullish",
+                    "direction": "long",
+                    "intent": "enter",
+                    "targetExposure": 0.1,
+                    "confidence": 0.7,
+                    "score": 80,
+                    "horizon": "5d",
+                    "entryLow": 99,
+                    "entryHigh": 100,
+                    "stopLoss": 94,
+                    "targetPrice": 110,
+                    "invalidation": "收盘跌破94",
+                    "reason": "趋势向上且价格计划完整",
+                    "evidenceIds": [f"TECH-{symbol}"],
+                },
             } for symbol in symbols]
         }, {"total_tokens": 100}, 12
     if "PIT基本面" in system:
@@ -171,6 +187,16 @@ def test_six_agent_pipeline_persists_predictions_and_enforces_hard_veto(tmp_path
     assert len(detail["predictions"]) == 6
     assert {item["horizon_days"] for item in detail["predictions"]} == {1, 5, 20}
     assert all(item["model"] == "deepseek-v4-flash" for item in detail["predictions"])
+    assert len(detail["candidateSignals"]) == 2
+    assert len(detail["stockInsights"]) == 2
+    signals = {item["symbol"]: item for item in detail["candidateSignals"]}
+    assert signals["002475"]["finalSignal"]["targetExposure"] == 0.1
+    assert signals["002475"]["finalSignal"]["actionable"] is True
+    assert signals["688256"]["status"] == "veto"
+    assert signals["688256"]["finalSignal"]["targetExposure"] == 0
+    assert "risk_veto" in signals["688256"]["guardrail"]["violations"]
+    assert all(stage["system_prompt"] for stage in detail["stages"])
+    assert detail["promptSnapshot"]
 
 
 def test_agent_failure_is_visible_and_uses_deterministic_fallback(tmp_path, monkeypatch):
@@ -197,6 +223,36 @@ def test_agent_failure_is_visible_and_uses_deterministic_fallback(tmp_path, monk
     assert "secret-key" not in str(result)
     assert result["predictionCount"] == 0
     assert agents.get_agent_run(result["runId"])["predictions"] == []
+
+
+def test_prompt_versions_are_immutable_and_production_profile_is_explicit(tmp_path, monkeypatch):
+    configure_platform(tmp_path, monkeypatch)
+    agents = _configured_agent(monkeypatch)
+    prompts = agents.builtin_prompt_version()["stagePrompts"]
+
+    first = agents.save_prompt_version(
+        name="科技趋势模板",
+        description="第一版",
+        stage_prompts=prompts,
+    )
+    changed = {**prompts, "technical": prompts["technical"] + "\n优先检查 RSI 与区间位置。"}
+    second = agents.save_prompt_version(
+        name="科技趋势模板",
+        description="第二版",
+        template_key=first["templateKey"],
+        stage_prompts=changed,
+    )
+
+    assert first["id"] != second["id"]
+    assert (first["version"], second["version"]) == (1, 2)
+    assert agents.get_prompt_version(first["id"])["stagePrompts"]["technical"] == prompts["technical"]
+    versions = agents.list_prompt_templates(first["templateKey"])
+    assert [item["version"] for item in versions["items"]] == [2, 1]
+
+    profile = agents.set_production_profile("deepseek", "deepseek-v4-pro", second["id"])
+    assert profile["provider"] == "deepseek"
+    assert profile["model"] == "deepseek-v4-pro"
+    assert profile["promptVersionId"] == second["id"]
 
 
 def test_pit_context_excludes_future_financial_facts(tmp_path, monkeypatch):
@@ -302,6 +358,19 @@ def test_model_diagnostic_never_returns_api_key(monkeypatch):
     )
     assert result["status"] == "ok"
     assert "secret-key" not in str(result)
+
+
+def test_anthropic_messages_structured_content_is_supported():
+    from app.services.ashare_tech_agents import _endpoint, _extract_content
+
+    runtime = {
+        "provider": "anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+    }
+    assert _endpoint(runtime) == "https://api.anthropic.com/v1/messages"
+    assert _extract_content({
+        "content": [{"type": "text", "text": '{"ok":true}'}],
+    }) == {"ok": True}
 
 
 def test_multiclass_brier_uses_standard_sum_over_classes():

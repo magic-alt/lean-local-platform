@@ -18,6 +18,7 @@ from ..core.config import (
     ASHARE_TECH_CLOSE_TOLERANCE_PCT,
     INSIGHTS_LLM_MODEL,
     INSIGHTS_LLM_PROVIDER,
+    resolve_insights_llm_runtime,
 )
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .tasks import append_log, update_task
@@ -261,7 +262,7 @@ def reset_watchlist() -> dict[str, Any]:
 
 
 def capabilities() -> dict[str, Any]:
-    from .ashare_tech_agents import agent_capabilities
+    from .ashare_tech_agents import agent_capabilities, get_production_profile
 
     watchlist = get_watchlist()
     return {
@@ -278,6 +279,7 @@ def capabilities() -> dict[str, Any]:
         "paperHandoff": False,
         "schedule": "A股工作日 17:30 Asia/Shanghai；数据未齐时 18:00、18:30 重试",
         "labels": list(ALLOWED_LABELS),
+        "productionProfile": get_production_profile(),
         **agent_capabilities(),
     }
 
@@ -339,6 +341,19 @@ def _ema(values: list[float], period: int) -> list[float]:
 
 def _moving_average(values: list[float], period: int) -> float | None:
     return _mean(values[-period:]) if len(values) >= period else None
+
+
+def _rsi(values: list[float], period: int = 14) -> float | None:
+    if len(values) <= period:
+        return None
+    changes = [values[index] - values[index - 1] for index in range(len(values) - period, len(values))]
+    gains = [max(change, 0.0) for change in changes]
+    losses = [max(-change, 0.0) for change in changes]
+    average_loss = statistics.fmean(losses)
+    if average_loss == 0:
+        return 100.0
+    relative_strength = statistics.fmean(gains) / average_loss
+    return 100 - 100 / (1 + relative_strength)
 
 
 def _ma_direction(closes: list[float], period: int) -> str | None:
@@ -414,6 +429,12 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "ma20DeviationPct": _round(_pct(close, mas[20])), "ma60DeviationPct": _round(_pct(close, mas[60])),
         "drawdown20Pct": _round(_pct(close, high20)),
         "volatility20": _round(volatility20, 6),
+        "realizedVolatility20dPct": _round(volatility20 * math.sqrt(252) * 100 if volatility20 is not None else None),
+        "rsi14": _round(_rsi(closes)),
+        "rangePosition20Pct": _round(
+            (close - low20) / (high20 - low20) * 100
+            if high20 is not None and low20 is not None and high20 > low20 else None
+        ),
         "return5Pct": _round(_pct(close, closes[-6] if len(closes) >= 6 else None)),
         "return10Pct": _round(_pct(close, closes[-11] if len(closes) >= 11 else None)),
         "ma20Direction": _ma_direction(closes, 20), "ma60Direction": _ma_direction(closes, 60),
@@ -840,16 +861,56 @@ def create_report(
     *,
     force: bool = False,
     analysis_mode: str = "auto",
+    provider: str | None = None,
+    model: str | None = None,
+    prompt_version_id: str | None = None,
 ) -> dict[str, Any]:
+    from .ashare_tech_agents import (
+        BUILTIN_PROMPT_VERSION_ID,
+        get_production_profile,
+        get_prompt_version,
+    )
+
     requested_date = requested_date or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     try:
         date.fromisoformat(requested_date)
     except ValueError as exc:
         raise AshareTechReportError("requestedDate must be YYYY-MM-DD.") from exc
+    profile = get_production_profile() or {}
+    requested_provider = provider or profile.get("provider") or INSIGHTS_LLM_PROVIDER or None
+    requested_model = model or profile.get("model") or INSIGHTS_LLM_MODEL or None
+    requested_prompt_version_id = (
+        prompt_version_id
+        or profile.get("promptVersionId")
+        or BUILTIN_PROMPT_VERSION_ID
+    )
+    if provider or model:
+        runtime = resolve_insights_llm_runtime(requested_provider, requested_model)
+        if (
+            not runtime.get("api_key")
+            or not runtime.get("base_url")
+            or runtime.get("invalid_model")
+        ):
+            raise AshareTechReportError("所选 Provider/模型未配置或不在允许列表中。")
+    try:
+        get_prompt_version(str(requested_prompt_version_id))
+    except KeyError as exc:
+        raise AshareTechReportError("所选 Prompt 版本不存在。") from exc
     with db() as connection:
         existing = connection.execute("select * from ashare_tech_reports where requested_date = ?", (requested_date,)).fetchone()
-    if existing and not force:
-        return row_to_dict(existing) or {}
+    existing_item = row_to_dict(existing)
+    active_statuses = {"created", "queued", "running", "waiting_data", "interrupted"}
+    if existing_item and str(existing_item.get("status")) in active_statuses and not force:
+        return existing_item
+    same_configuration = bool(
+        existing_item
+        and existing_item.get("analysis_mode") == analysis_mode
+        and existing_item.get("requested_provider") == requested_provider
+        and existing_item.get("requested_model") == requested_model
+        and existing_item.get("prompt_version_id") == requested_prompt_version_id
+    )
+    if existing_item and not force and same_configuration:
+        return existing_item
     snapshot = watchlist_snapshot()
     if not snapshot["items"]:
         raise AshareTechReportError("观察池没有启用股票，无法创建报告。")
@@ -862,10 +923,14 @@ def create_report(
                 update ashare_tech_reports
                 set status = ?, error = null, report_json = null, pool_snapshot_json = ?,
                     pool_fingerprint = ?, analysis_mode = ?, llm_status = null,
-                    active_agent_run_id = null, agent_summary_json = null, updated_at = ?
+                    active_agent_run_id = null, agent_summary_json = null,
+                    requested_provider=?,requested_model=?,prompt_version_id=?,updated_at = ?
                 where id = ?
                 """,
-                ("queued", json_dump(snapshot), snapshot["fingerprint"], analysis_mode, now, report_id),
+                (
+                    "queued", json_dump(snapshot), snapshot["fingerprint"], analysis_mode,
+                    requested_provider, requested_model, requested_prompt_version_id, now, report_id,
+                ),
             )
     else:
         with db() as connection:
@@ -874,11 +939,12 @@ def create_report(
                 insert into ashare_tech_reports
                     (id, requested_date, market_status, status, data_completeness_json, source_conflicts_json,
                      source_manifest_json, pool_snapshot_json, pool_fingerprint, prompt_version, analysis_mode,
-                     created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     requested_provider,requested_model,prompt_version_id,created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (report_id, requested_date, "pending", "queued", "{}", "[]", "[]", json_dump(snapshot),
-                 snapshot["fingerprint"], PROMPT_VERSION, analysis_mode, now, now),
+                 snapshot["fingerprint"], PROMPT_VERSION, analysis_mode, requested_provider, requested_model,
+                 requested_prompt_version_id, now, now),
             )
     return get_report(report_id)
 
@@ -1140,6 +1206,9 @@ def _finish_report(
             report_id=report_id,
             report=report,
             requested_mode=current.get("analysis_mode") or "auto",
+            requested_provider=current.get("requested_provider"),
+            requested_model=current.get("requested_model"),
+            prompt_version_id=current.get("prompt_version_id"),
         )
         report["agentRunSummary"] = agent_summary
         if agent_summary.get("summary"):

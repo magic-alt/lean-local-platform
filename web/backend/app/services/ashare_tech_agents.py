@@ -20,13 +20,16 @@ from ..core.config import (
     INSIGHTS_LLM_MODEL,
     INSIGHTS_LLM_PROVIDER,
     INSIGHTS_LLM_TIMEOUT_SECONDS,
+    insights_llm_public_catalog,
+    resolve_insights_llm_runtime,
 )
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .tasks import append_log
 from .tushare_adapter import TushareAdapter
 
 
-AGENT_PROMPT_VERSION = "ashare-tech-agent-v2"
+AGENT_PROMPT_VERSION = "ashare-tech-agent-v3"
+BUILTIN_PROMPT_VERSION_ID = "builtin:ashare-tech-agent-v3"
 AGENT_STAGES = (
     {"key": "technical", "name": "技术趋势 Agent", "sequence": 1},
     {"key": "fundamental", "name": "基本面与催化 Agent", "sequence": 2},
@@ -61,35 +64,71 @@ class AgentOutputError(ValueError):
     pass
 
 
-def _configured() -> bool:
-    return bool(INSIGHTS_LLM_BASE_URL and INSIGHTS_LLM_API_KEY and INSIGHTS_LLM_MODEL)
+def _runtime(provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+    # Preserve module-level overrides used by tests and legacy single-provider deployments.
+    provider_key = str(provider or INSIGHTS_LLM_PROVIDER or "").strip().lower()
+    if provider_key == str(INSIGHTS_LLM_PROVIDER or "").strip().lower():
+        runtime = {
+            "provider": provider_key,
+            "api_key": INSIGHTS_LLM_API_KEY,
+            "base_url": INSIGHTS_LLM_BASE_URL,
+            "model": model or INSIGHTS_LLM_MODEL,
+            "models": [],
+            "invalid_model": False,
+        }
+        catalog_entry = next(
+            (item for item in insights_llm_public_catalog() if item["provider"] == provider_key),
+            None,
+        )
+        if catalog_entry:
+            runtime["models"] = catalog_entry["models"]
+            allowed = {str(item["id"]) for item in catalog_entry["models"]}
+            runtime["invalid_model"] = bool(model and model not in allowed)
+        return runtime
+    return dict(resolve_insights_llm_runtime(provider_key, model))
 
 
-def _endpoint() -> str:
-    base = INSIGHTS_LLM_BASE_URL.rstrip("/")
+def _configured(provider: str | None = None, model: str | None = None) -> bool:
+    runtime = _runtime(provider, model)
+    return bool(
+        runtime.get("base_url")
+        and runtime.get("api_key")
+        and runtime.get("model")
+        and not runtime.get("invalid_model")
+    )
+
+
+def _endpoint(runtime: dict[str, Any] | None = None) -> str:
+    selected = runtime or _runtime()
+    base = str(selected.get("base_url") or "").rstrip("/")
+    if selected.get("provider") == "anthropic":
+        return base if base.endswith("/messages") else f"{base}/messages"
     return base if base.endswith("/chat/completions") else f"{base}/chat/completions"
 
 
 def agent_capabilities() -> dict[str, Any]:
     configured = _configured()
+    providers = insights_llm_public_catalog()
     return {
         "configured": configured,
         "provider": INSIGHTS_LLM_PROVIDER or None,
         "model": INSIGHTS_LLM_MODEL or None,
         "endpointHost": urlparse(INSIGHTS_LLM_BASE_URL).netloc if INSIGHTS_LLM_BASE_URL else None,
-        "apiStyle": "OpenAI-compatible chat/completions",
+        "apiStyle": "Structured JSON (OpenAI-compatible or Anthropic Messages)",
         "agentMode": ASHARE_TECH_AGENT_MODE,
         "defaultAnalysisMode": "hybrid_multi_agent" if configured else "deterministic",
         "stages": list(AGENT_STAGES),
         "evaluationHorizons": list(HORIZONS),
         "agentPromptVersion": AGENT_PROMPT_VERSION,
+        "providers": providers,
     }
 
 
-def _safe_error(exc: Exception) -> str:
+def _safe_error(exc: Exception, api_key: str | None = None) -> str:
     message = str(exc)
-    if INSIGHTS_LLM_API_KEY:
-        message = message.replace(INSIGHTS_LLM_API_KEY, "[REDACTED]")
+    secret = api_key or INSIGHTS_LLM_API_KEY
+    if secret:
+        message = message.replace(secret, "[REDACTED]")
     return message[:2000]
 
 
@@ -108,7 +147,14 @@ def _error_category(exc: Exception) -> str:
 
 
 def _extract_content(response: dict[str, Any]) -> dict[str, Any]:
-    content = ((((response.get("choices") or [{}])[0].get("message") or {}).get("content")))
+    if isinstance(response.get("content"), list):
+        content = "".join(
+            str(item.get("text") or "")
+            for item in response["content"]
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    else:
+        content = ((((response.get("choices") or [{}])[0].get("message") or {}).get("content")))
     if isinstance(content, dict):
         return content
     text = str(content or "").strip()
@@ -121,23 +167,51 @@ def _extract_content(response: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def _post_structured(system: str, payload_data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], int]:
+def _post_structured(
+    system: str,
+    payload_data: dict[str, Any],
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], int]:
+    selected = runtime or _runtime()
     payload: dict[str, Any] = {
-        "model": INSIGHTS_LLM_MODEL,
+        "model": selected["model"],
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload_data, ensure_ascii=False, separators=(",", ":"))},
         ],
     }
-    if INSIGHTS_LLM_PROVIDER == "kimi":
+    headers = {
+        "Authorization": f"Bearer {selected['api_key']}",
+        "Content-Type": "application/json",
+    }
+    if selected["provider"] == "anthropic":
+        payload = {
+            "model": selected["model"],
+            "max_tokens": 8192,
+            "system": system,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    "Return exactly one valid JSON object and no markdown.\n"
+                    + json.dumps(payload_data, ensure_ascii=False, separators=(",", ":"))
+                ),
+            }],
+        }
+        headers = {
+            "x-api-key": str(selected["api_key"]),
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+    if selected["provider"] == "kimi":
         payload["thinking"] = {"type": "disabled"}
     started = time.perf_counter()
     request = Request(
-        _endpoint(),
+        _endpoint(selected),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         method="POST",
-        headers={"Authorization": f"Bearer {INSIGHTS_LLM_API_KEY}", "Content-Type": "application/json"},
+        headers=headers,
     )
     with urlopen(request, timeout=INSIGHTS_LLM_TIMEOUT_SECONDS) as response:  # noqa: S310 - configured model endpoint
         raw = json.loads(response.read().decode("utf-8"))
@@ -147,19 +221,32 @@ def _post_structured(system: str, payload_data: dict[str, Any]) -> tuple[dict[st
 
 def model_diagnostics(
     requester: Callable[[str, dict[str, Any]], tuple[dict[str, Any], dict[str, Any], int]] = _post_structured,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     checked_at = utc_now()
-    if not _configured():
-        return {**agent_capabilities(), "status": "unconfigured", "checkedAt": checked_at}
+    selected = _runtime(provider, model)
+    capability = {
+        **agent_capabilities(),
+        "provider": selected.get("provider"),
+        "model": selected.get("model"),
+        "endpointHost": urlparse(str(selected.get("base_url") or "")).netloc or None,
+    }
+    if not _configured(provider, model):
+        return {**capability, "status": "unconfigured", "checkedAt": checked_at}
+    effective_requester = requester
+    if requester is _post_structured:
+        effective_requester = lambda system, payload: _post_structured(system, payload, runtime=selected)
     try:
-        output, usage, latency_ms = requester(
+        output, usage, latency_ms = effective_requester(
             "Return exactly one JSON object with ok=true. Do not add prose.",
             {"test": "ashare-tech-structured-json"},
         )
         if output.get("ok") is not True:
             raise AgentOutputError("Structured diagnostic did not return ok=true.")
         return {
-            **agent_capabilities(),
+            **capability,
             "status": "ok",
             "structuredJson": True,
             "latencyMs": latency_ms,
@@ -168,11 +255,11 @@ def model_diagnostics(
         }
     except Exception as exc:
         return {
-            **agent_capabilities(),
+            **capability,
             "status": "error",
             "structuredJson": False,
             "errorCategory": _error_category(exc),
-            "error": _safe_error(exc),
+            "error": _safe_error(exc, str(selected.get("api_key") or "")),
             "checkedAt": checked_at,
         }
 
@@ -320,6 +407,89 @@ def _number(value: Any, *, low: float = 0.0, high: float = 100.0) -> float:
     return result
 
 
+SIGNAL_INTENT_ALIASES = {
+    "buy": "enter", "open": "enter", "open_position": "enter",
+    "accumulate": "add", "increase": "add", "keep": "hold",
+    "wait": "hold", "observe": "hold", "no_trade": "hold",
+    "sell": "exit", "close": "exit", "close_position": "exit",
+    "trim": "reduce", "decrease": "reduce",
+}
+SIGNAL_HORIZONS = {"1d", "5d", "20d", "swing"}
+
+
+def _enum(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _unit_interval(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if 1 < number <= 100:
+        number /= 100
+    return max(0.0, min(number, 1.0)) if math.isfinite(number) else 0.0
+
+
+def _signal_score(value: Any) -> int:
+    number = _unit_interval(value)
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        raw = 0
+    if raw > 1:
+        number = max(0.0, min(raw / 100, 1.0))
+    return int(round(number * 100))
+
+
+def _optional_number(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _candidate_signal(value: Any, fallback_forecast: dict[str, Any]) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    direction = _enum(source.get("direction") or fallback_forecast.get("direction") or "flat")
+    if direction == "bullish":
+        direction = "long"
+    elif direction == "bearish":
+        direction = "flat"
+    if direction not in {"long", "flat", "short"}:
+        direction = "flat"
+    stance = _enum(source.get("stance") or fallback_forecast.get("direction") or "neutral")
+    if stance not in DIRECTIONS:
+        stance = "neutral"
+    raw_intent = _enum(source.get("intent") or ("enter" if direction == "long" else "hold"))
+    intent = SIGNAL_INTENT_ALIASES.get(raw_intent, raw_intent)
+    if intent not in {"enter", "add", "hold", "reduce", "exit"}:
+        intent = "hold"
+    horizon = _enum(source.get("horizon") or "5d")
+    if horizon in {"1", "5", "20"}:
+        horizon = f"{horizon}d"
+    if horizon not in SIGNAL_HORIZONS:
+        horizon = "swing"
+    evidence_ids = [str(item) for item in source.get("evidenceIds") or fallback_forecast.get("evidenceIds") or []]
+    return {
+        "stance": stance,
+        "direction": direction,
+        "intent": intent,
+        "targetExposure": _unit_interval(source.get("targetExposure")),
+        "confidence": _unit_interval(source.get("confidence") if source.get("confidence") is not None else max((fallback_forecast.get("probabilities") or {}).values(), default=0)),
+        "score": _signal_score(source.get("score") if source.get("score") is not None else fallback_forecast.get("trendScore")),
+        "horizon": horizon,
+        "entryLow": _optional_number(source.get("entryLow")),
+        "entryHigh": _optional_number(source.get("entryHigh")),
+        "stopLoss": _optional_number(source.get("stopLoss")),
+        "targetPrice": _optional_number(source.get("targetPrice")),
+        "invalidation": str(source.get("invalidation") or fallback_forecast.get("invalidation") or "")[:500],
+        "reason": str(source.get("reason") or fallback_forecast.get("rationale") or "")[:1000],
+        "evidenceIds": evidence_ids,
+    }
+
+
 def _validate_technical(value: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     symbols = set(context["symbols"])
     stocks = value.get("stocks")
@@ -362,7 +532,9 @@ def _validate_technical(value: dict[str, Any], context: dict[str, Any]) -> dict[
             horizons.add(horizon)
         if horizons != set(HORIZONS):
             raise AgentOutputError("technical output must contain 1, 5 and 20 day forecasts.")
-        output.append({"symbol": symbol, "forecasts": normalized_forecasts})
+        five_day = next(item for item in normalized_forecasts if item["horizonDays"] == 5)
+        candidate = _candidate_signal(item.get("candidateSignal"), five_day)
+        output.append({"symbol": symbol, "forecasts": normalized_forecasts, "candidateSignal": candidate})
         seen.add(symbol)
     if seen != symbols:
         raise AgentOutputError("technical output must cover every observation-pool symbol.")
@@ -509,7 +681,30 @@ def _fallback_technical(report: dict[str, Any]) -> dict[str, Any]:
                 "evidenceIds": [f"TECH-{row['code']}"],
                 "invalidation": f"收盘低于 {row.get('invalidation')}" if row.get("invalidation") else "关键数据缺失",
             })
-        stocks.append({"symbol": str(row["code"]), "forecasts": forecasts})
+        close = _optional_number(row.get("close"))
+        support = _optional_number(row.get("keySupport"))
+        entry_low = _optional_number((row.get("observationZone") or [None, None])[0])
+        entry_high = _optional_number((row.get("observationZone") or [None, None])[-1])
+        intent = "enter" if row.get("conclusion") in {"低吸观察", "小仓试错前置", "重点观察"} else "hold"
+        exposure = 0.15 if row.get("conclusion") == "小仓试错前置" else 0.1 if intent == "enter" else 0
+        five_day = next(item for item in forecasts if item["horizonDays"] == 5)
+        candidate = {
+            "stance": direction,
+            "direction": "long" if intent == "enter" else "flat",
+            "intent": intent,
+            "targetExposure": exposure,
+            "confidence": max(five_day["probabilities"].values()),
+            "score": int(score),
+            "horizon": "5d",
+            "entryLow": entry_low or close,
+            "entryHigh": entry_high or close,
+            "stopLoss": _optional_number(row.get("invalidation")) or (support * 0.97 if support else None),
+            "targetPrice": _optional_number(row.get("high20")),
+            "invalidation": five_day["invalidation"],
+            "reason": five_day["rationale"],
+            "evidenceIds": five_day["evidenceIds"],
+        }
+        stocks.append({"symbol": str(row["code"]), "forecasts": forecasts, "candidateSignal": candidate})
     return {"stocks": stocks}
 
 
@@ -603,7 +798,9 @@ STAGE_SYSTEMS = {
         "你是A股技术趋势分析Agent。只使用FACTS，覆盖全部股票并预测1/5/20个交易日趋势。"
         "返回JSON stocks数组；每项含symbol和三个forecasts；forecast含horizonDays、direction、"
         "bullish/neutral/bearish probabilities、trendScore、rationale、evidenceIds、invalidation。"
-        "概率和为1。不得提供下单、仓位或收益承诺。"
+        "每只股票还要给出candidateSignal，包含stance、direction、intent、targetExposure、confidence、"
+        "score、horizon、entryLow、entryHigh、stopLoss、targetPrice、invalidation、reason、evidenceIds。"
+        "targetExposure只代表该股票的独立研究信号。"
     ),
     "fundamental": (
         "你是PIT基本面与催化分析Agent。只使用截至分析日可见的FUND/ANN/POLICY事实，覆盖全部股票。"
@@ -630,8 +827,229 @@ STAGE_SYSTEMS = {
     ),
 }
 
+STAGE_CONTRACTS = {
+    "technical": (
+        "硬性契约：输出必须是单个JSON对象并覆盖CONTEXT.symbols中的每只股票。"
+        "forecasts必须恰好包含1/5/20日，三类概率均在0到1且合计为1。"
+        "candidateSignal的intent只能是enter/add/hold/reduce/exit，direction只能是long/flat/short；"
+        "targetExposure与confidence使用0到1小数，score使用0到100。所有evidenceIds必须来自CONTEXT。"
+    ),
+    "fundamental": (
+        "硬性契约：输出单个JSON对象，stocks覆盖全部股票；quality只能是strong/neutral/weak/unknown；"
+        "不得补造缺失数据，所有evidenceIds必须来自CONTEXT。"
+    ),
+    "bull": "硬性契约：输出单个JSON对象，stocks覆盖全部股票，所有evidenceIds必须来自CONTEXT，不得新增事实。",
+    "bear": "硬性契约：输出单个JSON对象，stocks覆盖全部股票，所有evidenceIds必须来自CONTEXT，不得新增事实。",
+    "risk": (
+        "硬性契约：输出单个JSON对象，stocks覆盖全部股票，status只能是pass/downgrade/veto；"
+        "确定性硬风险不得放行，所有evidenceIds必须来自CONTEXT。"
+    ),
+    "final": (
+        "硬性契约：输出单个JSON对象，selections最多10只且不得包含硬否决股票；"
+        "只做研究排序，不创建Paper信号或订单，所有evidenceIds必须来自CONTEXT。"
+    ),
+}
 
-def _persist_stage_start(run_id: str, stage_key: str, input_fingerprint: str, fact_ids: list[str]) -> str:
+
+def _prompt_payload(
+    *,
+    prompt_id: str,
+    template_key: str,
+    name: str,
+    description: str,
+    version_no: int,
+    stage_prompts: dict[str, str],
+    fingerprint: str,
+    created_at: str | None,
+    builtin: bool,
+) -> dict[str, Any]:
+    return {
+        "id": prompt_id,
+        "templateKey": template_key,
+        "name": name,
+        "description": description,
+        "version": version_no,
+        "stagePrompts": stage_prompts,
+        "fingerprint": fingerprint,
+        "createdAt": created_at,
+        "builtin": builtin,
+    }
+
+
+def builtin_prompt_version() -> dict[str, Any]:
+    prompts = dict(STAGE_SYSTEMS)
+    fingerprint = hashlib.sha256(json_dump(prompts).encode("utf-8")).hexdigest()
+    return _prompt_payload(
+        prompt_id=BUILTIN_PROMPT_VERSION_ID,
+        template_key="builtin",
+        name="A股科技日报内置模板",
+        description="随代码发布的六阶段默认分析指令",
+        version_no=1,
+        stage_prompts=prompts,
+        fingerprint=fingerprint,
+        created_at=None,
+        builtin=True,
+    )
+
+
+def list_prompt_templates(template_key: str | None = None) -> dict[str, Any]:
+    with db() as connection:
+        if template_key:
+            rows = connection.execute(
+                """
+                select * from ashare_tech_prompt_templates
+                where template_key=?
+                order by version_no desc
+                """,
+                (template_key,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "select * from ashare_tech_prompt_templates order by template_key,version_no desc"
+            ).fetchall()
+    items = [builtin_prompt_version()] if template_key in {None, "builtin"} else []
+    items.extend(
+        _prompt_payload(
+            prompt_id=str(item["id"]),
+            template_key=str(item["template_key"]),
+            name=str(item["name"]),
+            description=str(item.get("description") or ""),
+            version_no=int(item["version_no"]),
+            stage_prompts=dict(item.get("stagePrompts") or {}),
+            fingerprint=str(item["prompt_fingerprint"]),
+            created_at=str(item["created_at"]),
+            builtin=False,
+        )
+        for item in rows_to_dicts(rows)
+    )
+    return {"items": items, "count": len(items)}
+
+
+def get_prompt_version(prompt_version_id: str | None) -> dict[str, Any]:
+    if not prompt_version_id or prompt_version_id == BUILTIN_PROMPT_VERSION_ID:
+        return builtin_prompt_version()
+    with db() as connection:
+        row = row_to_dict(connection.execute(
+            "select * from ashare_tech_prompt_templates where id=?",
+            (prompt_version_id,),
+        ).fetchone())
+    if not row:
+        raise KeyError("Prompt version not found.")
+    return _prompt_payload(
+        prompt_id=str(row["id"]),
+        template_key=str(row["template_key"]),
+        name=str(row["name"]),
+        description=str(row.get("description") or ""),
+        version_no=int(row["version_no"]),
+        stage_prompts=dict(row.get("stagePrompts") or {}),
+        fingerprint=str(row["prompt_fingerprint"]),
+        created_at=str(row["created_at"]),
+        builtin=False,
+    )
+
+
+def save_prompt_version(
+    *,
+    name: str,
+    description: str = "",
+    stage_prompts: dict[str, str],
+    template_key: str | None = None,
+) -> dict[str, Any]:
+    clean_name = name.strip()
+    if not clean_name:
+        raise AgentOutputError("Prompt template name is required.")
+    expected = set(AGENT_STAGE_BY_KEY)
+    if set(stage_prompts) != expected:
+        raise AgentOutputError("Prompt template must contain all six Agent stages.")
+    clean_prompts = {key: str(stage_prompts[key]).strip() for key in expected}
+    if any(not value for value in clean_prompts.values()):
+        raise AgentOutputError("Agent stage prompts cannot be empty.")
+    key = re.sub(r"[^a-z0-9_-]+", "-", str(template_key or "").strip().lower()).strip("-")
+    if not key or key == "builtin":
+        key = f"custom-{uuid.uuid4().hex[:12]}"
+    fingerprint = hashlib.sha256(json_dump(clean_prompts).encode("utf-8")).hexdigest()
+    now = utc_now()
+    with db() as connection:
+        row = connection.execute(
+            "select max(version_no) as version_no from ashare_tech_prompt_templates where template_key=?",
+            (key,),
+        ).fetchone()
+        version_no = int(row["version_no"] or 0) + 1
+        prompt_id = str(uuid.uuid4())
+        connection.execute(
+            """
+            insert into ashare_tech_prompt_templates
+                (id,template_key,name,description,version_no,stage_prompts_json,prompt_fingerprint,created_at)
+            values (?,?,?,?,?,?,?,?)
+            """,
+            (
+                prompt_id, key, clean_name, description.strip(), version_no,
+                json_dump(clean_prompts), fingerprint, now,
+            ),
+        )
+    return get_prompt_version(prompt_id)
+
+
+def get_production_profile() -> dict[str, Any] | None:
+    with db() as connection:
+        row = row_to_dict(connection.execute(
+            "select * from ashare_tech_agent_profiles where profile_key='scheduled-default'"
+        ).fetchone())
+    if row:
+        return {
+            "provider": row["provider"],
+            "model": row["model"],
+            "promptVersionId": row["prompt_version_id"],
+            "updatedAt": row["updated_at"],
+            "source": "published",
+        }
+    selected = _runtime()
+    if not _configured():
+        return None
+    return {
+        "provider": selected["provider"],
+        "model": selected["model"],
+        "promptVersionId": BUILTIN_PROMPT_VERSION_ID,
+        "updatedAt": None,
+        "source": "legacy-environment",
+    }
+
+
+def set_production_profile(provider: str, model: str, prompt_version_id: str) -> dict[str, Any]:
+    selected = _runtime(provider, model)
+    if not _configured(provider, model):
+        raise AgentOutputError("Selected Provider/model is not configured or allowed.")
+    get_prompt_version(prompt_version_id)
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into ashare_tech_agent_profiles(profile_key,provider,model,prompt_version_id,updated_at)
+            values ('scheduled-default',?,?,?,?)
+            on conflict(profile_key) do update set
+                provider=excluded.provider,model=excluded.model,
+                prompt_version_id=excluded.prompt_version_id,updated_at=excluded.updated_at
+            """,
+            (selected["provider"], selected["model"], prompt_version_id, now),
+        )
+    return get_production_profile() or {}
+
+
+def _render_stage_prompt(stage_key: str, prompt: str) -> str:
+    return f"{prompt.strip()}\n\n{STAGE_CONTRACTS[stage_key]}"
+
+
+def _persist_stage_start(
+    run_id: str,
+    stage_key: str,
+    input_fingerprint: str,
+    fact_ids: list[str],
+    *,
+    runtime: dict[str, Any],
+    prompt_version: str,
+    prompt_version_id: str,
+    system_prompt: str,
+) -> str:
     now = utc_now()
     stage = AGENT_STAGE_BY_KEY[stage_key]
     with db() as connection:
@@ -646,18 +1064,19 @@ def _persist_stage_start(run_id: str, stage_key: str, input_fingerprint: str, fa
             """
             insert into ashare_tech_agent_stages
                 (id,run_id,stage_key,sequence_no,status,provider,model,prompt_version,input_fingerprint,
-                 input_fact_ids_json,usage_json,attempt_count,started_at,updated_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 input_fact_ids_json,usage_json,attempt_count,started_at,updated_at,prompt_version_id,system_prompt)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(run_id,stage_key) do update set
                 status=excluded.status,provider=excluded.provider,model=excluded.model,
                 prompt_version=excluded.prompt_version,input_fingerprint=excluded.input_fingerprint,
                 input_fact_ids_json=excluded.input_fact_ids_json,attempt_count=0,error_category=null,
-                error=null,started_at=excluded.started_at,finished_at=null,updated_at=excluded.updated_at
+                error=null,started_at=excluded.started_at,finished_at=null,updated_at=excluded.updated_at,
+                prompt_version_id=excluded.prompt_version_id,system_prompt=excluded.system_prompt
             """,
             (
-                stage_id, run_id, stage_key, stage["sequence"], "running", INSIGHTS_LLM_PROVIDER,
-                INSIGHTS_LLM_MODEL, AGENT_PROMPT_VERSION, input_fingerprint, json_dump(fact_ids),
-                "{}", 0, now, now,
+                stage_id, run_id, stage_key, stage["sequence"], "running", runtime["provider"],
+                runtime["model"], prompt_version, input_fingerprint, json_dump(fact_ids),
+                "{}", 0, now, now, prompt_version_id, system_prompt,
             ),
         )
     return stage_id
@@ -671,14 +1090,23 @@ def _run_stage(
     validator: Callable[[dict[str, Any]], dict[str, Any]],
     fallback: Callable[[], dict[str, Any]],
     requester: Callable[[str, dict[str, Any]], tuple[dict[str, Any], dict[str, Any], int]],
+    runtime: dict[str, Any],
+    prompt_version: str,
+    prompt_version_id: str,
+    stage_prompts: dict[str, str],
 ) -> tuple[dict[str, Any], str]:
     fact_ids = sorted(_all_evidence_ids(context))
     input_fingerprint = hashlib.sha256(json_dump(stage_input).encode("utf-8")).hexdigest()
-    stage_id = _persist_stage_start(run_id, stage_key, input_fingerprint, fact_ids)
+    system_prompt = _render_stage_prompt(stage_key, stage_prompts[stage_key])
+    stage_id = _persist_stage_start(
+        run_id, stage_key, input_fingerprint, fact_ids,
+        runtime=runtime, prompt_version=prompt_version,
+        prompt_version_id=prompt_version_id, system_prompt=system_prompt,
+    )
     last_error: Exception | None = None
     for attempt in range(1, 3):
         try:
-            raw, usage, latency_ms = requester(STAGE_SYSTEMS[stage_key], stage_input)
+            raw, usage, latency_ms = requester(system_prompt, stage_input)
             output = validator(raw)
             with db() as connection:
                 connection.execute(
@@ -704,7 +1132,8 @@ def _run_stage(
             """,
             (
                 json_dump(output), _error_category(last_error or AgentOutputError("unknown")),
-                _safe_error(last_error or AgentOutputError("unknown")), utc_now(), utc_now(), stage_id,
+                _safe_error(last_error or AgentOutputError("unknown"), str(runtime.get("api_key") or "")),
+                utc_now(), utc_now(), stage_id,
             ),
         )
     return output, "fallback"
@@ -718,8 +1147,8 @@ def _stage_summary(run_id: str) -> list[dict[str, Any]]:
     with db() as connection:
         rows = connection.execute(
             """
-            select stage_key,sequence_no,status,provider,model,prompt_version,latency_ms,attempt_count,
-                   error_category,error,usage_json,started_at,finished_at
+            select stage_key,sequence_no,status,provider,model,prompt_version,prompt_version_id,
+                   system_prompt,latency_ms,attempt_count,error_category,error,usage_json,started_at,finished_at
             from ashare_tech_agent_stages where run_id=? order by sequence_no
             """,
             (run_id,),
@@ -727,7 +1156,15 @@ def _stage_summary(run_id: str) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
-def _create_skipped_stages(run_id: str, reason: str) -> None:
+def _create_skipped_stages(
+    run_id: str,
+    reason: str,
+    *,
+    runtime: dict[str, Any],
+    prompt_version: str,
+    prompt_version_id: str,
+    stage_prompts: dict[str, str],
+) -> None:
     now = utc_now()
     with db() as connection:
         for stage in AGENT_STAGES:
@@ -735,14 +1172,16 @@ def _create_skipped_stages(run_id: str, reason: str) -> None:
                 """
                 insert into ashare_tech_agent_stages
                     (id,run_id,stage_key,sequence_no,status,provider,model,prompt_version,input_fingerprint,
-                     input_fact_ids_json,usage_json,attempt_count,error_category,error,finished_at,updated_at)
-                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     input_fact_ids_json,usage_json,attempt_count,error_category,error,finished_at,updated_at,
+                     prompt_version_id,system_prompt)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 on conflict(run_id,stage_key) do nothing
                 """,
                 (
                     str(uuid.uuid4()), run_id, stage["key"], stage["sequence"], "skipped",
-                    INSIGHTS_LLM_PROVIDER or None, INSIGHTS_LLM_MODEL or None, AGENT_PROMPT_VERSION,
+                    runtime.get("provider"), runtime.get("model"), prompt_version,
                     "deterministic", "[]", "{}", 0, "unconfigured", reason, now, now,
+                    prompt_version_id, _render_stage_prompt(stage["key"], stage_prompts[stage["key"]]),
                 ),
             )
 
@@ -765,12 +1204,145 @@ def _neutral_band_pct(volatility20: Any, horizon: int) -> float:
     return round(max(0.5, min(5.0, 0.5 * volatility * math.sqrt(horizon) * 100)), 4)
 
 
+def _guard_candidate_signal(
+    raw: dict[str, Any],
+    stock: dict[str, Any],
+    risk: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    signal = dict(raw)
+    violations: list[str] = []
+    normalized_fields: list[str] = []
+    direction = str(signal.get("direction") or "flat")
+    intent = str(signal.get("intent") or "hold")
+    exposure = _unit_interval(signal.get("targetExposure"))
+    confidence = _unit_interval(signal.get("confidence"))
+    if direction == "short":
+        direction, exposure = "flat", 0.0
+        if intent in {"enter", "add"}:
+            intent = "exit"
+        violations.append("spot_short_exposure_blocked")
+    risk_status = str(risk.get("status") or "pass")
+    if risk_status == "veto":
+        violations.append("risk_veto")
+    elif risk_status == "downgrade" and exposure > 0.05:
+        normalized_fields.append(f"targetExposure:{exposure:g}->0.05")
+        exposure = 0.05
+        violations.append("risk_downgrade")
+    missing = list((stock.get("dataCompleteness") or {}).get("missing") or [])
+    if missing:
+        violations.append("data_quality_degraded")
+    if stock.get("announcementRisk") and stock.get("announcementRisk") != "未发现重大负面":
+        violations.append("announcement_risk")
+    if not signal.get("evidenceIds"):
+        violations.append("evidence_missing")
+    levels = {
+        key: _optional_number(signal.get(key))
+        for key in ("entryLow", "entryHigh", "stopLoss", "targetPrice")
+    }
+    if direction == "long" and intent in {"enter", "add"}:
+        if any(value is None for value in levels.values()):
+            violations.append("price_plan_incomplete")
+        elif not (
+            levels["stopLoss"] < levels["entryLow"]
+            <= levels["entryHigh"] < levels["targetPrice"]
+        ):
+            violations.append("invalid_long_price_plan")
+    blocking = {
+        "risk_veto", "data_quality_degraded", "announcement_risk", "evidence_missing",
+        "price_plan_incomplete", "invalid_long_price_plan",
+    }
+    actionable = (
+        direction == "long"
+        and intent in {"enter", "add"}
+        and exposure > 0
+        and not any(item in blocking for item in violations)
+    )
+    if not actionable:
+        direction, intent, exposure = "flat", "hold", 0.0
+    final = {
+        **signal,
+        "direction": direction,
+        "intent": intent,
+        "targetExposure": round(exposure, 4),
+        "confidence": round(confidence, 4),
+        "actionable": actionable,
+        **levels,
+    }
+    guardrail = {
+        "passed": not violations,
+        "adjusted": bool(violations or normalized_fields),
+        "violations": sorted(set(violations)),
+        "normalizedFields": normalized_fields,
+        "riskStatus": risk_status,
+    }
+    return final, guardrail
+
+
+def _persist_candidate_signals(
+    *,
+    run_id: str,
+    report_id: str,
+    report: dict[str, Any],
+    technical: dict[str, Any],
+    risk: dict[str, Any],
+    runtime: dict[str, Any],
+    prompt_version: str,
+    source_type: str,
+) -> list[dict[str, Any]]:
+    stocks = {str(item["code"]): item for item in report.get("fullPool") or []}
+    risks = {str(item["symbol"]): item for item in risk.get("stocks") or []}
+    persisted: list[dict[str, Any]] = []
+    now = utc_now()
+    with db() as connection:
+        for item in technical.get("stocks") or []:
+            symbol = str(item["symbol"])
+            raw = dict(item.get("candidateSignal") or {})
+            final, guardrail = _guard_candidate_signal(
+                raw,
+                stocks.get(symbol) or {},
+                risks.get(symbol) or {},
+            )
+            signal_id = str(uuid.uuid4())
+            status = "active" if final["actionable"] else "veto" if "risk_veto" in guardrail["violations"] else "observation"
+            connection.execute(
+                """
+                insert into ashare_tech_candidate_signals
+                    (id,run_id,report_id,symbol,provider,model,prompt_version,source_type,
+                     raw_signal_json,final_signal_json,guardrail_json,status,created_at)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    signal_id, run_id, report_id, symbol, runtime.get("provider"), runtime.get("model"),
+                    prompt_version, source_type, json_dump(raw), json_dump(final), json_dump(guardrail),
+                    status, now,
+                ),
+            )
+            persisted.append({
+                "id": signal_id,
+                "run_id": run_id,
+                "report_id": report_id,
+                "symbol": symbol,
+                "provider": runtime.get("provider"),
+                "model": runtime.get("model"),
+                "prompt_version": prompt_version,
+                "source_type": source_type,
+                "rawSignal": raw,
+                "finalSignal": final,
+                "guardrail": guardrail,
+                "status": status,
+                "created_at": now,
+            })
+    return persisted
+
+
 def _persist_predictions(
     run_id: str,
     report_id: str,
     report: dict[str, Any],
     technical: dict[str, Any],
     final: dict[str, Any],
+    runtime: dict[str, Any],
+    prompt_version: str,
 ) -> list[dict[str, Any]]:
     rows_by_symbol = {str(item["code"]): item for item in report.get("fullPool") or []}
     selections = {str(item["symbol"]): item for item in final.get("selections") or []}
@@ -792,8 +1364,8 @@ def _persist_predictions(
                         (id,run_id,report_id,symbol,horizon_days,predicted_direction,probabilities_json,
                          confidence,trend_score,rule_conclusion,selection_rank,selection_tier,rationale,
                          evidence_ids_json,neutral_band_pct,entry_date,entry_close,benchmark_code,model,
-                         prompt_version,created_at)
-                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         prompt_version,provider,created_at)
+                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         prediction_id, run_id, report_id, symbol, horizon, forecast["direction"],
@@ -803,7 +1375,7 @@ def _persist_predictions(
                         json_dump(forecast["evidenceIds"]),
                         _neutral_band_pct(row.get("volatility20"), horizon),
                         str(report.get("analysisDate")), float(row.get("close")),
-                        _benchmark_for_symbol(symbol), INSIGHTS_LLM_MODEL, AGENT_PROMPT_VERSION, now,
+                        _benchmark_for_symbol(symbol), runtime["model"], prompt_version, runtime["provider"], now,
                     ),
                 )
                 persisted.append({
@@ -826,9 +1398,23 @@ def run_agent_pipeline(
     report_id: str,
     report: dict[str, Any],
     requested_mode: str | None = None,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+    prompt_version_id: str | None = None,
     requester: Callable[[str, dict[str, Any]], tuple[dict[str, Any], dict[str, Any], int]] = _post_structured,
 ) -> dict[str, Any]:
-    configured = _configured()
+    runtime = _runtime(requested_provider, requested_model)
+    configured = _configured(requested_provider, requested_model)
+    prompt = get_prompt_version(prompt_version_id)
+    stage_prompts = dict(prompt["stagePrompts"])
+    prompt_version = (
+        AGENT_PROMPT_VERSION
+        if prompt["builtin"]
+        else f"{prompt['templateKey']}:v{prompt['version']}"
+    )
+    effective_requester = requester
+    if requester is _post_structured:
+        effective_requester = lambda system, payload: _post_structured(system, payload, runtime=runtime)
     requested = str(requested_mode or ASHARE_TECH_AGENT_MODE or "hybrid_multi_agent").strip().lower()
     if requested not in {"auto", "hybrid_multi_agent", "deterministic"}:
         requested = "hybrid_multi_agent"
@@ -848,35 +1434,53 @@ def run_agent_pipeline(
             insert into ashare_tech_agent_runs
                 (id,report_id,task_id,requested_date,analysis_date,analysis_mode,status,provider,
                  requested_model,prompt_version,input_fingerprint,stage_summary_json,usage_json,
-                 fallback_reason,created_at,started_at,updated_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 fallback_reason,created_at,started_at,updated_at,prompt_version_id,prompt_snapshot_json,
+                 prompt_fingerprint)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id, report_id, task_id, str(report.get("requestedDate")), str(report.get("analysisDate")),
-                resolved_mode, status, INSIGHTS_LLM_PROVIDER or None, INSIGHTS_LLM_MODEL or None,
-                AGENT_PROMPT_VERSION, input_fingerprint, "[]", "{}", fallback_reason, now, now, now,
+                resolved_mode, status, runtime.get("provider"), runtime.get("model"),
+                prompt_version, input_fingerprint, "[]", "{}", fallback_reason, now, now, now,
+                prompt["id"], json_dump(stage_prompts), prompt["fingerprint"],
             ),
         )
         connection.execute(
             """
             update ashare_tech_reports
-            set active_agent_run_id=?,analysis_mode=?,llm_status=?,updated_at=?
+            set active_agent_run_id=?,analysis_mode=?,llm_status=?,context_json=?,
+                requested_provider=?,requested_model=?,prompt_version_id=?,updated_at=?
             where id=?
             """,
-            (run_id, resolved_mode, status, now, report_id),
+            (
+                run_id, resolved_mode, status, json_dump(context), runtime.get("provider"),
+                runtime.get("model"), prompt["id"], now, report_id,
+            ),
         )
     if resolved_mode == "deterministic" or not configured:
-        _create_skipped_stages(run_id, fallback_reason or "Deterministic mode selected.")
+        _create_skipped_stages(
+            run_id, fallback_reason or "Deterministic mode selected.",
+            runtime=runtime, prompt_version=prompt_version, prompt_version_id=prompt["id"],
+            stage_prompts=stage_prompts,
+        )
+        technical = _fallback_technical(report)
+        risk = _fallback_risk(report, context)
+        signals = _persist_candidate_signals(
+            run_id=run_id, report_id=report_id, report=report, technical=technical, risk=risk,
+            runtime=runtime, prompt_version=prompt_version, source_type="deterministic",
+        )
         summary = {
             "runId": run_id,
             "analysisMode": resolved_mode,
             "status": status,
-            "provider": INSIGHTS_LLM_PROVIDER or None,
-            "model": INSIGHTS_LLM_MODEL or None,
-            "promptVersion": AGENT_PROMPT_VERSION,
+            "provider": runtime.get("provider"),
+            "model": runtime.get("model"),
+            "promptVersion": prompt_version,
+            "promptVersionId": prompt["id"],
             "stages": _stage_summary(run_id),
             "topSelections": [],
             "fallbackReason": fallback_reason,
+            "candidateSignalCount": len(signals),
         }
         with db() as connection:
             connection.execute(
@@ -887,17 +1491,19 @@ def run_agent_pipeline(
             )
         return summary
 
-    append_log(task_id, f"Starting A-share six-agent run {run_id} with {INSIGHTS_LLM_PROVIDER}/{INSIGHTS_LLM_MODEL}.")
+    append_log(task_id, f"Starting A-share six-agent run {run_id} with {runtime['provider']}/{runtime['model']}.")
     technical_fallback = lambda: _fallback_technical(report)
     fundamental_fallback = lambda: _fallback_fundamental(context)
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="ashare-agent") as pool:
         technical_future = pool.submit(
             _run_stage, run_id, "technical", context, _stage_payload(context),
-            lambda value: _validate_technical(value, context), technical_fallback, requester,
+            lambda value: _validate_technical(value, context), technical_fallback, effective_requester,
+            runtime, prompt_version, prompt["id"], stage_prompts,
         )
         fundamental_future = pool.submit(
             _run_stage, run_id, "fundamental", context, _stage_payload(context),
-            lambda value: _validate_stock_scores(value, context, "fundamental"), fundamental_fallback, requester,
+            lambda value: _validate_stock_scores(value, context, "fundamental"), fundamental_fallback, effective_requester,
+            runtime, prompt_version, prompt["id"], stage_prompts,
         )
         technical, technical_status = technical_future.result()
         fundamental, fundamental_status = fundamental_future.result()
@@ -907,12 +1513,14 @@ def run_agent_pipeline(
         bull_future = pool.submit(
             _run_stage, run_id, "bull", context, debate_input,
             lambda value: _validate_stock_scores(value, context, "bull"),
-            lambda: _fallback_debate(context, technical, bullish=True), requester,
+            lambda: _fallback_debate(context, technical, bullish=True), effective_requester,
+            runtime, prompt_version, prompt["id"], stage_prompts,
         )
         bear_future = pool.submit(
             _run_stage, run_id, "bear", context, debate_input,
             lambda value: _validate_stock_scores(value, context, "bear"),
-            lambda: _fallback_debate(context, technical, bullish=False), requester,
+            lambda: _fallback_debate(context, technical, bullish=False), effective_requester,
+            runtime, prompt_version, prompt["id"], stage_prompts,
         )
         bull, bull_status = bull_future.result()
         bear, bear_status = bear_future.result()
@@ -924,7 +1532,8 @@ def run_agent_pipeline(
     risk, risk_status = _run_stage(
         run_id, "risk", context, risk_input,
         lambda value: _validate_risk(value, context),
-        lambda: _fallback_risk(report, context), requester,
+        lambda: _fallback_risk(report, context), effective_requester,
+        runtime, prompt_version, prompt["id"], stage_prompts,
     )
     # Server-side gates always win, even if the model risk reviewer missed them.
     vetoes = _hard_vetoes(report)
@@ -938,7 +1547,8 @@ def run_agent_pipeline(
     final, final_status = _run_stage(
         run_id, "final", context, final_input,
         lambda value: _validate_final(value, context, vetoes),
-        lambda: _fallback_final(report, context, technical, risk), requester,
+        lambda: _fallback_final(report, context, technical, risk), effective_requester,
+        runtime, prompt_version, prompt["id"], stage_prompts,
     )
     # Apply the same guard to fallback and persisted output.
     final = _validate_final(final, context, vetoes)
@@ -946,9 +1556,14 @@ def run_agent_pipeline(
     # A deterministic technical fallback remains visible in the report, but
     # recording it under the configured model would contaminate model metrics.
     predictions = (
-        _persist_predictions(run_id, report_id, report, technical, final)
+        _persist_predictions(run_id, report_id, report, technical, final, runtime, prompt_version)
         if technical_status == "success"
         else []
+    )
+    signals = _persist_candidate_signals(
+        run_id=run_id, report_id=report_id, report=report, technical=technical, risk=risk,
+        runtime=runtime, prompt_version=prompt_version,
+        source_type="model" if technical_status == "success" else "deterministic",
     )
     stage_statuses = [technical_status, fundamental_status, bull_status, bear_status, risk_status, final_status]
     run_status = "success" if all(item == "success" for item in stage_statuses) else "degraded"
@@ -974,14 +1589,16 @@ def run_agent_pipeline(
         "runId": run_id,
         "analysisMode": resolved_mode,
         "status": run_status,
-        "provider": INSIGHTS_LLM_PROVIDER,
-        "model": INSIGHTS_LLM_MODEL,
-        "promptVersion": AGENT_PROMPT_VERSION,
+        "provider": runtime["provider"],
+        "model": runtime["model"],
+        "promptVersion": prompt_version,
+        "promptVersionId": prompt["id"],
         "stages": stages,
         "topSelections": final.get("selections") or [],
         "marketRegime": final.get("marketRegime"),
         "summary": final.get("summary"),
         "predictionCount": len(predictions),
+        "candidateSignalCount": len(signals),
         "fallbackReason": fallback_reason,
         "usage": usage,
     }
@@ -1008,7 +1625,52 @@ def get_agent_run(run_id: str) -> dict[str, Any]:
             "select * from ashare_tech_predictions where run_id=? order by selection_rank is null,selection_rank,symbol,horizon_days",
             (run_id,),
         ).fetchall())
-    return {**run, "stages": stages, "predictions": predictions}
+        signals = rows_to_dicts(connection.execute(
+            "select * from ashare_tech_candidate_signals where run_id=? order by symbol",
+            (run_id,),
+        ).fetchall())
+        report_row = row_to_dict(connection.execute(
+            "select report_json,context_json from ashare_tech_reports where id=?",
+            (run["report_id"],),
+        ).fetchone())
+    report_payload = (report_row or {}).get("report") or {}
+    context = (report_row or {}).get("context") or {}
+    stock_rows = {str(item["code"]): item for item in report_payload.get("fullPool") or []}
+    stage_by_key = {str(item["stage_key"]): item.get("output") or {} for item in stages}
+    per_stage: dict[str, dict[str, dict[str, Any]]] = {}
+    for stage_key in ("technical", "fundamental", "bull", "bear", "risk"):
+        per_stage[stage_key] = {
+            str(item.get("symbol")): item
+            for item in (stage_by_key.get(stage_key) or {}).get("stocks") or []
+        }
+    final_output = stage_by_key.get("final") or {}
+    selections = {str(item.get("symbol")): item for item in final_output.get("selections") or []}
+    signals_by_symbol = {str(item["symbol"]): item for item in signals}
+    predictions_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for prediction in predictions:
+        predictions_by_symbol.setdefault(str(prediction["symbol"]), []).append(prediction)
+    symbols = list(context.get("symbols") or stock_rows)
+    stock_insights = [{
+        "symbol": symbol,
+        "name": (stock_rows.get(symbol) or {}).get("name") or symbol,
+        "metrics": stock_rows.get(symbol) or {},
+        "technical": per_stage["technical"].get(symbol),
+        "fundamental": per_stage["fundamental"].get(symbol),
+        "bull": per_stage["bull"].get(symbol),
+        "bear": per_stage["bear"].get(symbol),
+        "risk": per_stage["risk"].get(symbol),
+        "selection": selections.get(symbol),
+        "predictions": predictions_by_symbol.get(symbol) or [],
+        "signal": signals_by_symbol.get(symbol),
+    } for symbol in symbols]
+    return {
+        **run,
+        "stages": stages,
+        "predictions": predictions,
+        "candidateSignals": signals,
+        "facts": context.get("facts") or [],
+        "stockInsights": stock_insights,
+    }
 
 
 def delete_agent_data(report_id: str) -> None:
@@ -1018,6 +1680,7 @@ def delete_agent_data(report_id: str) -> None:
         ).fetchall()
         run_ids = [str(row["id"]) for row in run_rows]
         connection.execute("delete from ashare_tech_prediction_evaluations where report_id=?", (report_id,))
+        connection.execute("delete from ashare_tech_candidate_signals where report_id=?", (report_id,))
         connection.execute("delete from ashare_tech_predictions where report_id=?", (report_id,))
         for run_id in run_ids:
             connection.execute("delete from ashare_tech_agent_stages where run_id=?", (run_id,))
@@ -1176,6 +1839,7 @@ def list_evaluations(
     *,
     horizon_days: int | None = None,
     symbol: str | None = None,
+    provider: str | None = None,
     model: str | None = None,
     prompt_version: str | None = None,
     limit: int = 500,
@@ -1188,6 +1852,9 @@ def list_evaluations(
     if symbol:
         clauses.append("p.symbol=?")
         params.append(symbol)
+    if provider:
+        clauses.append("p.provider=?")
+        params.append(provider)
     if model:
         clauses.append("p.model=?")
         params.append(model)
@@ -1217,11 +1884,13 @@ def list_evaluations(
 def evaluation_summary(
     *,
     horizon_days: int | None = None,
+    provider: str | None = None,
     model: str | None = None,
     prompt_version: str | None = None,
 ) -> dict[str, Any]:
     response = list_evaluations(
-        horizon_days=horizon_days, model=model, prompt_version=prompt_version, limit=2000,
+        horizon_days=horizon_days, provider=provider, model=model,
+        prompt_version=prompt_version, limit=2000,
     )
     matured = [item for item in response["items"] if item.get("evaluation_status") == "evaluated"]
     pending = [item for item in response["items"] if item.get("evaluation_status") in {None, "pending"}]
@@ -1260,6 +1929,7 @@ def evaluation_summary(
         "selectedAverageReturnPct": mean("return_pct", selected),
         "top5AverageReturnPct": mean("return_pct", top5),
         "byHorizon": by_horizon,
+        "provider": provider,
         "model": model,
         "promptVersion": prompt_version,
     }

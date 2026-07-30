@@ -137,26 +137,34 @@ _INSIGHTS_LLM_PROVIDERS = {
         "api_key_names": ("DEEPSEEK_API_KEY",),
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-v4-flash",
+        "models": (
+            ("deepseek-v4-flash", "DeepSeek V4 Flash"),
+            ("deepseek-v4-pro", "DeepSeek V4 Pro"),
+        ),
     },
     "zhipu": {
         "api_key_names": ("ZHIPU_API_KEY", "ZAI_API_KEY"),
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-5.2",
+        "models": (("glm-5.2", "GLM 5.2"),),
     },
     "kimi": {
         "api_key_names": ("KIMI_API_KEY", "MOONSHOT_API_KEY"),
         "base_url": "https://api.moonshot.cn/v1",
         "model": "kimi-k2.6",
+        "models": (("kimi-k2.6", "Kimi K2.6"),),
     },
     "openai": {
         "api_key_names": ("OPENAI_API_KEY",),
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-5-mini",
+        "models": (("gpt-5-mini", "GPT-5 mini"),),
     },
     "anthropic": {
         "api_key_names": ("ANTHROPIC_API_KEY",),
         "base_url": "https://api.anthropic.com/v1",
         "model": "claude-sonnet-4-6",
+        "models": (("claude-sonnet-4-6", "Claude Sonnet 4.6"),),
     },
 }
 
@@ -188,6 +196,78 @@ def _resolve_insights_llm(environ: Mapping[str, str]) -> dict[str, str]:
         "base_url": environ.get("LEAN_INSIGHTS_LLM_BASE_URL", "").strip() or settings["base_url"],
         "model": environ.get("LEAN_INSIGHTS_LLM_MODEL", "").strip() or settings["model"],
     }
+
+
+def _resolve_insights_llm_catalog(environ: Mapping[str, str]) -> dict[str, dict[str, object]]:
+    """Resolve every configured provider without exposing this catalog through an API."""
+    selected = _resolve_insights_llm(environ)
+    output: dict[str, dict[str, object]] = {}
+    for provider, settings in _INSIGHTS_LLM_PROVIDERS.items():
+        api_key = next(
+            (
+                environ.get(key_name, "").strip()
+                for key_name in settings["api_key_names"]
+                if environ.get(key_name, "").strip()
+            ),
+            "",
+        )
+        if not api_key:
+            continue
+        is_selected = provider == selected["provider"]
+        configured_model = selected["model"] if is_selected else str(settings["model"])
+        models = [
+            {"id": model_id, "label": label}
+            for model_id, label in settings["models"]
+        ]
+        if configured_model and all(item["id"] != configured_model for item in models):
+            models.append({"id": configured_model, "label": configured_model})
+        output[provider] = {
+            "provider": provider,
+            "api_key": api_key,
+            "base_url": selected["base_url"] if is_selected else settings["base_url"],
+            "default_model": configured_model,
+            "models": models,
+        }
+    return output
+
+
+def resolve_insights_llm_runtime(
+    provider: str | None = None,
+    model: str | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    values = os.environ if environ is None else environ
+    catalog = _resolve_insights_llm_catalog(values)
+    selected = _resolve_insights_llm(values)
+    provider_key = (provider or selected["provider"]).strip().lower()
+    runtime = catalog.get(provider_key)
+    if runtime is None:
+        return {
+            "provider": provider_key,
+            "api_key": "",
+            "base_url": "",
+            "model": model or "",
+            "models": [],
+        }
+    allowed = {str(item["id"]) for item in runtime["models"]}
+    model_id = str(model or runtime["default_model"])
+    if model_id not in allowed:
+        return {**runtime, "model": model_id, "invalid_model": True}
+    return {**runtime, "model": model_id, "invalid_model": False}
+
+
+def insights_llm_public_catalog(environ: Mapping[str, str] | None = None) -> list[dict[str, object]]:
+    values = os.environ if environ is None else environ
+    catalog = _resolve_insights_llm_catalog(values)
+    return [
+        {
+            "provider": provider,
+            "defaultModel": runtime["default_model"],
+            "models": runtime["models"],
+        }
+        for provider, runtime in catalog.items()
+    ]
 
 
 _INSIGHTS_LLM = _resolve_insights_llm(os.environ)

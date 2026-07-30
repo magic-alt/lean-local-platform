@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **258** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **259** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -169,14 +169,18 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/insights` | List Insights | `assetClass` (query)<br>`symbol` (query)<br>`status` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
-| `POST` | `/api/insights` | Create Insight | body `InsightRequest` | `202` - |
 | `GET` | `/api/insights/ashare-tech/agent-runs/{run_id}` | Agent Run Detail | `run_id` (path, required) | `200` - |
 | `GET` | `/api/insights/ashare-tech/capabilities` | Read Capabilities | - | `200` - |
-| `GET` | `/api/insights/ashare-tech/evaluations` | Prediction Evaluations | `horizonDays` (query)<br>`symbol` (query)<br>`model` (query)<br>`promptVersion` (query)<br>`limit` (query) | `200` - |
+| `GET` | `/api/insights/ashare-tech/evaluations` | Prediction Evaluations | `horizonDays` (query)<br>`symbol` (query)<br>`provider` (query)<br>`model` (query)<br>`promptVersion` (query)<br>`limit` (query) | `200` - |
 | `POST` | `/api/insights/ashare-tech/evaluations/refresh` | Refresh Prediction Evaluations | - | `202` - |
-| `GET` | `/api/insights/ashare-tech/evaluations/summary` | Prediction Evaluation Summary | `horizonDays` (query)<br>`model` (query)<br>`promptVersion` (query) | `200` - |
-| `POST` | `/api/insights/ashare-tech/model-diagnostics` | Model Diagnostics | - | `200` - |
+| `GET` | `/api/insights/ashare-tech/evaluations/summary` | Prediction Evaluation Summary | `horizonDays` (query)<br>`provider` (query)<br>`model` (query)<br>`promptVersion` (query) | `200` - |
+| `POST` | `/api/insights/ashare-tech/model-diagnostics` | Model Diagnostics | body `ModelDiagnosticRequest` / `null` | `200` - |
+| `GET` | `/api/insights/ashare-tech/production-profile` | Production Profile | - | `200` - |
+| `PUT` | `/api/insights/ashare-tech/production-profile` | Update Production Profile | body `ProductionProfileRequest` | `200` - |
+| `GET` | `/api/insights/ashare-tech/prompt-templates` | Prompt Templates | - | `200` - |
+| `POST` | `/api/insights/ashare-tech/prompt-templates` | Create Prompt Template | body `PromptTemplateRequest` | `201` - |
+| `GET` | `/api/insights/ashare-tech/prompt-templates/{template_key}/versions` | Prompt Template Versions | `template_key` (path, required) | `200` - |
+| `POST` | `/api/insights/ashare-tech/prompt-templates/{template_key}/versions` | Create Prompt Template Version | `template_key` (path, required)<br>body `PromptTemplateRequest` | `201` - |
 | `GET` | `/api/insights/ashare-tech/reports` | List Reports | `limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/insights/ashare-tech/reports` | Create Report | body `AshareTechReportRequest` | `202` - |
 | `DELETE` | `/api/insights/ashare-tech/reports/{report_id}` | Delete Report | `report_id` (path, required)<br>`force` (query) | `200` - |
@@ -187,9 +191,6 @@
 | `DELETE` | `/api/insights/ashare-tech/watchlist/items/{code}` | Delete Watchlist Item | `code` (path, required) | `200` - |
 | `PATCH` | `/api/insights/ashare-tech/watchlist/items/{code}` | Update Watchlist Item | `code` (path, required)<br>body `WatchlistItemUpdate` | `200` - |
 | `POST` | `/api/insights/ashare-tech/watchlist/reset` | Reset Watchlist | - | `200` - |
-| `GET` | `/api/insights/capabilities` | Read Capabilities | - | `200` - |
-| `DELETE` | `/api/insights/{report_id}` | Delete Insight | `report_id` (path, required) | `200` - |
-| `GET` | `/api/insights/{report_id}` | Insight Detail | `report_id` (path, required) | `200` - |
 
 ## level3plus
 

@@ -74,6 +74,37 @@ def test_insights_llm_explicit_provider_and_overrides_win():
     }
 
 
+def test_insights_llm_catalog_exposes_all_configured_models_without_keys():
+    from app.core.config import insights_llm_public_catalog, resolve_insights_llm_runtime
+
+    environment = {
+        "DEEPSEEK_API_KEY": "deepseek-secret",
+        "OPENAI_API_KEY": "openai-secret",
+        "LEAN_INSIGHTS_LLM_PROVIDER": "deepseek",
+    }
+    catalog = insights_llm_public_catalog(environment)
+
+    assert [item["provider"] for item in catalog] == ["deepseek", "openai"]
+    assert [item["id"] for item in catalog[0]["models"]] == [
+        "deepseek-v4-flash", "deepseek-v4-pro",
+    ]
+    assert "secret" not in json.dumps(catalog)
+    runtime = resolve_insights_llm_runtime("deepseek", "deepseek-v4-pro", environ=environment)
+    assert runtime["api_key"] == "deepseek-secret"
+    assert runtime["model"] == "deepseek-v4-pro"
+    assert runtime["invalid_model"] is False
+
+
+def test_insights_llm_runtime_rejects_model_outside_provider_catalog():
+    from app.core.config import resolve_insights_llm_runtime
+
+    runtime = resolve_insights_llm_runtime(
+        "deepseek", "not-a-deepseek-model",
+        environ={"DEEPSEEK_API_KEY": "deepseek-secret"},
+    )
+    assert runtime["invalid_model"] is True
+
+
 def test_database_descriptor_defaults_to_mysql_without_sqlite_path(monkeypatch):
     import app.db as db_module
 

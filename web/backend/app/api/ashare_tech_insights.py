@@ -21,6 +21,27 @@ class AshareTechReportRequest(BaseModel):
     requestedDate: date | None = None
     force: bool = False
     analysisMode: Literal["auto", "hybrid_multi_agent", "deterministic"] = "auto"
+    provider: str | None = Field(None, max_length=32)
+    model: str | None = Field(None, max_length=128)
+    promptVersionId: str | None = Field(None, max_length=128)
+
+
+class ModelDiagnosticRequest(BaseModel):
+    provider: str | None = Field(None, max_length=32)
+    model: str | None = Field(None, max_length=128)
+
+
+class PromptTemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=96)
+    description: str = Field("", max_length=500)
+    templateKey: str | None = Field(None, max_length=96)
+    stagePrompts: dict[str, str]
+
+
+class ProductionProfileRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=32)
+    model: str = Field(min_length=1, max_length=128)
+    promptVersionId: str = Field(min_length=1, max_length=128)
 
 
 class WatchlistItemCreate(BaseModel):
@@ -40,6 +61,57 @@ def read_capabilities():
     return service.capabilities()
 
 
+@router.get("/prompt-templates")
+def prompt_templates():
+    return agent_service.list_prompt_templates()
+
+
+@router.get("/prompt-templates/{template_key}/versions")
+def prompt_template_versions(template_key: str):
+    return agent_service.list_prompt_templates(template_key)
+
+
+@router.post("/prompt-templates", status_code=201)
+def create_prompt_template(request: PromptTemplateRequest):
+    try:
+        return agent_service.save_prompt_version(
+            name=request.name,
+            description=request.description,
+            template_key=request.templateKey,
+            stage_prompts=request.stagePrompts,
+        )
+    except agent_service.AgentOutputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/prompt-templates/{template_key}/versions", status_code=201)
+def create_prompt_template_version(template_key: str, request: PromptTemplateRequest):
+    try:
+        return agent_service.save_prompt_version(
+            name=request.name,
+            description=request.description,
+            template_key=template_key,
+            stage_prompts=request.stagePrompts,
+        )
+    except agent_service.AgentOutputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/production-profile")
+def production_profile():
+    return agent_service.get_production_profile()
+
+
+@router.put("/production-profile")
+def update_production_profile(request: ProductionProfileRequest):
+    try:
+        return agent_service.set_production_profile(
+            request.provider, request.model, request.promptVersionId,
+        )
+    except (agent_service.AgentOutputError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/reports")
 def list_reports(limit: int = 50, offset: int = 0):
     return service.list_reports(limit=limit, offset=offset)
@@ -53,6 +125,9 @@ def create_report(request: AshareTechReportRequest):
             requested_date,
             force=request.force,
             analysis_mode=request.analysisMode,
+            provider=request.provider,
+            model=request.model,
+            prompt_version_id=request.promptVersionId,
         )
         if not request.force and report.get("status") == "success":
             return {"id": report["id"], "taskId": report.get("task_id"), "status": "success", "reused": True}
@@ -64,6 +139,9 @@ def create_report(request: AshareTechReportRequest):
                 "requestedDate": report["requested_date"],
                 "force": request.force,
                 "analysisMode": request.analysisMode,
+                "provider": request.provider,
+                "model": request.model,
+                "promptVersionId": request.promptVersionId,
             },
             related_id=report["id"],
         )
@@ -87,8 +165,11 @@ def report_detail(report_id: str):
 
 
 @router.post("/model-diagnostics")
-def model_diagnostics():
-    return agent_service.model_diagnostics()
+def model_diagnostics(request: ModelDiagnosticRequest | None = None):
+    return agent_service.model_diagnostics(
+        provider=request.provider if request else None,
+        model=request.model if request else None,
+    )
 
 
 @router.get("/reports/{report_id}/agent-runs")
@@ -112,6 +193,7 @@ def agent_run_detail(run_id: str):
 def prediction_evaluations(
     horizonDays: Literal[1, 5, 20] | None = None,
     symbol: str | None = None,
+    provider: str | None = None,
     model: str | None = None,
     promptVersion: str | None = None,
     limit: int = 500,
@@ -119,6 +201,7 @@ def prediction_evaluations(
     return agent_service.list_evaluations(
         horizon_days=horizonDays,
         symbol=symbol,
+        provider=provider,
         model=model,
         prompt_version=promptVersion,
         limit=limit,
@@ -128,11 +211,13 @@ def prediction_evaluations(
 @router.get("/evaluations/summary")
 def prediction_evaluation_summary(
     horizonDays: Literal[1, 5, 20] | None = None,
+    provider: str | None = None,
     model: str | None = None,
     promptVersion: str | None = None,
 ):
     return agent_service.evaluation_summary(
         horizon_days=horizonDays,
+        provider=provider,
         model=model,
         prompt_version=promptVersion,
     )

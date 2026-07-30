@@ -1,9 +1,10 @@
-import { Alert, Button, Card, Checkbox, Col, Descriptions, Divider, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Steps, Switch, Table, Tabs, Tag, Typography, message } from "antd";
-import { ApiOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Divider, Empty, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Steps, Switch, Table, Tabs, Tag, Typography, message } from "antd";
+import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { api } from "../api";
-import type { AshareTechAgentRun, AshareTechEvaluationItem, AshareTechEvaluationSummary, AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechModelDiagnostic, AshareTechReport, AshareTechRuleTag, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
+import type { AshareTechAgentRun, AshareTechAgentStage, AshareTechEvaluationItem, AshareTechEvaluationSummary, AshareTechGroupSummary, AshareTechMarketEnvironmentItem, AshareTechModelDiagnostic, AshareTechPromptTemplate, AshareTechReport, AshareTechRuleTag, AshareTechStockInsight, AshareTechStockRow, AshareTechWatchlistItem } from "../api";
 import { ApiError } from "../api/client";
 import { LeanChart } from "../charts/LeanChart";
 import { DateStringPicker } from "../components/DateStringPicker";
@@ -20,6 +21,11 @@ const ruleTagOptions = [
   { value: "strong_ai", label: "强势AI" },
   { value: "storage", label: "存储" }
 ];
+const stageKeys = ["technical", "fundamental", "bull", "bear", "risk", "final"] as const;
+const stageLabels: Record<string, string> = {
+  technical: "技术趋势", fundamental: "基本面", bull: "多头复核",
+  bear: "空头复核", risk: "风险审查", final: "最终研究排序"
+};
 
 function statusColor(status: string) {
   if (status === "success") return "green";
@@ -51,6 +57,160 @@ function directionTag(direction?: string | null) {
 const number = (value?: number | null) => value == null ? "-" : value.toFixed(2);
 const ratio = (value?: number | null) => value == null ? "-" : `${value.toFixed(2)}×`;
 const amountYi = (value?: number | null) => value == null ? "-" : `${(value / 100_000_000).toFixed(2)}亿`;
+
+function readableKey(key: string) {
+  const labels: Record<string, string> = {
+    symbol: "股票", direction: "方向", stance: "观点", intent: "意图", confidence: "置信度",
+    score: "评分", rationale: "理由", summary: "摘要", thesis: "观点", risks: "风险",
+    catalysts: "催化剂", evidenceIds: "证据 ID", targetExposure: "目标敞口",
+    entryLow: "入场下沿", entryHigh: "入场上沿", stopLoss: "止损价", targetPrice: "目标价",
+    invalidation: "失效条件", actionable: "可执行", status: "状态", marketRegime: "市场环境"
+  };
+  return labels[key] || key.replace(/([A-Z])/g, " $1");
+}
+
+function readableValue(value: unknown): ReactNode {
+  if (value == null || value === "") return "-";
+  if (typeof value === "boolean") return value ? <Tag color="green">是</Tag> : <Tag>否</Tag>;
+  if (Array.isArray(value)) {
+    if (!value.length) return "-";
+    return <Space size={[4, 4]} wrap>{value.map((item, index) =>
+      typeof item === "object"
+        ? <Tag key={index}>{JSON.stringify(item)}</Tag>
+        : <Tag key={index}>{String(item)}</Tag>
+    )}</Space>;
+  }
+  if (typeof value === "object") {
+    return <Space direction="vertical" size={2}>
+      {Object.entries(value as Record<string, unknown>).map(([key, item]) =>
+        <span key={key}><Typography.Text type="secondary">{readableKey(key)}：</Typography.Text>{readableValue(item)}</span>
+      )}
+    </Space>;
+  }
+  return String(value);
+}
+
+function StructuredObject({ value, empty = "暂无结构化输出" }: { value?: Record<string, unknown> | null; empty?: string }) {
+  if (!value || Object.keys(value).length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />;
+  return <Descriptions bordered size="small" column={2}>
+    {Object.entries(value).map(([key, item]) =>
+      <Descriptions.Item key={key} label={readableKey(key)} span={typeof item === "object" ? 2 : 1}>
+        {readableValue(item)}
+      </Descriptions.Item>
+    )}
+  </Descriptions>;
+}
+
+function StageOutputView({ stage }: { stage: AshareTechAgentStage }) {
+  const output = stage.output || {};
+  const stocks = Array.isArray(output.stocks) ? output.stocks as Array<Record<string, unknown>> : [];
+  const selections = Array.isArray(output.selections) ? output.selections as Array<Record<string, unknown>> : [];
+  const rows = stocks.length ? stocks : selections;
+  const overview = Object.fromEntries(Object.entries(output).filter(([key]) => !["stocks", "selections"].includes(key)));
+  return <Space direction="vertical" style={{ width: "100%" }} size={12}>
+    {Object.keys(overview).length > 0 && <StructuredObject value={overview} />}
+    {rows.length > 0 && <Table
+      rowKey={(item, index) => String(item.symbol || item.rank || index)}
+      size="small" pagination={{ pageSize: 8 }} dataSource={rows}
+      columns={[
+        { title: "股票", render: (_, item) => String(item.symbol || "-"), width: 100 },
+        { title: "核心结论", render: (_, item) => readableValue(item.rationale || item.thesis || item.summary || item.direction || item.consensusScore) },
+        { title: "证据", render: (_, item) => readableValue(item.evidenceIds || item.supportingEvidenceIds || []) }
+      ]}
+    />}
+    <Collapse size="small" items={[{
+      key: "raw", label: "查看原始 JSON（审计/排障）",
+      children: <Typography.Paragraph copyable={{ text: JSON.stringify(output, null, 2) }}>
+        <pre style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 360, overflow: "auto" }}>{JSON.stringify(output, null, 2)}</pre>
+      </Typography.Paragraph>
+    }]} />
+  </Space>;
+}
+
+function StockInsightView({
+  insight,
+  facts = []
+}: {
+  insight: AshareTechStockInsight | null;
+  facts?: Array<Record<string, unknown>>;
+}) {
+  if (!insight) return <Empty description="请选择股票查看完整 Insight" />;
+  const signal = insight.signal;
+  const metrics = insight.metrics;
+  const evidenceIds = new Set<string>();
+  for (const item of [insight.technical, insight.fundamental, insight.bull, insight.bear, insight.risk, insight.selection]) {
+    for (const evidenceId of (item?.evidenceIds as unknown[] || [])) evidenceIds.add(String(evidenceId));
+  }
+  for (const prediction of insight.predictions) {
+    for (const evidenceId of prediction.evidenceIds || []) evidenceIds.add(evidenceId);
+  }
+  for (const evidenceId of signal?.finalSignal.evidenceIds || []) evidenceIds.add(evidenceId);
+  const evidenceFacts = facts.filter((item) => evidenceIds.has(String(item.id)));
+  return <Space direction="vertical" style={{ width: "100%" }} size={14}>
+    <Descriptions bordered size="small" column={4} title={`${insight.name}（${insight.symbol}）`}>
+      <Descriptions.Item label="收盘">{number(metrics.close)}</Descriptions.Item>
+      <Descriptions.Item label="RSI14">{number(metrics.rsi14)}</Descriptions.Item>
+      <Descriptions.Item label="20日区间位置">{metrics.rangePosition20Pct == null ? "-" : `${number(metrics.rangePosition20Pct)}%`}</Descriptions.Item>
+      <Descriptions.Item label="20日年化波动">{metrics.realizedVolatility20dPct == null ? "-" : `${number(metrics.realizedVolatility20dPct)}%`}</Descriptions.Item>
+      <Descriptions.Item label="MA5 / 20 / 60" span={2}>{number(metrics.ma5)} / {number(metrics.ma20)} / {number(metrics.ma60)}</Descriptions.Item>
+      <Descriptions.Item label="量比 / 额比">{number(metrics.volumeRatio20)} / {number(metrics.amountRatio20)}</Descriptions.Item>
+      <Descriptions.Item label="规则结论"><Tag color={labelColor(metrics.conclusion)}>{metrics.conclusion}</Tag></Descriptions.Item>
+    </Descriptions>
+    {signal && <Card type="inner" title="候选交易信号（逐股独立目标敞口）">
+      <Descriptions bordered size="small" column={4}>
+        <Descriptions.Item label="状态"><Tag color={signal.status === "active" ? "green" : signal.status === "veto" ? "red" : "orange"}>{signal.status}</Tag></Descriptions.Item>
+        <Descriptions.Item label="方向">{signal.finalSignal.direction}</Descriptions.Item>
+        <Descriptions.Item label="意图">{signal.finalSignal.intent}</Descriptions.Item>
+        <Descriptions.Item label="目标敞口">{(signal.finalSignal.targetExposure * 100).toFixed(1)}%</Descriptions.Item>
+        <Descriptions.Item label="置信度">{(signal.finalSignal.confidence * 100).toFixed(0)}%</Descriptions.Item>
+        <Descriptions.Item label="入场区间">{number(signal.finalSignal.entryLow)} – {number(signal.finalSignal.entryHigh)}</Descriptions.Item>
+        <Descriptions.Item label="止损 / 目标">{number(signal.finalSignal.stopLoss)} / {number(signal.finalSignal.targetPrice)}</Descriptions.Item>
+        <Descriptions.Item label="可执行">{signal.finalSignal.actionable ? <Tag color="green">是</Tag> : <Tag>否</Tag>}</Descriptions.Item>
+        <Descriptions.Item label="门禁" span={4}>
+          {signal.guardrail.violations.length
+            ? <Space wrap>{signal.guardrail.violations.map((item) => <Tag color="red" key={item}>{item}</Tag>)}</Space>
+            : <Tag color="green">通过</Tag>}
+        </Descriptions.Item>
+        <Descriptions.Item label="理由" span={4}>{signal.finalSignal.reason || "-"}</Descriptions.Item>
+        <Descriptions.Item label="失效条件" span={4}>{signal.finalSignal.invalidation || "-"}</Descriptions.Item>
+      </Descriptions>
+    </Card>}
+    <Tabs size="small" items={[
+      { key: "technical", label: "技术", children: <StructuredObject value={insight.technical} /> },
+      { key: "fundamental", label: "基本面", children: <StructuredObject value={insight.fundamental} /> },
+      { key: "bull", label: "多头", children: <StructuredObject value={insight.bull} /> },
+      { key: "bear", label: "空头", children: <StructuredObject value={insight.bear} /> },
+      { key: "risk", label: "风险", children: <StructuredObject value={insight.risk} /> },
+      { key: "selection", label: "最终排序", children: <StructuredObject value={insight.selection} /> }
+    ]} />
+    <Table
+      rowKey="horizon_days" size="small" pagination={false} dataSource={insight.predictions}
+      columns={[
+        { title: "周期", render: (_, item) => `${item.horizon_days}日` },
+        { title: "方向", render: (_, item) => directionTag(item.predicted_direction) },
+        { title: "置信度", render: (_, item) => `${(item.confidence * 100).toFixed(0)}%` },
+        { title: "趋势分", dataIndex: "trend_score" },
+        { title: "理由", dataIndex: "rationale" },
+        { title: "证据", render: (_, item) => readableValue(item.evidenceIds || []) }
+      ]}
+    />
+    <Card type="inner" title={`证据登记（${evidenceFacts.length} / 引用 ${evidenceIds.size}）`}>
+      {evidenceFacts.length
+        ? <Table
+          rowKey={(item) => String(item.id)}
+          size="small"
+          pagination={false}
+          dataSource={evidenceFacts}
+          columns={[
+            { title: "Fact ID", dataIndex: "id", width: 150 },
+            { title: "类型", render: (_, item) => readableValue(item.kind || item.type || "-"), width: 120 },
+            { title: "事实内容", render: (_, item) => readableValue(Object.fromEntries(Object.entries(item).filter(([key]) => !["id", "kind", "type"].includes(key)))) }
+          ]}
+        />
+        : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该运行未保存可匹配的证据登记" />}
+    </Card>
+  </Space>;
+}
 
 function changeValue(value?: number | null) {
   if (value == null) return <span>-</span>;
@@ -109,17 +269,38 @@ export function AshareTechInsights() {
   const capabilities = useAsyncData(api.ashareTechCapabilities, {
     poolSize: 26, totalPoolSize: 26, defaultPoolSize: 26, groups: [], primarySource: "TuShare Pro", crossCheckSource: "东方财富",
     promptVersion: "ashare-tech-gpt56-v1", configured: false, provider: null, model: null, endpointHost: null,
-    apiStyle: "OpenAI-compatible chat/completions", agentMode: "hybrid_multi_agent" as const,
+    apiStyle: "结构化 JSON", agentMode: "hybrid_multi_agent" as const,
     defaultAnalysisMode: "deterministic" as const, stages: [], evaluationHorizons: [1, 5, 20],
-    agentPromptVersion: "ashare-tech-agent-v2", llmOptional: true, paperHandoff: false,
-    schedule: "工作日17:30", labels: []
+    agentPromptVersion: "ashare-tech-agent-v3", llmOptional: true, paperHandoff: false,
+    schedule: "工作日17:30", labels: [], providers: [], productionProfile: null
   }, false);
-  const watchlist = useAsyncData(api.ashareTechWatchlist, emptyWatchlist, false);
-  const loadEvaluations = useCallback(
-    () => api.ashareTechEvaluations({ limit: 500 }),
-    []
+  const promptTemplates = useAsyncData(
+    api.ashareTechPromptTemplates,
+    { items: [] as AshareTechPromptTemplate[], count: 0 },
+    false
   );
-  const evaluationSummary = useAsyncData(api.ashareTechEvaluationSummary, emptyEvaluationSummary, false);
+  const watchlist = useAsyncData(api.ashareTechWatchlist, emptyWatchlist, false);
+  const [evaluationProvider, setEvaluationProvider] = useState<string>();
+  const [evaluationModel, setEvaluationModel] = useState<string>();
+  const [evaluationPromptVersion, setEvaluationPromptVersion] = useState<string>();
+  const loadEvaluations = useCallback(
+    () => api.ashareTechEvaluations({
+      provider: evaluationProvider,
+      model: evaluationModel,
+      promptVersion: evaluationPromptVersion,
+      limit: 500
+    }),
+    [evaluationModel, evaluationPromptVersion, evaluationProvider]
+  );
+  const loadEvaluationSummary = useCallback(
+    () => api.ashareTechEvaluationSummary({
+      provider: evaluationProvider,
+      model: evaluationModel,
+      promptVersion: evaluationPromptVersion
+    }),
+    [evaluationModel, evaluationPromptVersion, evaluationProvider]
+  );
+  const evaluationSummary = useAsyncData(loadEvaluationSummary, emptyEvaluationSummary, false);
   const evaluations = useAsyncData<{ items: AshareTechEvaluationItem[]; count: number }>(
     loadEvaluations,
     { items: [], count: 0 },
@@ -127,41 +308,61 @@ export function AshareTechInsights() {
   );
   const [selected, setSelected] = useState<AshareTechReport | null>(null);
   const [agentRun, setAgentRun] = useState<AshareTechAgentRun | null>(null);
+  const [agentRuns, setAgentRuns] = useState<AshareTechAgentRun[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>();
   const [diagnostic, setDiagnostic] = useState<AshareTechModelDiagnostic | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [refreshingEvaluations, setRefreshingEvaluations] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [savingPrompt, setSavingPrompt] = useState(false);
+  const [publishingProfile, setPublishingProfile] = useState(false);
   const [detailWarning, setDetailWarning] = useState<string | null>(null);
   const [addForm] = Form.useForm();
+  const [reportForm] = Form.useForm();
+  const [promptForm] = Form.useForm();
+  const selectedProvider = Form.useWatch("provider", reportForm);
+  const selectedPromptVersionId = Form.useWatch("promptVersionId", reportForm);
+  const selectedProviderDefinition = capabilities.data.providers.find((item) => item.provider === selectedProvider);
 
-  const loadErrors = [reports.error, capabilities.error, watchlist.error, evaluationSummary.error, evaluations.error].filter((item): item is Error => Boolean(item));
+  const loadErrors = [reports.error, capabilities.error, promptTemplates.error, watchlist.error, evaluationSummary.error, evaluations.error].filter((item): item is Error => Boolean(item));
   const routeMissing = loadErrors.some((error) => error instanceof ApiError && error.status === 404);
 
   const refreshAll = useCallback(async () => {
     const [nextReports] = await Promise.all([
-      reports.reload(), capabilities.reload(), watchlist.reload(), evaluationSummary.reload(), evaluations.reload()
+      reports.reload(), capabilities.reload(), promptTemplates.reload(), watchlist.reload(), evaluationSummary.reload(), evaluations.reload()
     ]);
     if (selected && nextReports && !nextReports.items.some((item) => item.id === selected.id)) {
       setSelected(null);
       setDetailWarning("该报告已不在历史列表中，已清空详情并停止自动轮询。");
     }
-  }, [capabilities, evaluationSummary, evaluations, reports, selected, watchlist]);
+  }, [capabilities, evaluationSummary, evaluations, promptTemplates, reports, selected, watchlist]);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
       const detail = await api.ashareTechReport(id);
       setSelected(detail);
-      if (detail.active_agent_run_id) {
+      const runList = await api.ashareTechAgentRuns(id);
+      setAgentRuns(runList.items);
+      if (detail.active_agent_run_id || runList.items.length) {
         try {
-          setAgentRun(await api.ashareTechAgentRun(detail.active_agent_run_id));
+          const runId = detail.active_agent_run_id || runList.items[0].id;
+          const nextRun = await api.ashareTechAgentRun(runId);
+          setAgentRun(nextRun);
+          setSelectedSymbol((current) =>
+            nextRun.stockInsights?.some((item) => item.symbol === current)
+              ? current
+              : nextRun.stockInsights?.[0]?.symbol
+          );
         } catch (agentError) {
           setAgentRun(null);
           message.warning(`报告已加载，但 Agent 审计记录读取失败：${(agentError as Error).message}`);
         }
       } else {
         setAgentRun(null);
+        setSelectedSymbol(undefined);
       }
       setDetailWarning(null);
     } catch (error) {
@@ -183,7 +384,33 @@ export function AshareTechInsights() {
     return () => window.clearInterval(timer);
   }, [loadDetail, reports.reload, selected?.id, selected?.status]);
 
-  async function create(values: { requestedDate?: string; force?: boolean; analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic" }) {
+  useEffect(() => {
+    const profile = capabilities.data.productionProfile;
+    const firstProvider = capabilities.data.providers[0];
+    const updates: Record<string, string> = {};
+    if (!reportForm.getFieldValue("provider")) {
+      if (profile) {
+        updates.provider = profile.provider;
+        updates.model = profile.model;
+      } else if (firstProvider) {
+        updates.provider = firstProvider.provider;
+        updates.model = firstProvider.defaultModel;
+      }
+    }
+    if (!reportForm.getFieldValue("promptVersionId")) {
+      updates.promptVersionId = profile?.promptVersionId || promptTemplates.data.items[0]?.id;
+    }
+    if (Object.keys(updates).length) reportForm.setFieldsValue(updates);
+  }, [capabilities.data.productionProfile, capabilities.data.providers, promptTemplates.data.items, reportForm]);
+
+  async function create(values: {
+    requestedDate?: string;
+    force?: boolean;
+    analysisMode?: "auto" | "hybrid_multi_agent" | "deterministic";
+    provider?: string;
+    model?: string;
+    promptVersionId?: string;
+  }) {
     setSubmitting(true);
     try {
       const result = await api.createAshareTechReport(values);
@@ -197,7 +424,8 @@ export function AshareTechInsights() {
   async function diagnoseModel() {
     setDiagnosing(true);
     try {
-      const result = await api.diagnoseAshareTechModel();
+      const values = reportForm.getFieldsValue(["provider", "model"]);
+      const result = await api.diagnoseAshareTechModel(values);
       setDiagnostic(result);
       if (result.status === "ok") message.success(`模型连接正常，耗时 ${result.latencyMs ?? "-"}ms`);
       else message.warning(result.error || "模型尚未配置");
@@ -205,6 +433,74 @@ export function AshareTechInsights() {
       message.error((error as Error).message);
     } finally {
       setDiagnosing(false);
+    }
+  }
+
+  function openPromptEditor() {
+    const selectedPrompt = promptTemplates.data.items.find((item) => item.id === selectedPromptVersionId)
+      || promptTemplates.data.items[0];
+    if (!selectedPrompt) {
+      message.warning("Prompt 模板尚未加载");
+      return;
+    }
+    promptForm.setFieldsValue({
+      name: selectedPrompt.name,
+      description: selectedPrompt.description,
+      templateKey: selectedPrompt.templateKey,
+      stagePrompts: selectedPrompt.stagePrompts
+    });
+    setPromptOpen(true);
+  }
+
+  async function savePrompt(values: {
+    name: string;
+    description?: string;
+    templateKey?: string;
+    stagePrompts: Record<string, string>;
+  }) {
+    setSavingPrompt(true);
+    try {
+      const current = promptTemplates.data.items.find((item) => item.id === selectedPromptVersionId);
+      const saved = await api.saveAshareTechPromptTemplate({
+        ...values,
+        templateKey: current?.builtin ? undefined : values.templateKey
+      });
+      await promptTemplates.reload();
+      reportForm.setFieldValue("promptVersionId", saved.id);
+      setPromptOpen(false);
+      message.success(`已保存不可变 Prompt 版本 v${saved.version}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSavingPrompt(false);
+    }
+  }
+
+  async function publishProductionProfile() {
+    try {
+      const values = await reportForm.validateFields(["provider", "model", "promptVersionId"]);
+      if (!values.provider || !values.model || !values.promptVersionId) {
+        message.warning("发布定时生产配置前，请选择 Provider、模型和 Prompt 版本");
+        return;
+      }
+      setPublishingProfile(true);
+      const profile = await api.updateAshareTechProductionProfile(values);
+      await capabilities.reload();
+      message.success(`定时生产配置已发布：${profile.provider} / ${profile.model}`);
+    } catch (error) {
+      if (error instanceof Error) message.error(error.message);
+    } finally {
+      setPublishingProfile(false);
+    }
+  }
+
+  async function selectAgentRun(runId: string) {
+    try {
+      const nextRun = await api.ashareTechAgentRun(runId);
+      setAgentRun(nextRun);
+      setSelectedSymbol(nextRun.stockInsights?.[0]?.symbol);
+    } catch (error) {
+      message.error((error as Error).message);
     }
   }
 
@@ -295,6 +591,7 @@ export function AshareTechInsights() {
   const predictionMap = new Map(
     (agentRun?.predictions || []).map((item) => [`${item.symbol}:${item.horizon_days}`, item])
   );
+  const selectedStockInsight = agentRun?.stockInsights?.find((item) => item.symbol === selectedSymbol) || null;
   const topSelections = report?.agentRunSummary?.topSelections || selected?.agentSummary?.topSelections || [];
   const topSelectionRows = topSelections.map((item) => ({
     ...item,
@@ -346,14 +643,14 @@ export function AshareTechInsights() {
         extra={<Button icon={<ApiOutlined />} loading={diagnosing} onClick={() => void diagnoseModel()}>检测连接</Button>}
       >
         <Row gutter={[16, 16]}>
-          <Col xs={24} md={6}><Statistic title="Provider / 模型" value={`${capabilities.data.provider || "未配置"} / ${capabilities.data.model || "-"}`} /></Col>
+          <Col xs={24} md={6}><Statistic title="生产 Provider / 模型" value={`${capabilities.data.productionProfile?.provider || "未配置"} / ${capabilities.data.productionProfile?.model || "-"}`} /></Col>
           <Col xs={12} md={4}><Statistic title="连接配置" value={capabilities.data.configured ? "已配置" : "未配置"} valueStyle={{ color: capabilities.data.configured ? "#3f8600" : "#cf1322" }} /></Col>
           <Col xs={12} md={4}><Statistic title="默认模式" value={capabilities.data.defaultAnalysisMode === "hybrid_multi_agent" ? "六阶段 Agent" : "确定性"} /></Col>
           <Col xs={12} md={5}><Statistic title="接口" value={capabilities.data.apiStyle} /></Col>
           <Col xs={12} md={5}><Statistic title="Prompt" value={capabilities.data.agentPromptVersion} /></Col>
         </Row>
         <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-          模型通过 {capabilities.data.endpointHost || "未配置端点"} 的结构化 JSON 接口运行。规则引擎提供事实和硬风险门禁；
+          每次运行可从所有已配置 Provider 及其模型中选择，同一 DeepSeek API Key 可运行 flash 或 pro。模型通过结构化 JSON 接口运行。规则引擎提供事实和硬风险门禁；
           Agent 负责技术趋势、基本面、多空复核、风险审查与研究排序。API Key 仅保存在服务环境变量中，页面不会读取或保存密钥。
         </Typography.Paragraph>
         {diagnostic && <Alert
@@ -377,17 +674,75 @@ export function AshareTechInsights() {
       />}
       {detailWarning && <Alert showIcon closable onClose={() => setDetailWarning(null)} type="warning" style={{ marginBottom: 16 }} message={detailWarning} />}
       <Card title="生成 A股科技股收盘日报" extra={<Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>刷新</Button>}>
-        <Form layout="inline" onFinish={create} initialValues={{ force: false, analysisMode: "auto" }}>
+        <Form
+          form={reportForm}
+          layout="vertical"
+          onFinish={create}
+          initialValues={{ force: false, analysisMode: "auto" }}
+        >
+          <Row gutter={12}>
+            <Col xs={24} md={6}>
           <Form.Item name="requestedDate" label="报告日期"><DateStringPicker /></Form.Item>
+            </Col>
+            <Col xs={24} md={6}>
           <Form.Item name="analysisMode" label="分析模式">
-            <Select style={{ width: 190 }} options={[
+            <Select options={[
               { value: "auto", label: "自动（优先多 Agent）" },
               { value: "hybrid_multi_agent", label: "混合六阶段 Agent" },
               { value: "deterministic", label: "仅确定性规则" }
             ]} />
           </Form.Item>
-          <Form.Item name="force" valuePropName="checked"><Checkbox>使用最新观察池强制重新生成</Checkbox></Form.Item>
-          <Form.Item><Button type="primary" htmlType="submit" loading={submitting}>生成/打开日报</Button></Form.Item>
+            </Col>
+            <Col xs={24} md={6}>
+              <Form.Item name="provider" label="Provider">
+                <Select
+                  placeholder="选择已配置 Provider"
+                  options={capabilities.data.providers.map((item) => ({ value: item.provider, label: item.provider }))}
+                  onChange={(provider) => {
+                    const definition = capabilities.data.providers.find((item) => item.provider === provider);
+                    reportForm.setFieldValue("model", definition?.defaultModel);
+                  }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={6}>
+              <Form.Item name="model" label="运行模型">
+                <Select
+                  placeholder="选择模型"
+                  options={(selectedProviderDefinition?.models || []).map((item) => ({ value: item.id, label: item.label }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="promptVersionId" label="六阶段 Prompt 版本" rules={[{ required: true, message: "请选择 Prompt 版本" }]}>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={promptTemplates.data.items.map((item) => ({
+                    value: item.id,
+                    label: `${item.name} · ${item.builtin ? "内置" : `v${item.version}`} · ${item.fingerprint.slice(0, 8)}`
+                  }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Prompt 与生产配置">
+                <Space wrap>
+                  <Button icon={<EditOutlined />} onClick={openPromptEditor}>编辑并另存版本</Button>
+                  <Button icon={<SaveOutlined />} loading={publishingProfile} onClick={() => void publishProductionProfile()}>
+                    发布为工作日 17:30 配置
+                  </Button>
+                  {capabilities.data.productionProfile && <Tag color="blue">
+                    当前生产：{capabilities.data.productionProfile.provider} / {capabilities.data.productionProfile.model}
+                  </Tag>}
+                </Space>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Space wrap>
+            <Form.Item name="force" valuePropName="checked" noStyle><Checkbox>使用最新观察池强制重新生成</Checkbox></Form.Item>
+            <Button type="primary" htmlType="submit" loading={submitting}>生成/打开日报</Button>
+          </Space>
         </Form>
       </Card>
       <Card
@@ -459,10 +814,11 @@ export function AshareTechInsights() {
           <Descriptions.Item label="交叉核验">{report?.crossCheckSource || "-"}</Descriptions.Item>
           <Descriptions.Item label="模型">
             <Space>
-              <span>{selected.model || capabilities.data.model || "未配置"}</span>
+              <span>{selected.requested_provider || agentRun?.provider || "-"} / {selected.requested_model || selected.model || agentRun?.requested_model || "未配置"}</span>
               <Tag color={agentStatusColor(selected.llm_status)}>{selected.llm_status || "legacy / deterministic"}</Tag>
             </Space>
           </Descriptions.Item>
+          <Descriptions.Item label="Prompt 版本">{selected.prompt_version_id || selected.prompt_version || "-"}</Descriptions.Item>
         </Descriptions>
         {selected.error && <Alert type="error" showIcon message={selected.error} style={{ marginTop: 16 }} />}
         {report?.summary && <Alert type="warning" showIcon message={report.summary} style={{ marginTop: 16 }} />}
@@ -513,9 +869,48 @@ export function AshareTechInsights() {
               </>
             },
             {
+              key: "stock-insight",
+              label: "逐股结构化 Insight",
+              children: <>
+                {(agentRun?.stockInsights || []).length > 0
+                  ? <>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      value={selectedSymbol}
+                      style={{ width: 320, marginBottom: 16 }}
+                      placeholder="选择股票"
+                      onChange={setSelectedSymbol}
+                      options={(agentRun?.stockInsights || []).map((item) => ({
+                        value: item.symbol,
+                        label: `${item.name}（${item.symbol}）`
+                      }))}
+                    />
+                    <StockInsightView insight={selectedStockInsight} facts={agentRun?.facts} />
+                  </>
+                  : <Alert
+                    showIcon type="info" message="该运行没有逐股结构化 Insight"
+                    description="旧报告需要重新生成；确定性运行仍会生成带风控门禁的候选信号。"
+                  />}
+              </>
+            },
+            {
               key: "agents",
               label: "Agent 过程",
               children: <>
+                {agentRuns.length > 0 && <Space style={{ marginBottom: 16 }} wrap>
+                  <Typography.Text strong>运行版本</Typography.Text>
+                  <Select
+                    value={agentRun?.id}
+                    style={{ width: 420 }}
+                    onChange={(value) => void selectAgentRun(value)}
+                    options={agentRuns.map((item) => ({
+                      value: item.id,
+                      label: `${item.created_at} · ${item.provider || "-"} / ${item.requested_model || "-"} · ${item.status}`
+                    }))}
+                  />
+                  <Tag>{agentRun?.prompt_version || "-"}</Tag>
+                </Space>}
                 {stageItems.length > 0
                   ? <Steps responsive size="small" items={stageItems} />
                   : <Alert type="info" showIcon message="尚无 Agent 阶段记录" description="旧报告或确定性模式只显示规则输出。" />}
@@ -526,9 +921,7 @@ export function AshareTechInsights() {
                   pagination={false}
                   dataSource={agentRun?.stages}
                   expandable={{
-                    expandedRowRender: (stage) => <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                      {JSON.stringify(stage.output || {}, null, 2)}
-                    </pre>
+                    expandedRowRender: (stage) => <StageOutputView stage={stage} />
                   }}
                   columns={[
                     { title: "阶段", render: (_, item) => capabilities.data.stages.find((stage) => stage.key === item.stage_key)?.name || item.stage_key },
@@ -552,12 +945,40 @@ export function AshareTechInsights() {
               key: "evaluation",
               label: "效果评估",
               children: <>
-                <Space style={{ marginBottom: 12 }}>
+                <Space style={{ marginBottom: 12 }} wrap>
                   <Button icon={<ReloadOutlined />} loading={refreshingEvaluations} onClick={() => void refreshEvaluationData()}>刷新成熟预测</Button>
+                  <Select
+                    allowClear placeholder="全部 Provider" style={{ width: 150 }}
+                    value={evaluationProvider}
+                    onChange={(value) => {
+                      setEvaluationProvider(value);
+                      setEvaluationModel(undefined);
+                    }}
+                    options={capabilities.data.providers.map((item) => ({ value: item.provider, label: item.provider }))}
+                  />
+                  <Select
+                    allowClear placeholder="全部模型" style={{ width: 190 }}
+                    value={evaluationModel}
+                    onChange={setEvaluationModel}
+                    options={capabilities.data.providers
+                      .filter((item) => !evaluationProvider || item.provider === evaluationProvider)
+                      .flatMap((item) => item.models)
+                      .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index)
+                      .map((item) => ({ value: item.id, label: item.label }))}
+                  />
+                  <Select
+                    allowClear placeholder="全部 Prompt" style={{ width: 220 }}
+                    value={evaluationPromptVersion}
+                    onChange={setEvaluationPromptVersion}
+                    options={promptTemplates.data.items.map((item) => ({
+                      value: item.builtin ? capabilities.data.agentPromptVersion : `${item.templateKey}:v${item.version}`,
+                      label: `${item.name} · ${item.builtin ? "内置" : `v${item.version}`}`
+                    }))}
+                  />
                   <Tag color={evaluationSummary.data.sampleSufficient ? "green" : "orange"}>
                     {evaluationSummary.data.sampleSufficient ? "样本可评估" : "样本不足（少于20）"}
                   </Tag>
-                  <Tag>全模型 / Prompt 版本汇总</Tag>
+                  <Tag>{evaluationProvider || "全部 Provider"} / {evaluationModel || "全部模型"}</Tag>
                 </Space>
                 <Row gutter={[16, 16]}>
                   <Col xs={12} md={4}><Statistic title="成熟样本" value={evaluationSummary.data.sampleSize} /></Col>
@@ -616,10 +1037,29 @@ export function AshareTechInsights() {
             <Col span={8}><Statistic title="来源冲突" value={report.sourceConflicts?.length || 0} suffix="项" /></Col>
           </Row>
           <Typography.Paragraph style={{ marginTop: 16 }}>{report.conclusionFirst.importantChanges.join("；") || "今日无重要升级"}</Typography.Paragraph>
-          <Typography.Paragraph>较上一期：{JSON.stringify(report.conclusionFirst.versusPrevious)}</Typography.Paragraph>
+          <Card type="inner" size="small" title="较上一期变化" style={{ marginBottom: 12 }}>
+            <StructuredObject value={report.conclusionFirst.versusPrevious} empty="没有可比的上一期报告" />
+          </Card>
           {report.conclusionFirst.highRisk.length > 0 && <Alert type="warning" message="高位追涨/破位风险" description={report.conclusionFirst.highRisk.join("；")} />}
           {report.modelNarrative && <Alert type="info" style={{ marginTop: 12 }} message={`模型叙述（${report.narrativeStatus}）`} description={Object.values(report.modelNarrative).join(" ")} />}
-          {(report.sourceConflicts?.length || 0) > 0 && <Alert type="warning" style={{ marginTop: 12 }} message="来源冲突（采用TuShare并降级）" description={<pre>{JSON.stringify(report.sourceConflicts, null, 2)}</pre>} />}
+          {(report.sourceConflicts?.length || 0) > 0 && <Card type="inner" size="small" title="来源冲突（采用 TuShare 并降级）" style={{ marginTop: 12 }}>
+            <Table
+              rowKey={(_, index) => String(index)}
+              size="small"
+              pagination={false}
+              dataSource={report.sourceConflicts}
+              columns={[
+                { title: "字段 / 标的", render: (_, item) => readableValue(item.field || item.symbol || item.code || "-") },
+                { title: "主源值", render: (_, item) => readableValue(item.primaryValue || item.primary || item.tushare || "-") },
+                { title: "核验值", render: (_, item) => readableValue(item.crossCheckValue || item.crossCheck || item.eastmoney || "-") },
+                { title: "处理", render: (_, item) => readableValue(item.resolution || item.action || "采用主源并标记降级") }
+              ]}
+            />
+            <Collapse style={{ marginTop: 8 }} size="small" items={[{
+              key: "raw-conflicts", label: "查看原始冲突数据",
+              children: <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(report.sourceConflicts, null, 2)}</pre>
+            }]} />
+          </Card>}
         </>}
         {report?.focus && <><Divider>2. 重点提醒表</Divider><Table rowKey="code" size="small" tableLayout="fixed" dataSource={report.focus} columns={stockColumns} pagination={false} /></>}
         {report?.fullPool && <><Divider>3. 全池分析表（{report.fullPool.length}只）</Divider>
@@ -660,6 +1100,45 @@ export function AshareTechInsights() {
         {report?.finalThreeLines && <><Divider>7. 三行最终结论</Divider><Space direction="vertical"><div>最值得跟踪：{report.finalThreeLines.mostWorthTracking}</div><div>最应回避追高/警惕破位：{report.finalThreeLines.avoidChasingOrBreakdown}</div><div>总体阶段：{report.finalThreeLines.overallStage}</div></Space></>}
         {report?.disclaimer && <Alert type="info" message={report.disclaimer} style={{ marginTop: 16 }} />}
       </Card>}
+      <Modal
+        title="编辑六阶段 Prompt 模板"
+        open={promptOpen}
+        onCancel={() => setPromptOpen(false)}
+        footer={null}
+        width={960}
+        destroyOnHidden
+      >
+        <Alert
+          showIcon type="info" style={{ marginBottom: 16 }}
+          message="保存会创建不可变的新版本，不覆盖历史版本"
+          description="系统会在运行时追加各阶段的 JSON Schema、证据引用与安全边界；这里编辑研究角色、关注点和判断方法。"
+        />
+        <Form form={promptForm} layout="vertical" onFinish={savePrompt}>
+          <Row gutter={12}>
+            <Col span={12}><Form.Item name="name" label="模板名称" rules={[{ required: true }]}><Input /></Form.Item></Col>
+            <Col span={12}><Form.Item name="templateKey" label="模板键"><Input disabled /></Form.Item></Col>
+          </Row>
+          <Form.Item name="description" label="版本说明"><Input placeholder="说明本次修改目标，便于审计与评估" /></Form.Item>
+          <Tabs
+            type="card"
+            items={stageKeys.map((key) => ({
+              key,
+              label: stageLabels[key],
+              children: <Form.Item
+                name={["stagePrompts", key]}
+                label={`${stageLabels[key]}系统 Prompt`}
+                rules={[{ required: true, whitespace: true, message: "阶段 Prompt 不能为空" }]}
+              >
+                <Input.TextArea autoSize={{ minRows: 9, maxRows: 18 }} showCount />
+              </Form.Item>
+            }))}
+          />
+          <FormActions>
+            <Button onClick={() => setPromptOpen(false)}>取消</Button>
+            <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={savingPrompt}>保存为新版本</Button>
+          </FormActions>
+        </Form>
+      </Modal>
       <Modal title="添加A股股票" open={addOpen} onCancel={() => setAddOpen(false)} footer={null} destroyOnHidden>
         <Form form={addForm} layout="vertical" onFinish={addStock} initialValues={{ groupKey: "core", ruleTags: [] }}>
           <FormGrid modal>

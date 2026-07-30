@@ -36,7 +36,6 @@ from ..services.scheduler import acquire_scheduler_lease, release_scheduler_leas
 from ..services.settings import get_settings
 from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
 from ..services.tasks import append_log, create_task, get_task, update_task
-from ..services.insights import run_report as run_insight_report
 from ..services import ashare_tech_insights
 from ..services import ashare_tech_agents
 from ..services import paper as paper_service
@@ -96,17 +95,6 @@ def backup_mysql_task():
             details={"error": str(exc)},
             dedupe_key="mysql_backup_failed:scheduled",
         )
-        raise
-
-
-@celery_app.task(name="lean_web.generate_insight")
-def generate_insight_task(task_id: str, report_id: str):
-    try:
-        result = run_insight_report(task_id, report_id)
-        _record_task_metric("insight", "success")
-        return result
-    except Exception:
-        _record_task_metric("insight", "failed")
         raise
 
 

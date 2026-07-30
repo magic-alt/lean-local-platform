@@ -141,23 +141,22 @@ Task cancellation is centralized in `services/tasks.py`.
 - `kind=optimization`: revokes the optimization task, cancels the optimization row, marks non-terminal child `backtest_runs` as `cancelled`, and stops child LEAN containers with known `container_name`.
 - `kind=research`: revokes the task and stops the recorded research container.
 - `kind=report` and data tasks: revoke the task when a Celery id exists and persist `cancelled`.
-- `kind=insight`: revokes the model task and marks the linked insight report `cancelled`.
 
-## Insights
+## A-share Technology Insights
 
-Insights create structured, model-assisted research reports from LEAN-owned daily market data. They support DeepSeek, Zhipu, Kimi, OpenAI, and Anthropic, and remain opt-in until a supported API key is configured for both API and worker.
+A-share Technology Insights combine the closing daily report, six-stage Agent research, per-stock candidate signals, risk guardrails, and forecast evaluation in one workflow. The former generic multi-asset Insight workflow and its stored data are removed.
 
 ```text
-GET    /api/insights/capabilities
-GET    /api/insights
-POST   /api/insights
-GET    /api/insights/{report_id}
-DELETE /api/insights/{report_id}
+GET  /api/insights/ashare-tech/capabilities
+GET  /api/insights/ashare-tech/prompt-templates
+POST /api/insights/ashare-tech/prompt-templates
+POST /api/insights/ashare-tech/prompt-templates/{template_key}/versions
+GET  /api/insights/ashare-tech/production-profile
+PUT  /api/insights/ashare-tech/production-profile
+POST /api/insights/ashare-tech/reports
 ```
 
-`POST /api/insights` accepts `equity`, `crypto`, `crypto_future`, and `future`, currently at daily resolution. The optional `backtestRunId` must be a successful run for the same symbol, asset class, and venue. The response is HTTP 202 with the report and task identifiers.
-
-The model returns a candidate signal, but server-side guardrails own the final signal. Missing data, unsupported spot short exposure, invalid price plans, or missing evidence make the signal non-actionable. Insights remain advisory and are not sent to Paper.
+Each run selects one configured Provider/model for all six stages and snapshots an immutable Prompt version. DeepSeek `deepseek-v4-flash` and `deepseek-v4-pro` use the same key. The model returns per-stock candidate signals; server-side evidence, data-quality, exposure, price-plan, and risk guardrails own the final advisory signal. Signals are not normalized into a portfolio and never enter Paper or order execution.
 
 Environment variables:
 
@@ -168,7 +167,7 @@ KIMI_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 
-# Optional provider selection; otherwise the first configured key in the listed order is used.
+# Legacy fallback used until a production profile is published in the UI.
 LEAN_INSIGHTS_LLM_PROVIDER=deepseek
 # Optional provider-default overrides.
 LEAN_INSIGHTS_LLM_BASE_URL=
@@ -182,7 +181,7 @@ LEAN_ASHARE_TECH_EVALUATION_HOUR=18
 LEAN_ASHARE_TECH_EVALUATION_MINUTE=45
 ```
 
-Configure only the key for the provider you want to use. Provider defaults are `deepseek-v4-flash`, `glm-5.2`, `kimi-k2.6`, `gpt-5-mini`, and `claude-sonnet-4-6`, respectively. `ZAI_API_KEY` and `MOONSHOT_API_KEY` are accepted as aliases for `ZHIPU_API_KEY` and `KIMI_API_KEY`. API keys are never returned by capabilities, stored in settings, or persisted with the report.
+Configure one or more provider keys. The model catalog exposes both `deepseek-v4-flash` and `deepseek-v4-pro`, plus the configured Zhipu, Kimi, OpenAI, and Anthropic choices. `ZAI_API_KEY` and `MOONSHOT_API_KEY` are accepted as aliases for `ZHIPU_API_KEY` and `KIMI_API_KEY`. API keys are never returned by capabilities, stored in settings, or persisted with reports.
 
 ## Reports
 
@@ -339,16 +338,16 @@ records immutable intents, legal transitions, fills and ledger entries, then
 rebuilds projections with point-in-time Source Gate prices and exact benchmark
 dates. Legacy session and replay endpoints are retired.
 
-## Insights and A-share Technology Daily Report
+## A-share Technology Daily Report
 
 ```text
-GET  /api/insights/capabilities
-GET  /api/insights
-POST /api/insights
-GET  /api/insights/{report_id}
-DELETE /api/insights/{report_id}
-
 GET    /api/insights/ashare-tech/capabilities
+GET    /api/insights/ashare-tech/prompt-templates
+GET    /api/insights/ashare-tech/prompt-templates/{template_key}/versions
+POST   /api/insights/ashare-tech/prompt-templates
+POST   /api/insights/ashare-tech/prompt-templates/{template_key}/versions
+GET    /api/insights/ashare-tech/production-profile
+PUT    /api/insights/ashare-tech/production-profile
 GET    /api/insights/ashare-tech/reports
 POST   /api/insights/ashare-tech/reports
 GET    /api/insights/ashare-tech/reports/{report_id}
@@ -387,7 +386,11 @@ cover 1, 5 and 20 actual trading days; the 18:45 weekday evaluator records
 direction accuracy, three-class Brier score, stock/benchmark return, excess
 return and Top-5 lift. Deterministic fallbacks stay visible but are excluded
 from model prediction metrics. Server-side risk gates always override model
-output, and this workspace never creates Paper signals or orders.
+output. It also emits an auditable candidate signal for every stock with an
+independent target exposure, entry/exit plan, evidence IDs, and server-side
+guardrail result. Prompt templates are editable as immutable six-stage versions;
+the published Provider/model/Prompt profile controls the scheduled 17:30 run.
+This workspace never creates Paper signals or orders.
 
 ## Health and Observability
 
