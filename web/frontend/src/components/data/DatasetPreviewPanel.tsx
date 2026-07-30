@@ -147,9 +147,14 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [result, setResult] = useState<DatasetPreviewResult>();
+  const [indexChartResult, setIndexChartResult] = useState<DatasetPreviewResult>();
+  const [selectedIndexCode, setSelectedIndexCode] = useState("");
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const requestSequence = useRef(0);
+  const chartRequestSequence = useRef(0);
   const pageSize = 100;
 
   async function load(
@@ -187,14 +192,45 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
     }
   }
 
+  async function loadIndexChart(indexCode: string) {
+    const sequence = ++chartRequestSequence.current;
+    setSelectedIndexCode(indexCode);
+    setIndexChartResult(undefined);
+    setChartError("");
+    setChartLoading(true);
+    try {
+      const response = await api.datasetPreview("index_daily", {
+        keyword: indexCode,
+        limit: 500,
+      });
+      if (sequence !== chartRequestSequence.current) return;
+      const items = Array.isArray(response.items)
+        ? response.items.filter((item) => String(item?.ts_code || "") === indexCode)
+        : [];
+      setIndexChartResult({ ...response, items, count: items.length, offset: 0 });
+      if (items.length === 0) setChartError(`${indexCode} 暂无可用指数日线，无法绘制 K 线。`);
+    } catch (error) {
+      if (sequence !== chartRequestSequence.current) return;
+      setChartError((error as Error).message || `${indexCode} 指数日线加载失败`);
+    } finally {
+      if (sequence === chartRequestSequence.current) setChartLoading(false);
+    }
+  }
+
   useEffect(() => () => {
     requestSequence.current += 1;
+    chartRequestSequence.current += 1;
   }, []);
 
   useEffect(() => {
     setKeyword("");
     setStartDate("");
     setEndDate("");
+    setResult(undefined);
+    setSelectedIndexCode("");
+    setIndexChartResult(undefined);
+    setChartError("");
+    chartRequestSequence.current += 1;
     void load(1, dataset, { keyword: "", startDate: "", endDate: "" });
     // The dataset switch intentionally resets filters before the next manual search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,8 +241,12 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
   const totalPages = Math.max(1, Math.ceil((result?.count ?? 0) / pageSize));
   const columns = COLUMNS[dataset] ?? [];
   const chartRows = useMemo<DataQueryRow[]>(() => {
-    if (dataset !== "index_daily") return [];
-    return (result?.items ?? []).map((item) => ({
+    const items = dataset === "index_daily"
+      ? result?.items
+      : dataset === "index_basic"
+        ? indexChartResult?.items
+        : undefined;
+    return (items ?? []).map((item) => ({
       timestamp: String(item.trade_date || ""),
       open: Number(item.open || 0),
       high: Number(item.high || 0),
@@ -215,7 +255,16 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
       volume: Number(item.vol || 0),
       source: "tushare:index_daily",
     })).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-  }, [dataset, result?.items]);
+  }, [dataset, indexChartResult?.items, result?.items]);
+  const chartTitle = dataset === "index_basic"
+    ? selectedIndexCode
+    : String(result?.items[0]?.ts_code || "指数");
+  const previewMessage = result?.scope === "currently_tradable"
+    ? "当前可交易合约（按上市与最后交易日筛选）"
+    : result?.storage === "compressed_archive"
+      ? "读取压缩批次归档，不恢复逐行 JSON"
+      : "读取规范化 MySQL 表";
+  const previewDescription = `${result?.asOfDate ? `截至 ${result.asOfDate} · ` : ""}共匹配 ${(result?.count ?? 0).toLocaleString()} 条记录${result?.updatedAt ? ` · 归档时间 ${result.updatedAt}` : ""}`;
 
   return (
     <Card size="small" className="dataset-preview-card">
@@ -243,11 +292,29 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message={result?.storage === "compressed_archive" ? "读取压缩批次归档，不恢复逐行 JSON" : "读取规范化 MySQL 表"}
-        description={`共匹配 ${(result?.count ?? 0).toLocaleString()} 条记录${result?.updatedAt ? ` · 归档时间 ${result.updatedAt}` : ""}`}
+        message={previewMessage}
+        description={previewDescription}
       />
       {loadError && <Alert type="error" showIcon closable message="查询失败" description={loadError} style={{ marginBottom: 12 }} />}
-      {chartRows.length > 0 && <LeanChart option={candlestickOption(chartRows, String(result?.items[0]?.ts_code || "指数"))} style={{ height: 520, marginBottom: 12 }} />}
+      {dataset === "index_basic" && selectedIndexCode && (
+        <Alert
+          type={chartError ? "warning" : "info"}
+          showIcon
+          message={`${selectedIndexCode} 指数 K 线`}
+          description={chartError || "指数日线来自本地 index_daily 归档。"}
+          action={<Button size="small" onClick={() => {
+            chartRequestSequence.current += 1;
+            setSelectedIndexCode("");
+            setIndexChartResult(undefined);
+            setChartError("");
+            setChartLoading(false);
+          }}>关闭</Button>}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      <Spin spinning={chartLoading}>
+        {chartRows.length > 0 && <LeanChart option={candlestickOption(chartRows, chartTitle)} style={{ height: 520, marginBottom: 12 }} />}
+      </Spin>
       <Spin spinning={loading}>
         <div className="dataset-preview-table-scroll">
           <table className="dataset-preview-table" style={{ minWidth: TABLE_WIDTH[dataset] ?? 900 }}>
@@ -265,13 +332,24 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
                   <tr key={key}>
                     {columns.map((column) => {
                       const rawValue = row[column.dataIndex];
+                      const isIndexCode = dataset === "index_basic" && column.dataIndex === "ts_code";
                       return (
                         <td
                           key={column.dataIndex}
                           className={column.ellipsis ? "dataset-preview-cell-ellipsis" : undefined}
                           title={column.ellipsis ? textValue(rawValue) : undefined}
                         >
-                          {column.render ? column.render(rawValue) : textValue(rawValue)}
+                          {isIndexCode ? (
+                            <Button
+                              type="link"
+                              size="small"
+                              className="dataset-preview-code-link"
+                              loading={chartLoading && selectedIndexCode === String(rawValue || "")}
+                              onClick={() => void loadIndexChart(String(rawValue || ""))}
+                            >
+                              {textValue(rawValue)}
+                            </Button>
+                          ) : column.render ? column.render(rawValue) : textValue(rawValue)}
                         </td>
                       );
                     })}

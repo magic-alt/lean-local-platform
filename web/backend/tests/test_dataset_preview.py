@@ -6,7 +6,23 @@ from fastapi.testclient import TestClient
 
 from app.db import db, init_db, utc_now
 from app.main import app
+from app.services import dataset_preview as dataset_preview_service
 from app.services.db_object_store import put_bytes
+
+
+def _store_archive(dataset: str, rows: list[dict[str, object]]) -> None:
+    payload = gzip.compress(json.dumps(rows).encode("utf-8"), mtime=0)
+    stored = put_bytes("provider-raw", f"test/{dataset}.json.gz", payload)
+    with db() as connection:
+        connection.execute(
+            """
+            insert into provider_raw_archives
+                (id,provider,dataset_key,run_id,object_id,row_count,payload_sha256,
+                 archive_sha256,uncompressed_size,compressed_size,compression,created_at)
+            values (?, 'tushare',?,'test',?,?,'payload','archive',100,?,'gzip',?)
+            """,
+            (str(uuid.uuid4()), dataset, stored["id"], len(rows), len(payload), utc_now()),
+        )
 
 
 def test_trade_calendar_preview_filters_and_pages_canonical_rows():
@@ -60,22 +76,10 @@ def test_symbol_preview_uses_normalized_exact_match():
 
 def test_index_archive_preview_reads_compressed_batch_without_row_json():
     init_db()
-    payload = gzip.compress(json.dumps([
+    _store_archive("index_daily", [
         {"ts_code": "000300.SH", "trade_date": "20260717", "close": 4000.5, "pct_chg": 1.2},
         {"ts_code": "000905.SH", "trade_date": "20260716", "close": 6200.0, "pct_chg": -0.5},
-    ]).encode("utf-8"), mtime=0)
-    stored = put_bytes("provider-raw", "test/index-daily.json.gz", payload)
-    now = utc_now()
-    with db() as connection:
-        connection.execute(
-            """
-            insert into provider_raw_archives
-                (id,provider,dataset_key,run_id,object_id,row_count,payload_sha256,
-                 archive_sha256,uncompressed_size,compressed_size,compression,created_at)
-            values (?, 'tushare','index_daily','test',?,2,'payload','archive',100,?,'gzip',?)
-            """,
-            (str(uuid.uuid4()), stored["id"], len(payload), now),
-        )
+    ])
 
     response = TestClient(app).get(
         "/api/data/dataset-preview/index_daily",
@@ -87,6 +91,60 @@ def test_index_archive_preview_reads_compressed_batch_without_row_json():
     assert result["count"] == 1
     assert result["items"][0]["trade_date"] == "2026-07-17"
     assert result["items"][0]["close"] == 4000.5
+
+
+def test_futures_preview_only_returns_contracts_tradable_on_market_date(monkeypatch):
+    init_db()
+    _store_archive("fut_basic", [
+        {"ts_code": "IF2608.CFX", "list_date": "2026-01-01", "last_ddate": "2026-08-21"},
+        {"ts_code": "IF2607.CFX", "list_date": "2026-01-01", "last_ddate": "2026-07-17"},
+        {"ts_code": "IF2612.CFX", "list_date": "2026-08-01", "last_ddate": "2026-12-18"},
+        {"ts_code": "IFL.CFX"},
+    ])
+    monkeypatch.setattr(dataset_preview_service, "_current_market_date", lambda: "2026-07-31")
+
+    response = TestClient(app).get("/api/data/dataset-preview/fut_basic")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["scope"] == "currently_tradable"
+    assert result["asOfDate"] == "2026-07-31"
+    assert result["count"] == 1
+    assert [item["ts_code"] for item in result["items"]] == ["IF2608.CFX"]
+
+
+def test_options_preview_uses_last_trading_date_before_expiry_fallback(monkeypatch):
+    init_db()
+    _store_archive("opt_basic", [
+        {
+            "ts_code": "10010001.SH",
+            "list_date": "2026-06-01",
+            "last_ddate": "2026-07-30",
+            "last_edate": "2026-08-01",
+            "maturity_date": "2026-08-01",
+        },
+        {
+            "ts_code": "10010002.SH",
+            "list_date": "2026-06-01",
+            "last_edate": "2026-08-27",
+            "maturity_date": "2026-08-27",
+        },
+        {
+            "ts_code": "10010003.SH",
+            "list_date": "2026-08-01",
+            "last_edate": "2026-09-24",
+        },
+    ])
+    monkeypatch.setattr(dataset_preview_service, "_current_market_date", lambda: "2026-07-31")
+
+    response = TestClient(app).get("/api/data/dataset-preview/opt_basic")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["scope"] == "currently_tradable"
+    assert result["asOfDate"] == "2026-07-31"
+    assert result["count"] == 1
+    assert [item["ts_code"] for item in result["items"]] == ["10010002.SH"]
 
 
 def test_dataset_preview_rejects_unsupported_dataset():

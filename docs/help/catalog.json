@@ -6,6 +6,7 @@
   {"slug":"backtests","source":"help/backtests.md","group":"guide","category":"experiments","order":50,"summary":"统一 New Backtest 入口、按配置选择单次或批量、市场日历、preflight、案例和排障。"},
   {"slug":"optimization","source":"help/optimization.md","group":"guide","category":"experiments","order":60,"summary":"参数网格、稳健优化、Walk-forward 和多策略寻优。"},
   {"slug":"research","source":"help/research.md","group":"guide","category":"experiments","order":70,"summary":"快捷研究、批量因子分析和 Jupyter Research 工作区。"},
+  {"slug":"options-trading","source":"help/options-trading.md","group":"guide","category":"experiments","order":75,"summary":"期权合约筛选、行情研究、盈亏风险、到期处理和当前交易支持边界。"},
   {"slug":"paper","source":"help/paper.md","group":"guide","category":"operations","order":80,"summary":"LEAN Paper、信号模拟、逐日运行、回放和订单检查。"},
   {"slug":"reports","source":"help/reports.md","group":"guide","category":"operations","order":90,"summary":"运行详情、结果比较、统一报告、对象归档与导出。"},
   {"slug":"advanced-research","source":"help/advanced-research.md","group":"guide","category":"experiments","order":100,"summary":"Insights、因子、组合、期货、可转债和 API-first 能力。"},

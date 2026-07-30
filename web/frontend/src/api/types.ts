@@ -253,6 +253,8 @@ export interface DatasetPreviewResult {
   offset: number;
   storage: "canonical_table" | "compressed_archive" | string;
   updatedAt?: string | null;
+  scope?: "currently_tradable" | string | null;
+  asOfDate?: string | null;
 }
 
 export interface OnDemandStorageTarget {

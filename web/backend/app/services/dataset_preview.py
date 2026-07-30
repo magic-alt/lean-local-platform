@@ -3,8 +3,10 @@ from __future__ import annotations
 import gzip
 import json
 import math
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..db import db, rows_to_dicts
 from ..lean_engine.symbols import normalize_symbol
@@ -25,12 +27,27 @@ PREVIEW_DATASETS = {
 }
 
 ARCHIVE_DATASETS = {"index_basic", "index_daily", "fut_basic", "opt_basic"}
+CURRENT_CONTRACT_DATASETS = {"fut_basic", "opt_basic"}
 DATE_FIELDS = {
     "index_basic": "list_date",
     "index_daily": "trade_date",
     "fut_basic": "list_date",
     "opt_basic": "list_date",
 }
+CONTRACT_LIFECYCLE_FIELDS = {
+    "fut_basic": (
+        ("list_date", "listed_date"),
+        ("last_ddate", "last_trade_date", "delist_date"),
+    ),
+    "opt_basic": (
+        ("list_date", "listed_date"),
+        ("last_ddate", "last_trade_date", "last_edate", "maturity_date", "expiry_date", "delist_date"),
+    ),
+}
+
+
+def _current_market_date() -> str:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
 def _iso_date(value: Any) -> str | None:
@@ -48,6 +65,21 @@ def _safe_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_safe_value(item) for item in value]
     return value
+
+
+def _first_date(row: dict[str, Any], fields: tuple[str, ...]) -> str | None:
+    for field in fields:
+        normalized = _iso_date(row.get(field))
+        if normalized:
+            return normalized
+    return None
+
+
+def _is_current_contract(dataset: str, row: dict[str, Any], as_of_date: str) -> bool:
+    start_fields, end_fields = CONTRACT_LIFECYCLE_FIELDS[dataset]
+    listed_date = _first_date(row, start_fields)
+    last_trade_date = _first_date(row, end_fields)
+    return bool(listed_date and last_trade_date and listed_date <= as_of_date <= last_trade_date)
 
 
 @lru_cache(maxsize=16)
@@ -90,11 +122,14 @@ def _archive_preview(
     keyword: str,
     start_date: str | None,
     end_date: str | None,
+    as_of_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     rows, updated_at = _latest_archive(dataset)
     date_field = DATE_FIELDS[dataset]
     filtered: list[dict[str, Any]] = []
     for row in rows:
+        if as_of_date and not _is_current_contract(dataset, row, as_of_date):
+            continue
         normalized_date = _iso_date(row.get(date_field))
         if start_date and normalized_date and normalized_date < start_date:
             continue
@@ -103,7 +138,18 @@ def _archive_preview(
         if not _like_keyword(row, keyword):
             continue
         item = dict(row)
-        for field in ("trade_date", "list_date", "delist_date", "maturity_date", "last_ddate", "last_edate", "base_date"):
+        for field in (
+            "trade_date",
+            "list_date",
+            "listed_date",
+            "delist_date",
+            "maturity_date",
+            "last_ddate",
+            "last_edate",
+            "last_trade_date",
+            "expiry_date",
+            "base_date",
+        ):
             if item.get(field) not in (None, ""):
                 item[field] = _iso_date(item[field]) or item[field]
         filtered.append(item)
@@ -221,11 +267,13 @@ def dataset_preview(
     bounded_offset = max(0, int(offset))
     selected_keyword = str(keyword or "").strip()
     if dataset in ARCHIVE_DATASETS:
+        as_of_date = _current_market_date() if dataset in CURRENT_CONTRACT_DATASETS else None
         rows, updated_at = _archive_preview(
             dataset,
             keyword=selected_keyword,
             start_date=start_date,
             end_date=end_date,
+            as_of_date=as_of_date,
         )
         storage = "compressed_archive"
     else:
@@ -256,4 +304,6 @@ def dataset_preview(
         "offset": bounded_offset,
         "storage": storage,
         "updatedAt": updated_at,
+        "scope": "currently_tradable" if dataset in CURRENT_CONTRACT_DATASETS else None,
+        "asOfDate": as_of_date,
     }

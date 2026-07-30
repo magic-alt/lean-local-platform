@@ -23,9 +23,10 @@ LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理
 | [回测](backtests.md) | 单次、批量、动态组合、取消和结果可信度 |
 | [Optimization](optimization.md) | 网格、股票池稳健性、Walk-forward 和多策略 |
 | [Research](research.md) | 快捷研究、因子批量评价和 Jupyter |
+| [期权数据与交易边界](options-trading.md) | 当前合约、研究准备、盈亏风险、到期处理和接入要求 |
 | [Paper](paper.md) | LEAN Walk-forward、信号模拟与每日复盘 |
 | [Reports](reports.md) | 结果详情、比较、报告、归档与导出 |
-| [高级研究能力](advanced-research.md) | Insights、因子、组合、期货和可转债 |
+| [高级研究能力](advanced-research.md) | Insights、因子、组合、期货、期权和可转债 |
 | [配置与运行资源](configuration.md) | Settings、环境变量、Docker、目录与备份 |
 | [监控与故障排查](troubleshooting.md) | Tasks、Monitoring、MySQL、同步和前端问题 |
 

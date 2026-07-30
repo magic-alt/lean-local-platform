@@ -68,6 +68,12 @@ POST /api/data/query
 
 需要验证交易成本和执行影响时，应将 Research Run 的 DataScope 显式交给 Backtest，再配置策略、费用、滑点和资金规则。
 
+## 期权
+
+`opt_basic` 用于合约发现和生命周期筛选，`opt_daily` 通过按需下载取得日行情。当前 `option` 尚未注册为 Project、Backtest 或 Paper 的正式资产类型；期权数据可用于研究准备，但不能绕过资产校验进入标准执行链路。
+
+合约字段、当前有效合约口径、权利金与乘数、流动性、到期/行权/指派、空头保证金和正式接入验收要求见 [期权数据、研究与交易边界](options-trading.md)。
+
 ## Level 3+ 工作流
 
 Level 3+ 路由提供 universe coverage、pipeline run、alert acknowledge/resolve 和 workflow verification。它们用于平台级管线和运维集成，完整端点见 [API 索引](api-reference.md)。
