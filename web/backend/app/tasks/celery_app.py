@@ -72,6 +72,7 @@ celery_app.conf.update(
         "lean_web.sync_all_data": {"queue": "data-bulk"},
         "lean_web.prepare_ml_data": {"queue": "data-bulk"},
         "lean_web.run_ml_research": {"queue": "ml"},
+        "lean_web.run_research_analysis": {"queue": "default"},
         "lean_web.materialize_sync_data": {"queue": "data-demand"},
         "lean_web.maintain_derived_layers": {"queue": "data-demand"},
         "lean_web.recover_source_certifications": {"queue": "default"},

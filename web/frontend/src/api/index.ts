@@ -298,7 +298,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ datasets: datasets?.length ? datasets : null, mode })
     }),
-  prepareMlData: (payload: { mode: "universe_backfill"; datasets: string[]; scope: Record<string, unknown> }) =>
+  prepareMlData: (payload: { mode: "auto" | "incremental" | "full_rebuild" | "universe_backfill" | "screen_backfill"; datasets: string[]; scope: Record<string, unknown> }) =>
     request<DataSyncRun>("/api/data/sync-runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -540,9 +540,9 @@ export const api = {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope)
     }),
   researchSessions: () => request<ResearchWorkspace[]>("/api/research/workspaces?paged=false&limit=1000"),
-  createResearchSnapshot: (scope: DataScope) =>
+  createResearchSnapshot: (scope: DataScope, researchRunId?: string) =>
     request<{ snapshotId: string; dataFingerprint: string; count: number }>("/api/research/workspaces/snapshots", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope })
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(researchRunId ? { researchRunId } : { scope })
     }),
   startResearch: (payload: { projectId: string; port?: number; snapshotId?: string }) =>
     request<ResearchWorkspace>("/api/research/workspaces", {

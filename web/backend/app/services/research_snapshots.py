@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +31,13 @@ class ResearchData:
         return duckdb.sql(f"select * from read_parquet('{self.root / 'bars.parquet'}')")
 
     def dataset(self, name="bars"):
-        if name != "bars":
+        if name == "bars":
+            return self.history()
+        path = self.root / f"{name}.parquet"
+        if not path.is_file():
             raise KeyError(name)
-        return self.history()
+        import duckdb
+        return duckdb.sql(f"select * from read_parquet('{path}')")
 
     def universe(self):
         return sorted({row[0] for row in self.history().project("symbol").fetchall()})
@@ -91,6 +96,60 @@ def create_snapshot(scope: DataScope | dict[str, Any]) -> dict[str, Any]:
         "snapshotId": snapshot_id,
         "createdAt": utc_now(),
         "files": [{"path": "bars.parquet", "sha256": parquet_hash, "rows": payload["count"]}],
+        "readOnly": True,
+        "network": "none",
+    }
+    (root / "manifest.json").write_text(json_dump(manifest), encoding="utf-8")
+    (root / "lean_research.py").write_text(SDK_SOURCE, encoding="utf-8")
+    return manifest
+
+
+def create_run_snapshot(run_id: str) -> dict[str, Any]:
+    from . import research_runs
+    from .ashare_swing_screen import TEMPLATE_KEY
+
+    run = research_runs.get_run(run_id)
+    if run.get("status") != "success":
+        raise ValueError("Only a successful Research Run can create a run snapshot.")
+    if run.get("template_key") != TEMPLATE_KEY:
+        raise ValueError("This Research template does not expose a run snapshot bundle.")
+    result = run.get("result") or {}
+    artifacts = {str(item.get("key")): item for item in result.get("artifacts") or []}
+    audit = artifacts.get("auditParquet")
+    if not audit:
+        raise ValueError("Screen audit Parquet artifact is missing.")
+    source = research_runs.artifact_path(run_id, "auditParquet")
+    manifest_seed = {
+        "schemaVersion": "1.0",
+        "researchRunId": run_id,
+        "template": run.get("template_key"),
+        "scope": run.get("scope"),
+        "count": int((run.get("summary") or {}).get("universeCount") or 0),
+        "dataFingerprint": run.get("data_fingerprint"),
+        "resultSummary": run.get("summary") or {},
+    }
+    snapshot_id = hashlib.sha256(
+        json.dumps(manifest_seed, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    root = RESEARCH_DIR / "snapshots" / snapshot_id
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / "screen-audit.parquet"
+    expected_hash = str(audit.get("sha256") or "")
+    if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != expected_hash:
+        shutil.copy2(source, target)
+    file_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+    manifest = {
+        **manifest_seed,
+        "snapshotId": snapshot_id,
+        "createdAt": utc_now(),
+        "files": [
+            {
+                "path": target.name,
+                "dataset": "screen-audit",
+                "sha256": file_hash,
+                "rows": manifest_seed["count"],
+            }
+        ],
         "readOnly": True,
         "network": "none",
     }

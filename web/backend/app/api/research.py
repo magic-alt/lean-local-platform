@@ -26,9 +26,25 @@ from ..services import ml_research, research_analysis, research_runs
 from ..services import research_snapshots
 from ..services.projects import get_project
 from ..services.tasks import create_task, task_logs
-from ..tasks.worker import run_ml_research_task, start_research_task
+from ..tasks.worker import run_ml_research_task, run_research_analysis_task, start_research_task
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
+def _dispatch_async_run(run: dict[str, Any]) -> dict[str, Any]:
+    template_key = str(run.get("template_key") or "")
+    if template_key == ml_research.TEMPLATE_KEY:
+        task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+        signature = run_ml_research_task.s(task["id"], run["id"])
+    elif research_analysis.is_async_template(template_key):
+        task = create_task("research_analysis", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+        signature = run_research_analysis_task.s(task["id"], run["id"])
+    else:
+        return run
+    with db() as connection:
+        connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
+    dispatch_task(signature, task["id"])
+    return research_runs.get_run(run["id"])
 
 
 class ResearchRunRequest(BaseModel):
@@ -45,7 +61,8 @@ class WorkspaceRequest(BaseModel):
 
 
 class SnapshotRequest(BaseModel):
-    scope: DataScope
+    scope: DataScope | None = None
+    researchRunId: str | None = None
 
 
 @router.get("/templates")
@@ -76,13 +93,7 @@ def create_run(request: ResearchRunRequest):
             scope=request.scope,
             parameters=request.parameters,
         )
-        if request.template == "ml-cross-sectional-ranker":
-            task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
-            with db() as connection:
-                connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
-            dispatch_task(run_ml_research_task.s(task["id"], run["id"]), task["id"])
-            return research_runs.get_run(run["id"])
-        return run
+        return _dispatch_async_run(run)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -116,13 +127,7 @@ def cancel_run(run_id: str):
 def retry_run(run_id: str):
     try:
         run = research_runs.retry_run(run_id)
-        if run.get("template_key") == "ml-cross-sectional-ranker":
-            task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
-            with db() as connection:
-                connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
-            dispatch_task(run_ml_research_task.s(task["id"], run["id"]), task["id"])
-            return research_runs.get_run(run["id"])
-        return run
+        return _dispatch_async_run(run)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -162,9 +167,9 @@ def export_run(run_id: str):
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_key}")
-def ml_artifact(run_id: str, artifact_key: str):
+def research_artifact(run_id: str, artifact_key: str):
     try:
-        path = ml_research.artifact_path(run_id, artifact_key)
+        path = research_runs.artifact_path(run_id, artifact_key)
         return FileResponse(path, filename=path.name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -216,6 +221,10 @@ def list_workspaces(limit: int = 100, offset: int = 0, paged: bool = True):
 @router.post("/workspaces/snapshots")
 def create_workspace_snapshot(request: SnapshotRequest):
     try:
+        if request.researchRunId:
+            return research_snapshots.create_run_snapshot(request.researchRunId)
+        if request.scope is None:
+            raise ValueError("scope or researchRunId is required")
         return research_snapshots.create_snapshot(request.scope)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -225,11 +234,15 @@ def create_workspace_snapshot(request: SnapshotRequest):
 def create_workspace(request: WorkspaceRequest):
     try:
         project = get_project(request.projectId)
-        if not (RESEARCH_DIR / "snapshots" / request.snapshotId / "manifest.json").is_file():
+        snapshot_id = request.snapshotId.strip().lower()
+        if len(snapshot_id) != 64 or any(character not in "0123456789abcdef" for character in snapshot_id):
+            raise ValueError("Research snapshot ID is invalid.")
+        if not (RESEARCH_DIR / "snapshots" / snapshot_id / "manifest.json").is_file():
             raise ValueError("Research snapshot not found.")
         workspace_id = str(uuid.uuid4())
         port = find_available_port(request.port)
         workspace = _workspace_path(workspace_id, project)
+        (workspace / ".lean-research-snapshot-id").write_text(snapshot_id, encoding="utf-8")
         task = create_task("research", "Start Notebook Workspace", {"port": port}, request.projectId, workspace_id)
         with db() as connection:
             connection.execute(
@@ -239,7 +252,7 @@ def create_workspace(request: WorkspaceRequest):
                      readiness_status, container_status, workspace_path, project_name, snapshot_id)
                 values (?, ?, ?, 'queued', ?, ?, ?, 'pending', 'not_created', ?, ?, ?)
                 """,
-                (workspace_id, task["id"], request.projectId, port, task["log_path"], utc_now(), str(workspace), project.get("display_name") or project.get("name"), request.snapshotId),
+                (workspace_id, task["id"], request.projectId, port, task["log_path"], utc_now(), str(workspace), project.get("display_name") or project.get("name"), snapshot_id),
             )
         dispatch_task(start_research_task.s(task["id"], workspace_id), task["id"])
         return _workspace_detail(workspace_id)

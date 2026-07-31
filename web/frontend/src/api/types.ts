@@ -978,7 +978,7 @@ export interface DataScopeResolution {
   sourceAttempts: Array<{ source: string; rows: number }>;
   blocking?: string[];
   preparationRequest?: {
-    mode: "universe_backfill";
+    mode: "auto" | "incremental" | "full_rebuild" | "universe_backfill" | "screen_backfill";
     datasets: string[];
     scope: Record<string, unknown>;
   };
@@ -1040,6 +1040,8 @@ export interface ResearchRun {
     charts: Array<Record<string, unknown>>;
     tables: ResearchResultTable[];
     warnings: string[];
+    artifacts?: Array<{ key: string; name: string; mimeType?: string; sha256?: string; size?: number }>;
+    resolvedParameters?: Record<string, unknown>;
   } | null;
   summary?: Record<string, unknown> | null;
   data_fingerprint?: string | null;

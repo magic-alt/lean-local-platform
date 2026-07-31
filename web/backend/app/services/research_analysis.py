@@ -6,7 +6,7 @@ from typing import Any
 
 from ..db import db, rows_to_dicts
 from ..research import factors
-from . import cbond, data_gateway, futures
+from . import ashare_swing_screen, cbond, data_gateway, futures
 from .pit_data import index_members_as_of_payload
 
 
@@ -40,6 +40,14 @@ TEMPLATES = [
         "parameterSchema": {"factorNames": [], "forwardDays": 5, "quantiles": 5, "engine": "python"},
     },
     {
+        "key": ashare_swing_screen.TEMPLATE_KEY,
+        "name": "全A有序回调候选",
+        "description": "按PIT盈利、流动性、下跌速度、回调修复、波动和趋势筛选A股研究候选。",
+        "category": "idea-generation",
+        "execution": "async",
+        "parameterSchema": ashare_swing_screen.default_parameters(),
+    },
+    {
         "key": "ml-cross-sectional-ranker",
         "name": "CSI300 横截面机器学习",
         "description": "PIT 特征、Purged Walk-Forward 与 LightGBM 五档排序研究。",
@@ -71,6 +79,10 @@ def template(key: str) -> dict[str, Any]:
     if item is None:
         raise ValueError(f"unknown_research_template:{key}")
     return item
+
+
+def is_async_template(key: str) -> bool:
+    return str(template(key).get("execution") or "sync") == "async"
 
 
 def _table(name: str, columns: list[str], rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -237,10 +249,44 @@ ANALYZERS = {
 }
 
 
-def analyze(template_key: str, scope: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
+def analyze(
+    template_key: str,
+    scope: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    cancelled=None,
+    progress=None,
+) -> dict[str, Any]:
     template(template_key)
     resolved = data_gateway.resolve(scope)
     normalized = resolved["scope"]
+    if template_key == ashare_swing_screen.TEMPLATE_KEY:
+        if not run_id:
+            raise ValueError("run_id is required for A-share swing screening")
+        payload = ashare_swing_screen.analyze(
+            normalized,
+            parameters,
+            run_id=run_id,
+            cancelled=cancelled,
+            progress=progress,
+        )
+        return {
+            "schemaVersion": "1.0",
+            "template": template_key,
+            "scope": normalized,
+            "scopeHash": resolved["scopeHash"],
+            "dataFingerprint": payload["dataFingerprint"],
+            "source": resolved["source"],
+            "certification": resolved["certification"],
+            "coverage": payload["coverage"],
+            "summary": payload["summary"],
+            "charts": payload["charts"],
+            "tables": payload["tables"],
+            "warnings": payload["warnings"],
+            "artifacts": payload["artifacts"],
+            "resolvedParameters": payload["resolvedParameters"],
+        }
     analyzer = ANALYZERS[template_key]
     if template_key in {"market-eda", "data-quality"}:
         summary, charts, tables, warnings = analyzer(normalized)

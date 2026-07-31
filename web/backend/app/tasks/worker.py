@@ -45,6 +45,7 @@ from ..services import paper_scheduler
 from ..services import data_sync
 from ..services import ml_data_preparation
 from ..services import ml_research
+from ..services import research_runs
 from ..services import derived_maintenance
 from ..services import mysql_backup
 from ..services import resource_pressure
@@ -792,6 +793,40 @@ def run_ml_research_task(task_id: str, research_run_id: str):
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
         _record_task_metric("ml_research", "failed")
+        raise
+
+
+@celery_app.task(
+    name="lean_web.run_research_analysis",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_research_analysis_task(task_id: str, research_run_id: str):
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
+    try:
+        result = research_runs.execute_analysis_run(
+            research_run_id,
+            progress=lambda message: append_log(task_id, message),
+        )
+        status = str(result.get("status") or "failed")
+        artifact_names = [
+            str(item.get("name"))
+            for item in ((result.get("result") or {}).get("artifacts") or [])
+            if item.get("name")
+        ]
+        update_task(
+            task_id,
+            status="success" if status == "success" else "cancelled" if status == "cancelled" else "failed",
+            artifacts_json=artifact_names,
+            error=result.get("error"),
+            finished_at=utc_now(),
+        )
+        _record_task_metric("research_analysis", status)
+        return result
+    except Exception as exc:
+        append_log(task_id, f"error: {exc}")
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("research_analysis", "failed")
         raise
 
 

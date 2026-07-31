@@ -341,7 +341,7 @@
 | `POST` | `/api/research/runs/preview` | Preview Run | body `ResearchRunRequest` | `200` - |
 | `DELETE` | `/api/research/runs/{run_id}` | Delete Run | `run_id` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}` | Run Detail | `run_id` (path, required) | `200` - |
-| `GET` | `/api/research/runs/{run_id}/artifacts/{artifact_key}` | Ml Artifact | `run_id` (path, required)<br>`artifact_key` (path, required) | `200` - |
+| `GET` | `/api/research/runs/{run_id}/artifacts/{artifact_key}` | Research Artifact | `run_id` (path, required)<br>`artifact_key` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}/backtest-draft` | Backtest Draft | `run_id` (path, required) | `200` - |
 | `POST` | `/api/research/runs/{run_id}/cancel` | Cancel Run | `run_id` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}/export.csv` | Export Run | `run_id` (path, required) | `200` - |

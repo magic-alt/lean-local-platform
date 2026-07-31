@@ -50,6 +50,7 @@ def test_research_api_allocates_port_copies_workspace_and_deletes_record(tmp_pat
     assert session["port"] == 8891
     assert session["project_name"] == "Research Unit"
     assert (Path(session["workspace_path"]) / "main.py").exists()
+    assert (Path(session["workspace_path"]) / ".lean-research-snapshot-id").read_text() == snapshot_id
 
     logs = client.get(f"/api/research/workspaces/{session['id']}/logs")
     assert logs.status_code == 200

@@ -66,7 +66,7 @@ class DatasetSpec:
 # A successful probe is authoritative because some endpoints require separate grants.
 DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("stock_basic", "stock_basic", "A股/基础", probe={"list_status": "L"}, key_fields=("ts_code",), normalizer="stock_basic"),
-    DatasetSpec("namechange", "namechange", "A股/基础", "instrument", probe={"ts_code": "600519.SH"}, key_fields=("ts_code", "start_date", "name"), date_field="start_date"),
+    DatasetSpec("namechange", "namechange", "A股/基础", "instrument", probe={"ts_code": "600519.SH"}, key_fields=("ts_code", "start_date", "name"), date_field="start_date", normalizer="namechange", initial_fetch="per_symbol_full", incremental_fetch="per_symbol_full"),
     DatasetSpec("trade_cal", "trade_cal", "A股/基础", probe={"exchange": "SSE", "start_date": "20260101", "end_date": "20260110"}, key_fields=("exchange", "cal_date"), date_field="cal_date", normalizer="trade_cal"),
     DatasetSpec("daily", "daily", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="daily", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("adj_factor", "adj_factor", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="adj_factor", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
@@ -136,6 +136,7 @@ BULK_DATASET_KEYS = {
 }
 LOSSLESS_CANONICAL_NORMALIZERS = {
     "stock_basic",
+    "namechange",
     "adj_factor",
     "daily_basic",
     "financial",
@@ -1853,6 +1854,7 @@ def _sync_daily(
     end_date: str,
     task_id: str | None = None,
     full_refresh: bool = False,
+    minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     state = _item_state(run_id, "daily")
     checkpoint = state.get("checkpoint") or {}
@@ -1886,7 +1888,10 @@ def _sync_daily(
             continue
         symbol = str(security["symbol"])
         latest = latest_by_symbol.get(symbol)
-        start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else str(security.get("listed_date") or "1990-01-01")
+        initial_start = str(security.get("listed_date") or "1990-01-01")
+        if minimum_start_date:
+            initial_start = max(initial_start, minimum_start_date)
+        start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else initial_start
         delisted_date = str(security.get("delisted_date") or "")
         symbol_end = min(end_date, delisted_date) if delisted_date else end_date
         work.append((index, security, symbol, start, symbol_end))
@@ -2082,6 +2087,8 @@ def _generic_params(
 
 
 def _normalized_rows(adapter: TushareAdapter, spec: DatasetSpec, symbol: str, start: str, end: str) -> list[dict[str, Any]] | None:
+    if spec.normalizer == "namechange":
+        return adapter.namechange_rows(symbol)
     if spec.normalizer == "adj_factor":
         return [
             {
@@ -2125,6 +2132,37 @@ def _normalize_optional(
         return
     if spec.normalizer == "adj_factor":
         upsert_adjustment_factors(rows, source="tushare", batch_id=batch_id)
+    elif spec.normalizer == "namechange":
+        now = utc_now()
+        parameters = []
+        for row in rows:
+            payload = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+            parameters.append(
+                (
+                    str(uuid.uuid5(uuid.NAMESPACE_URL, f"name:{row['symbol']}:{row['start_date']}:{row['name']}")),
+                    row["symbol"],
+                    row["name"],
+                    row["start_date"],
+                    row.get("end_date"),
+                    int(bool(row.get("is_st"))),
+                    row.get("source") or "tushare:namechange",
+                    hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                    now,
+                )
+            )
+        connection_factory = bulk_db if bulk else db
+        with connection_factory() as connection:
+            connection.executemany(
+                """
+                insert into security_name_history
+                    (id,symbol,name,start_date,end_date,is_st,source,payload_hash,created_at)
+                values (?,?,?,?,?,?,?,?,?)
+                on conflict(symbol,start_date,name) do update set
+                    end_date=excluded.end_date,is_st=excluded.is_st,
+                    source=excluded.source,payload_hash=excluded.payload_hash
+                """,
+                parameters,
+            )
     elif spec.normalizer == "index_daily":
         # Keep the canonical security type as index.  LEAN's generated cache
         # remains equity-shaped because strategy templates subscribe through
@@ -2354,6 +2392,7 @@ def _sync_adj_factor_fast(
     task_id: str | None,
     *,
     full_refresh: bool,
+    minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Concurrent provider reads with one sequential, chunked database writer."""
     if not full_refresh and _latest_raw_date(spec) is None:
@@ -2406,7 +2445,13 @@ def _sync_adj_factor_fast(
             for index, item in enumerate(securities, start=1)
             if existing_statuses or index > legacy_resume
         ]
-        listed_dates = {str(item["symbol"]): str(item.get("listed_date") or "1990-01-01") for item in securities}
+        listed_dates = {
+            str(item["symbol"]): max(
+                str(item.get("listed_date") or "1990-01-01"),
+                minimum_start_date or "1990-01-01",
+            )
+            for item in securities
+        }
         _ensure_work_items(run_id, spec.key, work)
         statuses = _work_status(run_id, spec.key)
         pending = [(key, sequence) for key, sequence in work if statuses.get(key) != "committed"]
@@ -2650,6 +2695,7 @@ def _sync_stk_limit_fast(
     task_id: str | None,
     *,
     full_refresh: bool,
+    minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Batch sparse trade-status history and use market-wide increments."""
     state = _item_state(run_id, spec.key)
@@ -2765,6 +2811,8 @@ def _sync_stk_limit_fast(
                 if latest
                 else str(item.get("listed_date") or "1990-01-01")
             )
+            if minimum_start_date:
+                start = max(start, minimum_start_date)
             delisted_date = str(item.get("delisted_date") or "")
             symbol_end = min(end_date, delisted_date) if delisted_date else end_date
             work.append(
@@ -3232,6 +3280,7 @@ def _sync_generic(
     end_date: str,
     task_id: str | None = None,
     full_refresh: bool = False,
+    minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     if spec.normalizer == "adj_factor":
         return _sync_adj_factor_fast(
@@ -3242,6 +3291,7 @@ def _sync_generic(
             end_date,
             task_id,
             full_refresh=full_refresh,
+            minimum_start_date=minimum_start_date,
         )
     if spec.normalizer in {"stk_limit", "suspend_d"}:
         return _sync_stk_limit_fast(
@@ -3252,6 +3302,7 @@ def _sync_generic(
             end_date,
             task_id,
             full_refresh=full_refresh,
+            minimum_start_date=minimum_start_date,
         )
     if spec.normalizer == "suspend_d" and not full_refresh and hasattr(adapter, "suspend_rows_for_date"):
         listed_securities = _listed_securities()
@@ -3317,6 +3368,8 @@ def _sync_generic(
         )
         latest = None if full_refresh else persisted_latest
         initial_start = str(item.get("listed_date") or "1990-01-01") if item else "1990-01-01"
+        if minimum_start_date:
+            initial_start = max(initial_start, minimum_start_date)
         start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat() if latest else initial_start
         rows: list[dict[str, Any]] = []
         try:
@@ -3474,6 +3527,14 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
                 from ashare_trade_status where source='tushare:stk_limit'
                 """
             ).fetchone()
+        elif spec.normalizer == "namechange":
+            aggregate = connection.execute(
+                """
+                select count(*) as count,min(start_date) as first_date,
+                       max(coalesce(end_date,start_date)) as last_date
+                from security_name_history where source='tushare:namechange'
+                """
+            ).fetchone()
         elif spec.normalizer == "daily_basic":
             aggregate = connection.execute(
                 """
@@ -3622,7 +3683,8 @@ def run_sync(
     task_id: str | None = None,
 ) -> dict[str, Any]:
     batch_id = run_id
-    end_date = date.today().isoformat()
+    today = date.today()
+    end_date = today.isoformat()
     with db() as connection:
         run_row = connection.execute("select * from data_sync_runs where id=?", (run_id,)).fetchone()
         if not run_row:
@@ -3649,7 +3711,20 @@ def run_sync(
     selected_keys = set(run_record.get("requestedDatasets") or [spec.key for spec in DATASET_REGISTRY])
     sync_mode = str(run_record.get("mode") or "incremental")
     resume_base_mode = str((run_record.get("summary") or {}).get("resumeBaseMode") or "")
-    full_refresh = sync_mode in {"initial_full", "full_rebuild"} or resume_base_mode in {"initial_full", "full_rebuild"}
+    full_refresh = sync_mode in {"initial_full", "full_rebuild", "screen_backfill"} or resume_base_mode in {"initial_full", "full_rebuild", "screen_backfill"}
+    scoped_backfill = sync_mode in {"universe_backfill", "screen_backfill"} or resume_base_mode in {
+        "universe_backfill",
+        "screen_backfill",
+    }
+    request_scope = run_record.get("requestScope") or {}
+    minimum_start_date: str | None = None
+    if sync_mode == "screen_backfill" or resume_base_mode == "screen_backfill":
+        requested_as_of = str(request_scope.get("asOfDate") or end_date)
+        end_date = min(today, date.fromisoformat(requested_as_of)).isoformat()
+        history_bars = max(250, min(750, int(request_scope.get("minHistoryBars") or 500)))
+        minimum_start_date = (
+            date.fromisoformat(end_date) - timedelta(days=history_bars * 8 // 5 + 60)
+        ).isoformat()
     try:
         audit = audit_existing_data()
         probe_keys = _permission_probe_keys(selected_keys)
@@ -3701,7 +3776,7 @@ def run_sync(
             # items.  Enforce the current policy at execution time as well as
             # at run creation so a resumed legacy run cannot consume a 1/hour
             # endpoint or stall the full-database worker.
-            if spec.sync_policy == "on_demand":
+            if spec.sync_policy == "on_demand" and not scoped_backfill:
                 _item(
                     run_id,
                     spec.key,
@@ -3742,6 +3817,7 @@ def run_sync(
                         market_end_date,
                         task_id,
                         full_refresh=full_refresh,
+                        minimum_start_date=minimum_start_date,
                     )
                 else:
                     dataset_end_date = (
@@ -3757,6 +3833,7 @@ def run_sync(
                         dataset_end_date,
                         task_id,
                         full_refresh=full_refresh,
+                        minimum_start_date=minimum_start_date,
                     )
                 processed, inserted, updated, failed = result
                 if spec.key in {"stock_basic", "trade_cal"}:
@@ -3932,12 +4009,21 @@ def create_sync_run(
     *, requested: list[str] | None = None, mode: str = "auto", request_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_catalog()
-    if mode not in {"auto", "incremental", "full_rebuild", "universe_backfill"}:
-        raise ValueError("Data sync mode must be auto, incremental, full_rebuild, or universe_backfill.")
+    if mode not in {"auto", "incremental", "full_rebuild", "universe_backfill", "screen_backfill"}:
+        raise ValueError("Data sync mode must be auto, incremental, full_rebuild, universe_backfill, or screen_backfill.")
     if mode == "universe_backfill":
         scope_type = str((request_scope or {}).get("type") or "")
         if scope_type != "pit_universe_union":
             raise ValueError("universe_backfill requires scope.type=pit_universe_union.")
+    if mode == "screen_backfill":
+        from .ashare_swing_screen import REQUIRED_DATASETS as SCREEN_DATASETS
+
+        scope_type = str((request_scope or {}).get("type") or "")
+        if scope_type != "ashare_swing_screen":
+            raise ValueError("screen_backfill requires scope.type=ashare_swing_screen.")
+        unsupported = sorted(set(requested or []) - set(SCREEN_DATASETS))
+        if unsupported:
+            raise ValueError("screen_backfill only accepts A-share screening datasets: " + ", ".join(unsupported))
     with db() as connection:
         active = connection.execute(
             "select * from data_sync_runs where status in ('queued','running','cancelling') order by created_at desc limit 1"
@@ -3966,7 +4052,7 @@ def create_sync_run(
         if (requested and spec.key in requested) or (not requested and spec.sync_policy != "on_demand")
     ]
     on_demand_requested = [spec.key for spec in selected if spec.sync_policy == "on_demand"]
-    if on_demand_requested and mode != "universe_backfill":
+    if on_demand_requested and mode not in {"universe_backfill", "screen_backfill"}:
         raise ValueError(
             "On-demand datasets cannot be included in a full database update: "
             + ", ".join(on_demand_requested)
@@ -3982,7 +4068,7 @@ def create_sync_run(
             (
                 run_id,
                 resolved_mode,
-                "pit_universe_union" if mode == "universe_backfill" else "all_entitled_low_frequency",
+                "pit_universe_union" if mode == "universe_backfill" else "ashare_swing_screen" if mode == "screen_backfill" else "all_entitled_low_frequency",
                 json_dump([item.key for item in selected]),
                 json_dump({"leanCache": "pending", "clickHouse": "pending"}),
                 now,

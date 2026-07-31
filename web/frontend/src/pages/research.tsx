@@ -72,7 +72,8 @@ const categoryColors: Record<string, string> = {
   factor: "geekblue",
   cbond: "gold",
   futures: "volcano",
-  "machine-learning": "magenta"
+  "machine-learning": "magenta",
+  "idea-generation": "green"
 };
 
 function viewFromPath(pathname: string): ResearchView {
@@ -101,6 +102,23 @@ function concise(value: unknown) {
 }
 
 function TemplateParameters({ template }: { template: string }) {
+  if (template === "ashare-swing-candidates") {
+    return (
+      <>
+        <Form.Item name={["parameters", "universeCode"]} label="PIT股票池">
+          <Select options={["ALL_A", "CSI300", "CSI500", "CSI1000", "SSE50", "STAR50"].map((value) => ({ value, label: value }))} />
+        </Form.Item>
+        <Form.Item name={["parameters", "minHistoryBars"]} label="最少有效交易日" extra="默认500；允许250—750，低于500会标记短样本。">
+          <InputNumber min={250} max={750} step={50} />
+        </Form.Item>
+        <Form.Item name={["parameters", "topN"]} label="候选展示数量"><InputNumber min={1} max={200} /></Form.Item>
+        <Form.Item name={["parameters", "caseSymbols"]} label="案例代码" extra="逗号分隔；只用于逐项审计，不是强制命中名单。">
+          <Input placeholder="600036, 601166, 000651" />
+        </Form.Item>
+        <Form.Item name={["parameters", "rulesVersion"]} label="规则版本"><Input disabled /></Form.Item>
+      </>
+    );
+  }
   if (template === "ml-cross-sectional-ranker") {
     return (
       <Alert type="info" showIcon message="固定首版契约" description="使用上方数据范围日期；CSI300 PIT · 32 特征 · 未来 5 日超额收益 · 5 档 LightGBM Ranker · 5 年/6 月/3 月滚动验证 · 最后 12 个月冻结样本。" />
@@ -188,6 +206,20 @@ function ResultPanel({ run }: { run?: ResearchRun }) {
           ))}
         </Space>
       )}
+      {run.template_key !== "ml-cross-sectional-ranker" && (result.artifacts || []).length > 0 && (
+        <Space wrap>
+          {(result.artifacts || []).map((artifact) => (
+            <Button
+              key={artifact.key}
+              icon={<DownloadOutlined />}
+              href={api.researchArtifactUrl(run.id, artifact.key)}
+              target={artifact.key === "report" ? "_blank" : undefined}
+            >
+              {artifact.key === "report" ? "打开HTML研究报告" : artifact.name}
+            </Button>
+          ))}
+        </Space>
+      )}
       <div className="research-summary-grid">
         {summary.slice(0, 6).map(([key, value]) => (
           <Card size="small" key={key}><Statistic title={key} value={concise(value)} /></Card>
@@ -235,11 +267,20 @@ function NewResearch({
       name: current?.name,
       parameters
     };
-    if (selected === "universe-pit" || selected === "factor-evaluation" || selected === "ml-cross-sectional-ranker") {
+    if (selected === "universe-pit" || selected === "factor-evaluation" || selected === "ml-cross-sectional-ranker" || selected === "ashare-swing-candidates") {
+      const isSwing = selected === "ashare-swing-candidates";
       Object.assign(templateDefaults, {
         asset: { ...defaultScope.asset, assetClass: "equity" },
         selectionType: "universe",
-        selectionValues: selected === "factor-evaluation" ? "ALL_A" : "CSI300",
+        selectionValues: selected === "factor-evaluation" || isSwing ? "ALL_A" : "CSI300",
+        ...(isSwing ? {
+          price: { adjust: "raw" },
+          time: { ...defaultScope.time, startDate: dayjs().subtract(4, "year").format("YYYY-MM-DD") },
+          parameters: {
+            ...parameters,
+            caseSymbols: Array.isArray(parameters.caseSymbols) ? parameters.caseSymbols.join(", ") : parameters.caseSymbols
+          }
+        } : {}),
         ...(selected === "ml-cross-sectional-ranker" ? {
           time: { ...defaultScope.time, startDate: "2015-01-01" },
           parameters: { ...parameters, startDate: "2015-01-01", endDate: dayjs().format("YYYY-MM-DD") }
@@ -295,6 +336,12 @@ function NewResearch({
       parameters.startDate = scope.time.startDate;
       parameters.endDate = scope.time.endDate;
     }
+    if (selected === "ashare-swing-candidates") {
+      parameters.caseSymbols = String(parameters.caseSymbols || "")
+        .split(/[\s,，]+/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+    }
     return { template: selected, name: values.name, scope, parameters };
   }
 
@@ -337,7 +384,7 @@ function NewResearch({
     try {
       setBusy("run");
       await api.prepareMlData(resolution.preparationRequest);
-      message.success("PIT 历史并集数据准备任务已进入 data-bulk 队列");
+      message.success(selected === "ml-cross-sectional-ranker" ? "PIT 历史并集数据准备任务已进入 data-bulk 队列" : "筛选所需Tushare数据准备任务已进入队列");
     } catch (error) {
       if (error instanceof Error) message.error(error.message);
     } finally {
@@ -428,7 +475,7 @@ function NewResearch({
           </Card>
           <Space>
             <Button icon={<DatabaseOutlined />} loading={busy === "preview"} onClick={() => void preflight()}>数据预检</Button>
-            {resolution?.preparationRequest && (resolution.blocking || []).length > 0 && <Button onClick={() => void prepareData()}>准备 PIT 训练数据</Button>}
+            {resolution?.preparationRequest && (resolution.blocking || []).length > 0 && <Button onClick={() => void prepareData()}>{selected === "ml-cross-sectional-ranker" ? "准备 PIT 训练数据" : "准备筛选数据"}</Button>}
             <Button type="primary" icon={<PlayCircleOutlined />} loading={busy === "run"} onClick={() => void run()}>运行并固化结果</Button>
           </Space>
         </Form>
@@ -500,7 +547,10 @@ function RunHistory({ runs, reload }: { runs: ResearchRun[]; reload: () => void 
                     <Button size="small" icon={<ArrowRightOutlined />} disabled={item.status !== "success" || item.template_key === "ml-cross-sectional-ranker"} onClick={() => void handoff(item)}>转回测</Button>
                   </Tooltip>
                   <Button size="small" icon={<CodeOutlined />} disabled={item.status !== "success"} onClick={async () => {
-                    const snapshot = await api.createResearchSnapshot(item.scope);
+                    const snapshot = await api.createResearchSnapshot(
+                      item.scope,
+                      item.template_key === "ashare-swing-candidates" ? item.id : undefined
+                    );
                     await navigator.clipboard?.writeText(snapshot.snapshotId);
                     message.success(`只读快照已生成：${snapshot.snapshotId.slice(0, 12)}（ID 已复制）`);
                   }}>快照</Button>
