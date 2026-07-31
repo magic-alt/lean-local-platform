@@ -58,6 +58,11 @@ def _prune_backups(output_dir: Path, *, keep_days: int, keep_files: int) -> list
 
 def create_backup(output_dir: Path | None = None) -> dict[str, Any]:
     connection = _database_connection()
+    additional_databases = [
+        value.strip() for value in os.environ.get("LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES", "").split(",")
+        if value.strip() and value.strip() != connection["database"]
+    ]
+    databases = [str(connection["database"]), *additional_databases]
     binary = shutil.which("mysqldump") or shutil.which("mariadb-dump")
     if not binary:
         raise RuntimeError("mysql_dump_client_unavailable")
@@ -84,7 +89,8 @@ def create_backup(output_dir: Path | None = None) -> dict[str, Any]:
         "--routines",
         "--triggers",
         "--no-tablespaces",
-        str(connection["database"]),
+        "--databases",
+        *databases,
     ]
     environment = dict(os.environ)
     environment["MYSQL_PWD"] = str(connection["password"])
@@ -124,4 +130,5 @@ def create_backup(output_dir: Path | None = None) -> dict[str, Any]:
         "completedAt": completed_at.isoformat(),
         "durationSeconds": round((completed_at - started).total_seconds(), 3),
         "pruned": removed,
+        "databases": databases,
     }

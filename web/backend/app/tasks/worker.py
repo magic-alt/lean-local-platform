@@ -43,6 +43,8 @@ from ..services.trading_calendar import next_trade_date
 from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
+from ..services import ml_data_preparation
+from ..services import ml_research
 from ..services import derived_maintenance
 from ..services import mysql_backup
 from ..services import resource_pressure
@@ -722,6 +724,74 @@ def sync_all_data_task(task_id: str, run_id: str):
             dedupe_key=f"data_sync_failed:{run_id}",
         )
         _record_task_metric("data_sync", "failed")
+        raise
+
+
+@celery_app.task(
+    name="lean_web.prepare_ml_data",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def prepare_ml_data_task(task_id: str, run_id: str):
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
+    try:
+        result = ml_data_preparation.run_universe_backfill(
+            run_id,
+            log=lambda message: append_log(task_id, message),
+            cancelled=lambda: bool(get_task(task_id).get("status") == CANCELLED),
+        )
+        status = "cancelled" if result.get("status") == "cancelled" else "success" if result.get("status") == "success" else "failed"
+        update_task(task_id, status=status, error=None if status == "success" else str(result.get("status")), finished_at=utc_now())
+        _record_task_metric("ml_data_preparation", str(result.get("status")))
+        return result
+    except Exception as exc:
+        append_log(task_id, f"error: {exc}")
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        with db() as connection:
+            connection.execute(
+                "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=?",
+                (str(exc), utc_now(), run_id),
+            )
+        _record_task_metric("ml_data_preparation", "failed")
+        raise
+
+
+@celery_app.task(
+    name="lean_web.run_ml_research",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_ml_research_task(task_id: str, research_run_id: str):
+    update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
+    with db() as connection:
+        connection.execute("update research_runs set status='running',started_at=? where id=?", (utc_now(), research_run_id))
+        connection.execute("update research_run_items set status='running',started_at=? where run_id=?", (utc_now(), research_run_id))
+    try:
+        def is_cancelled() -> bool:
+            if get_task(task_id).get("status") == CANCELLED:
+                return True
+            with db() as connection:
+                row = connection.execute("select cancel_requested from research_runs where id=?", (research_run_id,)).fetchone()
+            return bool(row and row["cancel_requested"])
+
+        result = ml_research.run_training(
+            research_run_id,
+            log=lambda message: append_log(task_id, message),
+            cancelled=is_cancelled,
+        )
+        status = "cancelled" if result.get("status") == "cancelled" else "success"
+        artifacts = result.get("artifacts") or {}
+        artifact_paths = [
+            value for key, value in artifacts.items()
+            if key in {"rollingOosPredictions", "finalHoldoutPredictions", "featureImportance", "model"}
+        ]
+        update_task(task_id, status=status, artifacts_json=artifact_paths, finished_at=utc_now())
+        _record_task_metric("ml_research", status)
+        return result
+    except Exception as exc:
+        append_log(task_id, f"error: {exc}")
+        update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        _record_task_metric("ml_research", "failed")
         raise
 
 

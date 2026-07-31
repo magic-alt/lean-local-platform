@@ -116,6 +116,7 @@ export interface DataSyncRun {
   canonical_status?: string | null;
   canonical_ready_at?: string | null;
   derivedStatus?: Record<string, unknown> | null;
+  requestScope?: Record<string, unknown> | null;
   items?: DataSyncItem[];
 }
 
@@ -967,15 +968,43 @@ export interface DataScope {
 }
 
 export interface DataScopeResolution {
-  scope: DataScope;
-  scopeHash: string;
-  dataFingerprint: string;
-  source: string;
+  scope?: DataScope;
+  scopeHash?: string;
+  dataFingerprint?: string;
+  source?: string;
   ready: boolean;
   coverage: { rows?: number; symbols?: number; first_date?: string | null; last_date?: string | null };
   certification?: Record<string, unknown> | null;
   sourceAttempts: Array<{ source: string; rows: number }>;
   blocking?: string[];
+  preparationRequest?: {
+    mode: "universe_backfill";
+    datasets: string[];
+    scope: Record<string, unknown>;
+  };
+  historicalMemberSymbols?: number;
+  foldPlan?: Record<string, unknown> | null;
+  foldPlanError?: string | null;
+  candidateCount?: number;
+  finalHoldoutMonths?: number;
+  qualityThresholds?: Record<string, number>;
+}
+
+export interface MlResearchRun {
+  id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  metrics?: {
+    rollingOos?: Record<string, number | boolean | null>;
+    finalHoldout?: Record<string, number | boolean | null>;
+    featureImportance?: Array<{ feature: string; gain: number }>;
+  };
+  quality?: { qualified?: boolean; advisory?: boolean; checks?: Array<Record<string, unknown>> };
+  artifacts?: Record<string, string>;
+  mlflowUrl?: string;
+  error?: string | null;
+  trials?: Array<Record<string, unknown>>;
 }
 
 export interface ResearchTemplate {
@@ -1018,6 +1047,7 @@ export interface ResearchRun {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  mlResearch?: MlResearchRun | null;
 }
 
 export interface ResearchWorkspace extends ResearchSession {

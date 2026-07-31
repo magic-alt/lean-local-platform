@@ -298,6 +298,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ datasets: datasets?.length ? datasets : null, mode })
     }),
+  prepareMlData: (payload: { mode: "universe_backfill"; datasets: string[]; scope: Record<string, unknown> }) =>
+    request<DataSyncRun>("/api/data/sync-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   cancelDataSyncRun: (id: string) =>
     request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   resumeDataSyncRun: (id: string) =>
@@ -526,6 +532,7 @@ export const api = {
   cancelResearchRun: (id: string) =>
     request<ResearchRun>(`/api/research/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   researchRunExportUrl: (id: string) => `/api/research/runs/${encodeURIComponent(id)}/export.csv`,
+  researchArtifactUrl: (id: string, key: string) => `/api/research/runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(key)}`,
   researchBacktestDraft: (id: string) =>
     request<{ sourceResearchRunId: string; dataScope: DataScope; scopeHash: string; dataFingerprint: string; target: "backtest" | "batch" }>(`/api/research/runs/${encodeURIComponent(id)}/backtest-draft`),
   resolveDataScope: (scope: DataScope) =>

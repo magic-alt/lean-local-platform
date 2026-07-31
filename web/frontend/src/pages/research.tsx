@@ -71,7 +71,8 @@ const categoryColors: Record<string, string> = {
   universe: "purple",
   factor: "geekblue",
   cbond: "gold",
-  futures: "volcano"
+  futures: "volcano",
+  "machine-learning": "magenta"
 };
 
 function viewFromPath(pathname: string): ResearchView {
@@ -100,6 +101,11 @@ function concise(value: unknown) {
 }
 
 function TemplateParameters({ template }: { template: string }) {
+  if (template === "ml-cross-sectional-ranker") {
+    return (
+      <Alert type="info" showIcon message="固定首版契约" description="使用上方数据范围日期；CSI300 PIT · 32 特征 · 未来 5 日超额收益 · 5 档 LightGBM Ranker · 5 年/6 月/3 月滚动验证 · 最后 12 个月冻结样本。" />
+    );
+  }
   if (template === "universe-pit") {
     return (
       <>
@@ -155,11 +161,33 @@ function ResultPanel({ run }: { run?: ResearchRun }) {
   const result = run?.result;
   if (!run) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="运行分析后，结果会固定在这里并进入历史记录" />;
   if (run.status === "failed") return <Alert type="error" showIcon message="分析失败" description={run.error} />;
+  if (run.template_key === "ml-cross-sectional-ranker" && run.mlResearch && !result) {
+    return (
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Alert type="info" showIcon message={`ML 阶段：${run.mlResearch.stage}`} description={`进度 ${Math.round((run.mlResearch.progress || 0) * 100)}% · 独立 ml 队列`} />
+        {run.mlResearch.mlflowUrl && <Button href={run.mlResearch.mlflowUrl} target="_blank">打开 MLflow</Button>}
+      </Space>
+    );
+  }
   if (!result) return <Alert type="info" showIcon message={`任务状态：${run.status}`} />;
   const summary = Object.entries(result.summary || {}).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value));
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       {(result.warnings || []).map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
+      {run.mlResearch?.quality && <Alert type={run.mlResearch.quality.qualified ? "success" : "warning"} showIcon message={run.mlResearch.quality.qualified ? "通过研究建议门槛" : "技术运行成功，未通过研究建议门槛"} />}
+      {(run.mlResearch?.mlflowUrl || run.mlResearch?.artifacts) && (
+        <Space wrap>
+          {run.mlResearch?.mlflowUrl && <Button href={run.mlResearch.mlflowUrl} target="_blank">打开 MLflow 实验</Button>}
+          {Object.entries({
+            rollingOosPredictions: "滚动 OOS 预测",
+            finalHoldoutPredictions: "冻结样本预测",
+            featureImportance: "特征重要性",
+            model: "LightGBM 模型"
+          }).filter(([key]) => Boolean(run.mlResearch?.artifacts?.[key])).map(([key, label]) => (
+            <Button key={key} icon={<DownloadOutlined />} href={api.researchArtifactUrl(run.id, key)}>{label}</Button>
+          ))}
+        </Space>
+      )}
       <div className="research-summary-grid">
         {summary.slice(0, 6).map(([key, value]) => (
           <Card size="small" key={key}><Statistic title={key} value={concise(value)} /></Card>
@@ -207,11 +235,15 @@ function NewResearch({
       name: current?.name,
       parameters
     };
-    if (selected === "universe-pit" || selected === "factor-evaluation") {
+    if (selected === "universe-pit" || selected === "factor-evaluation" || selected === "ml-cross-sectional-ranker") {
       Object.assign(templateDefaults, {
         asset: { ...defaultScope.asset, assetClass: "equity" },
         selectionType: "universe",
-        selectionValues: selected === "universe-pit" ? "CSI300" : "ALL_A"
+        selectionValues: selected === "factor-evaluation" ? "ALL_A" : "CSI300",
+        ...(selected === "ml-cross-sectional-ranker" ? {
+          time: { ...defaultScope.time, startDate: "2015-01-01" },
+          parameters: { ...parameters, startDate: "2015-01-01", endDate: dayjs().format("YYYY-MM-DD") }
+        } : {})
       });
     } else if (selected === "cbond-double-low") {
       Object.assign(templateDefaults, {
@@ -236,6 +268,16 @@ function NewResearch({
     setResolution(undefined);
   }, [current, form, selected]);
 
+  useEffect(() => {
+    if (!latestRun || !["queued", "running"].includes(latestRun.status)) return;
+    const timer = window.setInterval(async () => {
+      const refreshed = await api.researchRun(latestRun.id);
+      setLatestRun(refreshed);
+      if (!["queued", "running"].includes(refreshed.status)) onCreated(refreshed);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [latestRun?.id, latestRun?.status, onCreated]);
+
   function payloadFrom(values: Record<string, any>) {
     const valuesText = String(values.selectionValues || "");
     const scope: DataScope = {
@@ -248,7 +290,12 @@ function NewResearch({
       price: values.price,
       provider: values.provider
     };
-    return { template: selected, name: values.name, scope, parameters: values.parameters || {} };
+    const parameters = { ...(values.parameters || {}) };
+    if (selected === "ml-cross-sectional-ranker") {
+      parameters.startDate = scope.time.startDate;
+      parameters.endDate = scope.time.endDate;
+    }
+    return { template: selected, name: values.name, scope, parameters };
   }
 
   async function preflight() {
@@ -276,7 +323,21 @@ function NewResearch({
       setLatestRun(created);
       onCreated(created);
       if (created.status === "success") message.success("研究分析已完成并固化");
+      else if (["queued", "running"].includes(created.status)) message.success("研究任务已进入独立队列");
       else message.warning(created.error || `任务状态：${created.status}`);
+    } catch (error) {
+      if (error instanceof Error) message.error(error.message);
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function prepareData() {
+    if (!resolution?.preparationRequest) return;
+    try {
+      setBusy("run");
+      await api.prepareMlData(resolution.preparationRequest);
+      message.success("PIT 历史并集数据准备任务已进入 data-bulk 队列");
     } catch (error) {
       if (error instanceof Error) message.error(error.message);
     } finally {
@@ -306,6 +367,7 @@ function NewResearch({
         <Form
           form={form}
           layout="vertical"
+          onValuesChange={() => setResolution(undefined)}
           initialValues={{
             template: selected,
             name: "市场研究",
@@ -366,6 +428,7 @@ function NewResearch({
           </Card>
           <Space>
             <Button icon={<DatabaseOutlined />} loading={busy === "preview"} onClick={() => void preflight()}>数据预检</Button>
+            {resolution?.preparationRequest && (resolution.blocking || []).length > 0 && <Button onClick={() => void prepareData()}>准备 PIT 训练数据</Button>}
             <Button type="primary" icon={<PlayCircleOutlined />} loading={busy === "run"} onClick={() => void run()}>运行并固化结果</Button>
           </Space>
         </Form>
@@ -375,12 +438,14 @@ function NewResearch({
         <Card size="small" title="数据就绪度" extra={resolution ? (resolution.ready ? <Tag color="green">READY</Tag> : <Tag color="red">BLOCKED</Tag>) : <Tag>待检查</Tag>}>
           {resolution ? (
             <Space direction="vertical" size={10} style={{ width: "100%" }}>
-              <div className="research-readiness-row"><span>来源</span><strong>{resolution.source}</strong></div>
+              <div className="research-readiness-row"><span>来源</span><strong>{resolution.source || (selected === "ml-cross-sectional-ranker" ? "PIT canonical tables" : "—")}</strong></div>
               <div className="research-readiness-row"><span>记录</span><strong>{Number(resolution.coverage.rows || 0).toLocaleString()}</strong></div>
-              <div className="research-readiness-row"><span>证券</span><strong>{Number(resolution.coverage.symbols || 0).toLocaleString()}</strong></div>
+              <div className="research-readiness-row"><span>证券</span><strong>{Number(resolution.coverage.symbols || resolution.historicalMemberSymbols || 0).toLocaleString()}</strong></div>
               <div className="research-readiness-row"><span>覆盖</span><strong>{resolution.coverage.first_date || "—"} → {resolution.coverage.last_date || "—"}</strong></div>
-              <Tooltip title={resolution.scopeHash}><div className="research-hash">SCOPE {resolution.scopeHash.slice(0, 12)}</div></Tooltip>
-              <Tooltip title={resolution.dataFingerprint}><div className="research-hash">DATA {resolution.dataFingerprint.slice(0, 12)}</div></Tooltip>
+              {resolution.scopeHash && <Tooltip title={resolution.scopeHash}><div className="research-hash">SCOPE {resolution.scopeHash.slice(0, 12)}</div></Tooltip>}
+              {resolution.dataFingerprint && <Tooltip title={resolution.dataFingerprint}><div className="research-hash">DATA {resolution.dataFingerprint.slice(0, 12)}</div></Tooltip>}
+              {resolution.candidateCount && <div className="research-readiness-row"><span>固定候选</span><strong>{resolution.candidateCount}</strong></div>}
+              {(resolution.blocking || []).map((item) => <Tag color="red" key={item}>{item}</Tag>)}
             </Space>
           ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="先运行数据预检" />}
         </Card>
@@ -431,7 +496,9 @@ function RunHistory({ runs, reload }: { runs: ResearchRun[]; reload: () => void 
               width: 340,
               render: (_, item) => (
                 <Space onClick={(event) => event.stopPropagation()}>
-                  <Button size="small" icon={<ArrowRightOutlined />} disabled={item.status !== "success"} onClick={() => void handoff(item)}>转回测</Button>
+                  <Tooltip title={item.template_key === "ml-cross-sectional-ranker" ? "ML_SIGNAL_EXPORT_NOT_IMPLEMENTED" : undefined}>
+                    <Button size="small" icon={<ArrowRightOutlined />} disabled={item.status !== "success" || item.template_key === "ml-cross-sectional-ranker"} onClick={() => void handoff(item)}>转回测</Button>
+                  </Tooltip>
                   <Button size="small" icon={<CodeOutlined />} disabled={item.status !== "success"} onClick={async () => {
                     const snapshot = await api.createResearchSnapshot(item.scope);
                     await navigator.clipboard?.writeText(snapshot.snapshotId);

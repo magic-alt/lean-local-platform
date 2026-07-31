@@ -34,6 +34,7 @@ services:
       - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-256M}
       - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
       - --binlog-row-image=MINIMAL
+      - --log-bin-trust-function-creators=1
       - --max-allowed-packet=256M
     ports:
       - "127.0.0.1:${LEAN_MYSQL_PORT:-3306}:3306"
@@ -69,6 +70,39 @@ services:
       timeout: 2s
       retries: 30
       start_period: 10s
+
+  mlflow-db-init:
+    profiles: ["app"]
+    logging: *bounded-logging
+    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
+    command:
+      - sh
+      - -c
+      - mysql -hmysql -uroot -plean-root -e "set global log_bin_trust_function_creators=1; create database if not exists lean_mlflow character set utf8mb4 collate utf8mb4_0900_ai_ci; grant all privileges on lean_mlflow.* to 'lean'@'%'; flush privileges;"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mlflow:
+    profiles: ["app"]
+    logging: *bounded-logging
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile.ml
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri mysql+pymysql://lean:lean@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
+    ports:
+      - "127.0.0.1:${LEAN_MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - mlflow-artifacts:/mlartifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      mlflow-db-init:
+        condition: service_completed_successfully
 
   clickhouse:
     logging: *bounded-logging
@@ -132,6 +166,7 @@ services:
       LEAN_RUNNER_URL: http://lean-runner:8010
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
       CLICKHOUSE_HOST: clickhouse
@@ -227,6 +262,8 @@ services:
         condition: service_started
       backtest-worker:
         condition: service_started
+      ml-worker:
+        condition: service_started
       lean-runner:
         condition: service_healthy
 
@@ -242,6 +279,7 @@ services:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
+      LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: lean_mlflow
       LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
       LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
       LEAN_STK_LIMIT_FETCH_CONCURRENCY: ${LEAN_STK_LIMIT_FETCH_CONCURRENCY:-16}
@@ -362,6 +400,27 @@ services:
       - lean_runner_token
     depends_on:
       lean-runner:
+        condition: service_healthy
+
+  ml-worker:
+    extends:
+      service: worker
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile.ml
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=ml --hostname=ml@%h
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      LEAN_MLFLOW_EXPERIMENT: lean-ashare-cross-sectional
+      LEAN_ML_THREADS: ${LEAN_ML_THREADS:-4}
+    cpus: "${LEAN_ML_WORKER_CPUS:-4.0}"
+    mem_limit: ${LEAN_ML_WORKER_MEMORY:-8g}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mlflow:
         condition: service_healthy
 
   lean-runner:
@@ -489,6 +548,7 @@ volumes:
   clickhouse-data:
   prometheus-data:
   grafana-data:
+  mlflow-artifacts:
 
 secrets:
   lean_api_token:

@@ -38,6 +38,7 @@
     "0034_unify_research_workflow": {"mode": "irreversible", "action": "Stop Research workloads and restore the verified pre-migration backup."},
     "0035_unify_optimization_workflow": {"mode": "irreversible", "action": "Stop optimization workloads and restore the verified pre-migration backup."},
     "0036_ashare_tech_agents": {"mode": "compensating", "action": "Stop report and evaluation workers, archive Agent and prediction evidence, then drop the added tables and report columns in a reviewed forward migration."},
-    "0037_merge_structured_insights": {"mode": "irreversible", "action": "Stop report workers and restore a verified pre-migration database backup if the permanently deleted generic Insight history or tables are required."}
+    "0037_merge_structured_insights": {"mode": "irreversible", "action": "Stop report workers and restore a verified pre-migration database backup if the permanently deleted generic Insight history or tables are required."},
+    "0038_ml_cross_sectional_research": {"mode": "compensating", "action": "Stop ML workers, archive model and feature manifests, then remove the added tables and financial audit columns with a reviewed forward migration."}
   }
 }

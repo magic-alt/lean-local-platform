@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **259** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **260** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -341,6 +341,7 @@
 | `POST` | `/api/research/runs/preview` | Preview Run | body `ResearchRunRequest` | `200` - |
 | `DELETE` | `/api/research/runs/{run_id}` | Delete Run | `run_id` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}` | Run Detail | `run_id` (path, required) | `200` - |
+| `GET` | `/api/research/runs/{run_id}/artifacts/{artifact_key}` | Ml Artifact | `run_id` (path, required)<br>`artifact_key` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}/backtest-draft` | Backtest Draft | `run_id` (path, required) | `200` - |
 | `POST` | `/api/research/runs/{run_id}/cancel` | Cancel Run | `run_id` (path, required) | `200` - |
 | `GET` | `/api/research/runs/{run_id}/export.csv` | Export Run | `run_id` (path, required) | `200` - |

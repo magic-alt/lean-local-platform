@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import uuid
@@ -198,11 +199,16 @@ def import_financial_statements(
         record_source = record.get("source") or source
         currency = record.get("currency") or "CNY"
         fields = dict(record.get("fields") or {})
+        payload_hash = str(record.get("payload_hash") or record.get("payloadHash") or hashlib.sha256(
+            json_dump({"fields": fields, "reportType": record.get("report_type"), "updateFlag": record.get("update_flag")}).encode("utf-8")
+        ).hexdigest())
         statements.append(
             (
                 ticker, statement, report, announce, effective,
                 record.get("fiscal_period") or record.get("fiscalPeriod"),
                 currency, json_dump(fields), record_source, batch_id, now,
+                record.get("report_type") or record.get("reportType"),
+                record.get("update_flag") or record.get("updateFlag"), payload_hash,
             )
         )
         for name, value in fields.items():
@@ -226,15 +232,19 @@ def import_financial_statements(
                 """
                 insert into financial_statements
                     (symbol,statement_type,report_date,announce_date,effective_date,
-                     fiscal_period,currency,fields_json,source,batch_id,created_at)
-                values (?,?,?,?,?,?,?,?,?,?,?)
+                     fiscal_period,currency,fields_json,source,batch_id,created_at,
+                     report_type,update_flag,payload_hash)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 on conflict(symbol,statement_type,report_date,announce_date,source) do update set
                     effective_date=excluded.effective_date,
                     fiscal_period=excluded.fiscal_period,
                     currency=excluded.currency,
                     fields_json=excluded.fields_json,
                     batch_id=excluded.batch_id,
-                    created_at=excluded.created_at
+                    created_at=excluded.created_at,
+                    report_type=excluded.report_type,
+                    update_flag=excluded.update_flag,
+                    payload_hash=excluded.payload_hash
                 """,
                 statements,
             )

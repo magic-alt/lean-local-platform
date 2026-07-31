@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from .common import dispatch_task, paged_items
@@ -22,11 +22,11 @@ from ..lean_engine.research import (
     remove_container,
     stop_container,
 )
-from ..services import research_analysis, research_runs
+from ..services import ml_research, research_analysis, research_runs
 from ..services import research_snapshots
 from ..services.projects import get_project
 from ..services.tasks import create_task, task_logs
-from ..tasks.worker import start_research_task
+from ..tasks.worker import run_ml_research_task, start_research_task
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -70,12 +70,19 @@ def list_runs(limit: int = 100, offset: int = 0, paged: bool = True):
 @router.post("/runs")
 def create_run(request: ResearchRunRequest):
     try:
-        return research_runs.create_run(
+        run = research_runs.create_run(
             template_key=request.template,
             name=request.name,
             scope=request.scope,
             parameters=request.parameters,
         )
+        if request.template == "ml-cross-sectional-ranker":
+            task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+            with db() as connection:
+                connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
+            dispatch_task(run_ml_research_task.s(task["id"], run["id"]), task["id"])
+            return research_runs.get_run(run["id"])
+        return run
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -108,7 +115,14 @@ def cancel_run(run_id: str):
 @router.post("/runs/{run_id}/retry")
 def retry_run(run_id: str):
     try:
-        return research_runs.retry_run(run_id)
+        run = research_runs.retry_run(run_id)
+        if run.get("template_key") == "ml-cross-sectional-ranker":
+            task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+            with db() as connection:
+                connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
+            dispatch_task(run_ml_research_task.s(task["id"], run["id"]), task["id"])
+            return research_runs.get_run(run["id"])
+        return run
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -145,6 +159,17 @@ def export_run(run_id: str):
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="research-{run_id}.csv"'},
     )
+
+
+@router.get("/runs/{run_id}/artifacts/{artifact_key}")
+def ml_artifact(run_id: str, artifact_key: str):
+    try:
+        path = ml_research.artifact_path(run_id, artifact_key)
+        return FileResponse(path, filename=path.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _workspace_path(workspace_id: str, project: dict[str, Any]) -> Path:

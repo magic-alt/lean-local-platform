@@ -134,7 +134,7 @@ def _queue_metrics() -> dict[str, Any]:
         from redis import Redis
 
         client = Redis.from_url(REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
-        queue_names = ("default", "backtest", "data", "data-bulk", "data-demand")
+        queue_names = ("default", "backtest", "data", "data-bulk", "data-demand", "ml")
         depths = {name: int(client.llen(name)) for name in queue_names}
         return {
             "depths": depths,

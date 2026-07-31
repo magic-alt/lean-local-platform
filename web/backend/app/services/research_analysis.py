@@ -40,6 +40,16 @@ TEMPLATES = [
         "parameterSchema": {"factorNames": [], "forwardDays": 5, "quantiles": 5, "engine": "python"},
     },
     {
+        "key": "ml-cross-sectional-ranker",
+        "name": "CSI300 横截面机器学习",
+        "description": "PIT 特征、Purged Walk-Forward 与 LightGBM 五档排序研究。",
+        "category": "machine-learning",
+        "parameterSchema": {
+            "universeCode": "CSI300", "startDate": "2015-01-01",
+            "endDate": "latest", "horizonTradingDays": 5,
+        },
+    },
+    {
         "key": "cbond-double-low",
         "name": "可转债双低筛选",
         "description": "按估值与强赎风险筛选可转债。",

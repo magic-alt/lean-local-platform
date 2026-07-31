@@ -66,6 +66,7 @@ class DatasetSpec:
 # A successful probe is authoritative because some endpoints require separate grants.
 DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("stock_basic", "stock_basic", "A股/基础", probe={"list_status": "L"}, key_fields=("ts_code",), normalizer="stock_basic"),
+    DatasetSpec("namechange", "namechange", "A股/基础", "instrument", probe={"ts_code": "600519.SH"}, key_fields=("ts_code", "start_date", "name"), date_field="start_date"),
     DatasetSpec("trade_cal", "trade_cal", "A股/基础", probe={"exchange": "SSE", "start_date": "20260101", "end_date": "20260110"}, key_fields=("exchange", "cal_date"), date_field="cal_date", normalizer="trade_cal"),
     DatasetSpec("daily", "daily", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="daily", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("adj_factor", "adj_factor", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="adj_factor", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
@@ -82,6 +83,9 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("index_basic", "index_basic", "指数", probe={"market": "SSE"}, key_fields=("ts_code",), catalog_date_field="list_date"),
     DatasetSpec("index_daily", "index_daily", "指数", "window", probe={"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="index_daily"),
     DatasetSpec("index_weight", "index_weight", "指数", "window", "monthly", {"index_code": "000300.SH", "start_date": "20260101", "end_date": "20260331"}, ("index_code", "con_code", "trade_date"), "trade_date", normalizer="index_weight"),
+    DatasetSpec("index_classify", "index_classify", "指数/行业", probe={"src": "SW2021", "level": "L1"}, key_fields=("index_code",), normalizer="sw_industry"),
+    DatasetSpec("index_member_all", "index_member_all", "指数/行业", "instrument", probe={"ts_code": "600519.SH", "is_new": "Y"}, key_fields=("ts_code", "l1_code", "in_date"), date_field="in_date", normalizer="sw_industry"),
+    DatasetSpec("sw_industry", "index_member_all", "指数/行业", "instrument", probe={"ts_code": "600519.SH", "is_new": "Y"}, key_fields=("ts_code", "l1_code", "in_date"), date_field="in_date", normalizer="sw_industry"),
     DatasetSpec("fund_basic", "fund_basic", "基金", probe={"market": "E"}, key_fields=("ts_code",)),
     DatasetSpec("fund_daily", "fund_daily", "基金", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date"),
     DatasetSpec("fund_nav", "fund_nav", "基金", "window", probe={"nav_date": "20260109"}, key_fields=("ts_code", "nav_date", "end_date", "ann_date"), date_field="nav_date"),
@@ -3924,10 +3928,16 @@ def run_sync(
         raise
 
 
-def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -> dict[str, Any]:
+def create_sync_run(
+    *, requested: list[str] | None = None, mode: str = "auto", request_scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ensure_catalog()
-    if mode not in {"auto", "incremental", "full_rebuild"}:
-        raise ValueError("Data sync mode must be auto, incremental, or full_rebuild.")
+    if mode not in {"auto", "incremental", "full_rebuild", "universe_backfill"}:
+        raise ValueError("Data sync mode must be auto, incremental, full_rebuild, or universe_backfill.")
+    if mode == "universe_backfill":
+        scope_type = str((request_scope or {}).get("type") or "")
+        if scope_type != "pit_universe_union":
+            raise ValueError("universe_backfill requires scope.type=pit_universe_union.")
     with db() as connection:
         active = connection.execute(
             "select * from data_sync_runs where status in ('queued','running','cancelling') order by created_at desc limit 1"
@@ -3956,7 +3966,7 @@ def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -
         if (requested and spec.key in requested) or (not requested and spec.sync_policy != "on_demand")
     ]
     on_demand_requested = [spec.key for spec in selected if spec.sync_policy == "on_demand"]
-    if on_demand_requested:
+    if on_demand_requested and mode != "universe_backfill":
         raise ValueError(
             "On-demand datasets cannot be included in a full database update: "
             + ", ".join(on_demand_requested)
@@ -3966,15 +3976,17 @@ def create_sync_run(*, requested: list[str] | None = None, mode: str = "auto") -
             """
             insert into data_sync_runs
                 (id,provider,mode,scope,status,requested_datasets_json,
-                 canonical_status,derived_status_json,created_at)
-            values (?,'tushare',?,'all_entitled_low_frequency','queued',?,'pending',?,?)
+                 canonical_status,derived_status_json,created_at,request_scope_json)
+            values (?,'tushare',?,?,'queued',?,'pending',?,?,?)
             """,
             (
                 run_id,
                 resolved_mode,
+                "pit_universe_union" if mode == "universe_backfill" else "all_entitled_low_frequency",
                 json_dump([item.key for item in selected]),
                 json_dump({"leanCache": "pending", "clickHouse": "pending"}),
                 now,
+                json_dump(request_scope or {}),
             ),
         )
         for spec in selected:

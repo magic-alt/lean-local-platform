@@ -55,7 +55,13 @@ from ..services import derived_maintenance
 from ..services.tasks import create_task
 from ..services import data_sync
 from ..services import data_gateway
-from ..tasks.worker import download_on_demand_dataset_task, fetch_data_batch_task, maintain_derived_layers_task, sync_all_data_task
+from ..tasks.worker import (
+    download_on_demand_dataset_task,
+    fetch_data_batch_task,
+    maintain_derived_layers_task,
+    prepare_ml_data_task,
+    sync_all_data_task,
+)
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -211,6 +217,7 @@ class DerivedMaintenanceRequest(BaseModel):
 class DataSyncRequest(BaseModel):
     datasets: list[str] | None = None
     mode: str = "auto"
+    scope: dict[str, Any] | None = None
 
 
 class OnDemandDatasetDownloadRequest(BaseModel):
@@ -355,7 +362,7 @@ def data_sync_runs(limit: int = 20):
 @router.post("/data/sync-runs")
 def create_data_sync_run(request: DataSyncRequest):
     try:
-        run = data_sync.create_sync_run(requested=request.datasets, mode=request.mode)
+        run = data_sync.create_sync_run(requested=request.datasets, mode=request.mode, request_scope=request.scope)
         task = create_task(
             "data_sync",
             "Update all TuShare data",
@@ -364,7 +371,12 @@ def create_data_sync_run(request: DataSyncRequest):
         )
         with db() as connection:
             connection.execute("update data_sync_runs set task_id=? where id=?", (task["id"], run["id"]))
-        dispatch_task(sync_all_data_task.s(task["id"], run["id"]), task["id"])
+        signature = (
+            prepare_ml_data_task.s(task["id"], run["id"])
+            if request.mode == "universe_backfill"
+            else sync_all_data_task.s(task["id"], run["id"])
+        )
+        dispatch_task(signature, task["id"])
         return data_sync.sync_run(run["id"])
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -121,6 +121,10 @@ JSON_COLUMNS = {
     "run_ids_json": "runIds",
     "constraints_json": "constraints",
     "input_fingerprints_json": "inputFingerprints",
+    "manifest_json": "manifest",
+    "quality_json": "quality",
+    "fold_plan_json": "foldPlan",
+    "request_scope_json": "requestScope",
 }
 
 
@@ -188,6 +192,10 @@ LONG_TEXT_COLUMNS = {
     "run_ids_json",
     "constraints_json",
     "input_fingerprints_json",
+    "manifest_json",
+    "quality_json",
+    "fold_plan_json",
+    "request_scope_json",
     "error",
     "error_message",
     "response_body",

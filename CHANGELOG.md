@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Add a research-only CSI300 PIT cross-sectional ML workflow with governed TuShare historical-union preparation, 32 causal price/valuation/financial features, next-open five-day excess-return labels, purged walk-forward LightGBM ranking, a frozen final holdout, content-addressed Parquet artifacts, separate MLflow/MySQL tracking, an isolated `ml` worker, API/UI progress and quality diagnostics, and explicit blocking of unfinished LEAN signal export.
 - Make index codes in Data Preview open their local daily candlestick chart, restrict futures and options Preview to contracts currently inside their listed trading lifecycle, and add a detailed options data, payoff, risk, expiry, and execution-boundary guide.
 - Merge the generic structured Insight workflow into A-share Technology Daily, remove its routes, services, UI, tasks, tables, and stored data, and add selectable configured Provider/model pairs (including DeepSeek flash/pro on one key), immutable editable six-stage Prompt versions, a published schedule profile, full-pool per-stock candidate signals with server guardrails, structured stage/stock rendering, and provider-aware evaluation filters.
 - Keep A-share Technology Insight details polling until their tasks reach a terminal state, so reports no longer remain visually stuck on `running`; record report/task completion after the optional Agent pipeline instead of backdating it to the market-data cutoff.

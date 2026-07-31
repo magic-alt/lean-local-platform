@@ -5,11 +5,14 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.data_scope import DataScope
-from . import data_gateway, research_analysis
+from . import data_gateway, ml_research, research_analysis
 
 
 def preview(template_key: str, scope: DataScope | dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
     research_analysis.template(template_key)
+    if template_key == ml_research.TEMPLATE_KEY:
+        normalized = data_gateway.normalize_scope(scope)
+        return ml_research.preview(parameters, scope=normalized)
     resolved = data_gateway.resolve(scope)
     return {
         **resolved,
@@ -34,6 +37,10 @@ def get_run(run_id: str) -> dict[str, Any]:
     item = row_to_dict(row)
     if item is None:
         raise KeyError("Research run not found.")
+    if item.get("template_key") == ml_research.TEMPLATE_KEY:
+        item["mlResearch"] = ml_research.training_for_research(run_id)
+        if item["mlResearch"]:
+            item["mlResearch"] = ml_research.training_detail(str(item["mlResearch"]["id"]))
     return item
 
 
@@ -46,6 +53,8 @@ def create_run(
 ) -> dict[str, Any]:
     template = research_analysis.template(template_key)
     normalized = data_gateway.normalize_scope(scope)
+    if template_key == ml_research.TEMPLATE_KEY:
+        ml_research.validate_scope(normalized, parameters)
     run_id = str(uuid.uuid4())
     item_id = str(uuid.uuid4())
     now = utc_now()
@@ -56,18 +65,21 @@ def create_run(
             insert into research_runs
                 (id, template_key, name, status, scope_json, parameters_json,
                  cancel_requested, created_at, started_at)
-            values (?, ?, ?, 'running', ?, ?, 0, ?, ?)
+            values (?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
-            (run_id, template_key, run_name, json_dump(normalized), json_dump(parameters), now, now),
+            (run_id, template_key, run_name, "queued" if template_key == ml_research.TEMPLATE_KEY else "running", json_dump(normalized), json_dump(parameters), now, None if template_key == ml_research.TEMPLATE_KEY else now),
         )
         connection.execute(
             """
             insert into research_run_items
                 (id, run_id, item_index, item_key, status, parameters_json, created_at, started_at)
-            values (?, ?, 0, ?, 'running', ?, ?, ?)
+            values (?, ?, 0, ?, ?, ?, ?, ?)
             """,
-            (item_id, run_id, template_key, json_dump(parameters), now, now),
+            (item_id, run_id, template_key, "queued" if template_key == ml_research.TEMPLATE_KEY else "running", json_dump(parameters), now, None if template_key == ml_research.TEMPLATE_KEY else now),
         )
+    if template_key == ml_research.TEMPLATE_KEY:
+        ml_research.create_training_record(run_id, parameters)
+        return get_run(run_id)
     try:
         result = research_analysis.analyze(template_key, normalized, parameters)
         finished = utc_now()
@@ -134,6 +146,8 @@ def delete_run(run_id: str) -> None:
 
 def backtest_draft(run_id: str) -> dict[str, Any]:
     item = get_run(run_id)
+    if item["template_key"] == ml_research.TEMPLATE_KEY:
+        raise ValueError("ML_SIGNAL_EXPORT_NOT_IMPLEMENTED")
     if item["status"] != "success":
         raise ValueError("Only a successful research run can create a backtest draft.")
     resolved = data_gateway.resolve(item["scope"])

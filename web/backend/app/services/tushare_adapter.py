@@ -4,6 +4,8 @@ import os
 import math
 from datetime import date, datetime, timedelta
 from typing import Any
+import hashlib
+import json
 
 from ..core.errors import LeanWebError
 from ..lean_engine.symbols import normalize_symbol
@@ -226,6 +228,54 @@ class TushareAdapter:
                     }
                 )
         return records
+
+    def namechange_rows(self, symbol: str) -> list[dict[str, Any]]:
+        frame = self.pro.namechange(
+            ts_code=to_tushare_stock_code(symbol),
+            fields="ts_code,name,start_date,end_date,change_reason",
+        )
+        rows = []
+        for item in _records(frame):
+            start_date = _iso_date(item.get("start_date"))
+            name = str(item.get("name") or "").strip()
+            if not start_date or not name:
+                continue
+            rows.append({
+                "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                "name": name,
+                "start_date": start_date,
+                "end_date": _iso_date(item.get("end_date")),
+                "is_st": _is_st_name(name),
+                "change_reason": item.get("change_reason"),
+                "source": "tushare:namechange",
+            })
+        return sorted(rows, key=lambda row: (row["start_date"], row["name"]))
+
+    def sw_industry_membership_rows(self, symbol: str) -> list[dict[str, Any]]:
+        """Return both current and exited SW2021 memberships with effective intervals."""
+        records: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for is_new in ("Y", "N"):
+            frame = self.pro.index_member_all(
+                ts_code=to_tushare_stock_code(symbol), is_new=is_new,
+                fields="l1_code,l1_name,l2_code,l2_name,l3_code,l3_name,ts_code,name,in_date,out_date,is_new",
+            )
+            for item in _records(frame):
+                in_date = _iso_date(item.get("in_date"))
+                industry_code = str(item.get("l1_code") or "").strip()
+                if not in_date or not industry_code:
+                    continue
+                row = {
+                    "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                    "industry_code": industry_code,
+                    "industry_name": item.get("l1_name"),
+                    "taxonomy": "SW2021",
+                    "level_no": 1,
+                    "in_date": in_date,
+                    "out_date": _iso_date(item.get("out_date")),
+                    "source": "tushare:index_member_all",
+                }
+                records[(row["symbol"], industry_code, in_date)] = row
+        return sorted(records.values(), key=lambda row: (row["in_date"], row["industry_code"]))
 
     def hk_basic(self, list_statuses: list[str] | None = None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -749,6 +799,11 @@ class TushareAdapter:
                     "currency": "CNY",
                     "fields": fields,
                     "source": f"tushare:{endpoint}",
+                    "report_type": None if _blank(item.get("report_type")) else str(item.get("report_type")),
+                    "update_flag": None if _blank(item.get("update_flag")) else str(item.get("update_flag")),
+                    "payload_hash": hashlib.sha256(
+                        json.dumps(item, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
                 }
             )
         return sorted(rows, key=lambda row: (row["report_date"], row["announce_date"], row["symbol"]))
