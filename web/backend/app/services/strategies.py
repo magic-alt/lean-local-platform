@@ -458,6 +458,9 @@ COMMON_FOOTER = '''
     def on_order_event(self, order_event):
         if self.ashare_execution:
             self.ashare_execution.on_order_event(order_event)
+        hook = getattr(self, "_strategy_on_order_event", None)
+        if hook:
+            hook(order_event)
 '''
 
 

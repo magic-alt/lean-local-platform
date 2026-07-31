@@ -304,7 +304,9 @@ def test_real_lean_runs_index_screening_and_writes_report_artifacts(tmp_path, mo
     assert by_symbol["600001"]["trend"] == "持续上涨"
     assert by_symbol["600001"]["suitableToBuy"] is True
     assert by_symbol["000001"]["suitableToBuy"] is False
-    assert screening["summary"]["selected"] == ["600001"]
+    assert screening["summary"]["qualifiedSymbols"] == ["600001"]
+    assert screening["summary"]["selected"] == []
+    assert by_symbol["600001"]["selectionEligible"] is False
     assert screening["summary"]["asOfDate"] == "2024-06-28"
     assert screening["summary"]["tradeSimulation"] is False
     events_path = Path(output["results_dir"]) / "screening-lean-integration-order-events.json"
@@ -317,3 +319,135 @@ def test_real_lean_runs_index_screening_and_writes_report_artifacts(tmp_path, mo
     ]
     assert filled == []
     assert "指数成分股技术面与基本面筛选" in Path(output["report_html_path"]).read_text(encoding="utf-8")
+
+
+def test_real_lean_trend_pullback_submits_close_signal_and_fills_next_open(tmp_path, monkeypatch):
+    _configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.runners.lean_runner import LeanRunner
+    from app.services.ashare_trend_pullback import write_trend_pullback_snapshot
+    from app.services.data import import_ashare_research_data
+    from app.services.strategies import render_python_template
+
+    dates = []
+    cursor = date(2023, 1, 2)
+    while len(dates) < 306:
+        if cursor.weekday() < 5:
+            dates.append(cursor)
+        cursor += timedelta(days=1)
+    closes = [10.0 + index * 0.04 for index in range(306)]
+    closes[297:306] = [22.0, 20.4, 20.3, 20.2, 20.3, 20.4, 20.5, 21.0, 21.1]
+
+    def rows_for(symbol):
+        rows = []
+        for index, (trade_date, close) in enumerate(zip(dates, closes)):
+            selected_close = close if symbol == "600001" else 3500 + index
+            amount = 50000000 if symbol == "600001" and 300 <= index <= 304 else 100000000
+            rows.append(
+                {
+                    "date": trade_date.isoformat(),
+                    "open": selected_close * 0.999,
+                    "high": selected_close * 1.005,
+                    "low": selected_close * 0.995,
+                    "close": selected_close,
+                    "volume": 1000000,
+                    "amount": amount,
+                    "adj_factor": 1.0,
+                    "canBuy": True,
+                    "canSell": True,
+                }
+            )
+        return rows
+
+    for symbol in ("600001", "000300"):
+        import_ashare_research_data(
+            symbol=symbol,
+            provider="unit",
+            market="china",
+            rows=rows_for(symbol),
+            source="unit-official",
+            overwrite=True,
+            adjust="raw",
+            outputsize="",
+            asset_class="equity",
+            venue="china",
+            resolution="daily",
+            data_type="trade",
+            start_date=None,
+            end_date=None,
+        )
+
+    run_dir = tmp_path / "runtime" / "runs" / "trend-pullback-integration"
+    universe_schedule = [
+        {"symbol": "600001", "startDate": dates[0].isoformat(), "endDate": None, "weight": 1.0}
+    ]
+    parameters = {
+        "ticker": "600001",
+        "assetClass": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "dataType": "trade",
+        "start": dates[0].isoformat(),
+        "end": dates[-1].isoformat(),
+        "cash": 1_000_000,
+        "initialCash": 1_000_000,
+        "initial_cash": 1_000_000,
+        "source": "unit-official",
+        "benchmarkSymbol": "000300",
+        "universeCode": "CSI300",
+        "universeSymbols": ["600001"],
+        "universeSchedule": json.dumps(universe_schedule, separators=(",", ":")),
+        "fundamentalSchedule": "[]",
+        "modelVariant": "A",
+        "topN": 1,
+        "ashareRules": True,
+        "ashareStatusFile": "/Lean/Run/ashare_trade_status.json",
+        "ashareNextOpenFillModel": True,
+        "slippageModel": "participation_sqrt",
+        "maxVolumeParticipation": 0.05,
+        "commissionRate": 0.0001,
+        "minCommission": 5.0,
+        "stampTaxSell": 0.0005,
+        "transferFeeRate": 0.00001,
+        "strategyTemplateKey": "ashare_trend_pullback_portfolio",
+    }
+    snapshot = write_trend_pullback_snapshot(run_dir, parameters)
+    parameters.update(
+        {
+            "trendPullbackInputFile": snapshot["containerPath"],
+            "trendPullbackInputSha256": snapshot["sha256"],
+            "trendPullbackInputSchemaVersion": snapshot["schemaVersion"],
+            "trendPullbackInputCoverage": snapshot["coverage"],
+        }
+    )
+    project_dir = tmp_path / "trend-project"
+    project_dir.mkdir()
+    (project_dir / "main.py").write_text(
+        render_python_template("TrendPullbackIntegrationAlgorithm", "ashare_trend_pullback_portfolio"),
+        encoding="utf-8",
+    )
+    output = LeanRunner(timeout_seconds=180).run_backtest(
+        "trend-pullback-integration",
+        parameters,
+        run_dir,
+        output_callback=lambda _line: None,
+        algorithm_path=project_dir / "main.py",
+        algorithm_class="TrendPullbackIntegrationAlgorithm",
+        language="Python",
+        project_dir=project_dir,
+    )
+
+    assert output["exit_code"] == 0
+    decisions = json.loads(
+        (Path(output["results_dir"]) / "trend-pullback-decisions.json").read_text(encoding="utf-8")
+    )
+    assert decisions["decisions"][-1]["symbol"] == "600001"
+    events = json.loads(
+        (Path(output["results_dir"]) / "trend-pullback-integration-order-events.json").read_text(encoding="utf-8")
+    )
+    if isinstance(events, dict):
+        events = list(events.values())
+    filled = [event for event in events if str(event.get("status")).lower() == "filled"]
+    assert filled
+    assert _ts_date(filled[-1]["time"]) == dates[-1].isoformat()

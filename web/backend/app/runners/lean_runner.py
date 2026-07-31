@@ -13,6 +13,7 @@ from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.reports import render_report
 from ..lean_engine.results import extract_statistics
 from ..lean_engine.screening import extract_screening_report
+from ..lean_engine.trend_pullback import extract_trend_pullback_report
 from ..services.ashare_execution import write_ashare_execution_artifacts
 from ..services.hk_execution import write_hk_execution_artifacts
 from ..services.screening_results import enrich_screening_file
@@ -84,6 +85,7 @@ class LeanRunner:
         for support_name in (
             "ashare_execution.py",
             "ashare_trade_status.json",
+            "ashare-trend-pullback-input.json.gz",
             "hk_execution.py",
             "trace-context.json",
         ):
@@ -228,6 +230,7 @@ class LeanRunner:
             screening_path = extract_screening_report(workspace.results_dir)
             if screening_path is not None:
                 enrich_screening_file(screening_path)
+            extract_trend_pullback_report(workspace.results_dir)
             render_report(artifacts.result_json, artifacts.report_html)
         self.archive(workspace, docker_output, artifacts)
         return LeanExecutionResult(

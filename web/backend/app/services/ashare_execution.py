@@ -8,9 +8,15 @@ from .ashare_repository import status_payload
 
 
 ASHARE_EXECUTION_HELPER_SOURCE = r'''from AlgorithmImports import *
+try:
+    from QuantConnect.Orders.Fills import EquityFillModel
+except ImportError:
+    class EquityFillModel:
+        def market_on_open_fill(self, asset, order):
+            return None
 import json
+import math
 from pathlib import Path
-
 
 def _parameter(algorithm, key, default=None):
     try:
@@ -61,11 +67,88 @@ class AShareFeeModel(FeeModel):
         return OrderFee(CashAmount(commission + stamp_tax + transfer_fee, self.currency))
 
 
+def _status_document(path_value):
+    path = Path(str(path_value))
+    if not path.exists():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as file:
+            return json.load(file)
+    except Exception:
+        return {}
+
+
 def _make_slippage_model(algorithm):
+    mode = str(_parameter(algorithm, "slippageModel", "constant")).lower()
+    if mode in {"participation", "participation_sqrt", "sqrt_participation"}:
+        cached = getattr(algorithm, "_ashare_participation_slippage_model", None)
+        if cached is not None:
+            return cached
+
+        class AShareParticipationSlippageModel:
+            def __init__(self, selected_algorithm):
+                self.base = _float_parameter(selected_algorithm, "slippageBps", 5.0) / 10000.0
+                self.impact = _float_parameter(selected_algorithm, "participationImpactBps", 25.0) / 10000.0
+                self.maximum = _float_parameter(selected_algorithm, "maxSlippageBps", 50.0) / 10000.0
+
+            def get_slippage_approximation(self, asset, order):
+                volume = max(0.0, float(getattr(asset, "volume", getattr(asset, "Volume", 0)) or 0))
+                participation = abs(float(order.quantity)) / volume if volume > 0 else 1.0
+                return float(asset.price) * min(self.maximum, self.base + self.impact * math.sqrt(participation))
+
+        cached = AShareParticipationSlippageModel(algorithm)
+        algorithm._ashare_participation_slippage_model = cached
+        return cached
     model_class = globals().get("ConstantSlippageModel")
     if model_class is None:
-        return None
+        return AShareParticipationSlippageModel(algorithm)
     return model_class(_float_parameter(algorithm, "slippageBps", 5.0) / 10000.0)
+
+
+def _make_next_open_fill_model(algorithm):
+    enabled = str(_parameter(algorithm, "ashareNextOpenFillModel", "false")).lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return None
+    cached = getattr(algorithm, "_ashare_next_open_fill_model", None)
+    if cached is not None:
+        return cached
+
+    class AShareNextOpenFillModel(EquityFillModel):
+        def __init__(self, selected_algorithm):
+            self.algorithm = selected_algorithm
+            self.status = _status_document(_parameter(selected_algorithm, "ashareStatusFile", "/Lean/Run/ashare_trade_status.json"))
+
+        @staticmethod
+        def _near(left, right):
+            if right in (None, 0):
+                return False
+            return abs(float(left) - float(right)) <= max(0.001, abs(float(right)) * 0.00005)
+
+        def market_on_open_fill(self, asset, order):
+            fill = super().market_on_open_fill(asset, order)
+            date_value = self.algorithm.time.strftime("%Y-%m-%d")
+            item = self.status.get(_symbol_key(asset.symbol), {}).get(date_value, {})
+            direction = getattr(order, "direction", getattr(order, "Direction", None))
+            open_price = float(getattr(asset, "open", getattr(asset, "Open", 0)) or 0)
+            reason = None
+            if not item:
+                reason = "trade_status_missing"
+            elif item.get("is_suspended"):
+                reason = "suspended"
+            elif direction == OrderDirection.BUY and self._near(open_price, item.get("limit_up")):
+                reason = "limit_up_open"
+            elif direction == OrderDirection.SELL and self._near(open_price, item.get("limit_down")):
+                reason = "limit_down_open"
+            if reason:
+                fill.status = OrderStatus.CANCELED
+                fill.fill_quantity = 0
+                fill.fill_price = 0
+                fill.message = f"ashare_next_open_blocked:{reason}"
+            return fill
+
+    cached = AShareNextOpenFillModel(algorithm)
+    algorithm._ashare_next_open_fill_model = cached
+    return cached
 
 
 def apply_ashare_models(algorithm, security):
@@ -82,6 +165,12 @@ def apply_ashare_models(algorithm, security):
         security.set_slippage_model(slippage_model)
     except AttributeError:
         security.SlippageModel = slippage_model
+    fill_model = _make_next_open_fill_model(algorithm)
+    if fill_model is not None:
+        try:
+            security.set_fill_model(fill_model)
+        except AttributeError:
+            security.FillModel = fill_model
 
 
 class AShareExecutionHelper:
@@ -93,6 +182,7 @@ class AShareExecutionHelper:
         self.execution_policy = str(_parameter(algorithm, "executionPolicy", "next_open")).lower()
         self.allow_st_buy = str(_parameter(algorithm, "allowStBuy", "false")).lower() in {"1", "true", "yes", "on"}
         self.next_open_gap_buffer_bps = _float_parameter(algorithm, "nextOpenGapBufferBps", 2000.0)
+        self.max_volume_participation = _float_parameter(algorithm, "maxVolumeParticipation", 0.0)
         self.buy_dates = {}
         self.registered_symbols = set()
         self.status = self._load_status()
@@ -200,6 +290,23 @@ class AShareExecutionHelper:
         slippage = trade_value * _float_parameter(self.algorithm, "slippageBps", 5.0) / 10000.0
         return commission + transfer + slippage
 
+    def _participation_quantity(self, symbol, quantity):
+        volume = float(getattr(self.algorithm.securities[symbol], "volume", 0) or 0)
+        if volume <= 0 or self.max_volume_participation <= 0:
+            return self._round_to_lot(quantity)
+        maximum = self._round_to_lot(volume * self.max_volume_participation)
+        return self._round_to_lot(min(abs(quantity), abs(maximum))) * (1 if quantity > 0 else -1)
+
+    def _can_submit_buy(self, symbol):
+        item = self._status(symbol)
+        if not item:
+            return False, "trade_status_missing"
+        if item.get("is_suspended"):
+            return False, "suspended"
+        if item.get("is_st") and not self.allow_st_buy:
+            return False, "st_blocked"
+        return True, "ok"
+
     def _reserved_buy_price(self, price):
         if self.execution_policy != "next_open":
             return price
@@ -245,6 +352,59 @@ class AShareExecutionHelper:
                 return None
             return self.algorithm.market_order(symbol, quantity)
         return None
+
+    def target_percent_moo(self, symbol, target_percent, tag=""):
+        target_percent = max(0.0, float(target_percent))
+        self._ensure_models(symbol)
+        if self._block_when_order_pending(symbol):
+            return None
+        price = self._price(symbol)
+        if price <= 0:
+            return None
+        total_value = float(self.algorithm.portfolio.total_portfolio_value)
+        current_quantity = self._holding_quantity(symbol)
+        desired_quantity = self._round_to_lot((total_value * target_percent) / price)
+        delta = desired_quantity - current_quantity
+        if delta > 0:
+            can_trade, reason = self._can_submit_buy(symbol)
+            if not can_trade:
+                self.algorithm.debug(f"AShare MOO buy blocked {_symbol_key(symbol)} {reason}")
+                return None
+            reserved_price = self._reserved_buy_price(price)
+            affordable = self._round_to_lot(
+                (self._available_cash() - self._buy_fee_buffer(delta * reserved_price)) / reserved_price
+            )
+            quantity = self._participation_quantity(symbol, min(delta, affordable))
+            if quantity <= 0:
+                self.algorithm.debug(f"AShare MOO buy blocked {_symbol_key(symbol)} insufficient_cash_capacity_or_lot")
+                return None
+            return self.algorithm.market_on_open_order(symbol, quantity, tag=tag)
+        if delta < 0:
+            can_trade, reason = self.can_sell(symbol)
+            if not can_trade and reason not in {"limit_down_or_blocked"}:
+                self.algorithm.debug(f"AShare MOO sell blocked {_symbol_key(symbol)} {reason}")
+                return None
+            quantity = self._participation_quantity(symbol, -min(abs(delta), max(0, current_quantity)))
+            if quantity >= 0:
+                return None
+            return self.algorithm.market_on_open_order(symbol, quantity, tag=tag)
+        return None
+
+    def exit_moo(self, symbol, tag=""):
+        self._ensure_models(symbol)
+        if self._block_when_order_pending(symbol):
+            return None
+        current_quantity = self._holding_quantity(symbol)
+        if current_quantity <= 0:
+            return None
+        can_trade, reason = self.can_sell(symbol)
+        if not can_trade and reason not in {"limit_down_or_blocked"}:
+            self.algorithm.debug(f"AShare MOO sell blocked {_symbol_key(symbol)} {reason}")
+            return None
+        quantity = self._participation_quantity(symbol, -current_quantity)
+        if quantity >= 0:
+            return None
+        return self.algorithm.market_on_open_order(symbol, quantity, tag=tag)
 
     def limit_buy(self, symbol, quantity, limit_price, tag=""):
         self._ensure_models(symbol)

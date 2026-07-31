@@ -97,6 +97,11 @@ replay、手工 signal 和逐日推进接口已下线，不再提供兼容入口
 行情、benchmark 或 Source Gate 不完整时，cycle 必须 fail closed，不能写入
 fill、ledger 或绩效 projection。
 
+`ashare_trend_pullback_portfolio` 可作为 Paper 候选。每个累计子回测都会按新的结束日重新生成
+指数成分、行业、财务、复权和流动性快照；历史订单若因数据修订发生漂移，reconciliation 会
+停止部署。执行日按实际开盘价复核停牌、涨停开盘买入和跌停开盘卖出，行业集中度使用执行日
+有效的申万一级行业，而不是证券主表中的当前行业。
+
 常用接口：
 
 | 方法 | 路径 | 说明 |

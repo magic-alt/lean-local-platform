@@ -84,6 +84,9 @@ _SCOPE_PARAMETERS = {
     "datasetQaReportId", "allowResearchSource", "preflight",
     "strategyTemplateKey", "strategyMode", "researchOnly", "tradable",
     "admissionEligible",
+    "trendPullbackInputFile", "trendPullbackInputSha256",
+    "trendPullbackInputSchemaVersion", "trendPullbackInputCoverage",
+    "ashareNextOpenFillModel",
 }
 
 

@@ -1,0 +1,41 @@
+{
+  "key": "ashare_trend_pullback_portfolio",
+  "name": "A股趋势回撤 · PIT组合",
+  "description": "在四类指数历史成分中，以复权技术指标、相对强弱和公告时点质量筛选股票，按周生成组合并在下一交易日开盘执行。",
+  "executionScope": "dynamic_universe",
+  "strategyMode": "A_SHARE_TREND_PULLBACK",
+  "researchOnly": false,
+  "tradable": true,
+  "admissionEligible": true,
+  "requiredMarket": "china",
+  "requiredResolution": "daily",
+  "requiresUniverseSchedule": true,
+  "defaultUniverse": "CSI300",
+  "requiredAdmissionGates": [
+    "ashare_pit_input_snapshot",
+    "ashare_next_open_execution",
+    "ashare_t_plus_one",
+    "ashare_no_short_positions",
+    "ashare_cash_account"
+  ],
+  "parameters": [
+    {"key": "modelVariant", "label": "模型版本(A/B/C)", "type": "string", "default": "B"},
+    {"key": "topN", "label": "持仓数量", "type": "number", "default": 18, "min": 1, "max": 50},
+    {"key": "grossExposure", "label": "目标总仓位", "type": "number", "default": 0.9, "min": 0, "max": 1},
+    {"key": "maxPositionWeight", "label": "单股权重上限", "type": "number", "default": 0.06, "min": 0.01, "max": 1},
+    {"key": "maxIndustryWeight", "label": "行业权重上限", "type": "number", "default": 0.25, "min": 0.05, "max": 1},
+    {"key": "maxTurnover", "label": "单次单边主动换手上限", "type": "number", "default": 0.4, "min": 0, "max": 1},
+    {"key": "minListedBars", "label": "最少上市有效日", "type": "number", "default": 250, "min": 120},
+    {"key": "minAmount20Cny", "label": "20日成交额中位数下限", "type": "number", "default": 50000000, "min": 0},
+    {"key": "minRawClose", "label": "最低原始价格", "type": "number", "default": 2, "min": 0},
+    {"key": "drawdownMin", "label": "最小回撤幅度", "type": "number", "default": 0.03, "min": 0, "max": 1},
+    {"key": "drawdownMax", "label": "最大回撤幅度", "type": "number", "default": 0.12, "min": 0, "max": 1},
+    {"key": "initialStopAtr", "label": "初始止损ATR倍数", "type": "number", "default": 2, "min": 0.5},
+    {"key": "trailingStopAtr", "label": "移动止损ATR倍数", "type": "number", "default": 3, "min": 0.5},
+    {"key": "maxHoldBars", "label": "最长持有有效日", "type": "number", "default": 20, "min": 1},
+    {"key": "marketRegimeMode", "label": "市场状态控制", "type": "string", "default": "off"},
+    {"key": "maxVolumeParticipation", "label": "成交量参与率上限", "type": "number", "default": 0.05, "min": 0.001, "max": 1}
+  ],
+  "expectedArtifacts": ["result.json", "report.html", "trend-pullback-decisions.json"],
+  "minimumData": {"bars": 270, "benchmark": true, "pitUniverse": true, "pitFundamentalsForC": true}
+}

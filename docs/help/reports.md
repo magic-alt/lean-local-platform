@@ -44,6 +44,10 @@ Reports 页面从 backtest run、parsed result 和 stored objects 生成 `report
 技术分、基本面分、综合分、是否合格、Top-N 精选状态、公司名称、通过依据和风险/缺失。
 筛选报告不显示收益、持仓或订单区块；该结论是研究规则输出，不构成投资建议。
 
+`ashare_trend_pullback_portfolio` 还会生成 `trend-pullback-decisions.json`，按调仓日保存入选
+股票、行业、模型版本、评分、目标权重、ATR、回撤、相对强弱、成交额和质量风险，并汇总各
+硬过滤阶段的排除数量。原始不可变输入快照可在同一运行的 artifact 清单中核对哈希。
+
 ## 生成与导出
 
 ```text

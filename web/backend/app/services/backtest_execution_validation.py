@@ -94,6 +94,70 @@ def _filled_events(result_path: Path, payload: dict[str, Any]) -> list[dict[str,
     ]
 
 
+def _event_date(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    return match.group(0) if match else None
+
+
+def _trend_order_contract(payload: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+    orders_payload = payload.get("orders") or payload.get("Orders") or {}
+    orders = list(orders_payload.values()) if isinstance(orders_payload, dict) else list(orders_payload) if isinstance(orders_payload, list) else []
+    filled_by_id: dict[str, dict[str, Any]] = {}
+    for event in events:
+        order_id = str(event.get("orderId") or event.get("OrderId") or "")
+        if order_id:
+            filled_by_id[order_id] = event
+    checked = 0
+    next_open_violations: list[dict[str, Any]] = []
+    t_plus_one_violations: list[dict[str, Any]] = []
+    last_buy: dict[str, str] = {}
+    chronological: list[tuple[str, str, float, str]] = []
+    for order in orders:
+        tag = str(order.get("tag") or order.get("Tag") or "")
+        if not tag.startswith("ASHARE_TREND|"):
+            continue
+        try:
+            metadata = json.loads(tag.split("|", 1)[1])
+        except json.JSONDecodeError:
+            next_open_violations.append({"orderId": order.get("id"), "reason": "invalid_tag"})
+            continue
+        order_id = str(order.get("id") or order.get("Id") or "")
+        event = filled_by_id.get(order_id)
+        if not event:
+            continue
+        fill_date = _event_date(
+            event.get("utcTime") or event.get("time") or event.get("fillTime")
+            or order.get("lastFillTime") or order.get("time")
+        )
+        signal_date = str(metadata.get("signalDate") or "")[:10]
+        symbol = str(
+            event.get("symbolValue")
+            or ((order.get("symbol") or {}).get("value") if isinstance(order.get("symbol"), dict) else order.get("symbol"))
+            or ""
+        )
+        quantity = _number(event.get("fillQuantity")) or 0.0
+        checked += 1
+        if not fill_date or not signal_date or fill_date <= signal_date:
+            next_open_violations.append(
+                {"orderId": order_id, "symbol": symbol, "signalDate": signal_date, "fillDate": fill_date}
+            )
+        if fill_date:
+            chronological.append((fill_date, symbol, quantity, order_id))
+    for fill_date, symbol, quantity, order_id in sorted(chronological):
+        if quantity > 0:
+            last_buy[symbol] = fill_date
+        elif quantity < 0 and last_buy.get(symbol) == fill_date:
+            t_plus_one_violations.append({"orderId": order_id, "symbol": symbol, "date": fill_date})
+    return {
+        "checkedOrders": checked,
+        "nextOpenViolations": next_open_violations,
+        "tPlusOneViolations": t_plus_one_violations,
+    }
+
+
 def _position_and_cash(events: list[dict[str, Any]], initial_cash: float) -> dict[str, Any]:
     positions: dict[str, float] = {}
     cash = initial_cash
@@ -199,6 +263,9 @@ def _log_evidence(result_path: Path) -> dict[str, Any]:
         ),
         "completedDate": completed_date,
         "cashAccountConfigured": any("AShare execution account type: cash" in line for line in lines),
+        "trendNextOpenContract": any(
+            "ASHARE_TREND_PULLBACK signal=close order=next_open" in line for line in lines
+        ),
     }
 
 
@@ -286,6 +353,25 @@ def audit_backtest_execution(
                 ),
             ]
         )
+        if str(parameters.get("strategyTemplateKey") or "") == "ashare_trend_pullback_portfolio":
+            contract = _trend_order_contract(payload, events)
+            gates.extend(
+                [
+                    _gate(
+                        "ashare_next_open_execution",
+                        bool(logs.get("trendNextOpenContract")) and not contract["nextOpenViolations"],
+                        declared=bool(logs.get("trendNextOpenContract")),
+                        checkedOrders=contract["checkedOrders"],
+                        violations=contract["nextOpenViolations"],
+                    ),
+                    _gate(
+                        "ashare_t_plus_one",
+                        not contract["tPlusOneViolations"],
+                        checkedOrders=contract["checkedOrders"],
+                        violations=contract["tPlusOneViolations"],
+                    ),
+                ]
+            )
     passed = all(gate["passed"] for gate in gates)
     return {
         "schemaVersion": 2,

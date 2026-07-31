@@ -71,8 +71,10 @@ def _ashare_market_rules(parameters: dict[str, Any]) -> dict[str, Any]:
             "currency": "CNY",
         },
         "slippageModel": {
-            "type": "constant_bps",
+            "type": parameters.get("slippageModel") or "constant_bps",
             "slippageBps": parameters.get("slippageBps"),
+            "participationImpactBps": parameters.get("participationImpactBps"),
+            "maxSlippageBps": parameters.get("maxSlippageBps"),
         },
         "lotSize": parameters.get("lotSize"),
         "executionPolicy": parameters.get("executionPolicy"),
@@ -301,6 +303,22 @@ def build_backtest_validation(
             for item in quality_gates
         ],
     ]
+    if str(parameters.get("strategyTemplateKey") or "") == "ashare_trend_pullback_portfolio":
+        snapshot_hash = str(parameters.get("trendPullbackInputSha256") or "")
+        snapshot_coverage = parameters.get("trendPullbackInputCoverage") or {}
+        gates.append(
+            _gate(
+                "ashare_pit_input_snapshot",
+                len(snapshot_hash) == 64
+                and int(parameters.get("trendPullbackInputSchemaVersion") or 0) == 1
+                and bool(snapshot_coverage.get("passed")),
+                details={
+                    "sha256": snapshot_hash or None,
+                    "schemaVersion": parameters.get("trendPullbackInputSchemaVersion"),
+                    "coverage": snapshot_coverage,
+                },
+            )
+        )
     passed = all(item["passed"] for item in gates)
     result.update(
         {

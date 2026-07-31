@@ -65,7 +65,7 @@ def test_all_backtest_examples_reference_renderable_strategy_templates():
 
     catalog = examples.list_examples("backtest")
 
-    assert len(catalog) == 11
+    assert len(catalog) == 12
     for example in catalog:
         template = get_template(example["templateKey"])
         assert template["key"] == example["templateKey"]

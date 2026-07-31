@@ -37,15 +37,18 @@ def failure_metadata(stage: str, error: str, *, retryable: bool = False, details
     }
 
 
+PIT_INDEX_TEMPLATE_KEYS = {"ashare_index_screening", "ashare_trend_pullback_portfolio"}
+
+
 def enrich_strategy_backtest_request(request_data: dict[str, Any]) -> dict[str, Any]:
-    """Inject server-owned PIT inputs required by the A-share screening template."""
+    """Inject server-owned PIT inputs required by A-share index strategies."""
     project_id = str(request_data.get("projectId") or "").strip()
     if not project_id:
         raise LeanPlatformError("project_required: Select a project before starting a backtest.")
     project = get_project(project_id)
     project_config = project.get("config") or {}
     template_key = str(project_config.get("templateKey") or "").strip()
-    if template_key != "ashare_index_screening":
+    if template_key not in PIT_INDEX_TEMPLATE_KEYS:
         return request_data
 
     parameters = dict(request_data.get("parameters") or {})
@@ -78,7 +81,8 @@ def enrich_strategy_backtest_request(request_data: dict[str, Any]) -> dict[str, 
         )
     universe_symbols = sorted({str(row["symbol"]).upper() for row in schedule})
     fundamental_schedule = _fundamental_schedule(universe_symbols, start, end)
-    if not fundamental_schedule:
+    model_variant = str(parameters.get("modelVariant") or "B").upper()
+    if (template_key == "ashare_index_screening" or model_variant == "C") and not fundamental_schedule:
         raise LeanPlatformError(
             f"No point-in-time fundamentals are available for {universe_code} in the selected range. "
             "Sync daily_basic, income, balancesheet and fina_indicator before running this case."
@@ -155,16 +159,31 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         parameters["researchOnly"] = bool(template.get("researchOnly", False))
         parameters["tradable"] = bool(template.get("tradable", True))
         parameters["admissionEligible"] = bool(template.get("admissionEligible", True))
+    if template_key == "ashare_trend_pullback_portfolio":
+        parameters.setdefault("slippageModel", "participation_sqrt")
+        parameters["ashareNextOpenFillModel"] = True
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
-    fingerprint_parameters = dict(parameters)
-    fingerprint_parameters["preflight"] = preflight
     docker_image = validate_lean_docker_image(request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE)
     parameters["dockerImage"] = docker_image
     run_id = new_run_id(parameters["ticker"], parameters["start"], parameters["end"])
     run_dir = RUNS_DIR / run_id
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
+    if template_key == "ashare_trend_pullback_portfolio":
+        from .ashare_trend_pullback import write_trend_pullback_snapshot
+
+        snapshot = write_trend_pullback_snapshot(run_dir, parameters)
+        parameters.update(
+            {
+                "trendPullbackInputFile": snapshot["containerPath"],
+                "trendPullbackInputSha256": snapshot["sha256"],
+                "trendPullbackInputSchemaVersion": snapshot["schemaVersion"],
+                "trendPullbackInputCoverage": snapshot["coverage"],
+            }
+        )
+    fingerprint_parameters = dict(parameters)
+    fingerprint_parameters["preflight"] = preflight
     shared_snapshot = request_data.get("sharedStrategySnapshotDir")
     snapshot_dir = Path(shared_snapshot).resolve() if shared_snapshot else run_dir / "strategy"
     snapshot_source = request_data.get("strategySnapshotSourceDir")

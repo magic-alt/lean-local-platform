@@ -43,6 +43,9 @@ FUNDAMENTAL_FIELD_ALIASES = {
     "pb": "pb",
     "n_income": "netProfit",
     "net_profit": "netProfit",
+    "n_income_attr_p": "netProfit",
+    "n_cashflow_act": "operatingCashFlow",
+    "net_cash_flows_oper_act": "operatingCashFlow",
 }
 INDEX_BENCHMARKS = {
     "CSI300": "000300",
@@ -330,6 +333,52 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
     for (symbol, canonical), (effective_date, rank, value) in initial.items():
         chosen[(symbol, effective_date, canonical)] = (rank, value)
 
+    # Build cash-flow quality only from facts for the same report period.  The
+    # derived metric becomes visible when both source statements are visible;
+    # this avoids pairing a newly published cash-flow statement with an older
+    # income statement during point-in-time replay.
+    statement_fields = [
+        field for field, canonical in FUNDAMENTAL_FIELD_ALIASES.items()
+        if canonical in {"netProfit", "operatingCashFlow"}
+    ]
+    statement_values: dict[tuple[str, str, str], tuple[str, float]] = {}
+    for chunk in _chunks(tickers):
+        symbol_placeholders = ",".join("?" for _ in chunk)
+        field_placeholders = ",".join("?" for _ in statement_fields)
+        with db() as connection:
+            rows = connection.execute(
+                f"""
+                select symbol,field_name,report_date,effective_date,value
+                from financial_facts
+                where symbol in ({symbol_placeholders})
+                  and field_name in ({field_placeholders}) and effective_date<=?
+                order by effective_date,report_date,field_name
+                """,
+                [*chunk, *statement_fields, end],
+            ).fetchall()
+        for row in rows_to_dicts(rows):
+            if row.get("value") is None or not row.get("report_date"):
+                continue
+            key = (
+                str(row["symbol"]).upper(),
+                str(row["report_date"])[:10],
+                FUNDAMENTAL_FIELD_ALIASES[str(row["field_name"])],
+            )
+            candidate = (str(row["effective_date"])[:10], float(row["value"]))
+            if key not in statement_values or candidate[0] >= statement_values[key][0]:
+                statement_values[key] = candidate
+    report_keys = {(symbol, report_date) for symbol, report_date, _field in statement_values}
+    for symbol, report_date in report_keys:
+        profit = statement_values.get((symbol, report_date, "netProfit"))
+        cashflow = statement_values.get((symbol, report_date, "operatingCashFlow"))
+        if not profit or not cashflow or profit[1] == 0:
+            continue
+        effective_date = max(profit[0], cashflow[0])
+        chosen[(symbol, effective_date, "operatingCashFlowToProfit")] = (
+            -1,
+            cashflow[1] / abs(profit[1]),
+        )
+
     # Valuation factors are daily data. Retain the last observation in each
     # calendar month plus the start-date snapshot to keep LEAN parameters bounded.
     valuation_initial: dict[tuple[str, str], tuple[str, float]] = {}
@@ -401,7 +450,8 @@ def expand(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]
         universe_symbols = sorted({row["symbol"] for row in schedule})
         request["parameters"].update({"universeCode": universe_code, "dynamicUniverse": True, "universeSchedule": __import__("json").dumps(schedule, ensure_ascii=False, separators=(",", ":")), "universeSymbols": universe_symbols})
         project = get_project(projects[0])
-        if str((project.get("config") or {}).get("templateKey") or "") == "ashare_index_screening":
+        template_key = str((project.get("config") or {}).get("templateKey") or "")
+        if template_key in {"ashare_index_screening", "ashare_trend_pullback_portfolio"}:
             if universe_code not in INDEX_BENCHMARKS:
                 raise LeanWebError("A-share index screening supports CSI300, CSI500, CSI1000 and STAR50.")
             fundamental_schedule = _fundamental_schedule(
@@ -409,7 +459,8 @@ def expand(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]
                 request["start"],
                 request["end"],
             )
-            if not fundamental_schedule:
+            model_variant = str(request["parameters"].get("modelVariant") or "B").upper()
+            if (template_key == "ashare_index_screening" or model_variant == "C") and not fundamental_schedule:
                 raise LeanWebError(
                     f"No point-in-time fundamentals are available for {universe_code} in the selected range. "
                     "Sync daily_basic, income, balancesheet and fina_indicator before running this case."

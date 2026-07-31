@@ -11,7 +11,7 @@ from ..domain.assets import asset_request
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from ..repositories.backtest_repository import get_backtest, get_result
-from .ashare_repository import is_tradeable, reference_data_coverage
+from .ashare_repository import get_security, is_tradeable, reference_data_coverage
 from .ashare_multisource import quality_gate
 from .backtest_service import create_backtest_job, mark_backtest_queued
 from .data_coverage import ashare_coverage
@@ -709,6 +709,18 @@ def create_walkforward_run(session_id: str, trade_date: str) -> dict[str, Any]:
             "strategySnapshotAlgorithmClass", "strategySnapshotLanguage",
         }
     }
+    if str(parameters.get("strategyTemplateKey") or "") == "ashare_trend_pullback_portfolio":
+        for server_owned_key in (
+            "universeSchedule",
+            "universeSymbols",
+            "fundamentalSchedule",
+            "fundamentalRecordCount",
+            "trendPullbackInputFile",
+            "trendPullbackInputSha256",
+            "trendPullbackInputSchemaVersion",
+            "trendPullbackInputCoverage",
+        ):
+            request_parameters.pop(server_owned_key, None)
     child = create_backtest_job(
         {
             "symbol": session["symbol"],
@@ -847,9 +859,26 @@ def _lean_intent_rejection(
         if not gate["passed"]:
             report_id = gate["blockingReports"][0].get("id") if gate["blockingReports"] else None
             return f"qa_failed:{report_id}" if report_id else "qa_failed"
-        can_trade, reason = is_tradeable(symbol, trade_date, side)
-        if not can_trade:
-            return reason
+        security = get_security(symbol)
+        if not security:
+            return "security_not_found"
+        if security.get("listed_date") and str(security["listed_date"]) > trade_date:
+            return "not_listed"
+        if security.get("delisted_date") and str(security["delisted_date"]) <= trade_date:
+            return "delisted"
+        status = _status_for(symbol, trade_date)
+        if not status:
+            return "trade_status_missing"
+        if status.get("is_suspended"):
+            return "suspended"
+        if side == "buy" and status.get("is_st") and not _parameter_bool(_session_parameters(session), "allowStBuy", False):
+            return "st_blocked"
+        open_price = float(bar.get("open") or 0)
+        tolerance = max(0.001, open_price * 0.00005)
+        if side == "buy" and status.get("limit_up") is not None and abs(open_price - float(status["limit_up"])) <= tolerance:
+            return "limit_up_open"
+        if side == "sell" and status.get("limit_down") is not None and abs(open_price - float(status["limit_down"])) <= tolerance:
+            return "limit_down_open"
     elif price <= 0:
         return "invalid_price"
     position = _position(session["id"], symbol)
@@ -909,6 +938,7 @@ def _lean_intent_rejection(
             incremental_quantity=quantity,
             price=price,
             bar=bar,
+            execution_date=trade_date,
         )
         if risk_reason:
             return risk_reason
@@ -2276,7 +2306,20 @@ def _risk_equity_baseline(session: dict[str, Any]) -> tuple[float, float]:
     return initial, float(session.get("equity") or 0)
 
 
-def _security_industry(symbol: str, market: str) -> str | None:
+def _security_industry(symbol: str, market: str, as_of: str | None = None) -> str | None:
+    if market == "china" and as_of:
+        with db() as connection:
+            row = connection.execute(
+                """
+                select coalesce(industry_name,industry_code) industry
+                from industry_membership
+                where symbol=? and taxonomy='SW2021' and level_no=1
+                  and in_date<=? and (out_date is null or out_date>=?)
+                order by in_date desc limit 1
+                """,
+                (symbol, as_of, as_of),
+            ).fetchone()
+        return str(row["industry"]).strip() if row and str(row["industry"] or "").strip() else None
     with db() as connection:
         row = connection.execute(
             """
@@ -2296,6 +2339,7 @@ def _projected_risk_rejection(
     incremental_quantity: float,
     price: float,
     bar: dict[str, Any] | None,
+    execution_date: str | None = None,
 ) -> str | None:
     parameters = _session_parameters(session)
     capacity_limit = _parameter_float(
@@ -2323,7 +2367,11 @@ def _projected_risk_rejection(
     if equity <= 0:
         return "industry_limit"
     market = str(session.get("venue") or "china")
-    target_industry = _security_industry(symbol, market)
+    target_industry = (
+        _security_industry(symbol, market, execution_date)
+        if execution_date
+        else _security_industry(symbol, market)
+    )
     if not target_industry:
         return "industry_unknown"
     industry_value = 0.0
@@ -2331,7 +2379,12 @@ def _projected_risk_rejection(
         if float(position.get("quantity") or 0) <= 0:
             continue
         position_symbol = str(position.get("symbol") or "").upper()
-        if _security_industry(position_symbol, market) == target_industry:
+        position_industry = (
+            _security_industry(position_symbol, market, execution_date)
+            if execution_date
+            else _security_industry(position_symbol, market)
+        )
+        if position_industry == target_industry:
             industry_value += float(position.get("market_value") or 0)
     projected_weight = (industry_value + incremental_quantity * price) / equity
     if projected_weight - industry_limit > 1e-12:
@@ -2520,6 +2573,7 @@ def match_daily_orders(
                 incremental_quantity=quantity,
                 price=price,
                 bar=bar,
+                execution_date=date_value,
             )
             if risk_reason:
                 orders.append(
