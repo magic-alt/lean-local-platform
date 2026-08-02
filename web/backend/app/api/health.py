@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from redis import Redis
 
 from ..core.config import REDIS_URL
-from ..services.dependencies import check_database, dependency_health
+from ..services.dependencies import check_alert_channel, check_database, dependency_health
 from ..services.release_identity import runtime_release_identity
 
 router = APIRouter(prefix="/api", tags=["health"])
@@ -16,9 +16,12 @@ def health(request: Request):
     except Exception:
         redis_ok = False
     release = runtime_release_identity(request.app.openapi())
+    notifications = check_alert_channel()
+    healthy = bool(release["schema"]["aligned"] and redis_ok and notifications["ok"])
     return {
-        "status": "ok" if release["schema"]["aligned"] else "degraded",
+        "status": "ok" if healthy else "degraded",
         "redis": redis_ok,
+        "notifications": notifications["detail"],
         "release": release,
     }
 

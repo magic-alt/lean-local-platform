@@ -17,7 +17,13 @@ from ..repositories.market_data_repository import (
 )
 from . import paper as paper_runtime
 from . import paper_order_pipeline
-from .alerts import delivery_succeeded, emit_alert, external_alert_channel_configured
+from .alerts import (
+    delivery_max_attempts,
+    delivery_retry_at,
+    delivery_succeeded,
+    emit_alert,
+    external_alert_channel_configured,
+)
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
 from .trading_calendar import next_trade_date
@@ -2539,15 +2545,7 @@ def deliver_notifications(limit: int = 100) -> dict[str, Any]:
     failed: list[str] = []
     for item in rows:
         if not external_alert_channel_configured():
-            with db() as connection:
-                connection.execute(
-                    """
-                    update paper_notification_outbox
-                    set status='failed',attempt=attempt+1,last_error='no_channel_configured',updated_at=?
-                    where id=?
-                    """,
-                    (utc_now(), item["id"]),
-                )
+            _record_notification_failure(item, "no_channel_configured")
             failed.append(item["id"])
             continue
         try:
@@ -2575,24 +2573,45 @@ def deliver_notifications(limit: int = 100) -> dict[str, Any]:
                 connection.execute(
                     """
                     update paper_notification_outbox
-                    set status='delivered',attempt=attempt+1,delivered_at=?,updated_at=?
+                    set status='delivered',attempt=attempt+1,next_attempt_at=null,
+                        delivered_at=?,last_error=null,terminal_at=null,updated_at=?
                     where id=?
                     """,
                     (utc_now(), utc_now(), item["id"]),
                 )
             delivered.append(item["id"])
         except Exception as exc:
-            with db() as connection:
-                connection.execute(
-                    """
-                    update paper_notification_outbox
-                    set status='retrying',attempt=attempt+1,last_error=?,updated_at=?
-                    where id=?
-                    """,
-                    (str(exc), utc_now(), item["id"]),
-                )
+            _record_notification_failure(item, str(exc))
             failed.append(item["id"])
     return {"delivered": delivered, "failed": failed}
+
+
+def _record_notification_failure(item: dict[str, Any], error: str) -> None:
+    attempt = int(item.get("attempt") or 0) + 1
+    terminal = attempt >= delivery_max_attempts()
+    now = utc_now()
+    next_attempt_at = (
+        None
+        if terminal
+        else delivery_retry_at(f"paper-outbox:{item['id']}", attempt)
+    )
+    with db() as connection:
+        connection.execute(
+            """
+            update paper_notification_outbox
+            set status=?,attempt=?,next_attempt_at=?,last_error=?,terminal_at=?,updated_at=?
+            where id=?
+            """,
+            (
+                "dead_letter" if terminal else "retrying",
+                attempt,
+                next_attempt_at,
+                error[:4000],
+                now if terminal else None,
+                now,
+                item["id"],
+            ),
+        )
 
 
 def schedule_due_deployments(now: datetime | None = None) -> dict[str, Any]:

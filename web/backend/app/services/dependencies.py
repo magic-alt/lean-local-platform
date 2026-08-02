@@ -21,7 +21,7 @@ from ..core.config import (
 from ..db import database_backend, database_descriptor, db
 from ..observability.metrics import set_dependency_status
 from . import market_data
-from .alerts import external_alert_channel_configured
+from .alerts import external_alert_channel_configured, notification_delivery_health
 from .source_gate import source_certification
 
 
@@ -111,15 +111,24 @@ def check_results_dir() -> dict[str, Any]:
 
 def check_alert_channel() -> dict[str, Any]:
     configured = external_alert_channel_configured()
-    ok = bool(configured or not SCHEDULED_AUTOMATION_ENABLED)
+    delivery = notification_delivery_health()
+    configuration_ok = bool(configured or not SCHEDULED_AUTOMATION_ENABLED)
+    ok = bool(configuration_ok and delivery.get("ok"))
     return {
         "service": "external_alert_channel",
         "ok": ok,
         "detail": {
             "configured": configured,
             "scheduledAutomationEnabled": SCHEDULED_AUTOMATION_ENABLED,
+            "delivery": delivery,
             "severity": None if ok else "critical",
-            "reason": None if ok else "scheduled_automation_requires_external_alert_channel",
+            "reason": (
+                None
+                if ok
+                else "scheduled_automation_requires_external_alert_channel"
+                if not configuration_ok
+                else str(delivery.get("reason") or "notification_delivery_failed")
+            ),
         },
     }
 

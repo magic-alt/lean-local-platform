@@ -42,6 +42,7 @@
     "0038_ml_cross_sectional_research": {"mode": "compensating", "action": "Stop ML workers, archive model and feature manifests, then remove the added tables and financial audit columns with a reviewed forward migration."},
     "0039_p0_lineage_and_run_convergence": {"mode": "compensating", "action": "Stop reconcilers and Paper scheduling, preserve all certification and quarantine evidence, and remove only additive guards through a reviewed forward migration."},
     "0040_p1_trust_and_reproducibility": {"mode": "compensating", "action": "Stop release, certificate, Paper trust, capability, and maintenance writers; preserve all evidence and remove nullable references only through a reviewed forward migration."},
-    "0041_p0_terminal_trust_and_release_identity": {"mode": "compensating", "action": "Stop trusted Backtest, Paper, and Walk-Forward consumers; preserve trust and certificate evidence; remove additive fields only through a reviewed forward migration."}
+    "0041_p0_terminal_trust_and_release_identity": {"mode": "compensating", "action": "Stop trusted Backtest, Paper, and Walk-Forward consumers; preserve trust and certificate evidence; remove additive fields only through a reviewed forward migration."},
+    "0042_p1_notification_capacity_controls": {"mode": "compensating", "action": "Stop notification workers, preserve delivery and dead-letter evidence, and remove additive terminal fields only through a reviewed forward migration."}
   }
 }

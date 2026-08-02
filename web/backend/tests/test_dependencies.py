@@ -69,6 +69,25 @@ def test_scheduled_automation_without_alert_channel_is_degraded(monkeypatch):
     assert result["detail"]["reason"] == "scheduled_automation_requires_external_alert_channel"
 
 
+def test_failed_alert_delivery_degrades_dependency_health(monkeypatch):
+    monkeypatch.setattr(dependencies, "SCHEDULED_AUTOMATION_ENABLED", True)
+    monkeypatch.setattr(dependencies, "external_alert_channel_configured", lambda: True)
+    monkeypatch.setattr(
+        dependencies,
+        "notification_delivery_health",
+        lambda: {
+            "ok": False,
+            "status": "degraded",
+            "reason": "notification_delivery_failed",
+        },
+    )
+
+    result = dependencies.check_alert_channel()
+
+    assert result["ok"] is False
+    assert result["detail"]["reason"] == "notification_delivery_failed"
+
+
 def test_missing_alert_channel_does_not_degrade_interactive_execution():
     checks = [
         {"service": "database", "ok": True},

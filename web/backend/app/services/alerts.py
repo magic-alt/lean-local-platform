@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,24 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
         return max(minimum, int(os.environ.get(name, str(default))))
     except (TypeError, ValueError):
         return max(minimum, default)
+
+
+def delivery_max_attempts() -> int:
+    return _env_int("LEAN_NOTIFICATION_MAX_ATTEMPTS", 8, 1)
+
+
+def delivery_retry_at(key: str, attempt: int, *, now: datetime | None = None) -> str:
+    """Return a bounded exponential retry time with deterministic jitter."""
+    base_seconds = _env_int("LEAN_NOTIFICATION_RETRY_BASE_SECONDS", 60, 1)
+    maximum_seconds = _env_int("LEAN_NOTIFICATION_RETRY_MAX_SECONDS", 3600, base_seconds)
+    jitter_percent = min(_env_int("LEAN_NOTIFICATION_RETRY_JITTER_PERCENT", 20, 0), 100)
+    unjittered = min(maximum_seconds, base_seconds * (2 ** max(0, int(attempt) - 1)))
+    digest = hashlib.sha256(f"{key}:{attempt}".encode("utf-8")).digest()
+    unit = int.from_bytes(digest[:8], "big") / ((1 << 64) - 1)
+    factor = 1 + ((unit * 2) - 1) * jitter_percent / 100
+    delay = max(1, round(unjittered * factor))
+    current = now or datetime.now(timezone.utc)
+    return (current.astimezone(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -152,22 +171,36 @@ def _record_delivery(
             "select id,attempt_count,created_at from alert_deliveries where alert_id=? and channel=?",
             (alert_id, channel),
         ).fetchone()
+        attempt_count = int(existing["attempt_count"] or 0) + 1 if existing else 1
+        terminal = status != "success" and attempt_count >= delivery_max_attempts()
+        persisted_status = "dead_letter" if terminal else status
+        next_retry_at = (
+            delivery_retry_at(f"{alert_id}:{channel}", attempt_count)
+            if status != "success" and not terminal
+            else None
+        )
+        metadata = {
+            "endpoint": _safe_endpoint(endpoint),
+            "maxAttempts": delivery_max_attempts(),
+        }
         if existing:
             connection.execute(
                 """
                 update alert_deliveries
-                set status=?,attempt_count=?,last_attempt_at=?,last_success_at=?,next_retry_at=null,
-                    last_error=?,response_code=?,metadata_json=?,updated_at=?
+                set status=?,attempt_count=?,last_attempt_at=?,last_success_at=?,next_retry_at=?,
+                    last_error=?,response_code=?,metadata_json=?,terminal_at=?,updated_at=?
                 where id=?
                 """,
                 (
-                    status,
-                    int(existing["attempt_count"] or 0) + 1,
+                    persisted_status,
+                    attempt_count,
                     now,
                     now if status == "success" else None,
+                    next_retry_at,
                     error,
                     response_code,
-                    json_dump({"endpoint": _safe_endpoint(endpoint)}),
+                    json_dump(metadata),
+                    now if terminal else None,
                     now,
                     existing["id"],
                 ),
@@ -177,19 +210,22 @@ def _record_delivery(
                 """
                 insert into alert_deliveries
                     (id,alert_id,channel,status,attempt_count,last_attempt_at,last_success_at,
-                     next_retry_at,last_error,response_code,metadata_json,created_at,updated_at)
-                values (?,?,?, ?,1,?,?,null,?,?,?,?,?)
+                     next_retry_at,last_error,response_code,metadata_json,terminal_at,created_at,updated_at)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     delivery_id,
                     alert_id,
                     channel,
-                    status,
+                    persisted_status,
+                    attempt_count,
                     now,
                     now if status == "success" else None,
+                    next_retry_at,
                     error,
                     response_code,
-                    json_dump({"endpoint": _safe_endpoint(endpoint)}),
+                    json_dump(metadata),
+                    now if terminal else None,
                     now,
                     now,
                 ),
@@ -201,13 +237,37 @@ def _record_delivery(
     return row_to_dict(row) or {}
 
 
+def _delivery_gate(alert_id: str, channel: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            "select * from alert_deliveries where alert_id=? and channel=?",
+            (alert_id, channel),
+        ).fetchone()
+    item = row_to_dict(row)
+    if not item:
+        return None
+    if item.get("status") == "success":
+        return {**item, "status": "already_delivered"}
+    if item.get("status") == "dead_letter":
+        return item
+    retry_at = _parse_time(item.get("next_retry_at"))
+    if retry_at and retry_at > datetime.now(timezone.utc):
+        return {**item, "status": "retry_scheduled"}
+    return None
+
+
 def _dispatch_webhook_channel(
     alert: dict[str, Any],
     *,
     channel: str,
     url: str,
     bearer_token: str,
+    respect_retry_schedule: bool = True,
 ) -> dict[str, Any]:
+    if respect_retry_schedule:
+        gated = _delivery_gate(str(alert["id"]), channel)
+        if gated:
+            return gated
     timeout_seconds = _env_int("LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS", 5, 1)
     response_code: int | None = None
     delivery_error: str | None = None
@@ -237,6 +297,7 @@ def dispatch_alert(
     *,
     webhook_url: str | None = None,
     force: bool = False,
+    respect_retry_schedule: bool = True,
 ) -> dict[str, Any]:
     url = str(
         webhook_url
@@ -276,6 +337,7 @@ def dispatch_alert(
             bearer_token=str(
                 os.environ.get("LEAN_ALERT_WEBHOOK_BEARER_TOKEN", "")
             ).strip(),
+            respect_retry_schedule=respect_retry_schedule,
         )
 
     escalation_after = _env_int("LEAN_ALERT_ESCALATION_AFTER", 1, 1)
@@ -296,6 +358,7 @@ def dispatch_alert(
                     os.environ.get("LEAN_ALERT_WEBHOOK_BEARER_TOKEN", ""),
                 )
             ).strip(),
+            respect_retry_schedule=respect_retry_schedule,
         )
     elif escalation_url:
         delivery["escalation"] = {
@@ -378,6 +441,14 @@ def emit_alert(
                 "select * from alert_events where id=?",
                 (alert_id,),
             ).fetchone()
+            connection.execute(
+                """
+                update alert_deliveries
+                set status='reopened',next_retry_at=null,terminal_at=null,updated_at=?
+                where alert_id=?
+                """,
+                (now, alert_id),
+            )
         elif existing and existing["status"] == "acknowledged":
             alert_id = str(existing["id"])
             connection.execute(
@@ -502,23 +573,149 @@ def redeliver_open_alerts(limit: int = 100) -> dict[str, Any]:
                     select 1 from alert_deliveries d
                     where d.alert_id=a.id and d.status='success'
                   )
+                  and not exists (
+                    select 1 from alert_deliveries d
+                    where d.alert_id=a.id and d.status='dead_letter'
+                  )
+                  and not exists (
+                    select 1 from alert_deliveries d
+                    where d.alert_id=a.id and d.next_retry_at>?
+                  )
                 order by a.last_seen_at
                 limit ?
                 """,
-                (max(1, min(int(limit), 1000)),),
+                (utc_now(), max(1, min(int(limit), 1000))),
             ).fetchall()
         )
     attempted: list[str] = []
     delivered: list[str] = []
     for item in rows:
         attempted.append(str(item["id"]))
-        result = dispatch_alert(item, force=True)
+        result = dispatch_alert(item, force=True, respect_retry_schedule=True)
         if delivery_succeeded(result):
             delivered.append(str(item["id"]))
     return {
         "status": "success",
         "attempted": attempted,
         "delivered": delivered,
+    }
+
+
+def notification_delivery_health() -> dict[str, Any]:
+    configured_channels = {
+        "webhook": bool(str(os.environ.get("LEAN_ALERT_WEBHOOK_URL", "")).strip()),
+        "escalation_webhook": bool(
+            str(os.environ.get("LEAN_ALERT_ESCALATION_WEBHOOK_URL", "")).strip()
+        ),
+    }
+    try:
+        with db() as connection:
+            channel_states: dict[str, dict[str, Any]] = {}
+            for channel in configured_channels:
+                aggregate = row_to_dict(
+                    connection.execute(
+                        """
+                        select
+                            sum(case when d.status='dead_letter' then 1 else 0 end) as dead_letter_count,
+                            sum(case when d.status='failed' then 1 else 0 end) as failed_count,
+                            max(d.attempt_count) as max_attempt_count,
+                            max(d.next_retry_at) as next_retry_at,
+                            max(d.last_success_at) as last_success_at
+                        from alert_deliveries d
+                        join alert_events a on a.id=d.alert_id
+                        where d.channel=? and a.status in ('open','acknowledged')
+                        """,
+                        (channel,),
+                    ).fetchone()
+                ) or {}
+                channel_states[channel] = aggregate
+            outbox = connection.execute(
+                """
+                select
+                    sum(case when status in ('failed','dead_letter') then 1 else 0 end) as terminal_count,
+                    sum(case when status='retrying' then 1 else 0 end) as retrying_count
+                from paper_notification_outbox
+                """
+            ).fetchone()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "degraded",
+            "reason": "notification_health_unavailable",
+            "error": str(exc),
+            "channels": [],
+        }
+    channels: list[dict[str, Any]] = []
+    for channel, configured in configured_channels.items():
+        delivery = channel_states[channel]
+        dead_letter_count = int(delivery.get("dead_letter_count") or 0)
+        failed_count = int(delivery.get("failed_count") or 0)
+        state = (
+            "dead_letter"
+            if dead_letter_count
+            else "failed"
+            if failed_count
+            else "success"
+            if delivery.get("last_success_at")
+            else "unprobed"
+        )
+        ok = not configured or state in {"unprobed", "success"}
+        channels.append(
+            {
+                "channel": channel,
+                "configured": configured,
+                "ok": ok,
+                "status": state,
+                "attemptCount": int(delivery.get("max_attempt_count") or 0),
+                "failedCount": failed_count,
+                "deadLetterCount": dead_letter_count,
+                "nextRetryAt": delivery.get("next_retry_at"),
+                "lastSuccessAt": delivery.get("last_success_at"),
+            }
+        )
+    outbox_item = row_to_dict(outbox) or {}
+    terminal_count = int(outbox_item.get("terminal_count") or 0)
+    retrying_count = int(outbox_item.get("retrying_count") or 0)
+    ok = (
+        all(item["ok"] for item in channels)
+        and terminal_count == 0
+        and retrying_count == 0
+    )
+    return {
+        "ok": ok,
+        "status": "ok" if ok else "degraded",
+        "reason": None if ok else "notification_delivery_failed",
+        "channels": channels,
+        "outbox": {
+            "retryingCount": retrying_count,
+            "terminalCount": terminal_count,
+        },
+    }
+
+
+def requeue_dead_letter_deliveries() -> dict[str, int]:
+    """Explicit operator action that preserves evidence and re-enables delivery."""
+    now = utc_now()
+    with db() as connection:
+        alert_cursor = connection.execute(
+            """
+            update alert_deliveries
+            set status='failed',attempt_count=0,next_retry_at=?,terminal_at=null,updated_at=?
+            where status='dead_letter'
+            """,
+            (now, now),
+        )
+        outbox_cursor = connection.execute(
+            """
+            update paper_notification_outbox
+            set status='retrying',attempt=0,next_attempt_at=?,terminal_at=null,updated_at=?
+            where status in ('failed','dead_letter')
+            """,
+            (now, now),
+        )
+    return {
+        "alertDeliveries": int(alert_cursor.rowcount or 0),
+        "paperOutbox": int(outbox_cursor.rowcount or 0),
     }
 
 
@@ -541,7 +738,11 @@ def update_alert_status(alert_id: str, status: str, *, actor: str = "api") -> di
         row = connection.execute("select * from alert_events where id = ?", (alert_id,)).fetchone()
     item = row_to_dict(row)
     if item and status == "resolved":
-        item["delivery"] = dispatch_alert(item, force=True)
+        item["delivery"] = dispatch_alert(
+            item,
+            force=True,
+            respect_retry_schedule=False,
+        )
     return item
 
 

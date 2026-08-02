@@ -1,3 +1,5 @@
+import os
+
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import before_task_publish, task_postrun, task_prerun
@@ -24,6 +26,13 @@ from ..core.request_context import (
 
 
 _task_context_tokens: dict[str, tuple] = {}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
 
 
 @before_task_publish.connect
@@ -90,6 +99,11 @@ celery_app.conf.update(
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=_positive_env_int("LEAN_WORKER_MAX_TASKS_PER_CHILD", 50),
+    worker_max_memory_per_child=_positive_env_int(
+        "LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB",
+        1_572_864,
+    ),
     # Bulk sync/materialization tasks can legitimately run for several hours.
     # Redis' one-hour default visibility timeout redelivers an unacknowledged
     # acks_late task while the original worker is still processing it.

@@ -80,9 +80,12 @@ def test_outbox_not_delivered_without_channel(monkeypatch):
     assert result["delivered"] == []
     assert len(result["failed"]) == 1
     with db() as connection:
-        row = connection.execute("select status,last_error from paper_notification_outbox").fetchone()
-    assert row["status"] == "failed"
+        row = connection.execute(
+            "select status,last_error,next_attempt_at from paper_notification_outbox"
+        ).fetchone()
+    assert row["status"] == "retrying"
     assert row["last_error"] == "no_channel_configured"
+    assert row["next_attempt_at"]
 
 
 def test_outbox_requires_external_2xx_acknowledgement(monkeypatch):
@@ -199,6 +202,119 @@ def test_open_alerts_are_backfilled_after_channel_configuration(monkeypatch):
     assert alerts.list_alert_events(status="open")[0]["deliveries"][0]["status"] == "success"
 
 
+def test_failed_alert_delivery_backs_off_then_enters_dead_letter(monkeypatch):
+    db_module = _init_db()
+    from app.services import alerts
+
+    monkeypatch.setenv("LEAN_ALERT_WEBHOOK_URL", "https://alerts.example.test/notify")
+    monkeypatch.setenv("LEAN_ALERT_MIN_SEVERITY", "warning")
+    monkeypatch.setenv("LEAN_NOTIFICATION_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(
+        alerts,
+        "_send_webhook",
+        lambda *args, **kwargs: (_ for _ in ()).throw(URLError("offline")),
+    )
+
+    opened = alerts.emit_alert("worker_down", severity="critical", dedupe_key="worker:dlq")
+    assert opened["delivery"]["status"] == "failed"
+    assert opened["delivery"]["next_retry_at"]
+    assert alerts.redeliver_open_alerts()["attempted"] == []
+
+    with db_module.db() as connection:
+        connection.execute(
+            "update alert_deliveries set next_retry_at='2000-01-01T00:00:00+00:00'"
+        )
+    retried = alerts.redeliver_open_alerts()
+    assert retried["attempted"] == [opened["id"]]
+    delivery = alerts.list_alert_events(status="open")[0]["deliveries"][0]
+    assert delivery["status"] == "dead_letter"
+    assert delivery["attempt_count"] == 2
+    assert delivery["terminal_at"]
+    health = alerts.notification_delivery_health()
+    assert health["status"] == "degraded"
+    assert health["channels"][0]["status"] == "dead_letter"
+    assert alerts.redeliver_open_alerts()["attempted"] == []
+
+
+def test_transient_alert_delivery_recovers_on_due_retry(monkeypatch):
+    db_module = _init_db()
+    from app.services import alerts
+
+    monkeypatch.setenv("LEAN_ALERT_WEBHOOK_URL", "https://alerts.example.test/notify")
+    monkeypatch.setenv("LEAN_ALERT_MIN_SEVERITY", "warning")
+    attempts = iter([URLError("temporary"), 204])
+
+    def flaky_send(*args, **kwargs):
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(alerts, "_send_webhook", flaky_send)
+    opened = alerts.emit_alert(
+        "provider_unavailable",
+        severity="error",
+        dedupe_key="provider:transient",
+    )
+    assert opened["delivery"]["status"] == "failed"
+    assert alerts.notification_delivery_health()["status"] == "degraded"
+    with db_module.db() as connection:
+        connection.execute(
+            "update alert_deliveries set next_retry_at='2000-01-01T00:00:00+00:00'"
+        )
+
+    retried = alerts.redeliver_open_alerts()
+
+    assert retried["delivered"] == [opened["id"]]
+    assert alerts.notification_delivery_health()["status"] == "ok"
+
+
+def test_paper_outbox_stops_at_retry_budget_and_can_be_requeued(monkeypatch):
+    db_module = _init_db()
+    from app.services import alerts, paper_accounts
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("LEAN_ALERT_ESCALATION_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("LEAN_NOTIFICATION_MAX_ATTEMPTS", "2")
+    account = paper_accounts.create_account(
+        {"name": "DLQ Account", "initialCash": "1000000", "benchmarkSymbol": "000300"}
+    )
+    with db_module.db() as connection:
+        paper_accounts._enqueue_notification(
+            connection,
+            account["id"],
+            None,
+            None,
+            "cycle_failed",
+            {"reason": "test"},
+        )
+
+    paper_accounts.deliver_notifications()
+    assert alerts.notification_delivery_health()["status"] == "degraded"
+    with db_module.db() as connection:
+        connection.execute(
+            "update paper_notification_outbox set next_attempt_at='2000-01-01T00:00:00+00:00'"
+        )
+    paper_accounts.deliver_notifications()
+    with db_module.db() as connection:
+        terminal = connection.execute(
+            "select status,attempt,terminal_at from paper_notification_outbox"
+        ).fetchone()
+    assert terminal["status"] == "dead_letter"
+    assert terminal["attempt"] == 2
+    assert terminal["terminal_at"]
+
+    result = alerts.requeue_dead_letter_deliveries()
+    assert result["paperOutbox"] == 1
+    with db_module.db() as connection:
+        requeued = connection.execute(
+            "select status,attempt,terminal_at from paper_notification_outbox"
+        ).fetchone()
+    assert requeued["status"] == "retrying"
+    assert requeued["attempt"] == 0
+    assert requeued["terminal_at"] is None
+
+
 def test_resolution_bypasses_cooldown_and_notifies_operator(monkeypatch):
     _init_db()
     from app.services import alerts
@@ -303,6 +419,47 @@ def test_resource_pressure_monitor_alerts_escalates_and_resolves(monkeypatch):
     ]
     assert alerts.list_alert_events(status="open") == []
     assert alerts.list_alert_events(status="resolved")[0]["event_type"] == "resource_disk_pressure"
+
+
+def test_resource_pressure_reports_capacity_slo_and_critical_status(monkeypatch):
+    _init_db()
+    from app.services import resource_pressure
+
+    monkeypatch.delenv("LEAN_ALERT_WEBHOOK_URL", raising=False)
+    snapshot = {
+        "container": {"role": "unit-worker"},
+        "disk": {"usedPercent": 10.0, "mounts": []},
+        "memory": {
+            "usedPercent": 92.0,
+            "headroomPercent": 8.0,
+            "limitConfigured": True,
+        },
+        "cpu": {"usedPercent": 10.0},
+        "queue": {"maxDepth": 0},
+    }
+
+    result = resource_pressure.monitor_operational_resources(snapshot)
+
+    assert result["status"] == "critical"
+    assert result["capacitySlo"] == {
+        "memoryWarningPercent": 80.0,
+        "memoryCriticalPercent": 90.0,
+        "memoryHeadroomPercent": 8.0,
+        "memoryLimitConfigured": True,
+    }
+
+
+def test_resource_metric_integer_reader_handles_limits(tmp_path):
+    from app.services import resource_pressure
+
+    numeric = tmp_path / "numeric"
+    numeric.write_text("4096\n", encoding="utf-8")
+    unlimited = tmp_path / "unlimited"
+    unlimited.write_text("max\n", encoding="utf-8")
+
+    assert resource_pressure._read_int(numeric) == 4096
+    assert resource_pressure._read_int(unlimited) is None
+    assert resource_pressure._read_int(tmp_path / "missing") is None
 
 
 def test_paper_walkforward_failure_emits_critical_alert(monkeypatch):

@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..services.alerts import list_alert_events, update_alert_status
+from ..services.alerts import (
+    list_alert_events,
+    notification_delivery_health,
+    requeue_dead_letter_deliveries,
+    update_alert_status,
+)
 from ..services.resource_pressure import (
     collect_resource_snapshot,
-    evaluate_resource_snapshot,
+    summarize_resource_capacity,
 )
 from ..services.pipeline_tracking import get_pipeline_run, list_pipeline_runs
 from ..services.universe_certification import get_certified_universe
@@ -65,10 +70,17 @@ def resolve_alert(alert_id: str):
     return payload
 
 
+@router.get("/alert-deliveries/health")
+def alert_delivery_health():
+    return notification_delivery_health()
+
+
+@router.post("/alert-deliveries/requeue-dead-letter")
+def requeue_alert_dead_letters():
+    return requeue_dead_letter_deliveries()
+
+
 @router.get("/operational/resources")
 def operational_resources():
     snapshot = collect_resource_snapshot()
-    return {
-        "snapshot": snapshot,
-        "evaluations": evaluate_resource_snapshot(snapshot),
-    }
+    return summarize_resource_capacity(snapshot)

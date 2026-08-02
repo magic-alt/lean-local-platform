@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import shutil
@@ -32,6 +33,27 @@ def _read_int(path: Path) -> int | None:
         return None
 
 
+def _read_memory_stat(path: Path) -> dict[str, int]:
+    try:
+        return {
+            parts[0]: int(parts[1])
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if len(parts := line.split()) == 2
+        }
+    except (OSError, ValueError):
+        return {}
+
+
+def _process_rss_bytes() -> int | None:
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 def _memory_metrics() -> dict[str, Any]:
     candidates = (
         (
@@ -48,6 +70,7 @@ def _memory_metrics() -> dict[str, Any]:
     current: int | None = None
     limit: int | None = None
     source = ""
+    memory_stat: dict[str, int] = {}
     for current_path, limit_path, candidate_source in candidates:
         current = _read_int(current_path)
         limit = _read_int(limit_path)
@@ -57,6 +80,7 @@ def _memory_metrics() -> dict[str, Any]:
             and 0 < limit < (1 << 60)
         ):
             source = candidate_source
+            memory_stat = _read_memory_stat(current_path.parent / "memory.stat")
             break
     if current is None or limit is None or limit <= 0:
         try:
@@ -69,10 +93,19 @@ def _memory_metrics() -> dict[str, Any]:
             source = "proc_meminfo"
         except (OSError, KeyError, ValueError):
             return {}
+    headroom = max(0, limit - current)
+    rss = memory_stat.get("anon") if source == "cgroup_v2" else memory_stat.get("rss")
+    cache = memory_stat.get("file") if source == "cgroup_v2" else memory_stat.get("cache")
     return {
         "usedBytes": current,
         "limitBytes": limit,
         "usedPercent": round(current * 100 / limit, 2),
+        "headroomBytes": headroom,
+        "headroomPercent": round(headroom * 100 / limit, 2),
+        "rssBytes": rss,
+        "cacheBytes": cache,
+        "processRssBytes": _process_rss_bytes(),
+        "limitConfigured": source.startswith("cgroup"),
         "source": source,
     }
 
@@ -154,6 +187,11 @@ def _queue_metrics() -> dict[str, Any]:
 
 def collect_resource_snapshot() -> dict[str, Any]:
     return {
+        "capturedAt": datetime.now(timezone.utc).isoformat(),
+        "container": {
+            "role": str(os.environ.get("LEAN_RELEASE_ROLE", "unknown")),
+            "hostname": str(os.environ.get("HOSTNAME", "unknown")),
+        },
         "disk": _disk_metrics(),
         "memory": _memory_metrics(),
         "cpu": _cpu_metrics(),
@@ -210,6 +248,28 @@ def evaluate_resource_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]
     return results
 
 
+def summarize_resource_capacity(
+    snapshot: dict[str, Any],
+    evaluations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    evaluated = evaluations or evaluate_resource_snapshot(snapshot)
+    severities = {str(item["severity"]) for item in evaluated if item["severity"]}
+    status = "critical" if "critical" in severities else "degraded" if severities else "ok"
+    memory = snapshot.get("memory") if isinstance(snapshot.get("memory"), dict) else {}
+    memory_warning, memory_critical = _thresholds("memory")
+    return {
+        "status": status,
+        "snapshot": snapshot,
+        "evaluations": evaluated,
+        "capacitySlo": {
+            "memoryWarningPercent": memory_warning,
+            "memoryCriticalPercent": memory_critical,
+            "memoryHeadroomPercent": memory.get("headroomPercent"),
+            "memoryLimitConfigured": bool(memory.get("limitConfigured")),
+        },
+    }
+
+
 def monitor_operational_resources(
     snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -257,8 +317,6 @@ def monitor_operational_resources(
                     }
                 )
     return {
-        "status": "ok",
-        "snapshot": captured,
-        "evaluations": evaluations,
+        **summarize_resource_capacity(captured, evaluations),
         "changes": changes,
     }

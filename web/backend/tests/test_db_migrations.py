@@ -61,6 +61,7 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "0033_retire_legacy_paper_sessions" in revisions
     assert "0039_p0_lineage_and_run_convergence" in revisions
     assert "0041_p0_terminal_trust_and_release_identity" in revisions
+    assert "0042_p1_notification_capacity_controls" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(
@@ -81,6 +82,13 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         walk_forward_columns = {
             row[1] for row in connection.execute("pragma table_info(walk_forward_runs)").fetchall()
         }
+        delivery_columns = {
+            row[1] for row in connection.execute("pragma table_info(alert_deliveries)").fetchall()
+        }
+        outbox_columns = {
+            row[1]
+            for row in connection.execute("pragma table_info(paper_notification_outbox)").fetchall()
+        }
     assert {"mode", "source_backtest_id", "last_processed_date", "pipeline_version"} <= paper_columns
     assert walkforward_table is not None
     assert intent_table is not None
@@ -88,6 +96,8 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert certification_table is not None
     assert {"trust_status", "trust_reason", "trust_evaluated_at"} <= backtest_columns
     assert {"certificate_json", "certificate_digest", "certified_at"} <= walk_forward_columns
+    assert "terminal_at" in delivery_columns
+    assert "terminal_at" in outbox_columns
     assert index_row is not None
 
 
