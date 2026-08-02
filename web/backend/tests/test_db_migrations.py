@@ -59,6 +59,7 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "0022_paper_order_pipeline_v2" in revisions
     assert "0029_paper_accounts" in revisions
     assert "0033_retire_legacy_paper_sessions" in revisions
+    assert "0039_p0_lineage_and_run_convergence" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(
@@ -70,10 +71,14 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         account_table = connection.execute(
             "select name from sqlite_master where type = 'table' and name = 'paper_accounts'"
         ).fetchone()
+        certification_table = connection.execute(
+            "select name from sqlite_master where type = 'table' and name = 'paper_certification_cohorts'"
+        ).fetchone()
     assert {"mode", "source_backtest_id", "last_processed_date", "pipeline_version"} <= paper_columns
     assert walkforward_table is not None
     assert intent_table is not None
     assert account_table is not None
+    assert certification_table is not None
     assert index_row is not None
 
 

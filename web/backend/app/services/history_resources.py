@@ -86,6 +86,29 @@ def delete_backtest(run_id: str) -> dict[str, Any]:
         if linked_paper and int(linked_paper["count"] or 0) > 0:
             raise ValueError("This backtest is used by a Paper session. Delete that session first.")
 
+        walk_forward_oos = connection.execute(
+            "select window_id from oos_evaluations where oos_run_id=? limit 1",
+            (run_id,),
+        ).fetchone()
+        if walk_forward_oos:
+            raise ValueError(
+                f"Backtest is immutable Walk-Forward OOS evidence for window {walk_forward_oos['window_id']}."
+            )
+        walk_forward_phase = connection.execute(
+            """
+            select item.batch_id,item.id
+            from experiment_batch_items item
+            join walk_forward_runs wf_run on wf_run.batch_id=item.batch_id
+            where item.related_id=? limit 1
+            """,
+            (run_id,),
+        ).fetchone()
+        if walk_forward_phase:
+            raise ValueError(
+                "Backtest is immutable Walk-Forward phase evidence "
+                f"(batchId={walk_forward_phase['batch_id']}, itemId={walk_forward_phase['id']})."
+            )
+
         report_rows = connection.execute("select report_path from reports where run_id = ?", (run_id,)).fetchall()
         report_paths = [str(item["report_path"]) for item in report_rows if item["report_path"]]
         connection.execute("delete from reports where run_id = ?", (run_id,))
@@ -132,6 +155,15 @@ def delete_paper_session(session_id: str) -> dict[str, Any]:
         session = row_to_dict(row)
         if session is None:
             raise NotFoundError("Paper session not found.")
+        account = connection.execute(
+            "select id from paper_accounts where shadow_session_id=? limit 1",
+            (session_id,),
+        ).fetchone()
+        if account:
+            raise ValueError(
+                "Paper Account shadow sessions are protected facts; archive the account instead "
+                f"(paperAccountId={account['id']})."
+            )
         if _is_active(session.get("status")):
             raise ValueError("Running Paper sessions must be stopped before deletion.")
         active_tasks = connection.execute(
@@ -180,6 +212,15 @@ def delete_experiment_batch(batch_id: str) -> dict[str, Any]:
         batch = row_to_dict(row)
         if batch is None:
             raise NotFoundError("Experiment batch not found.")
+        lineage = connection.execute(
+            "select id,lineage_status from walk_forward_runs where batch_id=? limit 1",
+            (batch_id,),
+        ).fetchone()
+        if lineage:
+            raise ValueError(
+                "Walk-Forward batches contain immutable selection and OOS evidence; archive the batch instead of deleting it "
+                f"(walkForwardRunId={lineage['id']}, lineageStatus={lineage['lineage_status']})."
+            )
         if _is_active(batch.get("status")):
             raise ValueError("Active experiment batches must be cancelled before deletion.")
         connection.execute(

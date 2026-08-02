@@ -486,6 +486,18 @@ def delete_account(account_id: str) -> dict[str, Any]:
     """Delete a stopped Paper account and all of its account-owned records."""
     with db() as connection:
         account = _account_row(connection, account_id)
+        certification = connection.execute(
+            """
+            select cohort_id from paper_certification_members
+            where paper_account_id=? limit 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if certification:
+            raise ValueError(
+                "Paper account belongs to immutable certification evidence; archive it instead of deleting it "
+                f"(cohortId={certification['cohort_id']})."
+            )
         if account["status"] == "active":
             raise ValueError("Active Paper accounts must be paused or archived before deletion.")
 

@@ -46,6 +46,7 @@ from ..services import data_sync
 from ..services import ml_data_preparation
 from ..services import ml_research
 from ..services import research_runs
+from ..services import run_reconciler
 from ..services import derived_maintenance
 from ..services import mysql_backup
 from ..services import resource_pressure
@@ -72,6 +73,11 @@ def _record_task_metric(kind: str, status: str) -> None:
 def _record_backtest_metric(status: str) -> None:
     if BACKTEST_STATUS is not None:
         BACKTEST_STATUS.labels(status).inc()
+
+
+@celery_app.task(name="lean_web.reconcile_domain_runs")
+def reconcile_domain_runs_task():
+    return run_reconciler.reconcile_domain_runs()
 
 
 @celery_app.task(name="lean_web.monitor_operational_resources")
@@ -765,7 +771,11 @@ def prepare_ml_data_task(task_id: str, run_id: str):
 def run_ml_research_task(task_id: str, research_run_id: str):
     update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
     with db() as connection:
-        connection.execute("update research_runs set status='running',started_at=? where id=?", (utc_now(), research_run_id))
+        now = utc_now()
+        connection.execute(
+            "update research_runs set status='running',started_at=?,owner_heartbeat_at=? where id=?",
+            (now, now, research_run_id),
+        )
         connection.execute("update research_run_items set status='running',started_at=? where run_id=?", (utc_now(), research_run_id))
     try:
         def is_cancelled() -> bool:

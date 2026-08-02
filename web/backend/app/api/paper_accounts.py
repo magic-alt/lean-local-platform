@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services import paper_accounts as service
+from ..services import paper_certification
 
 
 router = APIRouter(prefix="/api/paper", tags=["paper-accounts"])
@@ -76,6 +77,14 @@ class RunNowRequest(BaseModel):
     tradingDate: str | None = None
 
 
+class CertificationCohortCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=191)
+    accountIds: list[str] = Field(min_length=2)
+    requiredSessions: int = Field(default=21, ge=21)
+
+
 def _call(callback, *args, **kwargs):
     try:
         return callback(*args, **kwargs)
@@ -88,6 +97,31 @@ def _call(callback, *args, **kwargs):
 @router.get("/accounts/candidates")
 def account_candidates(projectId: str):
     return _call(service.trusted_backtest_candidates, projectId)
+
+
+@router.get("/certification-cohorts")
+def certification_cohorts():
+    return _call(paper_certification.list_cohorts)
+
+
+@router.post("/certification-cohorts", status_code=201)
+def create_certification_cohort(request: CertificationCohortCreate):
+    return _call(
+        paper_certification.create_cohort,
+        name=request.name,
+        account_ids=request.accountIds,
+        required_sessions=request.requiredSessions,
+    )
+
+
+@router.get("/certification-cohorts/{cohort_id}")
+def certification_cohort(cohort_id: str):
+    return _call(paper_certification.get_cohort, cohort_id)
+
+
+@router.post("/certification-cohorts/{cohort_id}/refresh")
+def refresh_certification_cohort(cohort_id: str):
+    return _call(paper_certification.refresh_cohort, cohort_id)
 
 
 @router.get("/accounts/compare")

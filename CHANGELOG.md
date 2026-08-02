@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve Walk-Forward parent, project, validation-selection, and OOS lineage with immutable snapshots and destructive-delete guards; add durable two-account/21-session Paper certification cohorts and UI status; quarantine orphan legacy Paper facts, converge ownerless Research runs, and schedule a domain reconciler without deleting historical evidence.
+- Add the 2026-08-02 actual-environment, non-destructive system audit covering architecture, Web/API contracts, governed data, LEAN backtests, experiments, Paper accounts, scheduling, commercial-product gaps, remediation waves, and machine-readable evidence without backups, restores, isolated stacks, or full data reimports.
 - Load complete index history into Data Preview candlestick charts so the initially recent window can be dragged to earlier dates, and remove redundant archive and local-source notices from the index list view.
 - Fix Data Preview by reading complete canonical index history instead of the latest incremental archive, synchronizing the common A-share benchmark indices including `000001.SH`, normalizing non-finite index values before MySQL writes, making futures/options lifecycle preview states explicit, and skipping the unrelated full A-share legacy audit during targeted index/contract refreshes.
 - Add a daily-bar-only gap event study that keeps sector proxies separate, uses exchange `prev_close`, standardizes gaps by prior volatility, reports low-open recovery and high-open giveback from OHLC, excludes company-action flags, and labels daily volume ratios as post-open descriptive data without claiming minute-path, VWAP, or fill-time evidence.

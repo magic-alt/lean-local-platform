@@ -158,8 +158,8 @@ def execute_analysis_run(
     started = utc_now()
     with db() as connection:
         connection.execute(
-            "update research_runs set status='running',started_at=coalesce(started_at,?),error=null where id=?",
-            (started, run_id),
+            "update research_runs set status='running',started_at=coalesce(started_at,?),owner_heartbeat_at=?,error=null where id=?",
+            (started, started, run_id),
         )
         connection.execute(
             "update research_run_items set status='running',started_at=coalesce(started_at,?),error=null where run_id=?",
@@ -182,10 +182,10 @@ def execute_analysis_run(
             connection.execute(
                 """
                 update research_runs
-                set status='success',result_json=?,summary_json=?,data_fingerprint=?,finished_at=?
+                set status='success',result_json=?,summary_json=?,data_fingerprint=?,owner_heartbeat_at=?,finished_at=?
                 where id=?
                 """,
-                (json_dump(result), json_dump(summary), result["dataFingerprint"], finished, run_id),
+                (json_dump(result), json_dump(summary), result["dataFingerprint"], finished, finished, run_id),
             )
             connection.execute(
                 "update research_run_items set status='success',result_json=?,finished_at=? where run_id=?",
@@ -197,8 +197,8 @@ def execute_analysis_run(
         status = "cancelled" if cancelled_run else "failed"
         with db() as connection:
             connection.execute(
-                "update research_runs set status=?,error=?,finished_at=? where id=?",
-                (status, None if cancelled_run else str(exc), finished, run_id),
+                "update research_runs set status=?,error=?,owner_heartbeat_at=?,finished_at=? where id=?",
+                (status, None if cancelled_run else str(exc), finished, finished, run_id),
             )
             connection.execute(
                 "update research_run_items set status=?,error=?,finished_at=? where run_id=?",

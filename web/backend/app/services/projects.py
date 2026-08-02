@@ -348,6 +348,29 @@ def delete_project(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
     deleted = {"runs": 0, "tasks": 0, "reports": 0, "project": project_id}
     with db() as connection:
+        paper_deployment = connection.execute(
+            "select id,paper_account_id from paper_strategy_deployments where project_id=? limit 1",
+            (project_id,),
+        ).fetchone()
+        if paper_deployment:
+            raise ValueError(
+                "Project is frozen by a Paper deployment and cannot be deleted "
+                f"(deploymentId={paper_deployment['id']}, paperAccountId={paper_deployment['paper_account_id']})."
+            )
+        walk_forward = connection.execute(
+            """
+            select wf_window.walk_forward_run_id,wf_window.batch_id
+            from walk_forward_windows wf_window
+            where wf_window.project_id=?
+            order by wf_window.created_at limit 1
+            """,
+            (project_id,),
+        ).fetchone()
+        if walk_forward:
+            raise ValueError(
+                "Project is immutable Walk-Forward lineage; preserve it while certified evidence exists "
+                f"(batchId={walk_forward['batch_id']}, walkForwardRunId={walk_forward['walk_forward_run_id']})."
+            )
         active_runs = connection.execute(
             "select count(*) as count from backtest_runs where project_id = ? and status in ('created','queued','checking','running')",
             (project_id,),

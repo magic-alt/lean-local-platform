@@ -53,6 +53,7 @@ import type {
   PaperBacktestCandidate,
   PaperAccount,
   PaperDataTrust,
+  PaperCertificationCohort,
   PaperAccountOverview,
   PaperAccountComparison,
   PaperDeployment,
@@ -588,6 +589,18 @@ export const api = {
     request<{ deleted: boolean }>(`/api/object-store/${encodePath(key)}`, { method: "DELETE" }),
   paperCandidates: (projectId: string) =>
     request<PaperBacktestCandidate[]>(`/api/paper/accounts/candidates?projectId=${encodeURIComponent(projectId)}`),
+  paperCertificationCohorts: () =>
+    request<{ items: PaperCertificationCohort[]; count: number }>("/api/paper/certification-cohorts"),
+  createPaperCertificationCohort: (payload: { name: string; accountIds: string[]; requiredSessions?: number }) =>
+    request<PaperCertificationCohort>("/api/paper/certification-cohorts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  refreshPaperCertificationCohort: (id: string) =>
+    request<PaperCertificationCohort>(`/api/paper/certification-cohorts/${encodeURIComponent(id)}/refresh`, {
+      method: "POST"
+    }),
   paperAccounts: (filters?: {
     status?: string;
     market?: string;

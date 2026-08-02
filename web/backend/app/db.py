@@ -125,6 +125,11 @@ JSON_COLUMNS = {
     "quality_json": "quality",
     "fold_plan_json": "foldPlan",
     "request_scope_json": "requestScope",
+    "batch_snapshot_json": "batchSnapshot",
+    "project_snapshot_json": "projectSnapshot",
+    "selection_inputs_json": "selectionInputs",
+    "selection_outputs_json": "selectionOutputs",
+    "contract_json": "contract",
 }
 
 
@@ -196,6 +201,11 @@ LONG_TEXT_COLUMNS = {
     "quality_json",
     "fold_plan_json",
     "request_scope_json",
+    "batch_snapshot_json",
+    "project_snapshot_json",
+    "selection_inputs_json",
+    "selection_outputs_json",
+    "contract_json",
     "error",
     "error_message",
     "response_body",

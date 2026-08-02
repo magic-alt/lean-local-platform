@@ -84,6 +84,7 @@ celery_app.conf.update(
         "lean_web.dispatch_experiment_batch": {"queue": "default"},
         "lean_web.run_research_batch_item": {"queue": "default"},
         "lean_web.reconcile_experiment_batches": {"queue": "default"},
+        "lean_web.reconcile_domain_runs": {"queue": "default"},
         "lean_web.run_paper_execution_cycle": {"queue": "default"},
         "lean_web.finalize_paper_execution_cycle": {"queue": "default"},
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
@@ -124,6 +125,10 @@ celery_app.conf.update(
         },
         "reconcile-experiment-batches": {
             "task": "lean_web.reconcile_experiment_batches",
+            "schedule": 60.0,
+        },
+        "reconcile-domain-runs": {
+            "task": "lean_web.reconcile_domain_runs",
             "schedule": 60.0,
         },
         "monitor-operational-resources": {

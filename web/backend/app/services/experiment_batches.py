@@ -586,12 +586,22 @@ def _persist_walk_forward_plan(
     if str(config.get("mode") or "") != "walk_forward":
         return
     run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"lean:walk-forward:{batch_id}"))
+    batch_snapshot = {
+        "id": batch_id,
+        "kind": str(config.get("kind") or "backtest"),
+        "mode": "walk_forward",
+        "name": str(config.get("name") or "Experiment Batch"),
+        "config": config,
+        "configDigest": _digest(config),
+        "createdAt": now,
+    }
     connection.execute(
         """
         insert into walk_forward_runs
             (id,batch_id,status,dataset_version,universe_version,adjustment_contract,
-             feature_pipeline_version,selection_metric,selection_rule,created_at)
-        values (?,?,?,?,?,?,?,?,?,?)
+             feature_pipeline_version,selection_metric,selection_rule,created_at,
+             lineage_status,batch_snapshot_json)
+        values (?,?,?,?,?,?,?,?,?,?,'complete',?)
         """,
         (
             run_id,
@@ -608,6 +618,7 @@ def _persist_walk_forward_plan(
                 "tie=minDrawdown,minTurnover,candidateKey"
             ),
             now,
+            json_dump(batch_snapshot),
         ),
     )
     lineage = dict(config.get("lineage") or {})
@@ -643,14 +654,31 @@ def _persist_walk_forward_plan(
         if leakage["decision"] != "ALLOW":
             codes = ",".join(item["code"] for item in leakage["violations"])
             raise LeanWebError(f"Walk-forward leakage check denied fold {group['fold']}: {codes}")
+        project_row = connection.execute(
+            "select id,name,language,algorithm_class,main_file,config_json,created_at,updated_at from projects where id=?",
+            (group["projectId"],),
+        ).fetchone()
+        if not project_row:
+            raise LeanWebError(f"Walk-forward project is unavailable: {group['projectId']}")
+        project_snapshot = row_to_dict(project_row) or {}
+        selection_inputs = {
+            "fold": group["fold"],
+            "selectionMetric": batch_snapshot["config"].get("selectionMetric")
+            or f"validation{str(config.get('objective') or 'sharpe').title()}",
+            "train": {"start": train["start"], "end": train["end"]},
+            "validation": {"start": validation["start"], "end": validation["end"]},
+            "oos": {"start": oos["start"], "end": oos["end"]},
+            "candidateKeys": sorted(group["candidates"]),
+            "foldFingerprint": fold_fingerprint,
+        }
         connection.execute(
             """
             insert into walk_forward_windows
                 (id,walk_forward_run_id,batch_id,project_id,symbol,fold,train_start,train_end,
                  validation_start,validation_end,oos_start,oos_end,universe_version,dataset_version,
                  adjustment_contract,feature_pipeline_version,fold_fingerprint,oos_input_fingerprint,
-                 status,created_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 status,created_at,project_snapshot_json,selection_inputs_json)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 window_id,
@@ -673,6 +701,8 @@ def _persist_walk_forward_plan(
                 _digest(base_oos_input),
                 "VALIDATION_PENDING",
                 now,
+                json_dump(project_snapshot),
+                json_dump(selection_inputs),
             ),
         )
         connection.execute(
@@ -1380,10 +1410,23 @@ def _advance_walk_forward_selection(batch: dict[str, Any], items: list[dict[str,
             connection.execute(
                 """
                 update walk_forward_windows
-                set status='PARAMETER_FROZEN',oos_input_fingerprint=?
+                set status='PARAMETER_FROZEN',oos_input_fingerprint=?,selection_outputs_json=?
                 where id=?
                 """,
-                (oos_input_fingerprint, window["id"]),
+                (
+                    oos_input_fingerprint,
+                    json_dump(
+                        {
+                            "selectionFingerprint": selection_fingerprint,
+                            "selectedCandidateId": selected_candidate["id"],
+                            "selectedCandidateKey": selected["candidateKey"],
+                            "selectedParameters": selected["parameters"],
+                            "ranking": ranking_payload,
+                            "oosItemId": selected_oos["id"],
+                        }
+                    ),
+                    window["id"],
+                ),
             )
             connection.execute(
                 """

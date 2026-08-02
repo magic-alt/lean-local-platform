@@ -1125,6 +1125,36 @@ export interface PaperDataTrust {
   reason: "historical_recertification_pending" | null;
 }
 
+export interface PaperCertificationMember {
+  id: string;
+  cohort_id: string;
+  paper_account_id: string;
+  account_generation: number;
+  opening_cash: string;
+  deployment_id?: string | null;
+  certified_sessions: number;
+  status: "collecting" | "certified" | "invalid";
+  evidence?: {
+    checks?: Record<string, boolean>;
+    certifiedSessions?: number;
+    requiredSessions?: number;
+  } | null;
+  evidence_digest?: string | null;
+}
+
+export interface PaperCertificationCohort {
+  id: string;
+  name: string;
+  status: "collecting" | "certified" | "invalid";
+  required_accounts: number;
+  required_sessions: number;
+  evidence_digest?: string | null;
+  created_at: string;
+  refreshed_at?: string | null;
+  certified_at?: string | null;
+  members?: PaperCertificationMember[];
+}
+
 export interface PaperAccount {
   id: string;
   shadow_session_id: string;

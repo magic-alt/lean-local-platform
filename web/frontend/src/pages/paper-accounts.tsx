@@ -48,6 +48,7 @@ import type {
   PaperAccountOverview,
   PaperBacktestCandidate,
   PaperDataTrust,
+  PaperCertificationCohort,
   PaperDeployment,
   PaperExecutionCycle,
   PaperPosition,
@@ -81,6 +82,9 @@ const statusColor: Record<string, string> = {
   draft: "default",
   succeeded: "green",
   skipped: "default",
+  collecting: "gold",
+  certified: "green",
+  invalid: "red",
   healthy: "green",
   stale: "gold"
 };
@@ -543,12 +547,17 @@ export function PaperAccountsPage() {
   const [keyword, setKeyword] = useState(() => searchParams.get("keyword") || "");
   const [status, setStatus] = useState<string | undefined>(() => searchParams.get("status") || undefined);
   const [dataTrust, setDataTrust] = useState<PaperDataTrust | null>(null);
+  const [certificationCohorts, setCertificationCohorts] = useState<PaperCertificationCohort[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.paperAccounts({ keyword, status });
+      const [result, cohorts] = await Promise.all([
+        api.paperAccounts({ keyword, status }),
+        api.paperCertificationCohorts()
+      ]);
       setAccounts(result.items);
+      setCertificationCohorts(cohorts.items);
       setDataTrust(result.dataTrust || null);
       setSelected((ids) => ids.filter((id) => result.items.some((account) => account.id === id)));
     } catch (error) {
@@ -601,6 +610,20 @@ export function PaperAccountsPage() {
     }
   }
 
+  async function createCertificationCohort() {
+    try {
+      const cohort = await api.createPaperCertificationCohort({
+        name: `Level 5 Paper · ${new Date().toISOString().slice(0, 10)}`,
+        accountIds: selected,
+        requiredSessions: 21
+      });
+      message.success(`认证 cohort 已建立：${cohort.name}`);
+      await load();
+    } catch (error) {
+      message.error(`认证 cohort 建立失败：${(error as Error).message}`);
+    }
+  }
+
   return (
     <>
       <div className="toolbar paper-toolbar">
@@ -611,6 +634,9 @@ export function PaperAccountsPage() {
         <Space wrap>
           <Button icon={<SwapOutlined />} disabled={selected.length < 2 || selected.length > 10} onClick={() => setComparisonOpen(true)}>
             比较 {selected.length || ""}
+          </Button>
+          <Button disabled={selected.length < 2} onClick={() => void createCertificationCohort()}>
+            建立 21 日认证 cohort
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setWizardOpen(true)}>新建模拟账户</Button>
         </Space>
@@ -624,6 +650,19 @@ export function PaperAccountsPage() {
           style={{ marginBottom: 16 }}
         />
       ) : null}
+      <Card size="small" title="Paper 认证证据" style={{ marginBottom: 16 }}>
+        {certificationCohorts.length ? (
+          <Space wrap>
+            {certificationCohorts.map((cohort) => (
+              <Tag key={cohort.id} color={statusColor[cohort.status] || (cohort.status === "certified" ? "green" : "gold")}>
+                {cohort.name} · {cohort.status.toUpperCase()} · {cohort.required_accounts} 账户 × {cohort.required_sessions} 日
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">尚未建立持久化认证 cohort；选择至少两个不同初始资金账户后创建。</Typography.Text>
+        )}
+      </Card>
       <Card className="paper-filter-card">
         <Space wrap>
           <Input.Search

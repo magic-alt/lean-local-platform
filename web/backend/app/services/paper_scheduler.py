@@ -86,12 +86,21 @@ def ensure_job(
     if state not in JOB_STATES:
         raise ValueError(f"Unknown Paper daily job state: {state}")
     with db() as connection:
+        parent = connection.execute(
+            "select id from paper_sessions where id=?",
+            (session_id,),
+        ).fetchone()
+        if not parent:
+            raise ValueError("Cannot schedule a Paper job without its parent session.")
         existing = connection.execute(
             "select * from paper_daily_jobs where session_id=? and trade_date=?",
             (session_id, trade_date),
         ).fetchone()
         if existing:
-            return row_to_dict(existing) or {}
+            item = row_to_dict(existing) or {}
+            if item.get("quarantined_at"):
+                raise ValueError(f"Paper daily job is quarantined: {item.get('quarantine_reason') or 'unknown'}")
+            return item
         now = utc_now()
         job = {
             "id": str(uuid.uuid4()),
@@ -145,6 +154,8 @@ def transition_job(
         job = row_to_dict(row)
         if not job:
             raise KeyError("Paper daily job not found.")
+        if job.get("quarantined_at"):
+            raise ValueError(f"Quarantined Paper daily jobs cannot transition: {job.get('quarantine_reason') or 'unknown'}")
         from_state = str(job["state"])
         if expected_states is not None and from_state not in expected_states:
             return job
@@ -230,7 +241,8 @@ def recover_orphaned_jobs(*, timeout_seconds: int = 3600) -> list[str]:
         rows = connection.execute(
             """
             select id from paper_daily_jobs
-            where state='RUNNING' and started_at<?
+            where state='RUNNING' and started_at<? and quarantined_at is null
+              and exists (select 1 from paper_sessions session where session.id=paper_daily_jobs.session_id)
             """,
             (cutoff,),
         ).fetchall()

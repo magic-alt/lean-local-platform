@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **260** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **264** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -271,6 +271,10 @@
 | `POST` | `/api/paper/accounts/{account_id}/resume` | Resume Account | `account_id` (path, required) | `200` - |
 | `GET` | `/api/paper/accounts/{account_id}/signals` | Account Signals | `account_id` (path, required)<br>`startDate` (query)<br>`endDate` (query)<br>`symbol` (query)<br>`status` (query)<br>`deploymentId` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
 | `GET` | `/api/paper/accounts/{account_id}/trades` | Account Trades | `account_id` (path, required)<br>`startDate` (query)<br>`endDate` (query)<br>`symbol` (query)<br>`side` (query)<br>`deploymentId` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
+| `GET` | `/api/paper/certification-cohorts` | Certification Cohorts | - | `200` - |
+| `POST` | `/api/paper/certification-cohorts` | Create Certification Cohort | body `CertificationCohortCreate` | `201` - |
+| `GET` | `/api/paper/certification-cohorts/{cohort_id}` | Certification Cohort | `cohort_id` (path, required) | `200` - |
+| `POST` | `/api/paper/certification-cohorts/{cohort_id}/refresh` | Refresh Certification Cohort | `cohort_id` (path, required) | `200` - |
 | `GET` | `/api/paper/deployments/{deployment_id}` | Get Deployment | `deployment_id` (path, required) | `200` - |
 | `PATCH` | `/api/paper/deployments/{deployment_id}` | Update Deployment | `deployment_id` (path, required)<br>body `DeploymentUpdate` | `200` - |
 | `POST` | `/api/paper/deployments/{deployment_id}/activate` | Activate Deployment | `deployment_id` (path, required) | `200` - |

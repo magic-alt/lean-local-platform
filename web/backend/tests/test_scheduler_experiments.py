@@ -13,6 +13,20 @@ def configure_temp_db(tmp_path, monkeypatch):
     return db_module
 
 
+def insert_paper_session(db_module, session_id: str = "session-1") -> None:
+    now = db_module.utc_now()
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into paper_sessions
+                (id,name,status,symbol,asset_class,venue,resolution,cash,equity,
+                 parameters_json,created_at,updated_at)
+            values (?,?,'running','000001','equity','china','daily',100000,100000,'{}',?,?)
+            """,
+            (session_id, session_id, now, now),
+        )
+
+
 def test_scheduler_lease_enforces_max_concurrent_slots(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
@@ -125,7 +139,8 @@ def test_delete_task_removes_terminal_task_and_log(tmp_path, monkeypatch):
 
 
 def test_paper_daily_job_is_unique_and_completion_marker_is_idempotent(tmp_path, monkeypatch):
-    configure_temp_db(tmp_path, monkeypatch)
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    insert_paper_session(db_module)
     from app.services import paper_scheduler
 
     first = paper_scheduler.ensure_job("session-1", "2026-07-22")
@@ -165,7 +180,8 @@ def test_paper_daily_job_is_unique_and_completion_marker_is_idempotent(tmp_path,
 
 
 def test_paper_daily_job_blocks_illegal_skip_over_running(tmp_path, monkeypatch):
-    configure_temp_db(tmp_path, monkeypatch)
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    insert_paper_session(db_module)
     from app.services import paper_scheduler
 
     job = paper_scheduler.ensure_job("session-1", "2026-07-22")

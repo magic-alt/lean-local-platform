@@ -118,13 +118,14 @@ POST   /api/experiment-batches/preview
 GET    /api/experiment-batches
 POST   /api/experiment-batches
 GET    /api/experiment-batches/{batch_id}
+DELETE /api/experiment-batches/{batch_id}
 POST   /api/experiment-batches/{batch_id}/cancel
 POST   /api/experiment-batches/{batch_id}/retry-failed
 POST   /api/experiment-batches/{batch_id}/restart
 GET    /api/experiment-batches/{batch_id}/export.csv
 ```
 
-The example catalog covers backtest, optimization and research workflows. Preview expands symbols, strategies, parameter grids, rolling windows or PIT-universe instructions and rejects a request that exceeds `maxBatchRuns`. Walk-forward expands train, validation and OOS phases; parameter selection uses validation only. Creation persists the batch and its child specifications; dispatch remains bounded by the batch window and the global scheduler lease limit. Failed-only retry and cancelled-batch restart preserve successful children and survive service restarts.
+The example catalog covers backtest, optimization and research workflows. Preview expands symbols, strategies, parameter grids, rolling windows or PIT-universe instructions and rejects a request that exceeds `maxBatchRuns`. Walk-forward expands train, validation and OOS phases; parameter selection uses validation only. Creation persists immutable batch/project snapshots plus selection inputs and outputs. A Walk-Forward batch, its project, and referenced OOS runs return `409` on destructive deletion while evidence exists. Dispatch remains bounded by the batch window and the global scheduler lease limit. Failed-only retry and cancelled-batch restart preserve successful children and survive service restarts.
 
 ## Tasks
 
@@ -322,6 +323,10 @@ These are useful research APIs but are not yet the core Level 3 acceptance chain
 ```text
 GET    /api/paper/accounts
 POST   /api/paper/accounts
+GET    /api/paper/certification-cohorts
+POST   /api/paper/certification-cohorts
+GET    /api/paper/certification-cohorts/{cohort_id}
+POST   /api/paper/certification-cohorts/{cohort_id}/refresh
 GET    /api/paper/accounts/candidates?projectId={project_id}
 GET    /api/paper/accounts/{account_id}/overview
 GET    /api/paper/accounts/{account_id}/performance
@@ -337,6 +342,13 @@ certified data, and retain its frozen strategy snapshot. The account workflow
 records immutable intents, legal transitions, fills and ledger entries, then
 rebuilds projections with point-in-time Source Gate prices and exact benchmark
 dates. Legacy session and replay endpoints are retired.
+
+A Paper certification cohort freezes each member's account generation, opening
+balance, risk profile, primary deployment, strategy fingerprint, dataset
+fingerprint, and execution mode. It remains `collecting` until at least two
+accounts with distinct opening balances each retain 21 terminal daily reports
+with result/checkpoint digests; any later mismatch makes previously certified
+evidence `invalid`. Cohort accounts cannot be hard-deleted.
 
 ## A-share Technology Daily Report
 
