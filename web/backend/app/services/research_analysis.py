@@ -6,7 +6,7 @@ from typing import Any
 
 from ..db import db, rows_to_dicts
 from ..research import factors
-from . import ashare_swing_screen, cbond, data_gateway, futures
+from . import ashare_swing_screen, cbond, daily_gap_analysis, data_gateway, futures
 from .pit_data import index_members_as_of_payload
 
 
@@ -46,6 +46,13 @@ TEMPLATES = [
         "category": "idea-generation",
         "execution": "async",
         "parameterSchema": ashare_swing_screen.default_parameters(),
+    },
+    {
+        "key": daily_gap_analysis.TEMPLATE_KEY,
+        "name": "日K低开修复与高开回吐",
+        "description": "按证券代码分别统计标准化缺口、日内修复/回吐、OHLC路径边界及事后量比。",
+        "category": "event-study",
+        "parameterSchema": daily_gap_analysis.default_parameters(),
     },
     {
         "key": "ml-cross-sectional-ranker",
@@ -244,6 +251,7 @@ ANALYZERS = {
     "data-quality": _data_quality,
     "universe-pit": _pit,
     "factor-evaluation": _factor,
+    daily_gap_analysis.TEMPLATE_KEY: daily_gap_analysis.analyze,
     "cbond-double-low": _cbond,
     "futures-continuous": _futures,
 }

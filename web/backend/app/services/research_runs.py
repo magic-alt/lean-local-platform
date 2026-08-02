@@ -6,7 +6,7 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.data_scope import DataScope
-from . import ashare_swing_screen, data_gateway, ml_research, research_analysis
+from . import ashare_swing_screen, daily_gap_analysis, data_gateway, ml_research, research_analysis
 
 
 def preview(template_key: str, scope: DataScope | dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
@@ -21,6 +21,16 @@ def preview(template_key: str, scope: DataScope | dict[str, Any], parameters: di
         return {
             **resolved,
             **payload,
+            "scope": normalized,
+            "scopeHash": resolved["scopeHash"],
+            "dataFingerprint": resolved["dataFingerprint"],
+        }
+    if template_key == daily_gap_analysis.TEMPLATE_KEY:
+        normalized = data_gateway.normalize_scope(scope)
+        resolved = data_gateway.resolve(normalized)
+        return {
+            **resolved,
+            **daily_gap_analysis.preview(normalized, parameters, resolved=resolved),
             "scope": normalized,
             "scopeHash": resolved["scopeHash"],
             "dataFingerprint": resolved["dataFingerprint"],

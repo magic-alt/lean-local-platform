@@ -73,7 +73,8 @@ const categoryColors: Record<string, string> = {
   cbond: "gold",
   futures: "volcano",
   "machine-learning": "magenta",
-  "idea-generation": "green"
+  "idea-generation": "green",
+  "event-study": "orange"
 };
 
 function viewFromPath(pathname: string): ResearchView {
@@ -102,6 +103,37 @@ function concise(value: unknown) {
 }
 
 function TemplateParameters({ template }: { template: string }) {
+  if (template === "daily-gap-events") {
+    return (
+      <>
+        <Form.Item name={["parameters", "gapSigmaWindow"]} label="缺口波动窗口">
+          <InputNumber min={20} max={252} />
+        </Form.Item>
+        <Form.Item name={["parameters", "gapSigmaMinPeriods"]} label="缺口最少样本">
+          <InputNumber min={10} max={252} />
+        </Form.Item>
+        <Form.Item name={["parameters", "volumeWindow"]} label="量比/额比窗口">
+          <InputNumber min={5} max={252} />
+        </Form.Item>
+        <Form.Item name={["parameters", "volumeMinPeriods"]} label="量比最少样本">
+          <InputNumber min={3} max={252} />
+        </Form.Item>
+        <Form.Item
+          name={["parameters", "corporateActionTolerance"]}
+          label="公司行动阈值"
+          extra="比较交易所前收盘参考价与上一交易日实际收盘价；默认0.001即0.1%。"
+        >
+          <InputNumber min={0} max={0.2} step={0.001} precision={4} />
+        </Form.Item>
+        <Alert
+          type="info"
+          showIcon
+          message="纯日K事件研究"
+          description="每个代码独立统计，不跨行业合并。量比/额比是当日收盘后才完整的事后分层变量；不输出VWAP、前15分钟或回补用时。"
+        />
+      </>
+    );
+  }
   if (template === "ashare-swing-candidates") {
     return (
       <>
@@ -267,7 +299,15 @@ function NewResearch({
       name: current?.name,
       parameters
     };
-    if (selected === "universe-pit" || selected === "factor-evaluation" || selected === "ml-cross-sectional-ranker" || selected === "ashare-swing-candidates") {
+    if (selected === "daily-gap-events") {
+      Object.assign(templateDefaults, {
+        asset: { ...defaultScope.asset, assetClass: "fund" },
+        selectionType: "symbols",
+        selectionValues: "512800, 512690, 512400",
+        price: { adjust: "raw" },
+        time: { ...defaultScope.time, startDate: "2020-01-01" }
+      });
+    } else if (selected === "universe-pit" || selected === "factor-evaluation" || selected === "ml-cross-sectional-ranker" || selected === "ashare-swing-candidates") {
       const isSwing = selected === "ashare-swing-candidates";
       Object.assign(templateDefaults, {
         asset: { ...defaultScope.asset, assetClass: "equity" },
@@ -433,6 +473,8 @@ function NewResearch({
               <Form.Item name={["asset", "assetClass"]} label="资产类别">
                 <Select options={[
                   { value: "equity", label: "股票" },
+                  { value: "fund", label: "基金 / ETF" },
+                  { value: "index", label: "指数" },
                   { value: "cbond", label: "可转债" },
                   { value: "future", label: "期货" },
                   { value: "crypto", label: "数字资产" }

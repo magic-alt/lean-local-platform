@@ -26,6 +26,7 @@ BAR_FIELDS = {
     "amount",
     "turnover_rate",
     "open_interest",
+    "prev_close",
     "pct_change",
     "source",
 }
@@ -245,7 +246,7 @@ def query(
     selected_fields = [field for field in (fields or []) if field in BAR_FIELDS]
     projection = ", ".join(selected_fields) if selected_fields else (
         "symbol, trade_date, open, high, low, close, settle, volume, amount, "
-        "turnover_rate, open_interest, pct_change, source"
+        "turnover_rate, open_interest, prev_close, pct_change, source"
     )
     clauses = [
         "asset_class = ?",
