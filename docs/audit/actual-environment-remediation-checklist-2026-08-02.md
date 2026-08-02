@@ -78,6 +78,17 @@
 | ACT-P1-005 | CODE_FIXED_REVALIDATION_REQUIRED | `dataset_releases` 及 Parquet/dataset version/backtest FK-like references | MySQL migration + equity/index recertification |
 | ACT-P1-006 | CODE_FIXED_REVALIDATION_REQUIRED | `reproducibility_certificates`、stored object、golden-pair API | 当前 certified release 最小真实 LEAN 双跑 |
 
+## P2 实施状态（审计后）
+
+四项 P2 已实现并统一标记为 `CODE_FIXED_REVALIDATION_REQUIRED`；原始实际环境证据与 `LEVEL5_FAIL` 不被代码测试覆盖。
+
+| Issue ID | 代码状态 | 主要落点 | 下一验收动作 |
+| --- | --- | --- | --- |
+| ACT-P2-001 | CODE_FIXED_REVALIDATION_REQUIRED | `PageEnvelope`、sync/Parquet/QA/workflow/verification endpoints、生成式 API reference | 部署后 authenticated contract snapshot |
+| ACT-P2-002 | CODE_FIXED_REVALIDATION_REQUIRED | `CursorLogViewer.tsx`、Backtest/Task cursor API types | >64 KiB 真实日志浏览器首尾与终态停 poll |
+| ACT-P2-003 | CODE_FIXED_REVALIDATION_REQUIRED | `client.ts` operation ID + network retry | timeout/replay 与异 payload 409 |
+| ACT-P2-004 | CODE_FIXED_REVALIDATION_REQUIRED | data sync commands、Paper command/query、state ownership manifest/test | 实际 sync/backtest/Paper characterization |
+
 验证命令：`cd web/backend && .venv/bin/python -m pytest -q`、`cd web/frontend && npm run build`、`scripts/generate_help_api_reference.py --check --json`。
 
 ## 依赖与优先级

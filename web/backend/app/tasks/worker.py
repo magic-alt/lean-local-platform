@@ -755,11 +755,7 @@ def prepare_ml_data_task(task_id: str, run_id: str):
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
-        with db() as connection:
-            connection.execute(
-                "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=?",
-                (str(exc), utc_now(), run_id),
-            )
+        data_sync.mark_run_failed(run_id, str(exc))
         _record_task_metric("ml_data_preparation", "failed")
         raise
 
@@ -1164,14 +1160,8 @@ def recover_data_sync_task():
             append_log(task_id, f"Removed {len(orphaned_tags)} orphaned broker message(s) after stale heartbeat.")
         # Mark queued before publishing. A concurrent recovery pass will then
         # see the published Redis envelope and preserve it.
-        with db() as connection:
-            current = connection.execute(
-                "select status,cancel_requested from data_sync_runs where id=?",
-                (run_id,),
-            ).fetchone()
-            if not current or current["status"] not in {"queued", "running"} or current["cancel_requested"]:
-                continue
-            connection.execute("update data_sync_runs set status='queued', error=null where id=?", (run_id,))
+        if not data_sync.queue_stale_run_for_recovery(run_id):
+            continue
         result = sync_all_data_task.apply_async(args=[task_id, run_id], queue="data-bulk")
         update_task(task_id, celery_task_id=result.id, status="queued", error=None, finished_at=None)
         append_log(task_id, "Recovered orphaned data synchronization after worker restart.")
@@ -1189,27 +1179,8 @@ def recover_data_sync_task():
         payload["status"] = "queued"
         payload["recoveryReason"] = "stale_derived_heartbeat"
         payload["recoveredAt"] = utc_now()
-        with db() as connection:
-            current = connection.execute(
-                "select canonical_status,derived_status_json from data_sync_runs where id=?",
-                (run_id,),
-            ).fetchone()
-            if not current or current["canonical_status"] != "ready":
-                continue
-            try:
-                current_payload = json.loads(current["derived_status_json"] or "{}")
-            except (TypeError, ValueError):
-                continue
-            if current_payload.get("status") not in {"queued", "running"}:
-                continue
-            connection.execute(
-                "update data_sync_runs set derived_status_json=? where id=?",
-                (json_dump(payload), run_id),
-            )
-            connection.execute(
-                "update data_sync_items set derived_status_json=? where run_id=? and dataset_key='daily'",
-                (json_dump(payload), run_id),
-            )
+        if not data_sync.queue_stale_derived_for_recovery(run_id, payload):
+            continue
         materialize_sync_data_task.apply_async(args=[run_id], queue="data-demand")
         recovered_derived.append(run_id)
     return {

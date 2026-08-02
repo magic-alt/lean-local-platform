@@ -46,26 +46,36 @@ def _event_payload(item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def list_workflows(*, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+def list_workflows(*, limit: int = 100, offset: int = 0, status: str | None = None) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
     clauses: list[str] = []
     params: list[Any] = []
     if status:
         clauses.append("status=?")
         params.append(status)
     where = f"where {' and '.join(clauses)}" if clauses else ""
-    params.append(max(1, min(int(limit), 500)))
     with db() as connection:
+        total = connection.execute(
+            f"select count(distinct workflow_id) as count from workflow_events {where}",
+            tuple(params),
+        ).fetchone()
         rows = connection.execute(
             f"""
             select workflow_id, min(created_at) as started_at, max(created_at) as updated_at,
                    count(*) as event_count,
                    sum(case when status='failed' then 1 else 0 end) as failure_count
             from workflow_events {where}
-            group by workflow_id order by updated_at desc limit ?
+            group by workflow_id order by updated_at desc limit ? offset ?
             """,
-            tuple(params),
+            (*params, bounded_limit, bounded_offset),
         ).fetchall()
-    return rows_to_dicts(rows)
+    return {
+        "items": rows_to_dicts(rows),
+        "count": int(total["count"] or 0),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
 
 
 def workflow_detail(workflow_id: str) -> dict[str, Any]:
@@ -81,12 +91,21 @@ def workflow_detail(workflow_id: str) -> dict[str, Any]:
             "events": events}
 
 
-def list_verifications(limit: int = 100) -> list[dict[str, Any]]:
+def list_verifications(limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
     with db() as connection:
+        total = connection.execute("select count(*) as count from verification_runs").fetchone()
         rows = connection.execute(
-            "select * from verification_runs order by created_at desc limit ?", (max(1, min(int(limit), 500)),)
+            "select * from verification_runs order by created_at desc limit ? offset ?",
+            (bounded_limit, bounded_offset),
         ).fetchall()
-    return rows_to_dicts(rows)
+    return {
+        "items": rows_to_dicts(rows),
+        "count": int(total["count"] or 0),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
 
 
 def verification_detail(run_id: str) -> dict[str, Any]:

@@ -97,3 +97,12 @@
 | Data | cross-asset | unavailable/metadata_only/data_ready/executable 与 canonical row 证据一致 | CODE_FIXED_REVALIDATION_REQUIRED | 当前全 scope 对账 |
 | Data | release | Parquet/version/run 共用 immutable Dataset Release | CODE_FIXED_REVALIDATION_REQUIRED | equity/index recertify |
 | Backtest | reproducibility | fetchable certificate + golden pair + component/artifact digests | CODE_FIXED_REVALIDATION_REQUIRED | 最小真实双跑 |
+
+## P2 整改后的能力契约
+
+| Domain | Feature | 新契约 | 代码状态 | 实际环境下一证据 |
+| --- | --- | --- | --- | --- |
+| API | primary lists | `{items,count,limit,offset}` 与 OpenAPI/TS/generated reference 一致 | CODE_FIXED_REVALIDATION_REQUIRED | authenticated contract snapshot |
+| Backtest/Operations | logs | earlier + cursor follow + manual stop + terminal stop polling | CODE_FIXED_REVALIDATION_REQUIRED | >64 KiB 真实日志浏览器 journey |
+| Web/API | write retry | 同一 command 的网络 retry 复用稳定 `Idempotency-Key` | CODE_FIXED_REVALIDATION_REQUIRED | timeout/replay probe |
+| Architecture | state ownership | command/query surfaces + machine-checked unique Dataset Release/Paper ledger/projection writers | CODE_FIXED_REVALIDATION_REQUIRED | 实际 sync/backtest/Paper characterization |

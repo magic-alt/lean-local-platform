@@ -506,7 +506,7 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 
 ### ACT-P2-001 — List envelope、OpenAPI 文档和 Research 路由语义漂移
 
-- 分类/严重度/Gate/状态：API/docs；P2；一致接口；OPEN。
+- 分类/严重度/Gate/状态：API/docs；P2；一致接口；`CODE_FIXED_REVALIDATION_REQUIRED`。
 - 模块/文件：`docs/api.md:27,302-308,485-491`、routers、frontend types；多个 list API；无 migration。
 - 当前/预期：四种 envelope，docs Research 路径旧；预期统一 paged schema 和生成式 reference。
 - 证据/复现：GET 结构见 §9；影响客户端维护，不直接影响事实。
@@ -516,7 +516,7 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 
 ### ACT-P2-002 — 日志 cursor 后端已实现，前端只能读取一次 bounded tail
 
-- 分类/严重度/Gate/状态：Web/API；P2；可诊断性；OPEN。
+- 分类/严重度/Gate/状态：Web/API；P2；可诊断性；`CODE_FIXED_REVALIDATION_REQUIRED`。
 - 模块/文件：`services/tasks.py:86-114`,`frontend/src/api/index.ts:451`,`pages/operations.tsx:184`；logs API；tasks/backtest 表/文件。
 - 当前/预期：后端返回 nextCursor/hasMore，TS 只声明 logs；预期 UI 可连续加载、保存位置和停止 polling。
 - 证据/复现：代码契约对照；影响故障诊断。
@@ -527,7 +527,7 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 
 ### ACT-P2-003 — 客户端每次重试生成新 Idempotency-Key
 
-- 分类/严重度/Gate/状态：API/幂等；P2；重复 POST/Run-now；OPEN。
+- 分类/严重度/Gate/状态：API/幂等；P2；重复 POST/Run-now；`CODE_FIXED_REVALIDATION_REQUIRED`。
 - 模块/文件：`frontend/src/api/client.ts:55-57`、middleware `app/main.py`; 所有 write API；表 `api_idempotency_keys`。
 - 当前/预期：每次 request 随机新 key；预期同一用户操作重试复用稳定 key，直到 terminal response。
 - 证据/复现：断网/重试代码审查；本轮未制造重复写。潜在影响任务/Paper cycle，不是已确认重复资金。
@@ -538,7 +538,7 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 
 ### ACT-P2-004 — 超大 service 与多状态写者使 ownership 难以审计
 
-- 分类/严重度/Gate/状态：架构；P2；边界/唯一 ownership；OPEN。
+- 分类/严重度/Gate/状态：架构；P2；边界/唯一 ownership；`CODE_FIXED_REVALIDATION_REQUIRED`。
 - 模块/文件：`data_sync.py` 4,755 行、`paper_accounts.py` 3,085 行、`worker.py` 1,522 行、`api/data.py` 925 行；相关 API/多表。
 - 当前/预期：service 同时做 query、command、HTTP payload、scheduler、projection；预期 command/query/repository/orchestrator 分层。
 - 证据/复现：LOC 与依赖审查；影响维护和状态缺陷率。
@@ -620,3 +620,16 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 | ACT-P1-006 | 成功的 certified-release run 生成 stored-object certificate，含 image/project/release/cache/config/orders/fills/equity/canonical/artifact digests；提供 fetch 和 golden-pair 查询 | 两个同 input/canonical output certificate 形成 golden pair | 实际运行最小双跑并下载证书 |
 
 代码验证：后端全量 `580 passed, 2 skipped`，新增 P1 专项 `6 passed`，前端 `npm run build` PASS；ECharts circular warning 属原 ACT-P3-002，不作为本轮 P1 关闭证据。
+
+## 22. P2 整改实现附录
+
+本节同样只记录审计后的代码整改，不改写 §1–20 的历史实际环境判定。四项均为 `CODE_FIXED_REVALIDATION_REQUIRED`：
+
+| Issue | 已实现控制 | 自动化验证 | 仍需实际环境验收 |
+| --- | --- | --- | --- |
+| ACT-P2-001 | sync runs、Parquet datasets、QA reports、workflows、verifications 统一 `{items,count,limit,offset}`，OpenAPI 显式引用 `PageEnvelope`；Research 文档改为 runs/workspaces，reference 由 OpenAPI 生成 | list contract、OpenAPI schema、generated docs check | 部署后 authenticated 响应与 TS 对账 |
+| ACT-P2-002 | 通用 cursor log viewer 支持加载更早、持续跟随、手动停止；Backtest/Task 进入终态后停止轮询且不重置当前位置 | 前端 TypeScript/build；后端 cursor contract 回归 | 浏览器用超过 64 KiB 的真实日志验证首尾可达 |
+| ACT-P2-003 | 每个 write command 生成一次 operation ID；网络失败自动重试时复用同一 `Idempotency-Key`，HTTP 响应不盲目重试 | 前端 TypeScript/build；既有服务端同 key/异 payload 409 测试 | 浏览器/代理注入一次 timeout 验证 replay |
+| ACT-P2-004 | Data Sync command orchestrator；Paper command/query surfaces；Dataset Release、Paper ledger/projection 唯一 writer 清单；API/task entrypoint 禁止直接 SQL 改 orchestration state | architecture dependency + unique-writer tests | 部署后运行 sync/backtest/Paper characterization journey |
+
+代码验证：P2/契约专项 `16 passed`，Data Sync/Paper/API 回归 `110 passed`，后端全量 `586 passed, 2 skipped`；前端 `npm run build`、生成式 API reference、33 篇 help 文档和 repository hygiene 均 PASS。既有 ECharts circular warning 仍归属 ACT-P3-002。

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Fix the four remaining 2026-08-02 actual-environment P2 findings by standardizing audited primary list envelopes and generated OpenAPI reference output, replacing obsolete Research routes, adding cursor-aware earlier/follow/terminal-stop log UI, reusing one operation ID across network retries, and enforcing command/query plus unique state-writer architecture boundaries.
 - Fix the six 2026-08-02 actual-environment P1 findings with account-generation/release/TTL-bound Paper trust, resumable single-lease derived maintenance with backoff and alerts, bounded summary list APIs plus server-paged Backtest history, canonical asset capability states and fail-closed preflight, immutable Dataset Releases shared by Parquet/run lineage, and fetchable stored-object reproducibility certificates with golden-pair digests.
 - Preserve Walk-Forward parent, project, validation-selection, and OOS lineage with immutable snapshots and destructive-delete guards; add durable two-account/21-session Paper certification cohorts and UI status; quarantine orphan legacy Paper facts, converge ownerless Research runs, and schedule a domain reconciler without deleting historical evidence.
 - Add the 2026-08-02 actual-environment, non-destructive system audit covering architecture, Web/API contracts, governed data, LEAN backtests, experiments, Paper accounts, scheduling, commercial-product gaps, remediation waves, and machine-readable evidence without backups, restores, isolated stacks, or full data reimports.

@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from .common import dispatch_task
+from .common import PageEnvelope, dispatch_task
 from ..domain.data_scope import DataQueryRequest, DataScope
 from ..core.config import UPLOADS_DIR
 from ..core.errors import LeanWebError
@@ -59,6 +59,7 @@ from ..services.cross_asset_quality import latest_cross_asset_quality_status
 from ..services import derived_maintenance
 from ..services.tasks import create_task
 from ..services import data_sync
+from ..services import data_sync_commands
 from ..services import data_gateway
 from ..services.asset_capabilities import capability_payload
 from ..services.dataset_releases import list_releases
@@ -66,8 +67,6 @@ from ..tasks.worker import (
     download_on_demand_dataset_task,
     fetch_data_batch_task,
     maintain_derived_layers_task,
-    prepare_ml_data_task,
-    sync_all_data_task,
 )
 
 router = APIRouter(prefix="/api", tags=["data"])
@@ -361,30 +360,19 @@ def create_on_demand_download(request: OnDemandDatasetDownloadRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/data/sync-runs")
-def data_sync_runs(limit: int = 20):
-    return {"items": data_sync.list_sync_runs(limit), "limit": limit}
+@router.get("/data/sync-runs", response_model=PageEnvelope)
+def data_sync_runs(limit: int = 20, offset: int = 0):
+    return data_sync.list_sync_runs(limit, offset)
 
 
 @router.post("/data/sync-runs")
 def create_data_sync_run(request: DataSyncRequest):
     try:
-        run = data_sync.create_sync_run(requested=request.datasets, mode=request.mode, request_scope=request.scope)
-        task = create_task(
-            "data_sync",
-            "Update all TuShare data",
-            {"runId": run["id"], "datasets": request.datasets or []},
-            related_id=run["id"],
+        return data_sync_commands.create_run(
+            datasets=request.datasets,
+            mode=request.mode,
+            scope=request.scope,
         )
-        with db() as connection:
-            connection.execute("update data_sync_runs set task_id=? where id=?", (task["id"], run["id"]))
-        signature = (
-            prepare_ml_data_task.s(task["id"], run["id"])
-            if request.mode == "universe_backfill"
-            else sync_all_data_task.s(task["id"], run["id"])
-        )
-        dispatch_task(signature, task["id"])
-        return data_sync.sync_run(run["id"])
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -408,7 +396,7 @@ def data_sync_validation(run_id: str, limit: int = 500):
 @router.post("/data/sync-runs/{run_id}/cancel")
 def cancel_data_sync_run(run_id: str):
     try:
-        return data_sync.request_cancel(run_id)
+        return data_sync_commands.cancel_run(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -416,12 +404,7 @@ def cancel_data_sync_run(run_id: str):
 @router.post("/data/sync-runs/{run_id}/resume")
 def resume_data_sync_run(run_id: str):
     try:
-        run = data_sync.prepare_resume(run_id)
-        task = create_task("data_sync", "Resume TuShare data update", {"runId": run_id}, related_id=run_id)
-        with db() as connection:
-            connection.execute("update data_sync_runs set task_id=? where id=?", (task["id"], run_id))
-        dispatch_task(sync_all_data_task.s(task["id"], run_id), task["id"])
-        return data_sync.sync_run(run_id)
+        return data_sync_commands.resume_run(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -598,9 +581,17 @@ def export_parquet_data(request: ParquetExportRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/data/parquet/datasets")
-def parquet_datasets():
-    return {"items": list_datasets()}
+@router.get("/data/parquet/datasets", response_model=PageEnvelope)
+def parquet_datasets(limit: int = 100, offset: int = 0):
+    bounded_limit = max(1, min(int(limit), 200))
+    bounded_offset = max(0, int(offset))
+    items = list_datasets()
+    return {
+        "items": items[bounded_offset : bounded_offset + bounded_limit],
+        "count": len(items),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
 
 
 @router.post("/data/parquet/rebuild")
@@ -696,7 +687,7 @@ def compare_ashare_daily_data_batch(request: AshareDailyCompareBatchRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/data/quality/reports")
+@router.get("/data/quality/reports", response_model=PageEnvelope)
 def data_quality_reports(limit: int = 100, offset: int = 0):
     return list_quality_report_summaries(limit=limit, offset=offset)
 

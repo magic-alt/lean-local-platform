@@ -89,7 +89,7 @@
 | `POST` | `/api/data/on-demand/downloads` | Create On Demand Download | body `OnDemandDatasetDownloadRequest` | `200` - |
 | `GET` | `/api/data/on-demand/storage-targets` | On Demand Storage Targets | - | `200` - |
 | `POST` | `/api/data/parquet/consistency` | Parquet Consistency | body `ParquetConsistencyRequest` | `200` - |
-| `GET` | `/api/data/parquet/datasets` | Parquet Datasets | - | `200` - |
+| `GET` | `/api/data/parquet/datasets` | Parquet Datasets | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `POST` | `/api/data/parquet/export` | Export Parquet Data | body `ParquetExportRequest` | `200` - |
 | `POST` | `/api/data/parquet/rebuild` | Rebuild Parquet Data | body `ParquetRebuildRequest` | `200` - |
 | `GET` | `/api/data/providers` | Providers | `includeAvailability` (query) | `200` - |
@@ -97,13 +97,13 @@
 | `POST` | `/api/data/quality/ashare/daily/compare` | Compare Ashare Daily Data | body `AshareDailyCompareRequest` | `200` - |
 | `POST` | `/api/data/quality/ashare/daily/compare-batch` | Compare Ashare Daily Data Batch | body `AshareDailyCompareBatchRequest` | `200` - |
 | `GET` | `/api/data/quality/cross-asset` | Cross Asset Quality Status | - | `200` - |
-| `GET` | `/api/data/quality/reports` | Data Quality Reports | `limit` (query)<br>`offset` (query) | `200` - |
+| `GET` | `/api/data/quality/reports` | Data Quality Reports | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `GET` | `/api/data/quality/reports/{report_id}` | Data Quality Report | `report_id` (path, required) | `200` - |
 | `GET` | `/api/data/query` | Query Data | `symbol` (query, required)<br>`assetClass` (query)<br>`venue` (query)<br>`market` (query)<br>`resolution` (query)<br>`dataType` (query)<br>`source` (query)<br>`providerSource` (query)<br>`providerMode` (query)<br>`allowResearchSource` (query)<br>`adjust` (query)<br>`startDate` (query)<br>`endDate` (query)<br>`limit` (query) | `200` - |
 | `POST` | `/api/data/query` | Query Data Scope | body `DataQueryRequest` | `200` - |
 | `GET` | `/api/data/releases` | Dataset Releases | `status` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/data/resolve` | Resolve Data Scope | body `DataScope` | `200` - |
-| `GET` | `/api/data/sync-runs` | Data Sync Runs | `limit` (query) | `200` - |
+| `GET` | `/api/data/sync-runs` | Data Sync Runs | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `POST` | `/api/data/sync-runs` | Create Data Sync Run | body `DataSyncRequest` | `200` - |
 | `GET` | `/api/data/sync-runs/{run_id}` | Data Sync Run | `run_id` (path, required) | `200` - |
 | `POST` | `/api/data/sync-runs/{run_id}/cancel` | Cancel Data Sync Run | `run_id` (path, required) | `200` - |
@@ -409,7 +409,7 @@
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/lineage/{resource_type}/{resource_id}` | Lineage | `resource_type` (path, required)<br>`resource_id` (path, required) | `200` - |
-| `GET` | `/api/verifications` | Verifications | `limit` (query) | `200` - |
+| `GET` | `/api/verifications` | Verifications | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `GET` | `/api/verifications/{run_id}` | Verification | `run_id` (path, required) | `200` - |
-| `GET` | `/api/workflows` | Workflows | `limit` (query)<br>`status` (query) | `200` - |
+| `GET` | `/api/workflows` | Workflows | `limit` (query)<br>`offset` (query)<br>`status` (query) | `200` `PageEnvelope` |
 | `GET` | `/api/workflows/{workflow_id}` | Workflow | `workflow_id` (path, required) | `200` - |

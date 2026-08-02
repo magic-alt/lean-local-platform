@@ -5,7 +5,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..services import paper_accounts as service
+from ..services import paper_account_commands as commands
+from ..services import paper_account_queries as queries
 from ..services import paper_certification
 
 
@@ -96,7 +97,7 @@ def _call(callback, *args, **kwargs):
 
 @router.get("/accounts/candidates")
 def account_candidates(projectId: str):
-    return _call(service.trusted_backtest_candidates, projectId)
+    return _call(queries.trusted_backtest_candidates, projectId)
 
 
 @router.get("/certification-cohorts")
@@ -130,7 +131,7 @@ def compare_accounts(
     startDate: str | None = None,
     endDate: str | None = None,
 ):
-    return _call(service.compare_accounts, accountId, startDate, endDate)
+    return _call(queries.compare_accounts, accountId, startDate, endDate)
 
 
 @router.get("/accounts")
@@ -147,7 +148,7 @@ def list_accounts(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_accounts,
+        queries.list_accounts,
         status=status,
         market=market,
         strategy=strategy,
@@ -163,48 +164,48 @@ def list_accounts(
 
 @router.post("/accounts", status_code=201)
 def create_account(request: AccountCreate):
-    return _call(service.create_account, request.model_dump())
+    return _call(commands.create_account, request.model_dump())
 
 
 @router.get("/accounts/{account_id}")
 def get_account(account_id: str):
-    return _call(service.get_account, account_id)
+    return _call(queries.get_account, account_id)
 
 
 @router.delete("/accounts/{account_id}")
 def delete_account(account_id: str):
-    return _call(service.delete_account, account_id)
+    return _call(commands.delete_account, account_id)
 
 
 @router.patch("/accounts/{account_id}")
 def update_account(account_id: str, request: AccountUpdate):
-    return _call(service.update_account, account_id, request.model_dump(exclude_none=True))
+    return _call(commands.update_account, account_id, request.model_dump(exclude_none=True))
 
 
 @router.post("/accounts/{account_id}/activate")
 def activate_account(account_id: str):
-    return _call(service.transition_account, account_id, "activate")
+    return _call(commands.transition_account, account_id, "activate")
 
 
 @router.post("/accounts/{account_id}/pause")
 def pause_account(account_id: str):
-    return _call(service.transition_account, account_id, "pause")
+    return _call(commands.transition_account, account_id, "pause")
 
 
 @router.post("/accounts/{account_id}/resume")
 def resume_account(account_id: str):
-    return _call(service.transition_account, account_id, "resume")
+    return _call(commands.transition_account, account_id, "resume")
 
 
 @router.post("/accounts/{account_id}/archive")
 def archive_account(account_id: str):
-    return _call(service.transition_account, account_id, "archive")
+    return _call(commands.transition_account, account_id, "archive")
 
 
 @router.post("/accounts/{account_id}/clone", status_code=201)
 def clone_account(account_id: str, request: AccountClone | None = None):
     return _call(
-        service.clone_account,
+        commands.clone_account,
         account_id,
         request.model_dump(exclude_none=True) if request else {},
     )
@@ -212,7 +213,7 @@ def clone_account(account_id: str, request: AccountClone | None = None):
 
 @router.get("/accounts/{account_id}/overview")
 def account_overview(account_id: str):
-    return _call(service.get_overview, account_id)
+    return _call(queries.get_overview, account_id)
 
 
 @router.get("/accounts/{account_id}/positions")
@@ -222,7 +223,7 @@ def account_positions(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    return _call(service.list_positions, account_id, symbol=symbol, limit=limit, offset=offset)
+    return _call(queries.list_positions, account_id, symbol=symbol, limit=limit, offset=offset)
 
 
 @router.get("/accounts/{account_id}/orders")
@@ -238,7 +239,7 @@ def account_orders(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_orders,
+        queries.list_orders,
         account_id,
         start_date=startDate,
         end_date=endDate,
@@ -263,7 +264,7 @@ def account_trades(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_trades,
+        queries.list_trades,
         account_id,
         start_date=startDate,
         end_date=endDate,
@@ -287,7 +288,7 @@ def account_signals(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_signals,
+        queries.list_signals,
         account_id,
         start_date=startDate,
         end_date=endDate,
@@ -305,7 +306,7 @@ def account_performance(
     startDate: str | None = None,
     endDate: str | None = None,
 ):
-    return _call(service.performance, account_id, startDate, endDate)
+    return _call(queries.performance, account_id, startDate, endDate)
 
 
 @router.get("/accounts/{account_id}/cycles")
@@ -319,7 +320,7 @@ def account_cycles(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_cycles,
+        queries.list_cycles,
         account_id,
         start_date=startDate,
         end_date=endDate,
@@ -340,7 +341,7 @@ def account_daily_reports(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.list_daily_reports,
+        queries.list_daily_reports,
         account_id,
         start_date=startDate,
         end_date=endDate,
@@ -356,52 +357,52 @@ def account_audit(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    return _call(service.audit, account_id, limit, offset)
+    return _call(queries.audit, account_id, limit, offset)
 
 
 @router.get("/accounts/{account_id}/deployments")
 def list_deployments(account_id: str):
-    return _call(service.list_deployments, account_id)
+    return _call(queries.list_deployments, account_id)
 
 
 @router.post("/accounts/{account_id}/deployments", status_code=201)
 def create_deployment(account_id: str, request: DeploymentCreate):
-    return _call(service.create_deployment, account_id, request.model_dump())
+    return _call(commands.create_deployment, account_id, request.model_dump())
 
 
 @router.get("/deployments/{deployment_id}")
 def get_deployment(deployment_id: str):
-    return _call(service.get_deployment, deployment_id)
+    return _call(queries.get_deployment, deployment_id)
 
 
 @router.patch("/deployments/{deployment_id}")
 def update_deployment(deployment_id: str, request: DeploymentUpdate):
-    return _call(service.update_deployment, deployment_id, request.model_dump(exclude_none=True))
+    return _call(commands.update_deployment, deployment_id, request.model_dump(exclude_none=True))
 
 
 @router.post("/deployments/{deployment_id}/activate")
 def activate_deployment(deployment_id: str):
-    return _call(service.transition_deployment, deployment_id, "activate")
+    return _call(commands.transition_deployment, deployment_id, "activate")
 
 
 @router.post("/deployments/{deployment_id}/pause")
 def pause_deployment(deployment_id: str):
-    return _call(service.transition_deployment, deployment_id, "pause")
+    return _call(commands.transition_deployment, deployment_id, "pause")
 
 
 @router.post("/deployments/{deployment_id}/resume")
 def resume_deployment(deployment_id: str):
-    return _call(service.transition_deployment, deployment_id, "resume")
+    return _call(commands.transition_deployment, deployment_id, "resume")
 
 
 @router.post("/deployments/{deployment_id}/run-now")
 def run_now(deployment_id: str, request: RunNowRequest | None = None):
-    return _call(service.run_now, deployment_id, request.tradingDate if request else None)
+    return _call(commands.run_now, deployment_id, request.tradingDate if request else None)
 
 
 @router.get("/deployments/{deployment_id}/next-runs")
 def next_runs(deployment_id: str, count: int = Query(default=5, ge=1, le=20)):
-    return _call(service.next_runs, deployment_id, count)
+    return _call(queries.next_runs, deployment_id, count)
 
 
 @router.get("/signals")
@@ -414,7 +415,7 @@ def global_signals(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.global_signals,
+        queries.global_signals,
         account_id=accountId,
         deployment_id=deploymentId,
         symbol=symbol,
@@ -433,7 +434,7 @@ def global_cycles(
     offset: int = Query(default=0, ge=0),
 ):
     return _call(
-        service.global_cycles,
+        queries.global_cycles,
         account_id=accountId,
         deployment_id=deploymentId,
         status=status,

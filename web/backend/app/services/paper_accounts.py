@@ -16,6 +16,7 @@ from ..repositories.market_data_repository import (
     close_price,
 )
 from . import paper as paper_runtime
+from . import paper_order_pipeline
 from .alerts import delivery_succeeded, emit_alert, external_alert_channel_configured
 from .experiments import get_experiment_versions
 from .run_paths import run_directory
@@ -304,26 +305,14 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                 now,
             ),
         )
-        connection.execute(
-            """
-            insert into paper_ledger_entries
-                (id,session_id,intent_id,fill_id,entry_type,asset,symbol,quantity,
-                 amount,currency,idempotency_key,created_at,paper_account_id,
-                 account_generation,ledger_sequence,precise_quantity,precise_amount)
-            values (?,?,?,null,'CASH_DEPOSIT','cash',null,0,?,?,?,?,
-                    ?,1,1,0,?)
-            """,
-            (
-                ledger_id,
-                session_id,
-                f"opening:{account_id}:1",
-                initial_cash,
-                currency,
-                f"account:{account_id}:generation:1:opening:cash",
-                now,
-                account_id,
-                initial_cash,
-            ),
+        paper_order_pipeline.insert_account_opening_ledger_entry(
+            connection,
+            ledger_id=ledger_id,
+            session_id=session_id,
+            account_id=account_id,
+            initial_cash=str(initial_cash),
+            currency=currency,
+            created_at=now,
         )
         connection.execute(
             """
@@ -643,9 +632,10 @@ def delete_account(account_id: str) -> dict[str, Any]:
             """,
             (account_id, session_id),
         )
-        connection.execute(
-            "delete from paper_ledger_entries where paper_account_id=? or session_id=?",
-            (account_id, session_id),
+        paper_order_pipeline.delete_account_ledger_entries(
+            connection,
+            account_id=account_id,
+            session_id=session_id,
         )
         connection.execute(
             "delete from paper_order_intents where paper_account_id=? or session_id=?",

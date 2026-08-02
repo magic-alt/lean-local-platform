@@ -1,8 +1,20 @@
+from typing import Any
+
 from fastapi import HTTPException
 from kombu.exceptions import KombuError
+from pydantic import BaseModel
 
 from ..tasks.celery_app import celery_app
 from ..services.tasks import update_task
+
+
+class PageEnvelope(BaseModel):
+    """OpenAPI-visible contract shared by primary collection endpoints."""
+
+    items: list[dict[str, Any]]
+    count: int
+    limit: int
+    offset: int
 
 
 def paged_items(

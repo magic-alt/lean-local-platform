@@ -159,10 +159,14 @@ an independent shadow v2 session solely to reuse the existing LEAN and order
 pipeline; it is not a second ledger. A deployment freezes source Backtest,
 project snapshot, strategy, dataset, universe, parameters and risk version.
 
-The market-data read boundary is repository-backed. Full transaction repository
-extraction remains open for the large `paper_accounts` and `data_sync`
-orchestrators; this is tracked as `L5-ARCH-002` and is not represented as closed.
-Changing execution inputs creates a new deployment version.
+The market-data read boundary is repository-backed. Data sync commands now run
+through `data_sync_commands`; Paper HTTP routes depend on explicit
+`paper_account_commands` and `paper_account_queries` surfaces. Canonical table
+writers are machine-readable in `app/architecture/state_ownership.py`, and the
+architecture test rejects any second writer for Dataset Release, Paper ledger,
+or Paper projection tables. Backtest/task entrypoints delegate status writes to
+their repository/service boundaries instead of issuing SQL. Changing execution
+inputs creates a new deployment version.
 
 The v1 production acceptance scope is China A-share daily data in
 `Asia/Shanghai`. Trading day T closes and passes certification before the

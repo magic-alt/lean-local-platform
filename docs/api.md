@@ -300,13 +300,20 @@ POST   /api/portfolio-optimizations/preview
 GET    /api/portfolio-optimizations
 POST   /api/portfolio-optimizations
 
-GET    /api/research
-POST   /api/research
-GET    /api/research/{session_id}
-POST   /api/research/{session_id}/stop
-POST   /api/research/{session_id}/restart
-GET    /api/research/{session_id}/logs
-DELETE /api/research/{session_id}
+GET    /api/research/runs
+POST   /api/research/runs
+GET    /api/research/runs/{run_id}
+POST   /api/research/runs/{run_id}/cancel
+POST   /api/research/runs/{run_id}/retry
+DELETE /api/research/runs/{run_id}
+
+GET    /api/research/workspaces
+POST   /api/research/workspaces
+GET    /api/research/workspaces/{workspace_id}
+POST   /api/research/workspaces/{workspace_id}/stop
+POST   /api/research/workspaces/{workspace_id}/restart
+GET    /api/research/workspaces/{workspace_id}/logs
+DELETE /api/research/workspaces/{workspace_id}
 
 GET    /api/factors/engines
 POST   /api/factors/values
@@ -316,7 +323,9 @@ POST   /api/factors/evaluate-batch
 GET    /api/factors/evaluations
 ```
 
-These are useful research APIs but are not yet the core Level 3 acceptance chain.
+The removed `/api/research` session routes are not compatibility aliases; use
+the run or workspace resource explicitly. The complete generated endpoint and
+schema index is [API Reference](help/api-reference.md).
 
 ## Paper Trading
 
@@ -489,16 +498,13 @@ REDIS_UNAVAILABLE
 RESOURCE_NOT_FOUND
 ```
 
-## Pagination and Log Cursor Roadmap
+## Pagination and Log Cursor
 
-Current state:
-
-- Some list endpoints support `limit` and `offset`.
-- Backtest and task logs return a bounded tail string.
-
-Recommended P2/P3 change:
+Primary lists return `{items,count,limit,offset}`. Backtest and task logs expose
+byte cursors; the Web client can load earlier chunks, follow appended bytes, and
+stops polling after the resource becomes terminal:
 
 ```text
 GET /api/backtests/{id}/logs?cursor=<byte_offset>&limit=65536
--> {logs, nextCursor, eof}
+-> {logs, offset, nextOffset, cursor, nextCursor, limit, total, hasMore}
 ```

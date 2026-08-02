@@ -1135,6 +1135,17 @@ export interface PagedResponse<T> {
   dataTrust?: PaperDataTrust;
 }
 
+export interface LogWindow {
+  logs: string;
+  offset: number;
+  nextOffset: number;
+  cursor: string;
+  nextCursor: string | null;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+}
+
 export interface PaperDataTrust {
   valuationTrusted: boolean;
   reason: string | null;

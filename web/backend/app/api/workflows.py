@@ -1,14 +1,19 @@
 from fastapi import APIRouter, HTTPException, Query
 
+from .common import PageEnvelope
 from ..services.workflows import list_verifications, list_workflows, verification_detail, workflow_detail
 from ..services.workflow_lineage import graph
 
 router = APIRouter(prefix="/api", tags=["workflows"])
 
 
-@router.get("/workflows")
-def workflows(limit: int = Query(100, ge=1, le=500), status: str | None = None):
-    return list_workflows(limit=limit, status=status)
+@router.get("/workflows", response_model=PageEnvelope)
+def workflows(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    status: str | None = None,
+):
+    return list_workflows(limit=limit, offset=offset, status=status)
 
 
 @router.get("/workflows/{workflow_id}")
@@ -19,9 +24,9 @@ def workflow(workflow_id: str):
         raise HTTPException(status_code=404, detail="Workflow not found.") from exc
 
 
-@router.get("/verifications")
-def verifications(limit: int = Query(100, ge=1, le=500)):
-    return list_verifications(limit)
+@router.get("/verifications", response_model=PageEnvelope)
+def verifications(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    return list_verifications(limit, offset)
 
 
 @router.get("/verifications/{run_id}")

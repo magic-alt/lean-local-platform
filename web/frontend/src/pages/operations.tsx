@@ -67,6 +67,7 @@ import type {
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { CursorLogViewer } from "../components/CursorLogViewer";
 import { BacktestTrustPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { candlestickOption } from "../charts/candlestick";
@@ -86,7 +87,7 @@ import {
   templateDefaults
 } from "../utils/strategy";
 
-const loadFailedWorkflows = () => api.workflows("failed", 50);
+const loadFailedWorkflows = async () => (await api.workflows("failed", 50)).items;
 
 export function ReportsPage() {
   const runs = useAsyncData(api.backtests, []);
@@ -176,13 +177,20 @@ export function ReportsPage() {
 export function TasksPage() {
   const tasks = useAsyncData(api.tasks, []);
   const [selected, setSelected] = useState<Task>();
-  const [logs, setLogs] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState<string>();
 
-  async function open(task: Task) {
+  function open(task: Task) {
     setSelected(task);
-    setLogs((await api.taskLogs(task.id)).logs);
   }
+  const selectedActive = Boolean(selected && ["created", "queued", "running", "cancelling"].includes(selected.status));
+  useEffect(() => {
+    if (!selected || !selectedActive) return;
+    const selectedId = selected.id;
+    const timer = window.setInterval(() => {
+      void api.task(selectedId).then((next) => setSelected((current) => current?.id === selectedId ? next : current));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [selected?.id, selectedActive]);
   async function remove(task: Task) {
     setDeletingTaskId(task.id);
     try {
@@ -190,7 +198,6 @@ export function TasksPage() {
       message.success("Task deleted");
       if (selected?.id === task.id) {
         setSelected(undefined);
-        setLogs("");
       }
       tasks.reload();
     } catch (error) {
@@ -228,7 +235,15 @@ export function TasksPage() {
           }
         ]} />
       </Card>
-      {selected && <Card title={`${selected.kind} / ${selected.id}`} style={{ marginTop: 16 }}><pre className="log-view">{logs}</pre></Card>}
+      {selected && (
+        <Card title={`${selected.kind} / ${selected.id}`} style={{ marginTop: 16 }}>
+          <CursorLogViewer
+            sourceKey={selected.id}
+            load={(params) => api.taskLogs(selected.id, params)}
+            active={selectedActive}
+          />
+        </Card>
+      )}
     </>
   );
 }

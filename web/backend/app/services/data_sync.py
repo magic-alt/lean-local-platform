@@ -4600,10 +4600,69 @@ def _materialize_daily_run_locked(run_id: str, *, lease_connection: Any | None =
     }
 
 
-def list_sync_runs(limit: int = 20) -> list[dict[str, Any]]:
+def list_sync_runs(limit: int = 20, offset: int = 0) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 100))
+    bounded_offset = max(0, int(offset))
     with db() as connection:
-        rows = connection.execute("select * from data_sync_runs order by created_at desc limit ?", (max(1, min(limit, 100)),)).fetchall()
-    return rows_to_dicts(rows)
+        total = connection.execute("select count(*) as count from data_sync_runs").fetchone()
+        rows = connection.execute(
+            "select * from data_sync_runs order by created_at desc limit ? offset ?",
+            (bounded_limit, bounded_offset),
+        ).fetchall()
+    return {
+        "items": rows_to_dicts(rows),
+        "count": int(total["count"] or 0),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
+
+
+def mark_run_failed(run_id: str, error: str) -> None:
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=?",
+            (error, utc_now(), run_id),
+        )
+
+
+def bind_task(run_id: str, task_id: str) -> None:
+    with db() as connection:
+        connection.execute("update data_sync_runs set task_id=? where id=?", (task_id, run_id))
+
+
+def queue_stale_run_for_recovery(run_id: str) -> bool:
+    with db() as connection:
+        current = connection.execute(
+            "select status,cancel_requested from data_sync_runs where id=?",
+            (run_id,),
+        ).fetchone()
+        if not current or current["status"] not in {"queued", "running"} or current["cancel_requested"]:
+            return False
+        connection.execute("update data_sync_runs set status='queued', error=null where id=?", (run_id,))
+    return True
+
+
+def queue_stale_derived_for_recovery(run_id: str, payload: dict[str, Any]) -> bool:
+    with db() as connection:
+        current = connection.execute(
+            "select canonical_status,derived_status_json from data_sync_runs where id=?",
+            (run_id,),
+        ).fetchone()
+        if not current or current["canonical_status"] != "ready":
+            return False
+        try:
+            current_payload = json.loads(current["derived_status_json"] or "{}")
+        except (TypeError, ValueError):
+            return False
+        if current_payload.get("status") not in {"queued", "running"}:
+            return False
+        encoded = json_dump(payload)
+        connection.execute("update data_sync_runs set derived_status_json=? where id=?", (encoded, run_id))
+        connection.execute(
+            "update data_sync_items set derived_status_json=? where run_id=? and dataset_key='daily'",
+            (encoded, run_id),
+        )
+    return True
 
 
 def request_cancel(run_id: str) -> dict[str, Any]:

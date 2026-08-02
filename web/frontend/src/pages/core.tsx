@@ -85,6 +85,7 @@ import { CompareRunsPanel } from "./compare";
 import { BacktestCharts, RunsTable, StatusTag } from "../components";
 import { DateStringPicker } from "../components/DateStringPicker";
 import { SecuritySearch } from "../components/SecuritySearch";
+import { CursorLogViewer } from "../components/CursorLogViewer";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../components/forms/FormLayout";
 import { DatasetPreviewPanel } from "../components/data/DatasetPreviewPanel";
 import { BacktestTrustPanel, StrategyAdmissionPanel, ValidationStatusTag } from "../components/backtests/BacktestTrustPanel";
@@ -2820,7 +2821,6 @@ export function RunDetailPage() {
   const [screeningQuery, setScreeningQuery] = useState("");
   const [trust, setTrust] = useState<BacktestValidationResponse>();
   const [admission, setAdmission] = useState<BacktestAdmissionResponse>();
-  const [logs, setLogs] = useState("");
   const [metricQuery, setMetricQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>();
@@ -2834,15 +2834,13 @@ export function RunDetailPage() {
 
     const requestedId = id;
     const load = async () => {
-      const [next, nextLogs, nextTrust, nextAdmission] = await Promise.all([
+      const [next, nextTrust, nextAdmission] = await Promise.all([
         api.backtest(requestedId),
-        api.logs(requestedId),
         api.backtestValidation(requestedId).catch(() => undefined),
         api.backtestAdmission(requestedId).catch(() => undefined)
       ]);
       if (currentRunId.current !== requestedId) return;
       setRun(next);
-      setLogs(nextLogs.logs);
       setTrust(nextTrust);
       setAdmission(nextAdmission);
       const screeningMode = String(asRecord(next.parameters).strategyTemplateKey || "") === "ashare_index_screening";
@@ -3562,8 +3560,14 @@ export function RunDetailPage() {
                     key: "logs",
                     label: "Logs",
                     children: (
-                      <Card title="Execution Log" className="run-section-card" extra={<Button icon={<CopyOutlined />} onClick={() => copyText(logs, "Logs")} disabled={!logs}>Copy logs</Button>}>
-                        <pre data-testid="backtest-logs" className="log-view">{logs || "No logs yet."}</pre>
+                      <Card title="Execution Log" className="run-section-card">
+                        <div data-testid="backtest-logs">
+                          <CursorLogViewer
+                            sourceKey={run.id}
+                            load={(params) => api.logs(run.id, params)}
+                            active={active}
+                          />
+                        </div>
                       </Card>
                     )
                   }

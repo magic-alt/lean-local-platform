@@ -27,6 +27,47 @@ ORDER_STATES = {
     "RECONCILIATION_FAILED",
 }
 
+
+def insert_account_opening_ledger_entry(
+    connection: Any,
+    *,
+    ledger_id: str,
+    session_id: str,
+    account_id: str,
+    initial_cash: str,
+    currency: str,
+    created_at: str,
+) -> None:
+    """Canonical writer for a Paper Account generation's opening cash fact."""
+    connection.execute(
+        """
+        insert into paper_ledger_entries
+            (id,session_id,intent_id,fill_id,entry_type,asset,symbol,quantity,
+             amount,currency,idempotency_key,created_at,paper_account_id,
+             account_generation,ledger_sequence,precise_quantity,precise_amount)
+        values (?,?,?,null,'CASH_DEPOSIT','cash',null,0,?,?,?,?,?,1,1,0,?)
+        """,
+        (
+            ledger_id,
+            session_id,
+            f"opening:{account_id}:1",
+            initial_cash,
+            currency,
+            f"account:{account_id}:generation:1:opening:cash",
+            created_at,
+            account_id,
+            initial_cash,
+        ),
+    )
+
+
+def delete_account_ledger_entries(connection: Any, *, account_id: str, session_id: str) -> None:
+    """Canonical destructive writer used only by guarded account deletion."""
+    connection.execute(
+        "delete from paper_ledger_entries where paper_account_id=? or session_id=?",
+        (account_id, session_id),
+    )
+
 LEGAL_TRANSITIONS = {
     None: {"INTENT_CREATED"},
     "INTENT_CREATED": {"VALIDATION_PENDING", "FAILED"},

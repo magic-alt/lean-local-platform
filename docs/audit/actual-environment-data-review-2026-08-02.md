@@ -174,3 +174,7 @@ Health 显示 orphan provider raw archives=0、quarantined issues=37。run1 本�
 - reproducibility certificate 记录 release、Docker image、project/config、LEAN zip/factor、canonical result、orders/fills/equity 和逐文件 artifact manifest digest，并存入 object store。
 
 代码测试覆盖 release 唯一性、maintenance resume、capability 三态和 golden pair；实际环境仍需增量 recertify 当前 equity/index，随后执行最小真实 LEAN 双跑。无需全量数据重导或全量 Parquet rebuild。
+
+## 14. P2 数据状态 ownership 附录
+
+Data Release、Data Sync recovery 与 Paper ledger/projection 的写入边界已显式化。`data_sync_commands` 只编排 command/task，`data_sync` 持有 sync-run 状态写入；`dataset_releases` 是 release 唯一 writer；`paper_order_pipeline` 是 ledger 唯一 writer；`paper_accounts` 是 account/position/daily projection 唯一 writer。`app/architecture/state_ownership.py` 是机器可读清单，测试扫描 SQL mutation 并拒绝第二 writer，同时禁止 API/Celery entrypoint 直接改 backtest/task/data-sync orchestration state。此项无 migration、无历史数据改写，实际环境仍需 characterization journey。

@@ -136,3 +136,14 @@ Primary list 至少有四种格式：
 - 新增 `/api/data/releases`、`/api/data/capabilities`、`/api/backtests/{run_id}/reproducibility-certificate` 和 golden-pair 查询。
 
 专项 payload 测试在 1 MB schedule/fingerprint/validation 输入下保持 backtest + task summary 合计小于 200 KB；当前实际 authenticated 3/9 条 payload 仍需部署后复测。
+
+## 14. P2 API/Web 整改附录
+
+审计后 API-02～05 已实现，状态为 `CODE_FIXED_REVALIDATION_REQUIRED`：
+
+- 审计点名的 primary lists 统一返回 `{items,count,limit,offset}`，并以 `PageEnvelope` 写入 OpenAPI；前端 workflow/data sync 类型同步。
+- `docs/api.md` 不再列出已移除的 Research session 路由，完整 reference 继续由当前 FastAPI OpenAPI 确定性生成。
+- Backtest 与 Task 共用 cursor log viewer，可向前取 chunk、从保存的 byte offset 跟随、手动停止，并在 run/task 终态停止定时请求。
+- write request 在一个 UI command 开始时只生成一次 operation ID；仅网络异常进行一次默认重试，两次 attempt 复用相同 `Idempotency-Key`，任何 HTTP 响应仍交给调用方处理。
+
+自动化覆盖 list 实际 shape、OpenAPI `$ref`、分页 total/offset、generated reference 和架构边界；实际浏览器长日志及 timeout/replay 仍需部署后复验。

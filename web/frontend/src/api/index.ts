@@ -61,6 +61,7 @@ import type {
   PaperPosition,
   PaperSignal,
   PagedResponse,
+  LogWindow,
   ChartPoint,
   ChartData,
   ScreeningReport,
@@ -103,7 +104,7 @@ export const api = {
   workflows: (status?: string, limit = 100) => {
     const query = new URLSearchParams({ limit: String(limit) });
     if (status) query.set("status", status);
-    return request<WorkflowSummary[]>(`/api/workflows?${query.toString()}`);
+    return request<PagedResponse<WorkflowSummary>>(`/api/workflows?${query.toString()}`);
   },
   workflow: (id: string) => request<WorkflowDetail>(`/api/workflows/${encodeURIComponent(id)}`),
   settings: () => request<AppSettings>("/api/settings"),
@@ -284,7 +285,7 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }),
-  dataSyncRuns: () => request<{ items: DataSyncRun[]; limit: number }>("/api/data/sync-runs"),
+  dataSyncRuns: () => request<PagedResponse<DataSyncRun>>("/api/data/sync-runs"),
   dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
   derivedLayerWatermarks: () => request<DerivedLayerWatermarks>("/api/data/derived/watermarks"),
   startDerivedMaintenance: (layers: Array<"parquet" | "clickhouse"> = ["parquet", "clickhouse"]) =>
@@ -454,15 +455,28 @@ export const api = {
     request<BacktestRun>(`/api/backtests/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteBacktest: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/backtests/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  logs: (id: string) =>
-    request<{ logs: string }>(`/api/backtests/${encodeURIComponent(id)}/logs`),
+  logs: (id: string, params?: { cursor?: string; offset?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.cursor !== undefined) query.set("cursor", params.cursor);
+    if (params?.offset !== undefined) query.set("offset", String(params.offset));
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return request<LogWindow>(`/api/backtests/${encodeURIComponent(id)}/logs${suffix}`);
+  },
   chartData: (id: string, symbol?: string) =>
     request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
   screening: (id: string) =>
     request<ScreeningReport>(`/api/backtests/${encodeURIComponent(id)}/screening`),
   tasks: () => request<Task[]>("/api/tasks?paged=false&limit=100"),
   task: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
-  taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
+  taskLogs: (id: string, params?: { cursor?: string; offset?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.cursor !== undefined) query.set("cursor", params.cursor);
+    if (params?.offset !== undefined) query.set("offset", String(params.offset));
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return request<LogWindow>(`/api/tasks/${encodeURIComponent(id)}/logs${suffix}`);
+  },
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteTask: (id: string) => request<{ deleted: boolean; id: string }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   optimizations: () => request<OptimizationRun[]>("/api/optimizations?paged=false&limit=1000"),
