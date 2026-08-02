@@ -61,6 +61,16 @@ def record_experiment_versions(
     dataset_release_id = fingerprint.get("datasetReleaseId")
     experiment_id = run_id
     with db() as connection:
+        existing_run = connection.execute(
+            "select dataset_release_id from backtest_runs where id=?",
+            (run_id,),
+        ).fetchone()
+        frozen_release_id = existing_run["dataset_release_id"] if existing_run else None
+        if frozen_release_id and dataset_release_id and frozen_release_id != dataset_release_id:
+            raise ValueError(
+                f"dataset_release_changed_during_run:{frozen_release_id}:{dataset_release_id}"
+            )
+        dataset_release_id = frozen_release_id or dataset_release_id
         connection.execute(
             """
             insert into strategy_versions
@@ -137,7 +147,7 @@ def record_experiment_versions(
             ),
         )
         connection.execute(
-            "update backtest_runs set dataset_release_id=? where id=?",
+            "update backtest_runs set dataset_release_id=coalesce(dataset_release_id,?) where id=?",
             (dataset_release_id, run_id),
         )
         connection.execute(

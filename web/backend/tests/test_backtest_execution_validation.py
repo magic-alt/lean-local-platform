@@ -204,6 +204,27 @@ def test_canonical_result_digest_excludes_run_local_snapshot_directory():
     assert canonical_result_sha256(payload) != canonical_result_sha256(changed_parameter)
 
 
+def test_canonical_result_digest_excludes_runtime_speed_advice():
+    from app.services.backtest_execution_validation import canonical_result_sha256
+
+    payload = {
+        "statistics": {"End Equity": "100000"},
+        "analysis": [{"name": "ParameterCountAnalysis", "sample": "12 Parameters Detected"}],
+    }
+    slower_run = json.loads(json.dumps(payload))
+    slower_run["analysis"].append(
+        {
+            "name": "ExecutionSpeedAnalysis",
+            "sample": "The algorithm is slowly executing at only 0k data points per second",
+        }
+    )
+    changed_advice = json.loads(json.dumps(payload))
+    changed_advice["analysis"][0]["sample"] = "13 Parameters Detected"
+
+    assert canonical_result_sha256(payload) == canonical_result_sha256(slower_run)
+    assert canonical_result_sha256(payload) != canonical_result_sha256(changed_advice)
+
+
 def test_execution_validation_merge_replaces_previous_execution_gates():
     from app.services.backtest_execution_validation import merge_execution_validation
 

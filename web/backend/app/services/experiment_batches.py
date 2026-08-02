@@ -302,7 +302,8 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
                   and field_name in ({field_placeholders})
                   and announce_date<=effective_date
                   and effective_date<=?
-                order by effective_date,announce_date,report_date,field_name
+                order by symbol,effective_date,announce_date,report_date,field_name,
+                         source,created_at,coalesce(batch_id,''),value
                 """,
                 [*chunk, *raw_fields, end],
             ).fetchall()
@@ -352,7 +353,8 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
                 from financial_facts
                 where symbol in ({symbol_placeholders})
                   and field_name in ({field_placeholders}) and effective_date<=?
-                order by effective_date,report_date,field_name
+                order by symbol,effective_date,report_date,field_name,
+                         source,created_at,coalesce(batch_id,''),value
                 """,
                 [*chunk, *statement_fields, end],
             ).fetchall()
@@ -393,7 +395,8 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
                 where symbol in ({placeholders})
                   and factor_name in ('pe','pe_ttm','pb')
                   and trade_date<=?
-                order by trade_date,factor_name
+                order by symbol,trade_date,factor_name,source,created_at,
+                         coalesce(batch_id,''),value
                 """,
                 [*chunk, end],
             ).fetchall()
@@ -1549,7 +1552,153 @@ def refresh(batch_id: str) -> dict[str, Any]:
                     batch_id,
                 ),
             )
+    if status == "success" and str(batch.get("mode") or "") == "walk_forward":
+        issue_walk_forward_certificate(batch_id)
     return detail(batch_id, refresh_state=False)
+
+
+def issue_walk_forward_certificate(batch_id: str) -> dict[str, Any]:
+    """Persist an immutable Train -> Validation decision -> OOS lineage certificate."""
+    with db() as connection:
+        run = row_to_dict(
+            connection.execute(
+                "select * from walk_forward_runs where batch_id=?",
+                (batch_id,),
+            ).fetchone()
+        )
+        if not run:
+            raise NotFoundError("Walk-forward evidence not found.")
+        if run.get("certificate") and run.get("certificate_digest"):
+            return {
+                "certificate": run["certificate"],
+                "certificateDigest": run["certificate_digest"],
+                "certifiedAt": run.get("certified_at"),
+            }
+        if run.get("status") != "COMPLETED" or run.get("lineage_status") != "complete":
+            raise LeanWebError("Walk-forward lineage is not complete.")
+        windows = rows_to_dicts(
+            connection.execute(
+                "select * from walk_forward_windows where batch_id=? order by fold,project_id,symbol",
+                (batch_id,),
+            ).fetchall()
+        )
+        if not windows:
+            raise LeanWebError("Walk-forward certificate requires at least one fold.")
+        certified_windows = []
+        for window in windows:
+            selection = row_to_dict(
+                connection.execute(
+                    "select * from parameter_selection_events where window_id=?",
+                    (window["id"],),
+                ).fetchone()
+            ) or {}
+            leakage = row_to_dict(
+                connection.execute(
+                    "select * from leakage_check_results where window_id=? order by checked_at desc limit 1",
+                    (window["id"],),
+                ).fetchone()
+            ) or {}
+            oos = row_to_dict(
+                connection.execute(
+                    "select * from oos_evaluations where window_id=?",
+                    (window["id"],),
+                ).fetchone()
+            ) or {}
+            if leakage.get("decision") != "ALLOW":
+                raise LeanWebError(f"Walk-forward leakage gate did not pass for fold {window['fold']}.")
+            if not selection.get("selection_fingerprint"):
+                raise LeanWebError(f"Walk-forward selection is not frozen for fold {window['fold']}.")
+            if (
+                oos.get("status") != "COMPLETED"
+                or not oos.get("oos_run_id")
+                or not oos.get("input_fingerprint")
+                or not oos.get("result_digest")
+            ):
+                raise LeanWebError(f"Walk-forward OOS evidence is incomplete for fold {window['fold']}.")
+            certified_windows.append(
+                {
+                    "windowId": window["id"],
+                    "fold": window["fold"],
+                    "projectId": window["project_id"],
+                    "symbol": window["symbol"],
+                    "train": {"start": window["train_start"], "end": window["train_end"]},
+                    "validation": {
+                        "start": window["validation_start"],
+                        "end": window["validation_end"],
+                    },
+                    "oos": {
+                        "start": window["oos_start"],
+                        "end": window["oos_end"],
+                        "runId": oos["oos_run_id"],
+                        "inputFingerprint": oos["input_fingerprint"],
+                        "resultDigest": oos["result_digest"],
+                    },
+                    "projectSnapshot": window.get("projectSnapshot"),
+                    "selectionInputs": window.get("selectionInputs"),
+                    "selectionOutputs": window.get("selectionOutputs"),
+                    "selection": {
+                        "selectedCandidateId": selection.get("selected_candidate_id"),
+                        "selectedParameters": json.loads(selection.get("selected_parameters_json") or "{}"),
+                        "candidateRanking": json.loads(selection.get("candidate_ranking_json") or "[]"),
+                        "fingerprint": selection["selection_fingerprint"],
+                    },
+                    "leakage": {
+                        "decision": leakage["decision"],
+                        "checkVersion": leakage.get("check_version"),
+                        "result": leakage.get("result"),
+                    },
+                    "foldFingerprint": window["fold_fingerprint"],
+                }
+            )
+        certified_at = utc_now()
+        certificate = {
+            "schemaVersion": 1,
+            "walkForwardRunId": run["id"],
+            "batchId": batch_id,
+            "datasetVersion": run["dataset_version"],
+            "universeVersion": run["universe_version"],
+            "adjustmentContract": run["adjustment_contract"],
+            "featurePipelineVersion": run["feature_pipeline_version"],
+            "selectionMetric": run["selection_metric"],
+            "selectionRule": run["selection_rule"],
+            "batchSnapshot": run.get("batchSnapshot"),
+            "windows": certified_windows,
+            "certifiedAt": certified_at,
+        }
+        digest = _digest(certificate)
+        connection.execute(
+            """
+            update walk_forward_runs
+            set certificate_json=?,certificate_digest=?,certified_at=?
+            where id=? and certificate_digest is null
+            """,
+            (json_dump(certificate), digest, certified_at, run["id"]),
+        )
+    return {
+        "certificate": certificate,
+        "certificateDigest": digest,
+        "certifiedAt": certified_at,
+    }
+
+
+def walk_forward_certificate(batch_id: str) -> dict[str, Any]:
+    with db() as connection:
+        row = row_to_dict(
+            connection.execute(
+                """
+                select certificate_json,certificate_digest,certified_at
+                from walk_forward_runs where batch_id=?
+                """,
+                (batch_id,),
+            ).fetchone()
+        )
+    if not row or not row.get("certificate"):
+        raise NotFoundError("Walk-forward certificate not found.")
+    return {
+        "certificate": row["certificate"],
+        "certificateDigest": row["certificate_digest"],
+        "certifiedAt": row["certified_at"],
+    }
 
 
 def detail(batch_id: str, *, refresh_state: bool = True) -> dict[str, Any]:

@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -23,17 +24,27 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import database_backend, db  # noqa: E402
-from app.services.paper_accounts import rebuild_projection  # noqa: E402
+from app.services.paper_accounts import (  # noqa: E402
+    mark_projection_history_trusted,
+    verify_projection_history,
+)
 
 
 MIN_TRADING_DAYS = 21
 MIN_ACCOUNTS = 2
 
 
-def _acceptance_contract(args: argparse.Namespace) -> dict[str, Any]:
+def _acceptance_contract(
+    args: argparse.Namespace,
+    existing_accounts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     days = int(args.days)
-    accounts = int(args.accounts)
-    cash_values = [item.strip() for item in str(args.initial_cash).split(",") if item.strip()]
+    accounts = len(existing_accounts) if existing_accounts is not None else int(args.accounts)
+    cash_values = (
+        [str(item["initial_cash"]) for item in existing_accounts]
+        if existing_accounts is not None
+        else [item.strip() for item in str(args.initial_cash).split(",") if item.strip()]
+    )
     if days < MIN_TRADING_DAYS:
         raise ValueError(f"paper_acceptance_requires_at_least_{MIN_TRADING_DAYS}_trading_days")
     if accounts < MIN_ACCOUNTS:
@@ -132,11 +143,21 @@ def _git_commit() -> str:
 
 
 def _ledger_evidence(account_id: str, as_of_date: str) -> dict[str, Any]:
-    projection = rebuild_projection(account_id, as_of_date)["account"]
     with db() as connection:
+        projection = connection.execute(
+            "select * from paper_account_projections where paper_account_id=?",
+            (account_id,),
+        ).fetchone()
+        position_rows = connection.execute(
+            """
+            select symbol,quantity from paper_account_position_projections
+            where paper_account_id=?
+            """,
+            (account_id,),
+        ).fetchall()
         rows = connection.execute(
             """
-            select ledger_sequence,entry_type,asset,precise_quantity,precise_amount,
+            select ledger_sequence,entry_type,asset,symbol,precise_quantity,precise_amount,
                    currency,idempotency_key,execution_cycle_id
             from paper_ledger_entries
             where paper_account_id=?
@@ -152,6 +173,22 @@ def _ledger_evidence(account_id: str, as_of_date: str) -> dict[str, Any]:
             (account_id,),
         ).fetchone()
     canonical = [dict(item) for item in rows]
+    replay_cash = sum(
+        Decimal(str(item.get("precise_amount") or 0))
+        for item in canonical
+        if item.get("asset") == "cash"
+    )
+    replay_positions: dict[str, Decimal] = {}
+    for item in canonical:
+        if item.get("asset") != "equity" or not item.get("symbol"):
+            continue
+        symbol = str(item["symbol"])
+        replay_positions[symbol] = replay_positions.get(symbol, Decimal("0")) + Decimal(
+            str(item.get("precise_quantity") or 0)
+        )
+    projected_positions = {
+        str(item["symbol"]): Decimal(str(item["quantity"])) for item in position_rows
+    }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
@@ -160,8 +197,14 @@ def _ledger_evidence(account_id: str, as_of_date: str) -> dict[str, Any]:
         "openingCheckpointDigest": opening["opening_checkpoint_digest"],
         "ledgerEntries": len(canonical),
         "ledgerDigest": digest,
-        "projectionCash": projection["cash"],
-        "projectionEquity": projection["total_equity"],
+        "replayedCash": format(replay_cash, "f"),
+        "projectionCash": str(projection["cash"]),
+        "cashMatches": replay_cash == Decimal(str(projection["cash"])),
+        "replayedPositions": {key: format(value, "f") for key, value in sorted(replay_positions.items()) if value},
+        "projectionPositions": {key: format(value, "f") for key, value in sorted(projected_positions.items()) if value},
+        "positionsMatch": {key: value for key, value in replay_positions.items() if value}
+        == {key: value for key, value in projected_positions.items() if value},
+        "projectionEquity": str(projection["total_equity"]),
         "sourceLedgerSequence": projection["source_ledger_sequence"],
         "sourceCheckpointDigest": projection["source_checkpoint_digest"],
     }
@@ -226,8 +269,104 @@ def _create_account(
     return _expect(status, body, {201}, "create_account")
 
 
+def _existing_scope(
+    base_url: str,
+    account_ids: list[str],
+    cohort_id: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    normalized = list(dict.fromkeys(item.strip() for item in account_ids if item.strip()))
+    if len(normalized) < MIN_ACCOUNTS:
+        raise RuntimeError("existing_acceptance_requires_at_least_two_accounts")
+    accounts = [
+        _expect(*_api(base_url, "GET", f"/api/paper/accounts/{account_id}"), {200}, "account")
+        for account_id in normalized
+    ]
+    deployments = []
+    for account in accounts:
+        items = _expect(
+            *_api(base_url, "GET", f"/api/paper/accounts/{account['id']}/deployments"),
+            {200},
+            "deployments",
+        )
+        primary = next(
+            (
+                item
+                for item in items
+                if bool(item.get("is_primary")) and item.get("status") in {"active", "paused"}
+            ),
+            None,
+        )
+        if primary is None:
+            raise RuntimeError(f"active_primary_deployment_missing:{account['id']}")
+        if primary["status"] == "paused":
+            primary = _expect(
+                *_api(base_url, "POST", f"/api/paper/deployments/{primary['id']}/activate"),
+                {200},
+                "activate_deployment",
+            )
+        if account["status"] != "active":
+            _expect(
+                *_api(base_url, "POST", f"/api/paper/accounts/{account['id']}/activate"),
+                {200},
+                "activate_account",
+            )
+        deployments.append(primary)
+
+    with db() as connection:
+        for deployment in deployments:
+            trusted = connection.execute(
+                """
+                select run.id from backtest_runs run
+                join dataset_releases release on release.id=run.dataset_release_id
+                join reproducibility_certificates certificate
+                  on certificate.id=run.reproducibility_certificate_id
+                where run.id=? and run.status='success' and run.trust_status='trusted'
+                  and release.status='active' and release.is_production=1 and release.is_certified=1
+                  and certificate.status='valid'
+                """,
+                (deployment["source_backtest_id"],),
+            ).fetchone()
+            if not trusted:
+                raise RuntimeError(
+                    f"deployment_source_backtest_not_trusted:{deployment['id']}:{deployment['source_backtest_id']}"
+                )
+
+    cohort: dict[str, Any] | None = None
+    if cohort_id:
+        cohort = _expect(
+            *_api(base_url, "GET", f"/api/paper/certification-cohorts/{cohort_id}"),
+            {200},
+            "cohort",
+        )
+    else:
+        listed = _expect(
+            *_api(base_url, "GET", "/api/paper/certification-cohorts"),
+            {200},
+            "cohorts",
+        )
+        for summary in listed.get("items") or []:
+            candidate = _expect(
+                *_api(
+                    base_url,
+                    "GET",
+                    f"/api/paper/certification-cohorts/{summary['id']}",
+                ),
+                {200},
+                "cohort",
+            )
+            member_ids = {str(item["paper_account_id"]) for item in candidate.get("members") or []}
+            if member_ids == set(normalized):
+                cohort = candidate
+                break
+    if cohort is None:
+        raise RuntimeError("existing_certification_cohort_missing")
+    member_ids = {str(item["paper_account_id"]) for item in cohort.get("members") or []}
+    if member_ids != set(normalized):
+        raise RuntimeError("certification_cohort_account_mismatch")
+    return accounts, deployments, cohort
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    contract = _acceptance_contract(args)
     if database_backend() != "mysql":
         raise RuntimeError("mysql_required")
     health = _expect(*_api(args.base_url, "GET", "/api/health"), {200}, "health")
@@ -236,24 +375,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         {200},
         "dependencies",
     )
-    if not args.project_id or not args.source_backtest_id:
-        raise RuntimeError("project_id_and_source_backtest_id_required")
-    candidates = _expect(
-        *_api(
+    existing_mode = bool(args.account_id)
+    cohort: dict[str, Any] | None = None
+    if existing_mode:
+        accounts, deployments, cohort = _existing_scope(
             args.base_url,
-            "GET",
-            f"/api/paper/accounts/candidates?projectId={urllib.parse.quote(args.project_id)}",
-        ),
-        {200},
-        "candidates",
-    )
-    if not any(item["id"] == args.source_backtest_id for item in candidates):
-        raise RuntimeError("trusted_candidate_unavailable")
+            args.account_id,
+            args.cohort_id,
+        )
+        contract = _acceptance_contract(args, accounts)
+    else:
+        contract = _acceptance_contract(args)
+        if not args.project_id or not args.source_backtest_id:
+            raise RuntimeError("project_id_and_source_backtest_id_required")
+        candidates = _expect(
+            *_api(
+                args.base_url,
+                "GET",
+                f"/api/paper/accounts/candidates?projectId={urllib.parse.quote(args.project_id)}",
+            ),
+            {200},
+            "candidates",
+        )
+        if not any(item["id"] == args.source_backtest_id for item in candidates):
+            raise RuntimeError("trusted_candidate_unavailable")
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    accounts: list[dict[str, Any]] = []
-    for index, cash in enumerate(contract["initialCash"]):
-        risk_config = (
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        accounts = []
+        for index, cash in enumerate(contract["initialCash"]):
+            risk_config = (
             {
                 "maxPositions": 10,
                 "maxPositionWeight": "1",
@@ -269,38 +419,52 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "maxOrderAmount": "1",
                 "maxDailyTurnover": "0.5",
             }
-        )
-        accounts.append(
-            _create_account(
-                args.base_url,
-                f"Acceptance {index + 1} {stamp}",
-                cash,
-                risk_config=risk_config,
             )
-        )
-    deployments: list[dict[str, Any]] = []
-    for index, account in enumerate(accounts, start=1):
-        status, deployment = _api(
-            args.base_url,
-            "POST",
-            f"/api/paper/accounts/{account['id']}/deployments",
-            {
-                "name": f"Acceptance Strategy {index}",
-                "projectId": args.project_id,
-                "sourceBacktestId": args.source_backtest_id,
-                "scheduleType": "market_daily",
-                "scheduleExpression": "after_close+00:45",
-                "marketTimezone": "Asia/Shanghai",
-                "executionTiming": "next_open",
-                "signalMode": "paper_execute",
-                "isPrimary": True,
-            },
-        )
-        deployments.append(_expect(status, deployment, {201}, "create_deployment"))
-        _expect(
-            *_api(args.base_url, "POST", f"/api/paper/accounts/{account['id']}/activate"),
-            {200},
-            "activate_account",
+            accounts.append(
+                _create_account(
+                    args.base_url,
+                    f"Acceptance {index + 1} {stamp}",
+                    cash,
+                    risk_config=risk_config,
+                )
+            )
+        deployments = []
+        for index, account in enumerate(accounts, start=1):
+            status, deployment = _api(
+                args.base_url,
+                "POST",
+                f"/api/paper/accounts/{account['id']}/deployments",
+                {
+                    "name": f"Acceptance Strategy {index}",
+                    "projectId": args.project_id,
+                    "sourceBacktestId": args.source_backtest_id,
+                    "scheduleType": "market_daily",
+                    "scheduleExpression": "after_close+00:45",
+                    "marketTimezone": "Asia/Shanghai",
+                    "executionTiming": "next_open",
+                    "signalMode": "paper_execute",
+                    "isPrimary": True,
+                },
+            )
+            deployments.append(_expect(status, deployment, {201}, "create_deployment"))
+            _expect(
+                *_api(args.base_url, "POST", f"/api/paper/accounts/{account['id']}/activate"),
+                {200},
+                "activate_account",
+            )
+        cohort = _expect(
+            *_api(
+                args.base_url,
+                "POST",
+                "/api/paper/certification-cohorts",
+                {
+                    "name": f"Paper accounts acceptance {stamp}",
+                    "accountIds": [account["id"] for account in accounts],
+                    "requiredSessions": contract["requiredTradingDays"],
+                },
+            ),
+            {201},
+            "create_cohort",
         )
 
     cycles: list[dict[str, Any]] = []
@@ -370,6 +534,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         account_id = account["id"]
         if ledgers[account_id]["ledgerDigest"] != replayed_ledgers[account_id]["ledgerDigest"]:
             raise RuntimeError(f"ledger_replay_digest_mismatch:{account_id}")
+        if not ledgers[account_id]["cashMatches"]:
+            raise RuntimeError(f"ledger_projection_cash_mismatch:{account_id}")
+        if not ledgers[account_id]["positionsMatch"]:
+            raise RuntimeError(f"ledger_projection_positions_mismatch:{account_id}")
     if len({item["openingLedgerEntryId"] for item in ledgers.values()}) != len(accounts):
         raise RuntimeError("account_opening_ledger_not_isolated")
     with db() as connection:
@@ -409,6 +577,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     observed_phases = sorted(str(item["phase"]) for item in checkpoint_phases)
     if args.with_fault and len(observed_phases) < 6:
         raise RuntimeError("six_checkpoint_fault_evidence_missing")
+    projection_verification = [verify_projection_history(account["id"]) for account in accounts]
+    if not all(item["passed"] for item in projection_verification):
+        raise RuntimeError(f"projection_history_verification_failed:{projection_verification}")
+    data_trust = [mark_projection_history_trusted(item) for item in projection_verification]
+    cohort = _expect(
+        *_api(
+            args.base_url,
+            "POST",
+            f"/api/paper/certification-cohorts/{cohort['id']}/refresh",
+        ),
+        {200},
+        "refresh_cohort",
+    )
+    if cohort.get("status") != "certified":
+        raise RuntimeError(f"paper_certification_incomplete:{cohort}")
     api_evidence: dict[str, Any] = {}
     for account in accounts:
         api_evidence[account["id"]] = {}
@@ -442,6 +625,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "testTimestamp": datetime.now(timezone.utc).isoformat(),
         "gitCommit": _git_commit(),
         "databaseBackend": "mysql",
+        "resourceMode": "existing" if existing_mode else "created",
         "health": health,
         "dependencies": dependencies,
         "strategyProjectFingerprints": [item["strategy_fingerprint"] for item in deployments],
@@ -469,6 +653,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "resultDigests": [item["result_digest"] for item in cycles],
         "ledgerReconciliation": ledgers,
         "ledgerReplayReconciliation": replayed_ledgers,
+        "projectionVerification": projection_verification,
+        "dataTrust": data_trust,
+        "certificationCohort": cohort,
         "concurrency": {
             "enabled": True,
             "accountCount": len(accounts),
@@ -499,6 +686,16 @@ def main() -> int:
     parser.add_argument("--trading-date", default=os.environ.get("PAPER_ACCEPTANCE_TRADING_DATE"))
     parser.add_argument("--days", type=int, default=MIN_TRADING_DAYS)
     parser.add_argument("--accounts", type=int, default=MIN_ACCOUNTS)
+    parser.add_argument(
+        "--account-id",
+        action="append",
+        default=[],
+        help="Reuse an existing Paper account (repeat at least twice); no duplicate account is created.",
+    )
+    parser.add_argument(
+        "--cohort-id",
+        help="Existing certification cohort for --account-id; omitted to auto-select an exact member match.",
+    )
     parser.add_argument("--initial-cash", default="1000000,3000000")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--with-fault", action="store_true")

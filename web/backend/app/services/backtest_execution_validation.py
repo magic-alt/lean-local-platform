@@ -58,6 +58,13 @@ def _canonical_result_value(value: Any, path: tuple[str, ...] = ()) -> Any:
             result[key] = _canonical_result_value(value[key], (*path, key))
         return result
     if isinstance(value, list):
+        if path and path[-1].lower() == "analysis":
+            value = [
+                item
+                for item in value
+                if not isinstance(item, dict)
+                or str(item.get("name") or "") != "ExecutionSpeedAnalysis"
+            ]
         return [_canonical_result_value(item, path) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
         return None
@@ -462,4 +469,7 @@ def revalidate_persisted_backtest(run_id: str) -> dict[str, Any]:
                 "update tasks set status = ?, error = ?, finished_at = coalesce(finished_at, ?) where id = ?",
                 (status, failure, utc_now(), run["task_id"]),
             )
+    from .backtest_trust import reconcile_backtest_trust
+
+    reconcile_backtest_trust(run_id)
     return get_backtest(run_id) or {}

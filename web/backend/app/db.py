@@ -61,6 +61,7 @@ JSON_COLUMNS = {
     "validation_json": "validation",
     "experiment_json": "experiment",
     "failure_json": "failure",
+    "certificate_json": "certificate",
     "reconciliation_json": "reconciliation",
     "event_json": "event",
     "raw_intent_json": "rawIntent",

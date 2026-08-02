@@ -97,10 +97,10 @@ def active_release_for_dataset(dataset_id: str) -> dict[str, Any] | None:
     with db() as connection:
         row = connection.execute(
             """
-            select release.* from dataset_releases release
-            where release.parquet_dataset_id=? and release.status='active'
-              and release.is_production=1 and release.is_certified=1
-            order by release.certified_at desc limit 1
+            select dataset_release.* from dataset_releases dataset_release
+            where dataset_release.parquet_dataset_id=? and dataset_release.status='active'
+              and dataset_release.is_production=1 and dataset_release.is_certified=1
+            order by dataset_release.certified_at desc limit 1
             """,
             (dataset_id,),
         ).fetchone()

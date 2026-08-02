@@ -118,6 +118,14 @@ def detail(batch_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/{batch_id}/walk-forward-certificate")
+def walk_forward_certificate(batch_id: str):
+    try:
+        return experiment_batches.walk_forward_certificate(batch_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.delete("/{batch_id}")
 def delete(batch_id: str):
     try:

@@ -166,7 +166,7 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
                    ) as admission_stage
             from backtest_runs br
             left join experiments experiment on experiment.run_id = br.id
-            where br.project_id = ? and br.status = 'success'
+            where br.project_id = ? and br.status = 'success' and br.trust_status='trusted'
             order by br.finished_at desc, br.created_at desc
             """,
             (project_id,),
@@ -223,7 +223,11 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     source_run = get_backtest(source_backtest_id)
     if not source_run or source_run.get("project_id") != project_id:
         raise ValueError("The selected backtest does not belong to this project.")
-    if source_run.get("status") != "success" or (source_run.get("validation") or {}).get("passed") is not True:
+    if (
+        source_run.get("status") != "success"
+        or source_run.get("trust_status") != "trusted"
+        or (source_run.get("validation") or {}).get("passed") is not True
+    ):
         raise ValueError("The selected backtest has not passed execution validation.")
     source_fingerprint = source_run.get("fingerprint") or {}
     source_certification = source_fingerprint.get("datasetCertification") or {}

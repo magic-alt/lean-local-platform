@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **269** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **270** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -136,6 +136,7 @@
 | `GET` | `/api/experiment-batches/{batch_id}/export.csv` | Export | `batch_id` (path, required) | `200` - |
 | `POST` | `/api/experiment-batches/{batch_id}/restart` | Restart Cancelled | `batch_id` (path, required) | `200` - |
 | `POST` | `/api/experiment-batches/{batch_id}/retry-failed` | Retry Failed | `batch_id` (path, required) | `200` - |
+| `GET` | `/api/experiment-batches/{batch_id}/walk-forward-certificate` | Walk Forward Certificate | `batch_id` (path, required) | `200` - |
 
 ## factors
 

@@ -105,9 +105,9 @@ def _data_trust(account_ids: str | Iterable[str] | None = None) -> dict[str, Any
         certifications = rows_to_dicts(
             connection.execute(
                 f"""
-                select trust.*,release.status as release_status,
-                       release.is_production as release_is_production,
-                       release.is_certified as release_is_certified,
+                select trust.*,dataset_release.status as release_status,
+                       dataset_release.is_production as release_is_production,
+                       dataset_release.is_certified as release_is_certified,
                        (select count(*) from paper_account_checkpoints checkpoint
                         where checkpoint.paper_account_id=trust.paper_account_id
                           and checkpoint.generation=trust.account_generation) as actual_checkpoint_count,
@@ -116,7 +116,7 @@ def _data_trust(account_ids: str | Iterable[str] | None = None) -> dict[str, Any
                         where report.paper_account_id=trust.paper_account_id
                           and report_cycle.account_generation=trust.account_generation) as actual_result_count
                 from paper_account_trust_certifications trust
-                join dataset_releases release on release.id=trust.dataset_release_id
+                join dataset_releases dataset_release on dataset_release.id=trust.dataset_release_id
                 where trust.paper_account_id in ({placeholders}) and trust.status='active'
                   and trust.expires_at>? and trust.revoked_at is null
                 order by trust.certified_at desc
@@ -2323,9 +2323,10 @@ def verify_projection_history(account_id: str) -> dict[str, Any]:
             select run.dataset_release_id
             from paper_strategy_deployments deployment
             join backtest_runs run on run.id=deployment.source_backtest_id
-            join dataset_releases release on release.id=run.dataset_release_id
+            join dataset_releases dataset_release on dataset_release.id=run.dataset_release_id
             where deployment.paper_account_id=? and deployment.generation=?
-              and release.status='active' and release.is_production=1 and release.is_certified=1
+              and dataset_release.status='active'
+              and dataset_release.is_production=1 and dataset_release.is_certified=1
             order by deployment.version desc limit 1
             """,
             (account_id, generation),

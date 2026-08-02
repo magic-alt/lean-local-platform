@@ -18,6 +18,7 @@ from .db import DatabaseUnavailableError, init_db
 from .services.projects import consolidate_automatic_copies
 from .services.workflows import record_workflow_event
 from .services import api_idempotency
+from .services.backtest_trust import reconcile_backtest_trust
 from .observability.metrics import metrics_middleware
 
 
@@ -240,6 +241,9 @@ async def trace_workflow_middleware(request: Request, call_next):
 def startup() -> None:
     try:
         init_db()
+        trust = reconcile_backtest_trust()
+        if trust["count"]:
+            logger.info("Backtest trust reconciliation: %s", trust["counts"])
         consolidation = consolidate_automatic_copies()
         if consolidation["merged"] or consolidation["renamed"]:
             logger.info("Project copy consolidation: %s", consolidation)

@@ -1428,9 +1428,27 @@ def run_backtest_task(self, task_id: str, run_id: str):
             )
             refreshed = get_backtest(run_id) or {}
             refreshed_fingerprint = refreshed.get("fingerprint") or {}
-            if refreshed.get("dataset_release_id") or refreshed_fingerprint.get("datasetReleaseId"):
-                issue_certificate(run_id)
-        update_backtest(run_id, status=status, finished_at=finished_at)
+            if (
+                status == "success"
+                and (refreshed.get("dataset_release_id") or refreshed_fingerprint.get("datasetReleaseId"))
+            ):
+                issue_certificate(run_id, allow_nonterminal=True)
+        finalized = get_backtest(run_id) or {}
+        certificate_id = finalized.get("reproducibility_certificate_id")
+        trust_status = "trusted" if status == "success" and certificate_id else "invalid" if status != "success" else "unverified"
+        trust_reason = None if trust_status == "trusted" else (
+            execution_failure_message(execution_validation or {})
+            if status != "success"
+            else "reproducibility_certificate_missing"
+        )
+        update_backtest(
+            run_id,
+            status=status,
+            finished_at=finished_at,
+            trust_status=trust_status,
+            trust_reason=trust_reason,
+            trust_evaluated_at=finished_at,
+        )
         update_task(
             task_id,
             status=status,
@@ -1477,6 +1495,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
             ),
             exit_code=latest_run.get("exit_code") if analysis_failed else -1,
             finished_at=finished_at,
+            trust_status="invalid",
+            trust_reason=str(exc),
+            trust_evaluated_at=finished_at,
         )
         update_fingerprint()
         update_task(task_id, status="failed", error=str(exc), finished_at=finished_at)

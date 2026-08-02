@@ -1,99 +1,81 @@
-# Actual-environment remediation checklist — 2026-08-02
+# Actual-environment remediation checklist — 2026-08-02（第二次审计）
 
-来源：[actual-environment-system-review-2026-08-02.md](actual-environment-system-review-2026-08-02.md)。当前判定 `LEVEL5_FAIL`，48/100。本清单不包含数据库备份、恢复、灾难恢复、隔离数据库或全量数据重导；这些事项属于本轮明确排除项。
+来源：[主报告](actual-environment-system-review-2026-08-02.md)。当前判定 `LEVEL5_FAIL`，51/100。第一次审计后 P0/P1/P2 三批代码修复均已纳入；`0039` 的状态收敛和 Paper 开户层已在实际环境验证，P1/P2 因实际进程/schema 未部署而不能关闭。
 
-通用完成条件：代码、migration、OpenAPI、前端类型和文档同步；单元/集成测试通过；最终复审仅使用当前实际环境并生成新日期证据。涉及历史异常记录只允许 additive trust/quarantine 标记，不删除或改写原始事实。
+通用约束：不删除或重写历史事实；历史错误只加 trust/quarantine 标记；不以 mock、SQLite、文档或单测替代 actual MySQL/LEAN/Paper 证据；不要求备份、恢复、隔离环境或全量数据重导。
 
 ## Wave 0 — 事实错误和 Critical
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-CRIT-001 | 冻结 execution dataset release/hash；将最终 Source/QA/PIT/benchmark gate、artifact digest、run/task terminal status 放入同一 finalization Unit of Work；历史异常 success 增 `trustStatus=invalid` | `tasks/worker.py`, source gate, backtest service, migration, TS types | additive 列/证书；不改 raw artifact | certification 在运行中切换的竞态集成测试；final gate critical 测试 | SQL `success AND final_passed=false`=0；启动/最终 release id 相同；异常历史不再显示 trusted | 回退代码与 additive API 字段；保留新增事实列，不删除证据 | 任何 critical gate 都无法进入 success，且版本冻结 |
+| ACT-P0-004 | 在获批变更窗口应用 `0040`，按 migration→API→workers→Beat 顺序滚动，同一 release manifest 暴露 git SHA/schema/OpenAPI hash | Compose/release scripts、health、migration 0040 | additive 四表；不改历史交易事实 | migration smoke、actual OpenAPI diff、worker ping | actual=source 230 paths；0040 applied；5 新 endpoints 可用；所有进程同 SHA | 回滚应用镜像；保留 additive 表，不 downgrade/delete | 实际代码、schema、API、frontend 单一代次 |
+| ACT-CRIT-001 | 部署 frozen Dataset Release/finalization 修复；将历史 critical-success additive 标记 `trustStatus=invalid`；禁止任何 final critical 进入 success | backtest worker/finalizer/source gate、0040、API/TS | 新 release/certificate/trust 字段；保留 raw artifact/status 历史 | certification race、final gate critical、事务回滚 | SQL `success AND final_passed=false AND trusted=true`=0；新 run 启动/最终 release一致 | 停发新证书并回退代码；不删除证据 | 任何可信 success 的最终 critical gates 全 pass |
 
 ## Wave 1 — 数据与回测可信度
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P1-005 | 建立单一 immutable Dataset Release；Parquet、LEAN cache、run、QA/certification 都引用 release FK | data governance services, migration, API/TS | 把现有 production Parquet 认证迁入 release；原表保留兼容 | release 唯一性、FK、过期/撤销、并发 recertification | 每个 production dataset 精确一个 active certified release；每个 success run FK 有效 | 双写兼容期间切回旧读取；不删除 release | `dataset_versions` 与 Parquet 不再形成两套 version 权威 |
-| ACT-P1-002 | 把 Parquet recertification 拆为有界分区、checkpoint resume 和唯一 active lease；MySQL 长查询使用分页/服务端游标 | `derived_maintenance.py`, `data_sync.py`, task/recovery | additive checkpoint/attempt；不重建全量 | 连接中断、worker restart、同 scope 重复调度 | 一次维护从 checkpoint 收敛；无 orphan active；7 日无 2013 | 关闭新 orchestrator feature flag，保留水位 | 自动认证无需依赖多次 worker 重启 |
-| ACT-P1-006 | 创建 fetchable Reproducibility Certificate，包含 image digest、project snapshot、release、LEAN zip/factor、config、orders/fills/equity/canonical digest | fingerprint/artifact services, stored object, migration | additive certificate/stored object | 两次同 input 最小真实 LEAN run；允许 raw 非确定字段差异 | 当前 DB 可查 golden pair；关键 canonical digest 全一致且文件可下载 | 停发 certificate；保留历史 certificate | 相同输入的当前复现性可独立验证 |
-| ACT-P1-004 | 引入资产 capability 状态 `metadata_only/data_ready/executable`，所有目录/UI/preflight 使用同一状态 | data catalog/provider/source gate/UI | additive capability；不导入新数据 | 各资产 0/metadata/full 三态 contract tests | futures/options/cbond/minute 等实际 0 行时明确不可运行 | 回退 UI 展示，保留字段 | 页面不会把 raw metadata 误报为可回测资产 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P1-005 | 对现有 equity/index 做增量 release 认证，使 Parquet、run、cache、QA 引用同一 immutable release | release/recertification/source gate | 增加 release/FK-like refs；不 rebuild Parquet | release唯一性、过期/撤销、并发recertify | 两个 production scope 各一 active certified release | 停用新读取，保留 release rows | 不再有两套 version authority |
+| ACT-P1-006 | 复用现有 project 做最小真实 LEAN 双跑并生成 Reproducibility Certificate | fingerprint/certificate/object store | 最少 2 runs；统一审计标签 | 同 input 两次；canonical/orders/fills/equity digest | Golden pair API 可查、证书可下载、关键 digest 相同 | 取消未开始任务；完成事实不删除 | 当前可独立复核相同输入复现性 |
+| ACT-P1-002 | 启用 maintenance checkpoint/single-active/backoff，观察 7 日 | derived maintenance/data sync/Beat | 仅 checkpoint/attempt/heartbeat | 连接瞬断和 worker restart 应在获批窗口执行 | 7日无 MySQL2013/orphan chain；同 scope 单 active | feature flag 回退，保留水位 | 自动认证有界恢复 |
+| ACT-P1-004 | 把 actual capability API/UI 与 canonical 行数、certification 对账 | catalog/capability/preflight/UI | 无数据导入 | 0/metadata/data-ready/executable 三态 | future/option/cbond/minute 0行时明确不可执行 | 回退 UI 字段，默认 unavailable | 页面不把 metadata 冒充可回测 |
 
 ## Wave 2 — Experiment 和 Walk-Forward
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P0-002 | 对 batch/project/OOS run 加删除保护或 immutable snapshot；将当前 orphan WF 标为 `lineage_broken`；持久化 selection inputs/outputs 与 OOS run FK | experiment services, migrations, API/UI | additive lineage/status；不删除 orphan | FK/soft archive、validation-only selection、embargo、OOS exclusion | orphan FK=0；每折从 Train→Validation decision→OOS artifact 可导航 | 关闭新写路径；保留 snapshot | WF 证据独立、完整、可复现 |
-| ACT-P0-002 | 在前项完成后执行最小 2×2 grid、rolling 与至少两折 WF，使用当前认证数据和已有 project | audit runner/API（复审阶段） | 最少新 run，统一 audit 标签 | preview=child unique count、failed-only retry、CSV/ranking/heatmap | child 组合唯一；success 不被 retry；OOS 未参与选择 | 取消尚未运行 child；不删除已生成事实 | 当前环境有完整 Experiment/WF 证据 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P0-002 | 保留当前 broken row 作历史证据；用现有 project/release 创建最小新 WF，持久化 train/validation/OOS snapshot、selection input/output、PIT manifest、OOS run FK | experiment/WF services、API/UI | 最少新 batch/folds；不覆盖旧 row | Validation-only selection、embargo、PIT、删除保护 | 每折可从 decision 导航到 OOS artifact；OOS不参与选参 | 取消未开始 child；已完成事实保留 | 当前库有完整、无泄漏的三段 WF certificate |
+| ACT-P0-002 | 创建最小 2×2 grid/rolling 证据并验证 failed-only retry、CSV/ranking/heatmap | experiment scheduler/UI | bounded child runs | preview=unique child count、retry 不覆盖 success | 组合唯一、进度/导出/比较一致 | cancel pending children | Optimization/rolling 由 actual evidence 支撑 |
 
 ## Wave 3 — Paper 多账户
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P0-001 | 建立 durable Paper certification cohort，至少两个差异 opening balance 账户，冻结 deployment/release/risk/execution version，保留 21 certified sessions | Paper account/deployment/cycle services, migration, API/UI | 创建最少两个正式审计账户和周期；append-only | account isolation、run-now/Beat 幂等、six checkpoint、no-signal/waiting/failed/recovered | ledger 独立；fill/fee 不重复；projection 重算 digest 一致 | pause cohort 和 deployment；不得删除 ledger | 当前库可导航并重算两个账户完整事实链 |
-| ACT-P1-001 | dataTrust 改为按 account+generation+release 计算，验证资源存在、TTL、checkpoint/result 数量 | `paper_accounts.py`, API/TS/UI, certification table | additive certification row | 账户归档/代次变化/证据过期 | count=0 时不返回 trusted；dangling account evidence=0 | feature flag 切回只读兼容，默认 false | trust 只代表当前存在的账户事实 |
-| ACT-P0-003 | 为 legacy Paper jobs/reconciliation 建 quarantine 与父资源完整性约束；禁止 orphan READY 被调度 | Paper scheduler/recovery, migration | 143/139 只标记 quarantine，不删除 | legacy migration、due scheduler、duplicate beat | orphan READY=0；quarantine 不参与 dispatch | 关闭 filter 但保留 quarantine 字段 | 旧 Paper 与 Account v2 边界明确且不影响调度 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P1-001 | 0040 后按当前 account+generation+release 重建 trust；旧 deleted account evidence 失效 | Paper trust/API/UI | additive certification；不改 ledger | archive/generation/TTL/release expiry | actual trust 只引用当前两个账户；无 dangling ID | trust 默认 false | trust 与当前事实绑定 |
+| ACT-P0-001 | 复用现有两个账户和 deployment 完成 21 certified sessions；先纠正 past-due scheduler 状态 | Paper scheduler/cycle/order pipeline/report | append-only cycles/ledger；不新建重复账户 | duplicate Beat/Run-now、no-signal/waiting/recovery、fill/fee uniqueness | 两账户各21 sessions；无跨账户 row；重复调用同 cycle/fill/fee | pause deployment；不删除 ledger | 多账户资金、持仓、订单、成交和账本可重算 |
+| ACT-P0-001 | 独立只读 replay ledger，与 projection/overview/performance/report/UI 五方对账 | ledger replay/query/UI | 只读 | cash/position/NAV/day P&L recompute | digest 和金额一致，误差规则明确 | 不适用 | projection 可由 ledger 重建 |
 
 ## Wave 4 — 架构和 API
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P2-004 | 拆分 Data Release、Run Orchestration、Paper Ledger/Projection 的 command/query/repository；声明每张状态表唯一 writer | `data_sync.py`, `paper_accounts.py`, `worker.py`, `api/data.py` | 无 schema 前提；逐步内部重构 | characterization + dependency tests | route 仅 validation/delegation；状态写者清单可自动检查 | 按模块 feature flag 回退 | 不再由超大 service 同时拥有 HTTP、调度和多表状态 |
-| ACT-P2-001 | 统一 primary list envelope；从 OpenAPI 生成 API reference；Research 旧路由明确 deprecated/removed | routers, schemas, `docs/api.md`, frontend types | 无 | OpenAPI snapshot、client contract | 所有 list `{items,count,limit,offset}`；docs/TS/actual 相同 | 保留限时 legacy query/adapter | 契约无四种结构漂移 |
-| ACT-P2-003 | UI command 创建稳定 operation id，网络重试复用同一 Idempotency-Key | `frontend/src/api/client.ts`, write callers | 复用现有 idempotency 表 | timeout/retry、同 key 异 payload 409 | 同一 command 两次请求返回同 resource/response | 回退 caller 层，服务端机制不变 | 关键 POST 的客户端重试语义成立 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P2-001 | 部署 PageEnvelope 和 generated docs；提供旧 envelope 兼容窗口 | routers/schemas/docs/TS | 无 | actual OpenAPI snapshot/client contract | primary lists 结构一致 | legacy adapter | docs/TS/OpenAPI/response一致 |
+| ACT-P2-004 | 部署并实际走通 ownership manifest/command-query surfaces | state ownership、data sync、Paper、worker | 无 | dependency + characterization | API/task entrypoint 不直接写 orchestration state | 模块 feature flag | 每张状态表只有声明 writer |
+| ACT-P2-003 | 对关键 POST 做真实 timeout replay | frontend API client、idempotency middleware | 最少受控请求；优先 no-signal terminal cycle | 同 command 同 key、异 payload 409 | 同一操作只生成一个 resource/cycle | 停止测试代理 | 客户端重试语义成立 |
 
 ## Wave 5 — Web 流程和 UI
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P1-003 | 新建 list summary DTO/字段选择；大 schedule/fingerprint/validation 只在 detail 请求返回；前端改真实分页 | backtest/task/QA schemas, API, `api/index.ts`, pages | 无 | payload budget、分页、slow-network UI | backtests 3 条 <200KB；tasks 9 条 <200KB；页面不全量 `limit=1000` | 版本化旧 detail/full endpoint | 列表响应有硬上限且移动端可操作 |
-| ACT-P2-002 | 前端实现 cursor 日志“更早/跟随/停止”，保留位置并在 terminal 停 poll | api types, operations/run detail pages | 无 | 长日志 cursor、route return、terminal polling | 可访问 tail 之前首行；无无限 polling | 隐藏新 UI，保留后端 cursor | 完整日志可诊断 |
-| ACT-P3-002 | 修正 ECharts manualChunks 循环；建立 bundle budget | Vite config/chart imports | 无 | build/bundle smoke | build 无 circular chunk warning | 合并为单 ECharts chunk | chunk 图稳定 |
-| ACT-P3-001 | 文档 migration/version 改生成或取消硬编码 | `docs/architecture.md`, docs checks | 无 | docs check | 实际 migration 与文档一致 | 回退文案 | 不再出现 0035/0038 漂移 |
-| WEB-NV-001 | 在可用 in-app Browser 中复审 Dashboard→项目→preflight→run detail、history、batch、Paper 以及 1440/1280/768/390 | Playwright/browser evidence | 复用现有资源；仅缺证据时创建最少审计 run | console/network/screenshot/route state/accessibility | 关键页面无白屏；错误可恢复；四视口可操作 | 不适用（只读为主） | 27 个 NOT_VERIFIED 中 Web 项全部有当前证据 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P1-003 | 部署 summary DTO/分页并设置 payload budget | backtest/task/QA schemas、pages | 无 | content-length/slow network | backtests/tasks list 各 <200KB | legacy full detail endpoint | 列表响应有硬上限 |
+| ACT-P2-002 | 在可用 Browser 中验证 cursor viewer、terminal stop polling | cursor viewer/pages | 无 | >64KiB真实日志 | 首尾可达、位置保持、终态不poll | 隐藏UI不回退API | 日志完整可诊断 |
+| WEB-NV-001 | 实际 Browser 完成 Dashboard→Project→preflight→history→batch→Paper 四视口 journey | Playwright/browser evidence | 复用现有资源 | console/network/a11y/route state | 无白屏/无限loading；错误可恢复；四视口可操作 | 不适用 | 主要Web流程有当前证据 |
+| ACT-P3-002 | 清除 ECharts circular chunks、建立 bundle budget | Vite/chart imports | 无 | build/smoke | build无循环warning | 合并vendor chunk | bundle图稳定 |
+| ACT-P3-001 | architecture migration 信息改为动态/不硬编码 | docs/check scripts | 无 | docs check | runtime与文档不漂移 | 回退文本 | latest migration 单一事实源 |
 
 ## Wave 6 — 调度和运行稳定性
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ACT-P0-003 | 建立通用 run registry/reconciler：owner、heartbeat、lease、domain/task mapping、terminalization reason | scheduler/task/research/derived/Paper services, migration | additive registry；历史 stale 标 reason | worker restart、task lost、container missing、cancel/finalize race | stale research=0；task/domain mismatch=0；单 scope 单 active | feature flag 回退，各域原状态保留 | 所有任务在 SLA 内收敛且 UI 给出操作 |
-| ACT-P1-002 | 对维护失败配置指数退避、最大尝试、外部 alert 和可见 checkpoint；禁止快速 orphan chain | Beat/Celery/monitoring | additive attempt/alert | 连接抖动/重启（非生产故障注入环境） | 一次故障仅一个 active，恢复不重复全量工作 | 调整 beat route/feature flag | 数据维护稳定且不会无限重派 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-P1-007 | notification delivery 加 health probe、max attempts、jitter backoff、dedupe 和 DLQ；修正示例 webhook | notification outbox/Beat/health | additive terminal/dead-letter state | 永久失败/瞬时失败/恢复 | channel失败时health degraded；attempt有界；无每分钟风暴 | disable channel、保留outbox | 送达状态真实且可操作 |
+| ACT-P1-008 | 先部署小 DTO，再按容器采集 RSS/heap，调并发和memory limit | metrics/Compose/workers/API | 无业务数据影响 | 24h soak、payload/load | memory低于critical阈值且无OOM/抖动 | 回滚concurrency值 | 有明确容量SLO和余量 |
+| ACT-P0-003 | 保留 0039 quarantine/reconciler 回归 | recovery/scheduler | 不删除历史 | restart/orphan regression（获批窗口） | stale/orphan READY 持续为0 | 不回滚quarantine事实 | 已解决问题不复发 |
 
 ## Wave 7 — 复审
 
 | Issue ID | 任务 | 涉及文件 | 数据影响 | 测试 | 验收 | 回滚 | 完成定义 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ALL | 在当前实际环境重跑非破坏审计；安全复用项目/数据/账户；生成新日期六份报告与证据 | `docs/audit`, `web/runtime/audit` | 仅最少审计 run；统一标签 | backend tests 使用获批现有 MySQL lane；frontend build；in-app Browser；LEAN golden；Paper 21 日；WF | 总分≥90、Critical=0、P0=0、关键 NOT_VERIFIED=0 | 报告不可回写；失败保持 FAIL | 满足用户 Level 5 全部 gate 后才可给 PASS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ALL | 在同一 actual 环境复审并生成新日期六份产物 | `docs/audit`,`web/runtime/audit` | 仅上面批准的最小runs/cycles | migration/OpenAPI、LEAN Golden、WF、Paper、Browser、SRE | score≥90、Critical=0、P0=0、关键NV=0 | 报告只追加新快照 | 满足所有Level5 gates后才给PASS |
 
-## P1 实施状态（审计后）
+## 当前依赖顺序
 
-六项 P1 的代码、migration、API/TS 和回归测试已实现，统一标记为 `CODE_FIXED_REVALIDATION_REQUIRED`，不以临时 SQLite 单测替代实际 MySQL/LEAN/Paper 验收。
+1. ACT-P0-004 是所有 P1/P2 actual 验收前置。
+2. ACT-CRIT-001 与 ACT-P1-005 是新 Experiment/Paper candidate 前置。
+3. ACT-P1-006 的 Golden Pair 是回测可信度前置。
+4. ACT-P0-002 完成后才能声明无未来数据泄漏。
+5. ACT-P0-001 必须以现有账户完成，不重复开户。
+6. ACT-P1-007/P1-008 在长期 Paper 自动运行前关闭。
 
-| Issue ID | 代码状态 | 主要落点 | 下一验收动作 |
-| --- | --- | --- | --- |
-| ACT-P1-001 | CODE_FIXED_REVALIDATION_REQUIRED | `paper_account_trust_certifications`、`paper_accounts.py` | 当前 cohort 重算、过期/归档/代次变化实测 |
-| ACT-P1-002 | CODE_FIXED_REVALIDATION_REQUIRED | maintenance attempt/checkpoint/heartbeat/backoff/alert，同 run resume | 7 日稳定性观察与强制连接断开恢复 |
-| ACT-P1-003 | CODE_FIXED_REVALIDATION_REQUIRED | summary list、200 hard limit、QA detail、Web server pagination | authenticated payload budget 与 slow-network UI |
-| ACT-P1-004 | CODE_FIXED_REVALIDATION_REQUIRED | `asset_capabilities`、catalog/API/TS、preflight gate | 当前 8 个 scope 的 API/UI/SQL 对账 |
-| ACT-P1-005 | CODE_FIXED_REVALIDATION_REQUIRED | `dataset_releases` 及 Parquet/dataset version/backtest FK-like references | MySQL migration + equity/index recertification |
-| ACT-P1-006 | CODE_FIXED_REVALIDATION_REQUIRED | `reproducibility_certificates`、stored object、golden-pair API | 当前 certified release 最小真实 LEAN 双跑 |
+## 已关闭项
 
-## P2 实施状态（审计后）
-
-四项 P2 已实现并统一标记为 `CODE_FIXED_REVALIDATION_REQUIRED`；原始实际环境证据与 `LEVEL5_FAIL` 不被代码测试覆盖。
-
-| Issue ID | 代码状态 | 主要落点 | 下一验收动作 |
-| --- | --- | --- | --- |
-| ACT-P2-001 | CODE_FIXED_REVALIDATION_REQUIRED | `PageEnvelope`、sync/Parquet/QA/workflow/verification endpoints、生成式 API reference | 部署后 authenticated contract snapshot |
-| ACT-P2-002 | CODE_FIXED_REVALIDATION_REQUIRED | `CursorLogViewer.tsx`、Backtest/Task cursor API types | >64 KiB 真实日志浏览器首尾与终态停 poll |
-| ACT-P2-003 | CODE_FIXED_REVALIDATION_REQUIRED | `client.ts` operation ID + network retry | timeout/replay 与异 payload 409 |
-| ACT-P2-004 | CODE_FIXED_REVALIDATION_REQUIRED | data sync commands、Paper command/query、state ownership manifest/test | 实际 sync/backtest/Paper characterization |
-
-验证命令：`cd web/backend && .venv/bin/python -m pytest -q`、`cd web/frontend && npm run build`、`scripts/generate_help_api_reference.py --check --json`。
-
-## 依赖与优先级
-
-1. ACT-CRIT-001 是所有新回测、Experiment、Paper candidate 的前置。
-2. ACT-P1-005 为 ACT-P1-006、ACT-P0-002 和 Paper deployment 冻结提供统一 release。
-3. ACT-P0-003 必须先于生产式 Paper 自动调度。
-4. Wave 7 不得用历史 JSON 代替当前事实，也不得因总分高而忽略 Critical/P0。
+`ACT-P0-003` 已由 `0039` 在实际环境关闭：stale Research run=0，143 legacy Paper jobs 和 139 reconciliations 全部 quarantine，orphan READY=0。关闭不代表删除历史；Wave 6 保留回归门禁。

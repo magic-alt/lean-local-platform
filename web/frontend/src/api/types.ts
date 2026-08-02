@@ -653,6 +653,11 @@ export interface BacktestRun {
   project_id?: string | null;
   task_id?: string | null;
   status: RunStatus;
+  trust_status?: "trusted" | "unverified" | "legacy_unverified" | "invalid";
+  trust_reason?: string | null;
+  trust_evaluated_at?: string | null;
+  dataset_release_id?: string | null;
+  reproducibility_certificate_id?: string | null;
   docker_image: string;
   container_name?: string | null;
   work_dir?: string | null;

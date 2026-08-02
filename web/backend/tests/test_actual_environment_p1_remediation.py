@@ -208,10 +208,24 @@ def test_reproducibility_certificates_form_fetchable_golden_pair(tmp_path, monke
                 """
                 insert into backtest_runs
                     (id,symbol,parameters_json,status,docker_image,results_dir,result_json_path,
-                     created_at,fingerprint_json,dataset_release_id)
-                values (?,'600519','{}','success','lean:test',?,?, 'now',?,?)
+                     created_at,fingerprint_json,validation_json,dataset_release_id)
+                values (?,'600519','{}','success','lean:test',?,?, 'now',?,?,?)
                 """,
-                (run_id, str(result_dir), str(path), json.dumps(fingerprint), release["id"]),
+                (
+                    run_id,
+                    str(result_dir),
+                    str(path),
+                    json.dumps(fingerprint),
+                    json.dumps(
+                        {
+                            "passed": True,
+                            "severity": "ok",
+                            "gates": [],
+                            "execution": {"canonicalResultSha256": "3" * 64},
+                        }
+                    ),
+                    release["id"],
+                ),
             )
     monkeypatch.setattr(reproducibility, "run_file", lambda run_id, *_args: paths[run_id])
     reproducibility.issue_certificate("golden-a")
@@ -219,5 +233,77 @@ def test_reproducibility_certificates_form_fetchable_golden_pair(tmp_path, monke
     fetched = reproducibility.certificate_for_run("golden-a")
     assert second["goldenPair"] is True
     assert fetched and fetched["goldenPair"] is True
+    assert fetched["canonical_result_sha256"] == "3" * 64
     assert fetched["stored_object_id"]
     assert set(fetched["matchingRunIds"]) == {"golden-a", "golden-b"}
+
+
+def test_reproducibility_certificate_rejects_final_critical_validation(tmp_path, monkeypatch):
+    db_module = _init_temp_db(tmp_path, monkeypatch)
+    release = _release(db_module)
+    from app.services import reproducibility
+
+    result_dir = tmp_path / "critical-run"
+    result_dir.mkdir()
+    path = result_dir / "result.json"
+    path.write_text(json.dumps({"orders": {}, "charts": {}}), encoding="utf-8")
+    fingerprint = {
+        "inputFingerprint": "c" * 64,
+        "datasetReleaseId": release["id"],
+    }
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id,symbol,parameters_json,status,docker_image,results_dir,result_json_path,
+                 created_at,fingerprint_json,validation_json,dataset_release_id)
+            values ('critical-run','600519','{}','success','lean:test',?,?,'now',?,?,?)
+            """,
+            (
+                str(result_dir),
+                str(path),
+                json.dumps(fingerprint),
+                json.dumps(
+                    {
+                        "passed": False,
+                        "severity": "critical",
+                        "gates": [{"name": "final", "passed": False, "severity": "critical"}],
+                    }
+                ),
+                release["id"],
+            ),
+        )
+    monkeypatch.setattr(reproducibility, "run_file", lambda *_args: path)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="final_validation_pass_required"):
+        reproducibility.issue_certificate("critical-run")
+
+
+def test_historical_critical_success_is_additively_marked_invalid(tmp_path, monkeypatch):
+    db_module = _init_temp_db(tmp_path, monkeypatch)
+    from app.services.backtest_trust import reconcile_backtest_trust
+
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id,symbol,parameters_json,status,docker_image,results_dir,created_at,validation_json)
+            values ('legacy-critical','600519','{}','success','lean:test','/tmp/run','now',?)
+            """,
+            (json.dumps({"passed": False, "severity": "critical"}),),
+        )
+
+    result = reconcile_backtest_trust("legacy-critical")
+
+    with db_module.db() as connection:
+        run = connection.execute(
+            "select status,trust_status,trust_reason from backtest_runs where id='legacy-critical'"
+        ).fetchone()
+    assert result["counts"] == {"invalid": 1}
+    assert dict(run) == {
+        "status": "success",
+        "trust_status": "invalid",
+        "trust_reason": "final_validation_not_passed",
+    }

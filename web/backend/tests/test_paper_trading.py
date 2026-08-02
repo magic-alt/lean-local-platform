@@ -797,8 +797,8 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
             """
             insert into backtest_runs
                 (id, project_id, symbol, asset_class, venue, resolution, data_type, parameters_json,
-                 status, docker_image, results_dir, created_at, finished_at, validation_json)
-            values (?, ?, ?, 'equity', 'china', 'daily', 'trade', ?, 'success', ?, ?, ?, ?, ?)
+                 status, docker_image, results_dir, created_at, finished_at, validation_json,trust_status)
+            values (?, ?, ?, 'equity', 'china', 'daily', 'trade', ?, 'success', ?, ?, ?, ?, ?,'trusted')
             """,
             (
                 "trusted-run",

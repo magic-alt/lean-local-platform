@@ -44,6 +44,32 @@ def seed_universe(db_module):
         )
 
 
+def test_fundamental_schedule_is_stable_across_duplicate_sources(tmp_path, monkeypatch):
+    db_module = configure(tmp_path, monkeypatch)
+    with db_module.db() as connection:
+        connection.executemany(
+            """
+            insert into financial_facts
+                (symbol,field_name,report_date,announce_date,effective_date,value,unit,
+                 source,batch_id,created_at)
+            values ('600519','roe','2025-12-31','2026-03-01','2026-03-01',?,'ratio',?,?,?)
+            """,
+            [
+                (0.20, "z-source", "batch-z", "2026-03-02"),
+                (0.10, "a-source", "batch-a", "2026-03-01"),
+            ],
+        )
+
+    from app.services.experiment_batches import _fundamental_schedule
+
+    first = _fundamental_schedule(["600519"], "2026-01-01", "2026-06-01")
+    second = _fundamental_schedule(["600519"], "2026-01-01", "2026-06-01")
+
+    assert first == second == [
+        {"symbol": "600519", "effectiveDate": "2026-03-01", "metrics": {"roe": 0.10}}
+    ]
+
+
 def test_example_catalog_instantiates_editable_research_project(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     from app.services import examples

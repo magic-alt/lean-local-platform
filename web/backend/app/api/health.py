@@ -1,20 +1,26 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from redis import Redis
 
 from ..core.config import REDIS_URL
 from ..services.dependencies import check_database, dependency_health
+from ..services.release_identity import runtime_release_identity
 
 router = APIRouter(prefix="/api", tags=["health"])
 
 
 @router.get("/health")
-def health():
+def health(request: Request):
     redis_ok = False
     try:
         redis_ok = bool(Redis.from_url(REDIS_URL, socket_connect_timeout=0.3).ping())
     except Exception:
         redis_ok = False
-    return {"status": "ok", "redis": redis_ok}
+    release = runtime_release_identity(request.app.openapi())
+    return {
+        "status": "ok" if release["schema"]["aligned"] else "degraded",
+        "redis": redis_ok,
+        "release": release,
+    }
 
 
 @router.get("/health/dependencies")

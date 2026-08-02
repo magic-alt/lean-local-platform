@@ -41,6 +41,9 @@ BACKTEST_UPDATE_COLUMNS = {
     "failure_json",
     "dataset_release_id",
     "reproducibility_certificate_id",
+    "trust_status",
+    "trust_reason",
+    "trust_evaluated_at",
 }
 
 
@@ -73,7 +76,8 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
         select id,task_id,project_id,name,symbol,asset_class,venue,resolution,data_type,
                parameters_json,status,docker_image,exit_code,error,error_message,failure_json,
                created_at,queued_at,started_at,finished_at,duration_seconds,validation_json,
-               dataset_release_id,reproducibility_certificate_id
+               dataset_release_id,reproducibility_certificate_id,trust_status,trust_reason,
+               trust_evaluated_at
         from backtest_runs
     """
     if clauses:

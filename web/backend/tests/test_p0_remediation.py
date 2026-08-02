@@ -63,6 +63,79 @@ def test_walk_forward_freezes_lineage_and_blocks_parent_deletion(tmp_path, monke
         delete_project(project["id"])
 
 
+def test_completed_walk_forward_issues_immutable_certificate(tmp_path, monkeypatch):
+    db_module = _init(tmp_path, monkeypatch)
+    from app.services import experiment_batches
+    from app.services.projects import create_project
+
+    project = create_project("certified-wf", template_key="ema_cross", market="china")
+    batch = experiment_batches.create_batch(
+        {
+            "kind": "optimization",
+            "mode": "walk_forward",
+            "projectId": project["id"],
+            "symbol": "600519",
+            "start": "2023-01-01",
+            "end": "2024-12-31",
+            "trainYears": 1,
+            "testYears": 1,
+            "validationMonths": 6,
+            "parameterGrid": {"fast": [10]},
+            "datasetVersion": "dataset:test:v1",
+            "universeVersion": "symbols:600519:v1",
+            "adjustmentContract": "raw-v1",
+            "featurePipelineVersion": "features:test:v1",
+        }
+    )
+    window = batch["walkForwardEvidence"]["windows"][0]
+    candidate = window["candidates"][0]
+    oos_item = next(
+        item
+        for item in batch["items"]
+        if (item["parameters"].get("parameters") or {}).get("experimentPhase") == "oos"
+    )
+    now = "2026-08-02T00:00:00+00:00"
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into parameter_selection_events
+                (id,window_id,selected_candidate_id,selection_metric,tie_break_rule,
+                 selected_parameters_json,candidate_ranking_json,selection_timestamp,
+                 selection_fingerprint)
+            values ('selection-cert',?,?,'validationSharpe','candidateKey','{}','[]',?,?)
+            """,
+            (window["id"], candidate["id"], now, "a" * 64),
+        )
+        connection.execute(
+            """
+            insert into oos_evaluations
+                (id,window_id,selected_candidate_id,oos_item_id,oos_run_id,input_fingerprint,
+                 result_digest,metrics_json,status,created_at,completed_at)
+            values ('oos-cert',?,?,?,'oos-run',?,?,'{}','COMPLETED',?,?)
+            """,
+            (
+                window["id"],
+                candidate["id"],
+                oos_item["id"],
+                "b" * 64,
+                "c" * 64,
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "update walk_forward_runs set status='COMPLETED',completed_at=? where batch_id=?",
+            (now, batch["id"]),
+        )
+
+    first = experiment_batches.issue_walk_forward_certificate(batch["id"])
+    second = experiment_batches.issue_walk_forward_certificate(batch["id"])
+
+    assert first["certificateDigest"] == second["certificateDigest"]
+    assert first["certificate"]["windows"][0]["oos"]["runId"] == "oos-run"
+    assert first["certificate"]["windows"][0]["leakage"]["decision"] == "ALLOW"
+
+
 def test_paper_certification_cohort_is_durable_and_fail_closed(tmp_path, monkeypatch):
     _init(tmp_path, monkeypatch)
     from app.services import paper_accounts, paper_certification

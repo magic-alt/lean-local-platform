@@ -4,6 +4,10 @@ x-logging: &bounded-logging
     max-size: "20m"
     max-file: "3"
 
+x-release-environment: &release-environment
+  LEAN_RELEASE_SHA: ${LEAN_RELEASE_SHA:-unknown}
+  LEAN_RELEASE_ID: ${LEAN_RELEASE_ID:-local-unversioned}
+
 services:
   redis:
     logging: *bounded-logging
@@ -158,6 +162,8 @@ services:
     ports:
       - "127.0.0.1:${LEAN_API_PORT:-8000}:8000"
     environment:
+      <<: *release-environment
+      LEAN_RELEASE_ROLE: api
       REDIS_URL: redis://redis:6379/0
       LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
@@ -275,6 +281,8 @@ services:
       dockerfile: web/backend/Dockerfile
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=default --hostname=default@%h
     environment:
+      <<: *release-environment
+      LEAN_RELEASE_ROLE: default-worker
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
@@ -375,12 +383,15 @@ services:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-bulk,data --hostname=data-bulk@%h
     environment:
+      LEAN_RELEASE_ROLE: data-worker
       LEAN_REQUIRE_LOADER_DATABASE: "1"
 
   data-demand-worker:
     extends:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_DATA_DEMAND_WORKER_CONCURRENCY:-4} --queues=data-demand --hostname=data-demand@%h
+    environment:
+      LEAN_RELEASE_ROLE: data-demand-worker
     cpus: "${LEAN_DATA_DEMAND_WORKER_CPUS:-4.0}"
 
   backtest-worker:
@@ -388,6 +399,7 @@ services:
       service: worker
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
     environment:
+      LEAN_RELEASE_ROLE: backtest-worker
       LEAN_RUNNER_URL: http://lean-runner:8010
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
     volumes:
@@ -410,6 +422,7 @@ services:
       dockerfile: web/backend/Dockerfile.ml
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=ml --hostname=ml@%h
     environment:
+      LEAN_RELEASE_ROLE: ml-worker
       MLFLOW_TRACKING_URI: http://mlflow:5000
       LEAN_MLFLOW_EXPERIMENT: lean-ashare-cross-sectional
       LEAN_ML_THREADS: ${LEAN_ML_THREADS:-4}
@@ -431,6 +444,8 @@ services:
       dockerfile: web/backend/Dockerfile
     command: uvicorn app.runner_service:app --host 0.0.0.0 --port 8010
     environment:
+      <<: *release-environment
+      LEAN_RELEASE_ROLE: lean-runner
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
@@ -475,6 +490,8 @@ services:
       dockerfile: web/backend/Dockerfile
     command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
+      <<: *release-environment
+      LEAN_RELEASE_ROLE: beat
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}

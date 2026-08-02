@@ -23,6 +23,7 @@ if str(BACKEND) not in sys.path:
 
 from app.db import db, row_to_dict, rows_to_dicts  # noqa: E402
 from app.lean_engine.errors import LeanPlatformError  # noqa: E402
+from app.repositories.backtest_repository import get_backtest  # noqa: E402
 from app.services.backtest_execution_validation import canonical_result_sha256  # noqa: E402
 from app.services.backtest_preflight import prepare_backtest_request  # noqa: E402
 from app.services.backtest_validation import build_backtest_validation  # noqa: E402
@@ -80,6 +81,35 @@ def _api_token() -> str:
         )
     )
     return token_path.read_text(encoding="utf-8").strip() if token_path.is_file() else ""
+
+
+def _resolve_golden_project_id(requested: str | None) -> str:
+    with db() as connection:
+        if requested:
+            row = connection.execute("select id from projects where id=?", (requested,)).fetchone()
+            if not row:
+                raise ValueError(f"Golden project does not exist: {requested}")
+            return str(row["id"])
+        rows = rows_to_dicts(
+            connection.execute(
+                """
+                select project.id,run.validation_json
+                from projects project
+                join backtest_runs run on run.project_id=project.id
+                where run.status='success'
+                order by run.finished_at desc,run.created_at desc
+                """
+            ).fetchall()
+        )
+        for item in rows:
+            if (item.get("validation") or {}).get("passed") is True:
+                return str(item["id"])
+        row = connection.execute(
+            "select id from projects order by created_at desc limit 1"
+        ).fetchone()
+    if not row:
+        raise ValueError("No project exists for the Golden Pair.")
+    return str(row["id"])
 
 
 def _api(
@@ -244,6 +274,20 @@ def csi300_evidence() -> dict[str, Any]:
     bundle_dir = ROOT / "web" / "runtime" / "source-cache" / "csi300-official"
     bundle_manifest_path = bundle_dir / "bundle-manifest.json"
     source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    if not bundle_manifest_path.is_file():
+        return {
+            "schemaVersion": 1,
+            "generatedAt": _utc_now(),
+            "passed": False,
+            "status": "not_available",
+            "reason": "official_bundle_cache_missing",
+            "sourceManifest": str(source_manifest_path.relative_to(ROOT)),
+            "expectedBundleManifest": str(bundle_manifest_path.relative_to(ROOT)),
+            "fetchCommand": (source_manifest.get("bundle") or {}).get("fetch_command"),
+            "offlineVerifyCommand": (source_manifest.get("bundle") or {}).get(
+                "offline_verify_command"
+            ),
+        }
     bundle_manifest = json.loads(bundle_manifest_path.read_text(encoding="utf-8"))
     file_checks = []
     for item in bundle_manifest["files"]:
@@ -377,17 +421,27 @@ def archive_evidence(run_id: str) -> dict[str, Any]:
     }
 
 
-def _run_golden(base_url: str) -> dict[str, Any]:
-    status, created = _api(base_url, "POST", "/api/backtests", GOLDEN_PAYLOAD, timeout=120)
-    if status >= 400 or not created.get("id"):
-        raise RuntimeError(f"Golden creation failed: HTTP {status}: {created}")
-    run_id = str(created["id"])
-    final = created
+def _run_golden(base_url: str, run_id: str | None = None) -> dict[str, Any]:
+    if run_id is None:
+        status, created = _api(base_url, "POST", "/api/backtests", GOLDEN_PAYLOAD, timeout=120)
+        if status >= 400 or not created.get("id"):
+            raise RuntimeError(f"Golden creation failed: HTTP {status}: {created}")
+        run_id = str(created["id"])
+    final: dict[str, Any] = {}
     for _ in range(240):
-        status, final = _api(base_url, "GET", f"/api/backtests/{run_id}", timeout=60)
-        if status >= 400:
-            raise RuntimeError(f"Golden status failed: HTTP {status}: {final}")
-        if final.get("status") in {"success", "failed", "cancelled"}:
+        with db() as connection:
+            row = connection.execute(
+                """
+                select status,error,error_message,started_at,finished_at
+                from backtest_runs where id=?
+                """,
+                (run_id,),
+            ).fetchone()
+        if not row:
+            raise RuntimeError(f"Golden run disappeared from canonical MySQL: {run_id}")
+        run_status = dict(row)
+        if run_status.get("status") in {"success", "failed", "cancelled"}:
+            final = get_backtest(run_id) or {}
             break
         time.sleep(2)
     if final.get("status") != "success":
@@ -407,6 +461,10 @@ def _run_golden(base_url: str) -> dict[str, Any]:
     return {
         "runId": run_id,
         "status": final.get("status"),
+        "trustStatus": final.get("trust_status"),
+        "trustReason": final.get("trust_reason"),
+        "datasetReleaseId": final.get("dataset_release_id"),
+        "reproducibilityCertificateId": final.get("reproducibility_certificate_id"),
         "validationPassed": validation.get("passed"),
         "inputFingerprint": fingerprint.get("inputFingerprint"),
         "canonicalResultSha256": execution.get("canonicalResultSha256"),
@@ -425,11 +483,15 @@ def _run_golden(base_url: str) -> dict[str, Any]:
     }
 
 
-def golden_evidence(base_url: str) -> dict[str, Any]:
+def golden_evidence(
+    base_url: str,
+    first_run_id: str | None = None,
+    second_run_id: str | None = None,
+) -> dict[str, Any]:
     # Keep all evidence in memory until both runs finish so repository status
     # and therefore the canonical input identity cannot change between runs.
-    first = _run_golden(base_url)
-    second = _run_golden(base_url)
+    first = _run_golden(base_url, first_run_id)
+    second = _run_golden(base_url, second_run_id)
     comparisons = {
         "inputFingerprint": first["inputFingerprint"] == second["inputFingerprint"],
         "canonicalResultSha256": first["canonicalResultSha256"] == second["canonicalResultSha256"],
@@ -437,6 +499,7 @@ def golden_evidence(base_url: str) -> dict[str, Any]:
         "fillCount": first["fillCount"] == second["fillCount"],
         "completedDate": first["completedDate"] == second["completedDate"],
         "datasetVersion": first["datasetVersion"] == second["datasetVersion"],
+        "datasetReleaseId": first["datasetReleaseId"] == second["datasetReleaseId"],
         "gitIdentity": (
             first["gitCommit"],
             first["gitStatusHash"],
@@ -448,6 +511,11 @@ def golden_evidence(base_url: str) -> dict[str, Any]:
     }
     passed = (
         first["status"] == second["status"] == "success"
+        and first["trustStatus"] == second["trustStatus"] == "trusted"
+        and bool(first["datasetReleaseId"])
+        and bool(second["datasetReleaseId"])
+        and bool(first["reproducibilityCertificateId"])
+        and bool(second["reproducibilityCertificateId"])
         and bool(first["validationPassed"])
         and bool(second["validationPassed"])
         and bool(first["canonicalRecomputePassed"])
@@ -494,6 +562,18 @@ def main() -> int:
     )
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument(
+        "--project-id",
+        help="Existing project for the Golden Pair; defaults to the newest validated project.",
+    )
+    parser.add_argument(
+        "--first-run-id",
+        help="Resume an already-created first Golden run instead of creating a duplicate.",
+    )
+    parser.add_argument(
+        "--second-run-id",
+        help="Reuse an already-created second Golden run instead of creating a duplicate.",
+    )
+    parser.add_argument(
         "--run-id",
         default="b15c8791-1e35-499d-9730-6b4d4e42164b",
         help="Successful ten-dataset production sync run.",
@@ -503,12 +583,17 @@ def main() -> int:
         default=str(ROOT / "audit-output" / f"p0-trust-{RELEASE_DATE}"),
     )
     args = parser.parse_args()
+    GOLDEN_PAYLOAD["projectId"] = _resolve_golden_project_id(args.project_id)
 
     sections = {
         "sourceQaReferenceMatrix": source_qa_reference_matrix(),
         "csi300": csi300_evidence(),
         "archives": archive_evidence(args.run_id),
-        "releaseGoldens": golden_evidence(args.api_url),
+        "releaseGoldens": golden_evidence(
+            args.api_url,
+            args.first_run_id,
+            args.second_run_id,
+        ),
     }
     report = {
         "schemaVersion": 1,

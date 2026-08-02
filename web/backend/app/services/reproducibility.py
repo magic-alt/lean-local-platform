@@ -66,14 +66,28 @@ def _equity(payload: dict[str, Any]) -> Any:
     return equity.get("values") or equity.get("Values") or []
 
 
-def issue_certificate(run_id: str) -> dict[str, Any]:
+def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[str, Any]:
     run = get_backtest(run_id)
     if not run:
         raise KeyError("Backtest run not found.")
     fingerprint = run.get("fingerprint") or {}
+    validation = run.get("validation") or {}
+    if validation.get("passed") is not True or any(
+        gate.get("passed") is not True
+        and str(gate.get("severity") or "").lower() == "critical"
+        for gate in validation.get("gates") or []
+        if isinstance(gate, dict)
+    ):
+        raise ValueError("final_validation_pass_required")
+    if run.get("status") != "success" and not (
+        allow_nonterminal and run.get("status") == "running"
+    ):
+        raise ValueError("successful_or_finalizing_run_required")
     release_id = run.get("dataset_release_id") or fingerprint.get("datasetReleaseId")
     if not release_id:
         raise ValueError("certified_dataset_release_required")
+    if run.get("dataset_release_id") != fingerprint.get("datasetReleaseId"):
+        raise ValueError("frozen_dataset_release_mismatch")
     with db() as connection:
         release = connection.execute(
             "select id,status,is_production,is_certified from dataset_releases where id=?",
@@ -83,6 +97,7 @@ def issue_certificate(run_id: str) -> dict[str, Any]:
         raise ValueError("active_certified_dataset_release_required")
     result_path = run_file(run_id, run.get("result_json_path"), f"results/{run_id}.json")
     payload = json.loads(result_path.read_text(encoding="utf-8"))
+    validated_execution = validation.get("execution") or {}
     orders = _orders(payload)
     fills = _fills(result_path, orders)
     equity = _equity(payload)
@@ -110,7 +125,11 @@ def issue_certificate(run_id: str) -> dict[str, Any]:
             ),
         },
         "configSha256": fingerprint.get("configFileHash"),
-        "canonicalResultSha256": fingerprint.get("canonicalResultSha256") or _hash(payload),
+        "canonicalResultSha256": (
+            validated_execution.get("canonicalResultSha256")
+            or fingerprint.get("canonicalResultSha256")
+            or _hash(payload)
+        ),
         "ordersSha256": _hash(orders),
         "fillsSha256": _hash(fills),
         "equitySha256": _hash(equity),

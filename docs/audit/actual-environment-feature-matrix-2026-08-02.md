@@ -1,108 +1,96 @@
-# Actual-environment feature matrix — 2026-08-02
+# Actual-environment feature matrix — 2026-08-02（第二次审计）
 
-状态只表示本轮证据。`Web=存在` 表示路由/组件存在，不等于实际浏览器通过；内置浏览器不可用使视觉检查保持 `NOT_VERIFIED`。
-
-> 审计后 P1 整改：下表保留 2026-08-02 实际环境采样事实。相关代码现已加入 Dataset Release、reproducibility certificate、account-bound Paper trust、maintenance resume、summary pagination 和 canonical capability 状态，统一为 `CODE_FIXED_REVALIDATION_REQUIRED`；部署后的实际数据/浏览器证据尚未回写为 PASS。
+`Web=存在` 仅表示路由/组件存在。内置 Browser 无可用实例，视觉、交互和四视口不能判 PASS。`SOURCE_FIXED` 表示 P1/P2 已进入仓库源码，但 actual API/worker/schema 未部署。
 
 | Domain | Feature | Web | API | Service | Database | Actual Data | Test Result | Evidence | Status | Gap |
 | ------ | ------- | --- | --- | ------- | -------- | ----------- | ----------- | -------- | ------ | --- |
-| Projects | 项目列表 | 存在 | `/api/projects` | projects | `projects` | 4 | authenticated GET | 4.9KB paged | PASS | 无 |
-| Projects | 创建项目 | 存在 | POST projects | projects | `projects` | 未创建 | 代码/contract | 最小写入原则 | CODE_ONLY | 实际 journey 未测 |
-| Projects | 打开/文件列表 | 存在 | project/file APIs | projects | `projects` | 4 projects | 只读检查 | route/component | PARTIAL | 浏览器未测 |
-| Projects | 编辑/保存文件 | 存在 | PUT file | projects | project workspace | 未写 | 代码检查 | editor component | CODE_ONLY | 实际保存未测 |
-| Projects | 克隆 | 存在 | clone API | projects | `projects` | 未克隆 | 代码检查 | 避免重复项目 | CODE_ONLY | 当前环境未测 |
-| Projects | 删除保护 | 确认 UI | DELETE project | projects | projects/runs | 未删除 | 代码检查 | 禁止真实删除 | CODE_ONLY | 依赖保护未实测 |
-| Strategies | 模板/示例实例化 | 存在 | examples/templates | projects | projects/files | 4 项目 | 文件检查 | templates/examples | PARTIAL | 未实例化 |
-| Strategies | 参数配置 | 存在 | backtest request | validation | run JSON | 3 runs | raw/DB 检查 | 参数入 fingerprint | PASS | list payload 过大 |
-| Strategies | 策略版本/快照 | 详情存在 | run/project APIs | fingerprint | runs/stored objects | 3 | 当前 artifact | git/project snapshot | PARTIAL | certificate 不完整 |
-| Strategies | 历史运行关联 | 存在 | project/backtests | backtests | projects/runs | 3 | DB join | 全部 project FK 存在 | PASS | 无 |
-| Data | 数据源列表/availability | 存在 | data providers | data catalog | provider tables | 多 provider | actual GET | ~20KB availability | PASS | metadata 与 executable 未统一 |
-| Data | 数据目录/资产 | 存在 | data catalog/assets | catalog | instruments | 8,103 | SQL/API | equity 8095/index 8 | PARTIAL | 跨资产缺失 |
-| Data | 数据预览 | 存在 | preview | market repository | daily bars | 19.2M | 600519 抽样 | 最新 OHLC 正常 | PASS | 浏览器图表未测 |
-| Data | 股票主数据 | 存在 | securities | A-share repository | securities/instruments | 5,551+/8,095 | SQL | 名称 UTF-8 正常 | PASS | count 模型不同 |
-| Data | 交易日历 | 存在 | calendar | calendar service | trade_calendar | 8,610+ | health/gate | end 2026-07-30 | PASS | 无 |
-| Data | 指数 | 存在 | catalog/preview | data service | instruments/bars | 8 indices | SQL | 000300 instrument | PASS | 名称/venue 元数据简化 |
-| Data | ETF | 页面能力 | catalog | provider | instruments | 独立 ETF 0 | SQL | name LIKE ETF 无样本 | FAIL | canonical 未建模 |
-| Data | 期货 | 页面能力 | catalog/providers | futures service | future tables | 0 | SQL/raw archive | metadata archive ≠ bars | FAIL | 不可执行 |
-| Data | 期权 | 页面能力 | catalog/providers | options service | option tables | 0 | SQL/raw archive | metadata archive ≠ bars | FAIL | 不可执行 |
-| Data | 可转债 | 文档/研究 | catalog | data service | instruments/bars | 0 | SQL | 无 asset class | FAIL | 不可执行 |
-| Data | 分钟/tick | 页面能力 | resolution | data service | minute/tick tables | 0 | SQL | 无 canonical rows | FAIL | 不可执行 |
-| Data | 公司行动 | 间接 | quality/preflight | A-share repository | corporate_actions | 59 / 3 symbols | SQL sample | 000001 dividend | PARTIAL | 覆盖严重偏窄 |
-| Data | 复权因子 | 间接 | preflight | cache/writer | adjustment factors | ~19.2M | DB inventory | 大规模存在 | PARTIAL | 本轮未全量 hash |
-| Data | 停牌 | 间接 | preflight | status repository | market_trade_status | 大规模 | SQL sample | 002348 blocked | PASS | 多 source 行需治理 |
-| Data | ST/退市 | 间接 | preflight | security master | securities/status | ST 557/delisted 366 | SQL | 实际样本 | PASS | 无 |
-| Data | PIT universe | 存在 | PIT APIs | universe service | membership/watermarks | 299,610 | SQL | CSI300 1,225 | PASS | 部分 universe partial |
-| Data | benchmark | 存在 | preflight/result | result analyzer | index bars/results | 000300 | raw/DB | run1 6.2461% | PASS | 当前只少数 index |
-| Data | 数据同步 | 存在 | sync-runs | data_sync | sync/checkpoints | 历史多 run | GET/SQL | 近期有失败与成功 | PARTIAL | 维护不稳定 |
-| Data | checkpoint/watermark | 存在 | data/health | maintenance | watermarks | 4 derived ready | SQL | equity/index Parquet/CH | PASS | 状态系统分裂 |
-| Data | validation/quarantine | 存在 | quality/verifications | QA | QA/raw issues | 37 quarantined issues | GET/health | orphan raw=0 | PASS | 当前全量未重跑 |
-| Data | certification | 存在 | health/preflight | source gate | parquet datasets | 2 certified | degraded→ok | 05:28 UTC 恢复 | PASS | version authority 分裂 |
-| Data | Parquet/DuckDB | 存在 | parquet datasets | maintenance | parquet datasets/files | 17.7M + 44.7K | watermark/health | ready/certified | PASS | 未全量 consistency 重建 |
-| Data | ClickHouse | 存在 | health | maintenance | derived watermark | equity 17.7M/index 5,960 | health/SQL | ready | PARTIAL | index scope 比 Parquet 小 |
-| Data | CSV import | 存在 | import API | importer | import batches | 历史记录 | 代码检查 | 未执行写入 | CODE_ONLY | 实际导入未测 |
-| Data | on-demand | 存在 | data request | demand worker | sync/request tables | worker 在线 | worker ping | 无审计下载 | PARTIAL | 未发请求 |
-| Backtest | Preflight | 存在 | POST preflight | validation/source gate | read-only | existing project | actual 400 | structured fail-closed | PASS | 恢复后成功响应未留输出 |
-| Backtest | 单次真实 LEAN | 存在 | create/run | worker/runner | runs/results | 3 existing | raw artifact | LEAN digest-pinned | PASS | 新 run 未创建 |
-| Backtest | 批量回测 | 存在 | batches | experiment service | batches/items | 2×1 child | DB/API | dynamic PIT success | PARTIAL | 无矩阵证据 |
-| Backtest | 状态/日志 | 存在 | status/logs | task service | runs/tasks | 3/9 | API/code | cursor backend | PARTIAL | UI 不用 cursor |
-| Backtest | 取消 | 存在 | cancel | backtest service | runs/tasks | 未取消 | 代码/测试审查 | 禁止影响任务 | CODE_ONLY | 竞态未实测 |
-| Backtest | 结果/图表 | 存在 | result | parser/report | results | 3 | raw/DB | run1 对账 | PASS | 浏览器图表未测 |
-| Backtest | 订单/成交/持仓 | 存在 | result | parser | result JSON | 134/134/10 | raw/DB/API | run1 | PASS | UI 未点击 |
-| Backtest | 指标/benchmark/excess | 存在 | result | analyzer | results | run1 完整 | 四方对账 | -9.625/6.246/-15.871% | PASS | 无 |
-| Backtest | artifact/report | 存在 | artifact/reports | object store/report | stored_objects/reports | 3 reports | hash抽样 | raw object hash 匹配 | PARTIAL | manifest hash 不全 |
-| Backtest | version/fingerprint | 存在 | detail | fingerprint | runs | 3 | SQL | input/canonical hash | PARTIAL | image/cache hash null |
-| Backtest | 最终数据 gate | trust panel | detail | worker validation | runs | 异常 run 1 | SQL | success + critical | FAIL | Critical TOCTOU |
-| Backtest | 失败详情 | 存在 | errors/detail | error mapping | runs/tasks | 历史失败少 | API errors | structured error | PARTIAL | current failure journey 未测 |
-| Backtest | 历史筛选/分页 | 存在 | list | backtests | runs | 3 | API | paged envelope | PARTIAL | 23.3MB payload |
-| Research | Research run | 存在 | `/api/research/runs` | research service | research_runs | 3 | GET/SQL | 1 success/2 stale running | FAIL | 状态不收敛 |
-| Research | Workspace/Jupyter | 存在 | workspaces | runner | workspace rows/files | 无当前活动证据 | 代码检查 | restricted runner path | CODE_ONLY | 未启动 |
-| Research | Factor evaluation | 存在 | research templates | research service | factors/values | ~8M values | DB inventory | 当前 run 未专项验证 | PARTIAL | UI 未测 |
-| Experiment | Optimization | 存在 | optimizations | experiment service | batches/experiments | 0 | actual GET | count=0 | NOT_VERIFIED | 当前无资源 |
-| Experiment | 参数网格 | 存在 | batch preview/create | batch service | batch/items | 0 current | 历史文件仅参考 | 未造数 | NOT_VERIFIED | 无 3×3 当前证据 |
-| Experiment | 多标的/多策略 | 存在 | batches | batch service | batches/items | 2 single-child | DB | dynamic universe | PARTIAL | 无 multi-strategy |
-| Experiment | rolling | 存在 | batch mode | batch service | batch/items | 0 current | 代码/历史证据 | 非当前事实 | CODE_ONLY | 无实际记录 |
-| Experiment | Walk-Forward | 存在 | WF APIs | WF service | WF runs/windows | 1 run/2 folds | SQL | 三段边界 | FAIL | 父资源断裂 |
-| Experiment | dynamic PIT | 存在 | batches | universe service | batches/membership | 2 batches | DB | mode dynamic_universe | PASS | child 各 1 |
-| Experiment | retry/cancel/restart | 存在 | action APIs | batch service | batches/items | 无当前动作 | 代码审查 | 未写入 | CODE_ONLY | 实际幂等未测 |
-| Experiment | CSV/ranking/heatmap | 存在 | export/result | aggregator | batch results | 无矩阵 | 代码检查 | 当前不可验证 | CODE_ONLY | 无数据 |
-| Experiment | Train/Validation/OOS | 存在 | WF detail | WF service | windows | 2 folds | SQL | 时间不重叠 | PARTIAL | selection/OOS lineage 断裂 |
-| Paper | 旧 Paper Session | 无主导航 | legacy compatibility | paper service | paper_sessions | 0 | SQL | jobs orphan | FAIL | 边界清理不完整 |
-| Paper | Paper Account 列表 | 存在 | accounts | paper_accounts | paper_accounts | 0 | actual GET | count=0 | NOT_VERIFIED | 无账户 |
-| Paper | 多账户/资金/持仓 | 存在 | overview/compare | projection | account/ledger | 0 | SQL | 无事实 | NOT_VERIFIED | L5 阻断 |
-| Paper | deployment freeze | 存在 | deployments | deployment service | deployments | 0 | 代码检查 | 版本字段存在 | CODE_ONLY | 当前无部署 |
-| Paper | daily cycle/Run-now | 存在 | cycles/run-now | scheduler | cycles/jobs | account cycles 0 | 代码检查 | legacy job 143 orphan | NOT_VERIFIED | 无安全终态账户 |
-| Paper | signal/intent/transition | 存在 | account detail | v2 pipeline | signal/intent/transition | 0 | schema/code | immutable design | CODE_ONLY | 无实际记录 |
-| Paper | constraint/order/fill | 存在 | detail APIs | pipeline | constraint/order/fill | 0 | schema/code | 无事实 | CODE_ONLY | 无实际记录 |
-| Paper | ledger/projection | 存在 | performance | projection writer | ledger/projection | 0 | SQL | 无法重算 | NOT_VERIFIED | L5 阻断 |
-| Paper | report/notification/audit | 存在 | reports/audit | outbox/audit | report/outbox/audit | 0 current | schema/code | historical file only | CODE_ONLY | 无当前送达 |
-| Paper | dataTrust | 告警 UI | accounts/performance | trust loader | runtime evidence | stale | actual GET | 0 account still trusted | FAIL | dangling evidence |
-| Operations | Dashboard | 存在 | aggregates/health | services | 多表 | 当前 counts | HTTP/API | data health ok | PARTIAL | 浏览器未测 |
-| Operations | Tasks | 存在 | `/api/tasks` | task service | tasks | 9 success | GET | 5.2MB | PARTIAL | 不含 derived maintenance |
-| Operations | Scheduler/Beat | 监控存在 | health | scheduler | leases/jobs | Beat online | Docker/Celery | queues 0 | PASS | domain orphan |
-| Operations | Recovery | 状态 UI | actions | recovery services | 多状态表 | stale/orphan | SQL | 2+143+139 | FAIL | ownership 不统一 |
-| Operations | Reports | 存在 | reports | report service | reports | 3 | GET | synthesized from runs | PASS | 与 result 职责相邻 |
-| Operations | Docs | 存在 | help APIs | docs service | files | 33 articles | docs check | PASS | API/architecture 局部漂移 |
-| Operations | Settings | 存在 | settings | config service | config/env | 当前可读 | GET/code | secrets 未打印 | PARTIAL | 浏览器未测 |
-| Operations | Health/Metrics | 存在 | health/metrics | monitoring | runtime | all core ok | actual health | source recovered | PASS | DB latency 7.5s 偏高 |
-| Operations | 错误/空/加载状态 | 存在 | structured errors | hooks/components | n/a | API errors | code/API | trace/retryable | PARTIAL | 视觉未验证 |
-| Operations | 移动导航 | 存在 | n/a | React/CSS | n/a | n/a | static review | 390/768 tests defined | NOT_VERIFIED | 浏览器不可用 |
+| Projects | 项目列表 | 存在 | `/api/projects` | project service | `projects` | 4 | authenticated GET | paged response | PASS | 浏览器未测 |
+| Projects | 创建项目 | 存在 | POST projects | project service | `projects` | 本轮0新建 | code/contract | 最小写入原则 | CODE_ONLY | 实际journey未测 |
+| Projects | 打开/文件 | 存在 | project/file APIs | project service | project workspace | 4 projects | read-only API/code | files/routes存在 | PARTIAL | Editor浏览器未测 |
+| Projects | 编辑/保存 | 存在 | PUT file | project service | workspace/snapshot | 未写 | code review | editor component | CODE_ONLY | 实际保存未测 |
+| Projects | 克隆 | 存在 | clone API | project service | `projects` | 未克隆 | code review | 避免重复资源 | CODE_ONLY | 实际未测 |
+| Projects | 删除保护 | confirm UI | DELETE | dependency guards | projects/runs | 未删除 | code review | 禁止真实删除 | CODE_ONLY | DB约束历史不足 |
+| Strategies | 模板/示例 | 存在 | template/example APIs | project service | files | 多模板；4项目 | file inventory | templates/examples | PARTIAL | 未实例化 |
+| Strategies | 参数配置 | 存在 | preflight/create | validation | run JSON | 3 runs | actual preflight | ready=true | PASS | UI form未测 |
+| Strategies | 版本/快照 | 详情存在 | run versions | fingerprint | runs/objects | 3 | artifact/DB | project snapshot | PARTIAL | certificate actual缺失 |
+| Strategies | 历史运行关联 | 存在 | project/backtests | backtest service | project/run FK | 3 | DB join | project均存在 | PASS | 无 |
+| Data | Provider availability | 存在 | providers/catalog | catalog | provider metadata | 多provider | actual GET | source health | PASS | executable状态旧API不清 |
+| Data | 资产目录 | 存在 | asset classes/catalog | catalog | `instruments` | 8,103 | API/SQL | 8,095 equity+8 index | PARTIAL | capability endpoint actual 404 |
+| Data | 数据预览 | 存在 | preview | market repository | daily bars | 19.2M | existing sample | A股OHLC正常 | PASS | 浏览器图表NV |
+| Data | 股票主数据 | 存在 | securities | reference service | securities/instruments | 5,902/8,095 | reference coverage | lifecycle存在 | PASS | 两模型需说明 |
+| Data | 交易日历 | 存在 | calendar | calendar service | trade calendar | 8,693 | actual coverage | 1990-12-19..2026-07-30 | PASS | 无 |
+| Data | 指数 | 存在 | catalog/preview | data service | instruments/bars | 8 instruments | SQL/API | 000300可用 | PASS | 仅少数index |
+| Data | ETF | 泛资产入口 | catalog | provider | instruments | 独立0 | SQL/QA | 无executable样本 | FAIL | capability需部署 |
+| Data | 期货 | 泛资产入口 | providers/asset classes | futures | raw metadata | canonical 0 | cross-asset QA | fut_basic metadata only | FAIL | 不可回测 |
+| Data | 期权 | 泛资产入口 | providers/asset classes | options | raw metadata | canonical 0 | cross-asset QA | opt_basic metadata only | FAIL | 不可回测 |
+| Data | 可转债 | 文档/入口 | catalog | data service | cb tables | canonical 0 | cross-asset QA | cb datasets missing | FAIL | 不可回测 |
+| Data | 分钟/tick | resolution UI | preview/preflight | data service | minute/tick | 0 | inventory | no canonical rows | FAIL | 不可回测 |
+| Data | 公司行动 | 间接 | quality/preflight | reference service | corporate actions | 59/3 symbols | sample+coverage | action样本存在 | PARTIAL | 覆盖严重偏窄 |
+| Data | 复权因子 | 间接 | preflight | LEAN cache/data | factor data | 大规模 | gate/artifact | run可执行 | PARTIAL | run级SHA为空 |
+| Data | 停牌 | 间接 | preflight/reference | status repository | trade status | 18,302,220 | actual coverage | 141,551 suspended days | PASS | 多源语义需文档 |
+| Data | ST | 间接 | preflight/reference | status repository | securities/status | 557 symbols | actual sample | ST样本 | PASS | ST-days统计仅1需复核 |
+| Data | 退市 | 间接 | reference | security master | securities | 366 | sample | 国华退等 | PASS | 无 |
+| Data | PIT universe | 存在 | PIT APIs | universe service | memberships | 299,610 | health/SQL | CSI300 1,225 | PASS/PARTIAL | 其他universe partial |
+| Data | Benchmark | 存在 | preflight/result | analyzer | index bars/results | 000300 | raw/DB/report | 6.2461%真实收益 | PASS | 覆盖有限 |
+| Data | 数据同步 | 存在 | sync-runs | data sync | sync/checkpoint | 20 latest可查 | API/SQL | success/partial/fail历史 | PARTIAL | 恢复fix未部署 |
+| Data | Checkpoint/watermark | 存在 | health/watermarks | maintenance | watermarks | 4 ready | actual GET | Parquet/CH | PASS | ClickHouse index窄scope |
+| Data | Validation/quarantine | 存在 | QA/verifications | QA | QA/raw issues | QA20；37 quarantine | actual GET | 16ok/2warn/2critical | PASS/PARTIAL | 报告含历史critical |
+| Data | Certification | 存在 | health/preflight | source gate | parquet datasets | 2 certified | actual health | recert success | PASS | Dataset Release未部署 |
+| Data | Dataset Release | 新源码有 | `/api/data/releases` | release service | 0040 table | 0/表不存在 | actual 404/schema | source vs runtime diff | CODE_ONLY | P0-004 |
+| Data | Parquet/DuckDB | 存在 | parquet datasets | maintenance | parquet datasets | 7；2 production | watermark/manifest | equity17.7M,index44.7K | PASS | 全量独立rehash NV |
+| Data | ClickHouse | 存在 | health | maintenance | watermarks | equity17.7M,index5,960 | actual health | ready | PARTIAL | index scope较窄 |
+| Data | CSV import | 存在 | import APIs | importer | import runs | 历史能力 | code/API | 本轮未写 | CODE_ONLY | 实际幂等未测 |
+| Data | On-demand download | 存在 | demand APIs | data-demand worker | tasks/archive | worker在线 | queue/code | 无新下载 | PARTIAL | 未触发 |
+| Backtest | Preflight | 存在 | POST preflight | validation/source gate | read-only | reused project | actual 200 | ready=true,17.129s | PASS | benchmark display 0 rows易误解 |
+| Backtest | 单次真实LEAN | 存在 | create/detail | backtest worker | runs/results | 3 | existing artifact | runner/raw result | PASS/PARTIAL | final gate Critical |
+| Backtest | 批量回测 | 存在 | batches | experiment | batches/children | 2×1 child | actual GET | dynamic PIT | PARTIAL | 非参数grid |
+| Backtest | 状态/任务 | 存在 | run/task APIs | worker/recovery | runs/tasks | 3/9 success | SQL/API | 无current queued | PASS/PARTIAL | 新生命周期UI NV |
+| Backtest | 日志/cursor | 存在 | logs | task service | file/object | 296,777 bytes | actual cursor | tail/offset正确 | PASS/PARTIAL | UI cursor NV |
+| Backtest | 取消 | 存在 | cancel | cancel service | run/task | 未执行 | code only | 禁止影响任务 | CODE_ONLY | race NV |
+| Backtest | 结果/图表 | 存在 | result/chart | parser | results | 3 | actual 200 | run1对账 | PASS | payload大 |
+| Backtest | 订单/成交/持仓 | 存在 | detail/result | parser | result JSON | 134/134/10(run1) | raw/DB/API | 四方一致 | PASS | UI表格NV |
+| Backtest | Metrics/benchmark/excess | 存在 | result | analyzer | results | 3 | raw/report | run1指标一致 | PASS | excess UI NV |
+| Backtest | Artifact/report | 存在 | downloads/reports | object/report | objects/reports | 68 backtest objects | SHA/API/file | raw先保存 | PASS | per-file cert缺 |
+| Backtest | Version/fingerprint | 存在 | versions | fingerprint | run JSON | 3 | actual GET | image/project/data字段 | PARTIAL | release/cache SHA缺 |
+| Backtest | Final gate | 详情显示 | validation | finalizer | runs | 1矛盾 | SQL/API | success+critical | FAIL | ACT-CRIT-001 |
+| Backtest | Reproducibility | 新源码有 | certificate/golden | cert service | 0040 table | 0 | actual 404 | no duplicate input | CODE_ONLY | 无Golden Pair |
+| Backtest | 历史筛选/分页 | 存在 | list filters | query service | runs | 3 | HTTP/code | actual list23.3MB | PARTIAL | browser/URL state NV |
+| Experiment | Parameter grid | 存在 | preview/create | scheduler | batch/children | 0 current | inventory | 无实际grid | CODE_ONLY | actual证据缺 |
+| Experiment | Dynamic PIT | 存在 | batch detail | experiment | batches | 2×1 success | API/SQL | child success | PASS/PARTIAL | 规模极小 |
+| Experiment | Rolling | 存在 | batch types | experiment | batches | 0 | inventory | 无current run | CODE_ONLY | actual证据缺 |
+| Experiment | Walk-Forward | 存在 | WF APIs | WF service | WF run/windows | 1/2 windows | SQL | lineage_broken | FAIL | P0-002 |
+| Experiment | Train/Validation/OOS | 存在 | WF detail | WF service | window fields | 两折日期 | SQL | 三段边界存在 | PARTIAL | selection/OOS link NULL |
+| Experiment | Retry/cancel/restart | 存在 | command APIs | scheduler | batch/task | 未执行 | code review | 最小写入原则 | CODE_ONLY | actual竞态NV |
+| Experiment | CSV export | 存在 | export | experiment query | child results | 1 row | actual GET | 200/305 bytes | PASS | 小样本 |
+| Experiment | Ranking/heatmap | 存在 | aggregate APIs | analytics | results | 无grid数据 | code | UI未测 | CODE_ONLY | 无实际热力图 |
+| Research | Runs/workspaces | 存在 | research APIs | research service | research runs | 3 | SQL/API | 1success/2failed | PASS/PARTIAL | 无current running |
+| Research | 日志/停止/重启 | 存在 | command/log APIs | worker | tasks/runs | 无active | code/history | stale已收敛 | PARTIAL | actual命令NV |
+| Factors | Evaluation | 存在 | factor APIs | factor service | factor values | 大规模research | code/inventory | 未专项复算 | PARTIAL | 浏览器NV |
+| Paper | Legacy Session | 存在 | legacy Paper API | legacy service | paper sessions/jobs | 2 sessions；旧orphan quarantined | SQL | 边界仍双轨 | PARTIAL | deprecate需明确 |
+| Paper | Account开户 | 存在 | accounts | account service | accounts | 2 | actual API/SQL | 1m/3m | PASS | 均draft |
+| Paper | Opening ledger | 存在 | overview | ledger pipeline | ledger entries | 2 | readonly reconcile | sequence1 exact | PASS | 仅开户 |
+| Paper | Projection | 存在 | overview/compare | projection | projections | 2 | readonly reconcile | cash/equity exact | PASS | 无交易日序列 |
+| Paper | Deployment freeze | 存在 | deployments | deployment | deployments | 2 active | API/SQL | fingerprints不同 | PARTIAL | actual trust/release旧 |
+| Paper | Certification cohort | 间接 | cohort APIs | certification | cohort/members | 1/2 | SQL | collecting,0/21 | PARTIAL | 未运行 |
+| Paper | Daily cycle | 存在 | cycles/run-now | scheduler/cycle | cycles | 0 | SQL/API | latestCycle null | FAIL | past due deployment |
+| Paper | Signal/intent | 存在 | signals | execution | signal/intent | 0 | SQL/API | empty | NOT_VERIFIED | 无cycle |
+| Paper | Order/fill | 存在 | orders/trades | order pipeline | orders/fills | 0 | SQL/API | empty | NOT_VERIFIED | 幂等/next-session未证 |
+| Paper | Position/cash/NAV | 工作台存在 | overview/performance | projection | positions/snapshots | opening only | reconcile | initial projection exact | PARTIAL | 无交易后事实 |
+| Paper | Report/performance | 存在 | reports/performance | reporting | reports/snapshots | 0/empty | API | endpoints 200 empty | NOT_VERIFIED | 无daily cycles |
+| Paper | Notification/audit | 存在 | notifications/audit | outbox/audit | events/outbox | account downstream 0 | API | empty | NOT_VERIFIED | global delivery失败 |
+| Paper | 多账户比较 | 存在 | compare | query | projections | 2 | actual API | comparable=true | PASS/PARTIAL | 仅opening状态 |
+| Paper | Trust | UI字段 | accounts | trust service | runtime/0040 absent | stale旧IDs | actual API/SQL | trust=true dangling | FAIL | P1-001 |
+| Paper | 停止/删除保护 | 存在 | commands/delete | account service | dependencies | 未执行 | code review | 禁止真实破坏 | CODE_ONLY | actual保护NV |
+| System | Dashboard | 存在 | aggregate APIs | query services | 多表 | current | HTTP/code | route/assets加载 | PARTIAL | 浏览器NV |
+| System | Tasks | 存在 | tasks | task service | tasks | 9 success | actual GET | 5.2MB | PARTIAL | payload过大 |
+| System | Reports | 存在 | reports | report service | reports/objects | existing | API/code | run report可读 | PASS/PARTIAL | UI NV |
+| System | Docs | 存在 | docs/help | help generator | files | 33 articles | check scripts | PASS | PASS | runtime内容未逐页浏览 |
+| System | Settings | 存在 | settings/health | config | env/runtime | current | code/HTTP | route存在 | PARTIAL | 权限失效UI NV |
+| System | Health/Metrics | 存在 | health/resources | monitoring | samples/alerts | current | actual GET | DB/queues/resource | PARTIAL | notification false-ready |
+| System | Error/loading/empty | components有 | structured errors | API client | n/a | actual empty Paper tabs | HTTP/code | endpoints 200 | PARTIAL | 浏览器体验NV |
+| System | Notification outbox | 间接 | alerts | notification | deliveries | 33/33 failed | SQL/API/log | attempts70,260 | FAIL | P1-007 |
+| System | Responsive/mobile | components有 | n/a | n/a | n/a | 4目标尺寸 | browser unavailable | mocks不算actual | NOT_VERIFIED | 四视口未验 |
 
-## P1 整改后的能力契约
+## 结论
 
-| Domain | Feature | 新契约 | 代码状态 | 实际环境下一证据 |
-| --- | --- | --- | --- | --- |
-| Paper | dataTrust | account + generation + active release + TTL + live checkpoint/report | CODE_FIXED_REVALIDATION_REQUIRED | 当前 cohort 重算 |
-| Data | maintenance | 单 active run + bounded checkpoint resume + backoff/alert | CODE_FIXED_REVALIDATION_REQUIRED | 7 日稳定运行 |
-| API/Web | history/tasks/QA | summary list + detail + limit≤200；History server pagination | CODE_FIXED_REVALIDATION_REQUIRED | 当前 payload/四视口 |
-| Data | cross-asset | unavailable/metadata_only/data_ready/executable 与 canonical row 证据一致 | CODE_FIXED_REVALIDATION_REQUIRED | 当前全 scope 对账 |
-| Data | release | Parquet/version/run 共用 immutable Dataset Release | CODE_FIXED_REVALIDATION_REQUIRED | equity/index recertify |
-| Backtest | reproducibility | fetchable certificate + golden pair + component/artifact digests | CODE_FIXED_REVALIDATION_REQUIRED | 最小真实双跑 |
-
-## P2 整改后的能力契约
-
-| Domain | Feature | 新契约 | 代码状态 | 实际环境下一证据 |
-| --- | --- | --- | --- | --- |
-| API | primary lists | `{items,count,limit,offset}` 与 OpenAPI/TS/generated reference 一致 | CODE_FIXED_REVALIDATION_REQUIRED | authenticated contract snapshot |
-| Backtest/Operations | logs | earlier + cursor follow + manual stop + terminal stop polling | CODE_FIXED_REVALIDATION_REQUIRED | >64 KiB 真实日志浏览器 journey |
-| Web/API | write retry | 同一 command 的网络 retry 复用稳定 `Idempotency-Key` | CODE_FIXED_REVALIDATION_REQUIRED | timeout/replay probe |
-| Architecture | state ownership | command/query surfaces + machine-checked unique Dataset Release/Paper ledger/projection writers | CODE_FIXED_REVALIDATION_REQUIRED | 实际 sync/backtest/Paper characterization |
+功能面“存在”明显高于“实际链路通过”。第二次审计新增的真实 PASS 是 P0 状态收敛、Paper 双账户开户/初始账本/投影和 comparison；未被代码修复覆盖的关键实际缺口仍是 final gate、部署代次、WF lineage、Paper 0 cycles、通知全失败和跨资产数据不可执行。
