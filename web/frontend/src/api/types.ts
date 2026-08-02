@@ -51,6 +51,9 @@ export interface DataSyncCatalogItem {
   skip_reason?: string | null;
   rate_limit_per_hour?: number | null;
   next_allowed_at?: string | null;
+  capabilityState?: "unavailable" | "metadata_only" | "data_ready" | "executable";
+  canonicalRowCount?: number;
+  capabilityReason?: string | null;
 }
 
 export interface DataSyncItem {
@@ -282,6 +285,18 @@ export interface AssetClassInfo {
   venues: string[];
   dataTypes: string[];
   notes: string;
+  capabilityState?: "unavailable" | "metadata_only" | "data_ready" | "executable";
+  capabilities?: Array<{
+    asset_class: string;
+    market: string;
+    venue: string;
+    resolution: string;
+    data_type: string;
+    state: "unavailable" | "metadata_only" | "data_ready" | "executable";
+    metadata_count: number;
+    canonical_row_count: number;
+    executable_reason?: string | null;
+  }>;
 }
 
 export interface LocalDataFile {
@@ -1122,7 +1137,12 @@ export interface PagedResponse<T> {
 
 export interface PaperDataTrust {
   valuationTrusted: boolean;
-  reason: "historical_recertification_pending" | null;
+  reason: string | null;
+  accountIds?: string[];
+  missingAccountIds?: string[];
+  datasetReleaseIds?: string[];
+  generationByAccount?: Record<string, number>;
+  expiresAt?: string;
 }
 
 export interface PaperCertificationMember {

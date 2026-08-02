@@ -130,6 +130,7 @@ JSON_COLUMNS = {
     "selection_inputs_json": "selectionInputs",
     "selection_outputs_json": "selectionOutputs",
     "contract_json": "contract",
+    "certificate_json": "certificate",
 }
 
 
@@ -206,6 +207,7 @@ LONG_TEXT_COLUMNS = {
     "selection_inputs_json",
     "selection_outputs_json",
     "contract_json",
+    "certificate_json",
     "error",
     "error_message",
     "response_body",

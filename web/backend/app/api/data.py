@@ -34,7 +34,12 @@ from ..services.data_provider_manager import DATA_PROVIDER_MANAGER
 from ..services.data_coverage import ashare_coverage, benchmark_coverage, symbol_coverage
 from ..services.market_data import mirror_rows, query_bars, query_database_bars
 from ..services.parquet_lake import export_market_daily_bars, list_datasets, parquet_consistency_report, query_duckdb_bars, rebuild_all_market_parquet
-from ..services.ashare_multisource import compare_ashare_daily_sources, compare_ashare_daily_sources_batch, list_quality_reports
+from ..services.ashare_multisource import (
+    compare_ashare_daily_sources,
+    compare_ashare_daily_sources_batch,
+    list_quality_report_summaries,
+    quality_report,
+)
 from ..services.free_data_pipeline import import_ashare_daily_sample
 from ..services.intraday import import_intraday_bars
 from ..services.instrument_identity import identifier_coverage, identifiers_for_symbol
@@ -55,6 +60,8 @@ from ..services import derived_maintenance
 from ..services.tasks import create_task
 from ..services import data_sync
 from ..services import data_gateway
+from ..services.asset_capabilities import capability_payload
+from ..services.dataset_releases import list_releases
 from ..tasks.worker import (
     download_on_demand_dataset_task,
     fetch_data_batch_task,
@@ -426,6 +433,16 @@ def available_asset_classes():
     return asset_classes()
 
 
+@router.get("/data/capabilities")
+def data_capabilities():
+    return capability_payload()
+
+
+@router.get("/data/releases")
+def dataset_releases(status: str | None = None, limit: int = 100, offset: int = 0):
+    return list_releases(status=status, limit=limit, offset=offset)
+
+
 @router.get("/data/files")
 def data_files(assetClass: str | None = None, venue: str | None = None):
     items = local_data_index(assetClass, venue)
@@ -680,8 +697,16 @@ def compare_ashare_daily_data_batch(request: AshareDailyCompareBatchRequest):
 
 
 @router.get("/data/quality/reports")
-def data_quality_reports(limit: int = 100):
-    return {"items": list_quality_reports(limit=limit)}
+def data_quality_reports(limit: int = 100, offset: int = 0):
+    return list_quality_report_summaries(limit=limit, offset=offset)
+
+
+@router.get("/data/quality/reports/{report_id}")
+def data_quality_report(report_id: str):
+    item = quality_report(report_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Data quality report not found.")
+    return item
 
 
 @router.get("/data/quality/cross-asset")

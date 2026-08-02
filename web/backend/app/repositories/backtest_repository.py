@@ -39,6 +39,8 @@ BACKTEST_UPDATE_COLUMNS = {
     "validation_json",
     "experiment_json",
     "failure_json",
+    "dataset_release_id",
+    "reproducibility_certificate_id",
 }
 
 
@@ -46,6 +48,9 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
     filters = filters or {}
     clauses: list[str] = []
     values: list[Any] = []
+    if filters.get("name"):
+        clauses.append("name like ?")
+        values.append(f"%{str(filters['name']).strip()}%")
     if filters.get("status"):
         clauses.append("status = ?")
         values.append(normalize_status(str(filters["status"])))
@@ -55,19 +60,44 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
     if filters.get("symbol"):
         clauses.append("symbol = ?")
         values.append(str(filters["symbol"]).upper())
+    if filters.get("market"):
+        clauses.append("venue = ?")
+        values.append(str(filters["market"]).lower())
     if filters.get("from_date"):
         clauses.append("created_at >= ?")
         values.append(filters["from_date"])
     if filters.get("to_date"):
         clauses.append("created_at <= ?")
         values.append(filters["to_date"])
-    sql = "select * from backtest_runs"
+    sql = """
+        select id,task_id,project_id,name,symbol,asset_class,venue,resolution,data_type,
+               parameters_json,status,docker_image,exit_code,error,error_message,failure_json,
+               created_at,queued_at,started_at,finished_at,duration_seconds,validation_json,
+               dataset_release_id,reproducibility_certificate_id
+        from backtest_runs
+    """
     if clauses:
         sql += " where " + " and ".join(clauses)
     sql += " order by created_at desc"
     with db() as connection:
         rows = connection.execute(sql, values).fetchall()
-    return rows_to_dicts(rows)
+    items = rows_to_dicts(rows)
+    allowed_parameters = {
+        "ticker", "symbol", "assetClass", "market", "venue", "resolution", "dataType",
+        "start", "end", "cash", "initialCash", "benchmarkSymbol", "strategyTemplateKey",
+    }
+    for item in items:
+        parameters = item.get("parameters") or {}
+        item["parameters"] = {
+            key: value for key, value in parameters.items()
+            if key in allowed_parameters and not isinstance(value, (dict, list))
+        }
+        validation = item.get("validation") or {}
+        item["validation"] = {
+            key: validation.get(key) for key in ("schemaVersion", "passed", "severity")
+            if key in validation
+        }
+    return items
 
 
 def get_backtest(job_id: str) -> dict[str, Any] | None:

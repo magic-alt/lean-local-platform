@@ -297,6 +297,38 @@ def catalog_payload() -> dict[str, Any]:
             """
         ).fetchone()
     items = rows_to_dicts(rows)
+    from .asset_capabilities import refresh_capabilities
+
+    capabilities = refresh_capabilities()
+
+    def capability_asset(dataset_key: str) -> str | None:
+        if dataset_key.startswith("fut_"):
+            return "future"
+        if dataset_key.startswith("opt_"):
+            return "option"
+        if dataset_key.startswith("cb_"):
+            return "convertible_bond"
+        if dataset_key.startswith("fund_"):
+            return "etf"
+        if dataset_key.startswith("index_"):
+            return "index"
+        if dataset_key in {"stock_basic", "namechange", "daily", "adj_factor", "daily_basic", "suspend_d", "stk_limit"}:
+            return "equity"
+        return None
+
+    for item in items:
+        asset_class = capability_asset(str(item["dataset_key"]))
+        capability = next(
+            (
+                value for value in capabilities
+                if value["asset_class"] == asset_class and value["resolution"] == "daily"
+            ),
+            None,
+        )
+        if capability:
+            item["capabilityState"] = capability["state"]
+            item["canonicalRowCount"] = int(capability.get("canonical_row_count") or 0)
+            item["capabilityReason"] = capability.get("executable_reason")
     active_run = sync_run(str(active["id"])) if active else None
     latest_run = sync_run(str(latest["id"])) if latest else None
     return {

@@ -2,6 +2,8 @@
 
 状态只表示本轮证据。`Web=存在` 表示路由/组件存在，不等于实际浏览器通过；内置浏览器不可用使视觉检查保持 `NOT_VERIFIED`。
 
+> 审计后 P1 整改：下表保留 2026-08-02 实际环境采样事实。相关代码现已加入 Dataset Release、reproducibility certificate、account-bound Paper trust、maintenance resume、summary pagination 和 canonical capability 状态，统一为 `CODE_FIXED_REVALIDATION_REQUIRED`；部署后的实际数据/浏览器证据尚未回写为 PASS。
+
 | Domain | Feature | Web | API | Service | Database | Actual Data | Test Result | Evidence | Status | Gap |
 | ------ | ------- | --- | --- | ------- | -------- | ----------- | ----------- | -------- | ------ | --- |
 | Projects | 项目列表 | 存在 | `/api/projects` | projects | `projects` | 4 | authenticated GET | 4.9KB paged | PASS | 无 |
@@ -84,3 +86,14 @@
 | Operations | Health/Metrics | 存在 | health/metrics | monitoring | runtime | all core ok | actual health | source recovered | PASS | DB latency 7.5s 偏高 |
 | Operations | 错误/空/加载状态 | 存在 | structured errors | hooks/components | n/a | API errors | code/API | trace/retryable | PARTIAL | 视觉未验证 |
 | Operations | 移动导航 | 存在 | n/a | React/CSS | n/a | n/a | static review | 390/768 tests defined | NOT_VERIFIED | 浏览器不可用 |
+
+## P1 整改后的能力契约
+
+| Domain | Feature | 新契约 | 代码状态 | 实际环境下一证据 |
+| --- | --- | --- | --- | --- |
+| Paper | dataTrust | account + generation + active release + TTL + live checkpoint/report | CODE_FIXED_REVALIDATION_REQUIRED | 当前 cohort 重算 |
+| Data | maintenance | 单 active run + bounded checkpoint resume + backoff/alert | CODE_FIXED_REVALIDATION_REQUIRED | 7 日稳定运行 |
+| API/Web | history/tasks/QA | summary list + detail + limit≤200；History server pagination | CODE_FIXED_REVALIDATION_REQUIRED | 当前 payload/四视口 |
+| Data | cross-asset | unavailable/metadata_only/data_ready/executable 与 canonical row 证据一致 | CODE_FIXED_REVALIDATION_REQUIRED | 当前全 scope 对账 |
+| Data | release | Parquet/version/run 共用 immutable Dataset Release | CODE_FIXED_REVALIDATION_REQUIRED | equity/index recertify |
+| Backtest | reproducibility | fetchable certificate + golden pair + component/artifact digests | CODE_FIXED_REVALIDATION_REQUIRED | 最小真实双跑 |

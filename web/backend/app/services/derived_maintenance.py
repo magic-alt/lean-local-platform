@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import hashlib
+import os
 import uuid
 from typing import Any
 
@@ -44,6 +45,16 @@ def create_maintenance_run(
     unsupported = [item for item in selected if item not in LAYERS]
     if unsupported:
         raise ValueError(f"Unsupported derived layers: {', '.join(unsupported)}.")
+    with db() as connection:
+        active = connection.execute(
+            """
+            select * from derived_maintenance_runs
+            where status in ('queued','running','retry_wait')
+            order by created_at desc limit 1
+            """
+        ).fetchone()
+    if active:
+        return row_to_dict(active) or {}
     run_id = str(uuid.uuid4())
     now = utc_now()
     with db() as connection:
@@ -576,11 +587,19 @@ def _run_locked(run_id: str) -> dict[str, Any]:
     if run["status"] == "success":
         return run
     layers = list(run.get("requested_layers") or LAYERS)
+    checkpoint = dict(run.get("checkpoint") or {})
+    completed_units = set(str(item) for item in checkpoint.get("completedUnits") or [])
+    attempt = int(run.get("attempt_count") or 0) + 1
     started = utc_now()
     with db() as connection:
         connection.execute(
-            "update derived_maintenance_runs set status='running',started_at=?,error=null where id=?",
-            (started, run_id),
+            """
+            update derived_maintenance_runs
+            set status='running',started_at=coalesce(started_at,?),error=null,
+                attempt_count=?,heartbeat_at=?,next_retry_at=null,finished_at=null,lease_owner=?
+            where id=?
+            """,
+            (started, attempt, started, f"{os.getpid()}:{run_id}", run_id),
         )
     scopes = _available_scopes(include_research_sources=False)
     results: list[dict[str, Any]] = []
@@ -593,6 +612,10 @@ def _run_locked(run_id: str) -> dict[str, Any]:
             if int(stats.get("row_count") or 0) <= 0:
                 continue
             for layer in layers:
+                unit_key = f"{layer}|{scope_key}|{scope['source']}"
+                if unit_key in completed_units:
+                    results.append({"layer": layer, "scopeKey": scope_key, "source": scope["source"], "status": "checkpoint_skipped"})
+                    continue
                 prior = _watermark(layer, scope_key, scope["source"]) or _existing_layer_seed(layer, scope, stats)
                 _upsert_watermark(
                     layer,
@@ -680,6 +703,22 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                         completed_at=completed,
                     )
                     results.append({"layer": layer, "scopeKey": scope_key, "source": scope["source"], "status": status, **details})
+                    if status == "ready":
+                        completed_units.add(unit_key)
+                    checkpoint = {
+                        "schemaVersion": 1,
+                        "completedUnits": sorted(completed_units),
+                        "currentUnit": unit_key,
+                        "attempt": attempt,
+                    }
+                    with db() as connection:
+                        connection.execute(
+                            """
+                            update derived_maintenance_runs
+                            set checkpoint_json=?,checkpoint_at=?,heartbeat_at=? where id=?
+                            """,
+                            (json_dump(checkpoint), utc_now(), utc_now(), run_id),
+                        )
                 except Exception as exc:  # noqa: BLE001 - continue other independent scopes
                     error = str(exc)
                     errors.append({"layer": layer, "scopeKey": scope_key, "source": scope["source"], "error": error})
@@ -699,7 +738,10 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                         completed_at=utc_now(),
                     )
         consistency = None
-        if "parquet" in layers and any(item["layer"] == "parquet" and item["status"] == "ready" for item in results):
+        if "parquet" in layers and (
+            any(item["layer"] == "parquet" and item["status"] == "ready" for item in results)
+            or any(unit.startswith("parquet|") for unit in completed_units)
+        ):
             consistency = parquet_consistency_report(
                 sources=sorted({scope["source"] for scope in scopes}),
                 include_research_sources=False,
@@ -724,7 +766,12 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                         }
                     )
         effective_errors = list(errors)
-        status = "success" if not effective_errors else "partial" if results else "failed"
+        max_attempts = int(run.get("max_attempts") or 5)
+        exhausted = bool(effective_errors) and attempt >= max_attempts
+        status = "success" if not effective_errors else "failed" if exhausted else "retry_wait"
+        next_retry_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=min(3600, 30 * (2 ** max(0, attempt - 1))))
+        ).isoformat() if status == "retry_wait" else None
         summary = {
             "layers": layers,
             "scopeCount": len(scopes),
@@ -736,7 +783,8 @@ def _run_locked(run_id: str) -> dict[str, Any]:
             connection.execute(
                 """
                 update derived_maintenance_runs
-                set status=?,canonical_watermark=?,summary_json=?,error=?,finished_at=?
+                set status=?,canonical_watermark=?,summary_json=?,error=?,finished_at=?,
+                    next_retry_at=?,heartbeat_at=?
                 where id=?
                 """,
                 (
@@ -744,21 +792,77 @@ def _run_locked(run_id: str) -> dict[str, Any]:
                     canonical_end,
                     json_dump(summary),
                     "; ".join(item["error"] for item in errors[:5]) or None,
+                    utc_now() if status in {"success", "failed"} else None,
+                    next_retry_at,
                     utc_now(),
                     run_id,
                 ),
             )
+        if exhausted:
+            from .alerts import emit_alert
+
+            emit_alert(
+                "data_sync_failed",
+                severity="critical",
+                title="Derived data maintenance exhausted retries",
+                message="; ".join(item["error"] for item in errors[:5]),
+                source="derived_maintenance",
+                related_id=run_id,
+                details={"attempt": attempt, "maxAttempts": max_attempts, "checkpoint": checkpoint},
+                dedupe_key=f"derived_maintenance_exhausted:{run_id}",
+            )
+            with db() as connection:
+                connection.execute(
+                    "update derived_maintenance_runs set alert_sent_at=? where id=?",
+                    (utc_now(), run_id),
+                )
         return maintenance_run(run_id) or {}
     except Exception as exc:
+        retry_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=min(3600, 30 * (2 ** max(0, attempt - 1))))
+        ).isoformat()
+        max_attempts = int(run.get("max_attempts") or 5)
+        exhausted = attempt >= max_attempts
         with db() as connection:
             connection.execute(
-                "update derived_maintenance_runs set status='failed',error=?,finished_at=? where id=?",
-                (str(exc), utc_now(), run_id),
+                """
+                update derived_maintenance_runs
+                set status=?,error=?,finished_at=?,next_retry_at=?,heartbeat_at=?
+                where id=?
+                """,
+                (
+                    "failed" if exhausted else "retry_wait", str(exc),
+                    utc_now() if exhausted else None, None if exhausted else retry_at,
+                    utc_now(), run_id,
+                ),
             )
+        if exhausted:
+            from .alerts import emit_alert
+
+            emit_alert(
+                "data_sync_failed",
+                severity="critical",
+                title="Derived data maintenance exhausted retries",
+                message=str(exc),
+                source="derived_maintenance",
+                related_id=run_id,
+                details={"attempt": attempt, "maxAttempts": max_attempts, "checkpoint": checkpoint},
+                dedupe_key=f"derived_maintenance_exhausted:{run_id}",
+            )
+            with db() as connection:
+                connection.execute(
+                    "update derived_maintenance_runs set alert_sent_at=? where id=?",
+                    (utc_now(), run_id),
+                )
         raise
 
 
 def run_maintenance(run_id: str) -> dict[str, Any]:
+    current = maintenance_run(run_id)
+    if current and current.get("status") == "retry_wait" and current.get("next_retry_at"):
+        retry_at = datetime.fromisoformat(str(current["next_retry_at"]))
+        if retry_at > datetime.now(timezone.utc):
+            return current
     if database_backend() != "mysql":
         return _run_locked(run_id)
     with db() as connection:

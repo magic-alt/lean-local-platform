@@ -162,10 +162,12 @@ export function RunsTable({
   runs,
   onOpen,
   onDelete,
+  page,
 }: {
   runs: BacktestRun[];
   onOpen: (id: string) => void;
   onDelete?: (run: BacktestRun) => Promise<void>;
+  page?: { current: number; pageSize: number; total: number; onChange: (page: number, pageSize: number) => void };
 }) {
   const [selected, setSelected] = useState<React.Key[]>([]);
   const [deleting, setDeleting] = useState(false);
@@ -213,7 +215,14 @@ export function RunsTable({
           onChange: setSelected,
           getCheckboxProps: (run) => ({ disabled: !canDelete(run) }),
         } : undefined}
-        pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 20, 50] }}
+        pagination={page ? {
+          current: page.current,
+          pageSize: page.pageSize,
+          total: page.total,
+          onChange: page.onChange,
+          showSizeChanger: true,
+          pageSizeOptions: [8, 20, 50, 100],
+        } : { pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 20, 50] }}
         locale={{ emptyText: <Empty description="No backtests found" /> }}
         columns={[
           {

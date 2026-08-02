@@ -65,6 +65,21 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | ALL | 在当前实际环境重跑非破坏审计；安全复用项目/数据/账户；生成新日期六份报告与证据 | `docs/audit`, `web/runtime/audit` | 仅最少审计 run；统一标签 | backend tests 使用获批现有 MySQL lane；frontend build；in-app Browser；LEAN golden；Paper 21 日；WF | 总分≥90、Critical=0、P0=0、关键 NOT_VERIFIED=0 | 报告不可回写；失败保持 FAIL | 满足用户 Level 5 全部 gate 后才可给 PASS |
 
+## P1 实施状态（审计后）
+
+六项 P1 的代码、migration、API/TS 和回归测试已实现，统一标记为 `CODE_FIXED_REVALIDATION_REQUIRED`，不以临时 SQLite 单测替代实际 MySQL/LEAN/Paper 验收。
+
+| Issue ID | 代码状态 | 主要落点 | 下一验收动作 |
+| --- | --- | --- | --- |
+| ACT-P1-001 | CODE_FIXED_REVALIDATION_REQUIRED | `paper_account_trust_certifications`、`paper_accounts.py` | 当前 cohort 重算、过期/归档/代次变化实测 |
+| ACT-P1-002 | CODE_FIXED_REVALIDATION_REQUIRED | maintenance attempt/checkpoint/heartbeat/backoff/alert，同 run resume | 7 日稳定性观察与强制连接断开恢复 |
+| ACT-P1-003 | CODE_FIXED_REVALIDATION_REQUIRED | summary list、200 hard limit、QA detail、Web server pagination | authenticated payload budget 与 slow-network UI |
+| ACT-P1-004 | CODE_FIXED_REVALIDATION_REQUIRED | `asset_capabilities`、catalog/API/TS、preflight gate | 当前 8 个 scope 的 API/UI/SQL 对账 |
+| ACT-P1-005 | CODE_FIXED_REVALIDATION_REQUIRED | `dataset_releases` 及 Parquet/dataset version/backtest FK-like references | MySQL migration + equity/index recertification |
+| ACT-P1-006 | CODE_FIXED_REVALIDATION_REQUIRED | `reproducibility_certificates`、stored object、golden-pair API | 当前 certified release 最小真实 LEAN 双跑 |
+
+验证命令：`cd web/backend && .venv/bin/python -m pytest -q`、`cd web/frontend && npm run build`、`scripts/generate_help_api_reference.py --check --json`。
+
 ## 依赖与优先级
 
 1. ACT-CRIT-001 是所有新回测、Experiment、Paper candidate 的前置。

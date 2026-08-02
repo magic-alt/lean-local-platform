@@ -1245,6 +1245,16 @@ def _certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]
                 """,
                 (dataset_version, certified_at, report_id, certified_at, dataset_id, PRIMARY_DATA_SOURCE),
             )
+            from .dataset_releases import certify_parquet_dataset
+
+            certify_parquet_dataset(
+                dataset_id,
+                dataset_version=dataset_version,
+                manifest_sha256=manifest_sha256,
+                qa_report_id=str(report_id),
+                certified_at=certified_at,
+                connection=connection,
+            )
             certified_ids.append(dataset_id)
     return certified_ids
 

@@ -365,15 +365,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
-  backtests: (filters?: { status?: string; projectId?: string; symbol?: string; fromDate?: string; toDate?: string }) => {
+  backtests: (filters?: { name?: string; status?: string; projectId?: string; symbol?: string; market?: string; fromDate?: string; toDate?: string }) => {
     const query = new URLSearchParams();
     Object.entries(filters ?? {}).forEach(([key, value]) => {
       if (value) query.set(key, String(value));
     });
     query.set("paged", "false");
-    query.set("limit", "1000");
+    query.set("limit", "100");
     const suffix = `?${query.toString()}`;
     return request<BacktestRun[]>(`/api/backtests${suffix}`);
+  },
+  backtestsPage: (
+    filters?: { name?: string; status?: string; projectId?: string; symbol?: string; market?: string; fromDate?: string; toDate?: string },
+    page: { limit: number; offset: number } = { limit: 20, offset: 0 }
+  ) => {
+    const query = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value) query.set(key, String(value));
+    });
+    query.set("paged", "true");
+    query.set("limit", String(page.limit));
+    query.set("offset", String(page.offset));
+    return request<PagedResponse<BacktestRun>>(`/api/backtests?${query.toString()}`);
   },
   preflightBacktest: (payload: {
     symbol: string;
@@ -447,7 +460,7 @@ export const api = {
     request<ChartData>(`/api/backtests/${encodeURIComponent(id)}/chart-data${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
   screening: (id: string) =>
     request<ScreeningReport>(`/api/backtests/${encodeURIComponent(id)}/screening`),
-  tasks: () => request<Task[]>("/api/tasks?paged=false&limit=1000"),
+  tasks: () => request<Task[]>("/api/tasks?paged=false&limit=100"),
   task: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   taskLogs: (id: string) => request<{ logs: string }>(`/api/tasks/${encodeURIComponent(id)}/logs`),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),

@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from ..db import db, json_dump, rows_to_dicts, utc_now
+
+
+CAPABILITY_SCOPES = (
+    ("equity", "china", "china", "daily", "trade"),
+    ("index", "china", "china", "daily", "trade"),
+    ("etf", "china", "china", "daily", "trade"),
+    ("future", "china", "china", "daily", "trade"),
+    ("option", "china", "china", "daily", "trade"),
+    ("convertible_bond", "china", "china", "daily", "trade"),
+    ("equity", "china", "china", "minute", "trade"),
+    ("equity", "china", "china", "tick", "trade"),
+)
+
+
+def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, int]:
+    if asset_class == "future":
+        metadata = connection.execute("select count(*) as count from futures_contracts").fetchone()["count"]
+        rows = connection.execute("select count(*) as count from futures_daily_bars").fetchone()["count"]
+        return int(metadata or 0), int(rows or 0)
+    if asset_class == "convertible_bond":
+        metadata = connection.execute("select count(*) as count from cbond_securities").fetchone()["count"]
+        rows = connection.execute("select count(*) as count from cbond_daily_bars").fetchone()["count"]
+        return int(metadata or 0), int(rows or 0)
+    if asset_class == "option":
+        metadata = connection.execute(
+            "select count(*) as count from provider_raw_records where dataset_key='opt_basic'"
+        ).fetchone()["count"]
+        return int(metadata or 0), 0
+    if resolution == "minute":
+        rows = connection.execute(
+            "select count(*) as count from market_intraday_bars where asset_class=?",
+            (asset_class,),
+        ).fetchone()["count"]
+    elif resolution == "tick":
+        rows = connection.execute(
+            "select count(*) as count from market_ticks where asset_class=?",
+            (asset_class,),
+        ).fetchone()["count"]
+    elif asset_class == "etf":
+        rows = connection.execute(
+            """
+            select count(*) as count from market_daily_bars bar
+            join instruments instrument on instrument.instrument_id=bar.instrument_id
+            where instrument.asset_class='equity'
+              and (lower(instrument.name) like '%etf%' or lower(instrument.metadata_json) like '%etf%')
+            """
+        ).fetchone()["count"]
+    else:
+        rows = connection.execute(
+            "select count(*) as count from market_daily_bars where asset_class=?",
+            (asset_class,),
+        ).fetchone()["count"]
+    metadata_class = "equity" if asset_class == "etf" else asset_class
+    metadata = connection.execute(
+        "select count(*) as count from instruments where asset_class=?",
+        (metadata_class,),
+    ).fetchone()["count"]
+    return int(metadata or 0), int(rows or 0)
+
+
+def refresh_capabilities() -> list[dict[str, Any]]:
+    now = utc_now()
+    with db() as connection:
+        for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
+            metadata_count, row_count = _counts(connection, asset_class, resolution)
+            state = (
+                "executable" if row_count > 0 and asset_class in {"equity", "index"}
+                else "data_ready" if row_count > 0
+                else "metadata_only" if metadata_count > 0
+                else "unavailable"
+            )
+            reason = None if state == "executable" else (
+                "execution_adapter_not_certified" if row_count > 0
+                else
+                "canonical_rows_missing" if metadata_count > 0 else "metadata_and_canonical_rows_missing"
+            )
+            key = f"{asset_class}:{market}:{venue}:{resolution}:{data_type}"
+            evidence = {
+                "schemaVersion": 1,
+                "metadataCount": metadata_count,
+                "canonicalRowCount": row_count,
+                "derivedFromCanonicalTables": True,
+            }
+            connection.execute(
+                """
+                insert into asset_capabilities
+                    (id,asset_class,market,venue,resolution,data_type,state,metadata_count,
+                     canonical_row_count,executable_reason,evidence_json,refreshed_at)
+                values (?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(asset_class,market,venue,resolution,data_type) do update set
+                    state=excluded.state,metadata_count=excluded.metadata_count,
+                    canonical_row_count=excluded.canonical_row_count,
+                    executable_reason=excluded.executable_reason,evidence_json=excluded.evidence_json,
+                    refreshed_at=excluded.refreshed_at
+                """,
+                (
+                    str(uuid.uuid5(uuid.NAMESPACE_URL, key)), asset_class, market, venue,
+                    resolution, data_type, state, metadata_count, row_count, reason,
+                    json_dump(evidence), now,
+                ),
+            )
+        rows = connection.execute(
+            "select * from asset_capabilities order by asset_class,resolution,market,venue"
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def capability_for_scope(
+    *,
+    asset_class: str,
+    market: str,
+    venue: str | None,
+    resolution: str,
+    data_type: str,
+) -> dict[str, Any]:
+    normalized = "convertible_bond" if asset_class.lower() in {"cbond", "convertible-bond"} else asset_class.lower()
+    items = refresh_capabilities()
+    match = next(
+        (
+            item for item in items
+            if item["asset_class"] == normalized
+            and item["market"] == market.lower()
+            and item["venue"] == (venue or market).lower()
+            and item["resolution"] == resolution.lower()
+            and item["data_type"] == data_type.lower()
+        ),
+        None,
+    )
+    return match or {
+        "asset_class": normalized,
+        "market": market.lower(),
+        "venue": (venue or market).lower(),
+        "resolution": resolution.lower(),
+        "data_type": data_type.lower(),
+        "state": "unavailable",
+        "metadata_count": 0,
+        "canonical_row_count": 0,
+        "executable_reason": "capability_scope_not_registered",
+    }
+
+
+def capability_payload() -> dict[str, Any]:
+    items = refresh_capabilities()
+    return {"items": items, "count": len(items), "states": ["unavailable", "metadata_only", "data_ready", "executable"]}
+
+
+def require_executable_scope(parameters: dict[str, Any]) -> dict[str, Any]:
+    capability = capability_for_scope(
+        asset_class=str(parameters.get("assetClass") or "equity"),
+        market=str(parameters.get("market") or parameters.get("venue") or "china"),
+        venue=str(parameters.get("venue") or parameters.get("market") or "china"),
+        resolution=str(parameters.get("resolution") or "daily"),
+        data_type=str(parameters.get("dataType") or "trade"),
+    )
+    if capability["state"] != "executable":
+        raise ValueError(
+            "asset_capability_not_executable:"
+            f"{capability['asset_class']}:{capability['resolution']}:{capability['state']}:"
+            f"{capability.get('executable_reason') or 'not_ready'}"
+        )
+    return capability

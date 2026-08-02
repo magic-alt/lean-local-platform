@@ -13,7 +13,7 @@ def paged_items(
     paged: bool = False,
 ) -> list | dict:
     """Return the shared page envelope or the bounded legacy array."""
-    bounded_limit = max(1, min(int(limit), 1000))
+    bounded_limit = max(1, min(int(limit), 200))
     bounded_offset = max(0, int(offset))
     window = items[bounded_offset : bounded_offset + bounded_limit]
     if not paged:

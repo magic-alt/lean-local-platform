@@ -124,3 +124,15 @@ Primary list 至少有四种格式：
 5. 删除/归档无法生成 dangling lineage。
 6. Paper trust 不引用不存在资源。
 7. OpenAPI contract snapshot 与 `docs/api.md` CI 检查通过。
+
+## 13. P1 API 整改附录
+
+审计后已实现 API-01/API-06，状态为 `CODE_FIXED_REVALIDATION_REQUIRED`：
+
+- `/api/backtests` 和 `/api/tasks` 默认只返回 summary 字段，limit 最大 200；Backtest fingerprint/完整 validation/schedule 只经 detail 返回。
+- `/api/data/quality/reports` 返回分页 summary，`/api/data/quality/reports/{report_id}` 返回完整 result。
+- Web Backtest History 使用 `{items,count,limit,offset}` 做服务端分页，不再请求 `limit=1000`。
+- `/api/paper/accounts` 的 `dataTrust` 仅在当前 account generation、active certified release、TTL、checkpoint/report 资源全部成立时为 true；count=0 固定 false。
+- 新增 `/api/data/releases`、`/api/data/capabilities`、`/api/backtests/{run_id}/reproducibility-certificate` 和 golden-pair 查询。
+
+专项 payload 测试在 1 MB schedule/fingerprint/validation 输入下保持 backtest + task summary 合计小于 200 KB；当前实际 authenticated 3/9 条 payload 仍需部署后复测。

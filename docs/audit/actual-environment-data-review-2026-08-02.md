@@ -163,3 +163,14 @@ Health 显示 orphan provider raw archives=0、quarantined issues=37。run1 本�
 ## 12. 不得重复创建的数据说明
 
 本轮复用了 canonical MySQL、当前 Parquet、watermarks、raw archives、LEAN cache、stored objects、3 个已有回测、2 个 batch 与 PIT bundle。没有重新下载 TuShare、导入 CSI300、生成全量 Parquet/ClickHouse、创建证券/日历/公司行动或修改 certification。后续整改应继续使用增量、幂等、checkpoint 和 release；任何全量操作需要独立授权，不能作为本审计默认验收步骤。
+
+## 13. P1 数据整改附录
+
+审计后 migration `0040_p1_trust_and_reproducibility` 和对应服务已实现，原 §1–12 仍是部署前历史事实：
+
+- `dataset_releases` 成为 production certification 的单一 immutable authority。Parquet recertification 原子生成 release，并把 `parquet_datasets`、run-scoped `dataset_versions` 和 `backtest_runs` 绑定到 release；实际 MySQL 若仍无 release，Source Gate fail-closed。
+- derived maintenance 只允许一个 active run，按 scope/layer 保存 checkpoint、attempt、heartbeat、lease owner 和 next retry；worker 丢失后续跑原 run，不再制造 orphan chain。
+- `asset_capabilities` 从 canonical 表实时生成 metadata/rows 证据，区分 `unavailable/metadata_only/data_ready/executable`；未认证 scope 无法通过 preflight。
+- reproducibility certificate 记录 release、Docker image、project/config、LEAN zip/factor、canonical result、orders/fills/equity 和逐文件 artifact manifest digest，并存入 object store。
+
+代码测试覆盖 release 唯一性、maintenance resume、capability 三态和 golden pair；实际环境仍需增量 recertify 当前 equity/index，随后执行最小真实 LEAN 双跑。无需全量数据重导或全量 Parquet rebuild。

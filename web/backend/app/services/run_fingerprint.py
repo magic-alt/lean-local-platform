@@ -123,6 +123,8 @@ def git_state() -> dict[str, Any]:
 def docker_image_digest(image: str | None) -> dict[str, Any]:
     if not image:
         return {"image": None, "digest": None, "error": "docker_image_missing"}
+    if "@sha256:" in image:
+        return {"image": image, "digest": image.split("@", 1)[1], "repoDigests": [image]}
     docker = shutil.which("docker")
     if not docker:
         return {"image": image, "digest": None, "error": "docker_not_found"}
@@ -416,6 +418,23 @@ def _requirements_hash() -> str | None:
     return _file_hash(BACKEND_DIR / "requirements.txt")
 
 
+def _lean_cache_manifest_hash(lean_cache: dict[str, Any] | None) -> str | None:
+    files: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("sha256"):
+                files.append({"path": value.get("path"), "sha256": value.get("sha256")})
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(lean_cache or {})
+    return _json_hash(sorted(files, key=lambda item: str(item.get("path") or item["sha256"]))) if files else None
+
+
 def build_run_fingerprint(
     *,
     run_id: str,
@@ -439,6 +458,7 @@ def build_run_fingerprint(
         lean_cache = _local_ashare_cache(parameters)
     daily_cache = _first_cache_file(lean_cache, "daily")
     factor_cache = _first_cache_file(lean_cache, "factor")
+    lean_cache_manifest_sha256 = _lean_cache_manifest_hash(lean_cache)
     parquet_files = data.get("parquetFiles") or []
     first_parquet = parquet_files[0] if parquet_files else {}
     market_daily = data.get("marketDailyBars") or {}
@@ -481,6 +501,7 @@ def build_run_fingerprint(
             for key in (
                 "source",
                 "datasetVersion",
+                "datasetReleaseId",
                 "datasetId",
                 "fileManifestSha256",
                 "qaStatus",
@@ -491,6 +512,7 @@ def build_run_fingerprint(
         "leanCache": {
             "dailySha256": daily_cache.get("sha256"),
             "factorSha256": factor_cache.get("sha256"),
+            "manifestSha256": lean_cache_manifest_sha256,
         },
         "dockerImage": docker.get("image"),
         "dockerImageDigest": docker.get("digest"),
@@ -522,6 +544,7 @@ def build_run_fingerprint(
         "data": data,
         "source": certification.get("source"),
         "datasetVersion": dataset_version,
+        "datasetReleaseId": certification.get("datasetReleaseId"),
         "datasetCertification": certification,
         "legacyAliases": {
             "parameters_sha256": parameters_hash,
@@ -541,6 +564,7 @@ def build_run_fingerprint(
         "parquet_file_sha256": first_parquet.get("sha256"),
         "lean_zip_sha256": daily_cache.get("sha256"),
         "factor_file_sha256": factor_cache.get("sha256"),
+        "leanCacheManifestSha256": lean_cache_manifest_sha256,
         "leanCache": lean_cache or {},
         "docker": docker,
         "docker_image": docker.get("image"),

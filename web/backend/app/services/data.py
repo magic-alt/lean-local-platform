@@ -128,7 +128,10 @@ def markets() -> list[dict[str, Any]]:
 
 
 def asset_classes() -> list[dict[str, Any]]:
-    return [
+    from .asset_capabilities import refresh_capabilities
+
+    capabilities = refresh_capabilities()
+    result = [
         {
             "key": "equity",
             "name": "Equity",
@@ -166,6 +169,18 @@ def asset_classes() -> list[dict[str, Any]]:
             "notes": "Uses local LEAN-format futures data and CSV import. Complete public futures data needs vendor-quality contract metadata.",
         },
     ]
+    for item in result:
+        aliases = {item["key"]}
+        matching = [capability for capability in capabilities if capability["asset_class"] in aliases]
+        item["capabilities"] = matching
+        if matching:
+            item["capabilityState"] = (
+                "executable" if any(value["state"] == "executable" for value in matching)
+                else "data_ready" if any(value["state"] == "data_ready" for value in matching)
+                else "metadata_only" if any(value["state"] == "metadata_only" for value in matching)
+                else "unavailable"
+            )
+    return result
 
 
 def local_data_index(asset_class: str | None = None, venue: str | None = None) -> list[dict[str, Any]]:

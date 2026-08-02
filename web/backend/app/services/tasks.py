@@ -42,8 +42,21 @@ def get_task(task_id: str) -> dict[str, Any]:
 
 def list_tasks() -> list[dict[str, Any]]:
     with db() as connection:
-        rows = connection.execute("select * from tasks order by created_at desc").fetchall()
-    return rows_to_dicts(rows)
+        rows = connection.execute(
+            """
+            select id,celery_task_id,kind,status,title,project_id,related_id,parameters_json,
+                   error,created_at,started_at,finished_at
+            from tasks order by created_at desc
+            """
+        ).fetchall()
+    items = rows_to_dicts(rows)
+    for item in items:
+        parameters = item.get("parameters") or {}
+        item["parameters"] = {
+            key: value for key, value in parameters.items()
+            if not isinstance(value, (dict, list)) and len(str(value)) <= 512
+        }
+    return items
 
 
 def update_task(task_id: str, **fields: Any) -> None:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from .common import paged_items
 from ..services.tasks import cancel_task, delete_task, get_task, list_tasks, task_log_window
@@ -7,7 +7,11 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
 @router.get("")
-def tasks(limit: int = 100, offset: int = 0, paged: bool = True):
+def tasks(
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    paged: bool = True,
+):
     return paged_items(list_tasks(), limit=limit, offset=offset, paged=paged)
 
 

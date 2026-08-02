@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from ..db import db, row_to_dict
+from ..db import database_backend, db, row_to_dict
 
 
 PRIMARY_DATA_SOURCE = "tushare"
@@ -243,6 +243,25 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             and file_manifest_sha256
             and dataset_version == expected_dataset_version
         )
+        release = None
+        if certification_valid and file_manifest_sha256 and item.get("qa_report_id"):
+            from .dataset_releases import ensure_release_for_certified_dataset
+
+            release = ensure_release_for_certified_dataset(
+                item,
+                manifest_sha256=file_manifest_sha256,
+            )
+            certification_valid = bool(
+                release
+                and release.get("status") == "active"
+                and release.get("is_production")
+                and release.get("is_certified")
+                and release.get("file_manifest_sha256") == file_manifest_sha256
+            )
+        elif certification_valid and database_backend() == "mysql":
+            # Production never accepts the pre-0040 split authority. SQLite is
+            # retained only for legacy unit fixtures that do not model QA rows.
+            certification_valid = False
         if certification_valid and dataset_id:
             dataset_version = expected_dataset_version
         return {
@@ -266,6 +285,7 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             "qaStatus": item.get("qa_status"),
             "qaReportId": item.get("qa_report_id"),
             "datasetId": dataset_id,
+            "datasetReleaseId": release.get("id") if release else None,
             "fileCount": len(files),
             "fileManifestSha256": file_manifest_sha256,
         }
@@ -286,6 +306,7 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
         "qaStatus": "unverified",
         "qaReportId": None,
         "datasetId": None,
+        "datasetReleaseId": None,
         "fileCount": 0,
         "fileManifestSha256": None,
     }
@@ -314,11 +335,31 @@ def invalidate_source_certification(
     """
     if connection is not None:
         cursor = connection.execute(sql, parameters)
+        from .dataset_releases import revoke_scope
+
+        revoke_scope(
+            source=normalized,
+            asset_class=asset_class.lower(),
+            market=market.lower(),
+            venue=scope_venue,
+            reason="canonical_source_changed",
+            connection=connection,
+        )
         return bool(int(getattr(cursor, "rowcount", 0) or 0))
     with db() as owned_connection:
         cursor = owned_connection.execute(
             sql,
             parameters,
+        )
+        from .dataset_releases import revoke_scope
+
+        revoke_scope(
+            source=normalized,
+            asset_class=asset_class.lower(),
+            market=market.lower(),
+            venue=scope_venue,
+            reason="canonical_source_changed",
+            connection=owned_connection,
         )
     return bool(int(getattr(cursor, "rowcount", 0) or 0))
 
@@ -363,6 +404,7 @@ def apply_source_context(parameters: dict[str, Any], context: dict[str, Any]) ->
     result["source"] = context["source"]
     result["providerSource"] = context["source"]
     result["datasetVersion"] = context.get("datasetVersion")
+    result["datasetReleaseId"] = context.get("datasetReleaseId")
     result["datasetCertified"] = bool(context.get("isCertified"))
     result["datasetProduction"] = bool(context.get("isProduction"))
     result["datasetEnvironment"] = context.get("environment")

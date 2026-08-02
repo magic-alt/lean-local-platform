@@ -22,7 +22,7 @@ def _parameters(request_data: dict[str, Any]) -> dict[str, Any]:
         template_parameters["slow"] = request_data["slow"]
     for key, value in (request_data.get("extra") or {}).items():
         template_parameters.setdefault(key, value)
-    return validate_backtest_parameters(
+    parameters = validate_backtest_parameters(
         {
             "ticker": request_data["symbol"],
             "assetClass": request_data.get("assetClass", "equity"),
@@ -36,6 +36,13 @@ def _parameters(request_data: dict[str, Any]) -> dict[str, Any]:
             **template_parameters,
         }
     )
+    asset_class = str(parameters.get("assetClass") or "equity").lower()
+    resolution = str(parameters.get("resolution") or "daily").lower()
+    if asset_class in {"future", "option", "cbond", "convertible_bond"} or resolution in {"minute", "tick"}:
+        from .asset_capabilities import require_executable_scope
+
+        require_executable_scope(parameters)
+    return parameters
 
 
 def _coverage(symbol: str, parameters: dict[str, Any], source: str) -> dict[str, Any]:

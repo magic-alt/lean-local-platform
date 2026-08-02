@@ -135,6 +135,18 @@ const A_SHARE_BACKTEST_SOURCE_OPTIONS = [
   { value: "tonghuashun", label: "TongHuaShun" },
   { value: "yfinance", label: "YFinance" }
 ];
+
+function assetClassSelectOptions(items: AssetClassInfo[]) {
+  return items.map((item) => {
+    const state = item.capabilityState;
+    const unavailable = Boolean(state && state !== "executable");
+    return {
+      value: item.key,
+      label: unavailable ? `${item.name} (${state})` : item.name,
+      disabled: unavailable,
+    };
+  });
+}
 const ISO_DATE_FORMAT = "YYYY-MM-DD";
 
 function dataSourceLabel(value: string) {
@@ -644,7 +656,7 @@ function MarketDataDownloader({
             <Form.Item name="assetClass" label="Asset Class">
               <Select
                 disabled={Boolean(forcedAssetClass)}
-                options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                options={assetClassSelectOptions(assetClasses.data)}
                 onChange={(value) => {
                   const nextVenue = defaultVenueFor(value, assetClasses.data, selectedMarket);
                   form.setFieldsValue({
@@ -1336,7 +1348,7 @@ export function ProjectsPage() {
               <Select
                 data-testid="project-asset-select"
                 virtual={false}
-                options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                options={assetClassSelectOptions(assetClasses.data)}
                 onChange={(value) => {
                   createForm.setFieldValue("templateKey", defaultTemplateFor(value));
                   createForm.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, createForm.getFieldValue("market") || "usa"));
@@ -1389,7 +1401,7 @@ export function ProjectsPage() {
                 <Select
                   data-testid="project-asset-select"
                   virtual={false}
-                  options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))}
+                  options={assetClassSelectOptions(assetClasses.data)}
                   onChange={(value) => {
                     form.setFieldValue("templateKey", defaultTemplateFor(value));
                     form.setFieldValue("venue", defaultVenueFor(value, assetClasses.data, form.getFieldValue("market") || "usa"));
@@ -2078,6 +2090,13 @@ export function DataPage() {
                     {item.syncItem && (
                       <Tooltip title="本轮同步状态"><span><StatusTag status={item.syncItem.status} /></span></Tooltip>
                     )}
+                    {item.capabilityState && (
+                      <Tooltip title={item.capabilityReason || `Canonical rows: ${(item.canonicalRowCount || 0).toLocaleString()}`}>
+                        <Tag color={item.capabilityState === "executable" ? "success" : item.capabilityState === "data_ready" ? "processing" : "warning"}>
+                          {item.capabilityState}
+                        </Tag>
+                      </Tooltip>
+                    )}
                     {Boolean(item.syncItem?.failed) && <Tag color="error">失败 {item.syncItem?.failed}</Tag>}
                   </div>
                 )
@@ -2288,7 +2307,7 @@ export function DataPage() {
         <Form form={csvForm} layout="vertical" onFinish={importCsv} initialValues={{ assetClass: "equity", market: "china" }}>
           <FormGrid>
             <Form.Item name="symbol" label="Symbol" rules={[{ required: true }]}><SecuritySearch assetClass={csvAssetClass} market={csvMarket} /></Form.Item>
-            <Form.Item name="assetClass" label="Asset Class"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="assetClass" label="Asset Class"><Select options={assetClassSelectOptions(assetClasses.data)} /></Form.Item>
             <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
           </FormGrid>
           <Space wrap>
@@ -2340,9 +2359,19 @@ export function BacktestsPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const settings = useAsyncData<AppSettings>(api.settings, defaultSettings);
   const [filters, setFilters] = useState<BacktestHistoryFilters>(() => backtestHistoryFiltersFromSearch(searchParams));
-  const loadRuns = useCallback(() => api.backtests(filters), [filters]);
-  const runsCacheKey = useMemo(() => `backtests:${JSON.stringify(filters)}`, [filters]);
-  const runs = useAsyncData(loadRuns, [], true, runsCacheKey);
+  const [historyPage, setHistoryPage] = useState({ current: 1, pageSize: 20 });
+  const loadRuns = useCallback(
+    () => api.backtestsPage(filters, {
+      limit: historyPage.pageSize,
+      offset: (historyPage.current - 1) * historyPage.pageSize,
+    }),
+    [filters, historyPage]
+  );
+  const runsCacheKey = useMemo(
+    () => `backtests:${JSON.stringify(filters)}:${historyPage.current}:${historyPage.pageSize}`,
+    [filters, historyPage]
+  );
+  const runs = useAsyncData(loadRuns, { items: [], count: 0, limit: 20, offset: 0 }, true, runsCacheKey);
   const [form] = Form.useForm();
   const [historyForm] = Form.useForm();
   const [assetClass, setAssetClass] = useState("equity");
@@ -2509,6 +2538,7 @@ export function BacktestsPage() {
       Object.entries(values).filter(([, value]) => String(value ?? "").trim())
     ) as BacktestHistoryFilters;
     setFilters(nextFilters);
+    setHistoryPage((current) => ({ ...current, current: 1 }));
     const nextSearchParams = new URLSearchParams();
     nextSearchParams.set("view", "history");
     Object.entries(nextFilters).forEach(([key, value]) => nextSearchParams.set(key, String(value)));
@@ -2539,13 +2569,7 @@ export function BacktestsPage() {
       setSubmitting(false);
     }
   }
-  const runsForDisplay = runs.data.filter((run) => {
-    const name = String((filters as any).name ?? "").trim().toLowerCase();
-    const marketFilter = String((filters as any).market ?? "").trim().toLowerCase();
-    const runMarket = String(run.parameters?.market ?? run.venue ?? "").toLowerCase();
-    return (!name || String(run.name ?? run.id).toLowerCase().includes(name)) &&
-      (!marketFilter || runMarket === marketFilter);
-  });
+  const runsForDisplay = runs.data.items;
 
   return (
     <>
@@ -2630,7 +2654,7 @@ export function BacktestsPage() {
           </FormSection>
           <FormSection title="Instrument & data">
           <FormGrid>
-            <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+            <Form.Item name="assetClass" label="Asset"><Select data-testid="backtest-asset-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { const nextVenue = defaultVenueFor(value, assetClasses.data, market); setAssetClass(value); setVenue(nextVenue); form.setFieldsValue({ venue: nextVenue }); }} options={assetClassSelectOptions(assetClasses.data)} /></Form.Item>
             <Form.Item name="market" label="Market"><Select data-testid="backtest-market-select" virtual={false} showSearch optionFilterProp="label" onChange={(value) => { setMarket(value); if (assetClass === "equity") { setVenue(value); form.setFieldValue("venue", value); } form.setFieldValue("benchmarkSymbol", defaultBenchmark(value)); form.setFieldValue("source", defaultBacktestSource(value)); }} options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
             <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} onChange={setVenue} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="resolution" label="Resolution"><Select data-testid="backtest-resolution-select" virtual={false} showSearch optionFilterProp="label" onChange={setResolution} options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>
@@ -2727,7 +2751,7 @@ export function BacktestsPage() {
           },
           {
             key: "history",
-            label: `History (${runs.data.length})`,
+            label: `History (${runs.data.count})`,
             children: (
               <Card title="Backtest History">
         <p className="muted">All backtest records are managed here. Use project and run filters to narrow the canonical history.</p>
@@ -2740,7 +2764,17 @@ export function BacktestsPage() {
           <Button htmlType="submit">Filter</Button>
           <Button onClick={() => { historyForm.resetFields(); applyHistoryFilters({}); }}>Clear</Button>
         </Form>
-        <RunsTable runs={runsForDisplay} onOpen={(id) => navigate(runDetailHref(id))} onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }} />
+        <RunsTable
+          runs={runsForDisplay}
+          onOpen={(id) => navigate(runDetailHref(id))}
+          onDelete={async (run) => { await api.deleteBacktest(run.id); await runs.reload(); }}
+          page={{
+            current: historyPage.current,
+            pageSize: historyPage.pageSize,
+            total: runs.data.count,
+            onChange: (current, pageSize) => setHistoryPage({ current, pageSize }),
+          }}
+        />
               </Card>
             )
           }
@@ -3635,7 +3669,7 @@ export function OptimizationPage() {
                     <FormSection title="Strategy and market">
                     <FormGrid>
                       <Form.Item className="form-field--wide" name="projectId" label="Project" rules={[{ required: true }]}><Select onChange={(value) => { const project = projects.data.find((item) => item.id === value); if (project) { const template = projectTemplate(project, templates.data); form.setFieldsValue({ assetClass: projectAssetClass(project), market: projectMarket(project), venue: projectVenue(project), resolution: projectResolution(project), dataType: projectDataType(project), parameterGrid: Object.fromEntries((template?.parameters ?? []).map((parameter) => [parameter.key, String(parameter.default ?? "")])) }); } }} options={projectSelectOptions(projects.data)} /></Form.Item>
-                      <Form.Item name="assetClass" label="Asset"><Select options={assetClasses.data.map((item) => ({ value: item.key, label: item.name }))} /></Form.Item>
+                      <Form.Item name="assetClass" label="Asset"><Select options={assetClassSelectOptions(assetClasses.data)} /></Form.Item>
                       <Form.Item name="market" label="Market"><Select options={[{ value: "usa", label: "US" }, { value: "china", label: "A Share" }, { value: "hongkong", label: "Hong Kong" }]} /></Form.Item>
                       <Form.Item name="venue" label="Venue"><Select disabled={assetClass === "equity"} options={(selectedAssetInfo?.venues ?? ["usa"]).map((value) => ({ value, label: value }))} /></Form.Item>
                       <Form.Item name="resolution" label="Resolution"><Select options={["daily", "hour", "minute", "second", "tick"].map((value) => ({ value, label: value }))} /></Form.Item>

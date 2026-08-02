@@ -32,6 +32,7 @@ from ..services.projects import get_project
 from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache, ensure_lean_results_analyzer_reference_data
 from ..services.run_fingerprint import build_run_fingerprint
+from ..services.reproducibility import issue_certificate
 from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
 from ..services.settings import get_settings
 from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
@@ -889,18 +890,68 @@ def recover_source_certifications_task():
         active = connection.execute(
             """
             select id,status from derived_maintenance_runs
-            where status in ('queued','running')
+            where status in ('queued','running','retry_wait')
             order by created_at desc limit 1
             """
         ).fetchone()
+        latest_maintenance = connection.execute(
+            """
+            select id,status,attempt_count,max_attempts,error from derived_maintenance_runs
+            order by created_at desc limit 1
+            """
+        ).fetchone()
+    exhausted = (
+        latest_maintenance
+        if latest_maintenance
+        and latest_maintenance["status"] == "failed"
+        and int(latest_maintenance["attempt_count"] or 0) >= int(latest_maintenance["max_attempts"] or 5)
+        else None
+    )
     if active_sync:
         return {
             "status": "waiting_for_data_sync",
             "scheduled": False,
             "dataSyncRunId": active_sync["id"],
         }
+    if not active and exhausted:
+        return {
+            "status": "recovery_exhausted",
+            "scheduled": False,
+            "runId": exhausted["id"],
+            "attemptCount": int(exhausted["attempt_count"] or 0),
+            "maxAttempts": int(exhausted["max_attempts"] or 0),
+            "error": exhausted["error"],
+        }
     if active:
         active_status = str(active["status"])
+        if active_status == "retry_wait":
+            with db() as connection:
+                retry_row = connection.execute(
+                    "select next_retry_at,attempt_count,max_attempts from derived_maintenance_runs where id=?",
+                    (active["id"],),
+                ).fetchone()
+            if retry_row and int(retry_row["attempt_count"] or 0) >= int(retry_row["max_attempts"] or 5):
+                return {"status": "recovery_exhausted", "scheduled": False, "runId": active["id"]}
+            next_retry = datetime.fromisoformat(str(retry_row["next_retry_at"])) if retry_row and retry_row["next_retry_at"] else None
+            if next_retry and next_retry > datetime.now(timezone.utc):
+                return {
+                    "status": "recovery_backoff",
+                    "scheduled": False,
+                    "runId": active["id"],
+                    "nextRetryAt": next_retry.isoformat(),
+                }
+            with db() as connection:
+                connection.execute(
+                    "update derived_maintenance_runs set status='queued' where id=? and status='retry_wait'",
+                    (active["id"],),
+                )
+            dispatched = maintain_derived_layers_task.apply_async(args=[active["id"]])
+            return {
+                "status": "recovery_resumed",
+                "scheduled": True,
+                "runId": active["id"],
+                "taskId": dispatched.id,
+            }
         lease_active = derived_maintenance.maintenance_lease_active()
         if active_status == "queued" or database_backend() != "mysql" or lease_active:
             return {"status": "recovery_in_progress", "scheduled": False, "runId": active["id"]}
@@ -910,11 +961,18 @@ def recover_source_certifications_task():
             connection.execute(
                 """
                 update derived_maintenance_runs
-                set status='failed',error='orphaned_after_worker_restart',finished_at=?
+                set status='queued',error='orphaned_after_worker_restart',heartbeat_at=?
                 where id=? and status='running'
                 """,
                 (utc_now(), orphaned_run_id),
             )
+        dispatched = maintain_derived_layers_task.apply_async(args=[orphaned_run_id])
+        return {
+            "status": "orphan_checkpoint_resumed",
+            "scheduled": True,
+            "runId": orphaned_run_id,
+            "taskId": dispatched.id,
+        }
     run = derived_maintenance.create_maintenance_run(
         layers=["parquet"],
         trigger_type="source_recertification",
@@ -1397,6 +1455,10 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 Path(output["summary_json_path"]) if output.get("summary_json_path") else None,
                 run,
             )
+            refreshed = get_backtest(run_id) or {}
+            refreshed_fingerprint = refreshed.get("fingerprint") or {}
+            if refreshed.get("dataset_release_id") or refreshed_fingerprint.get("datasetReleaseId"):
+                issue_certificate(run_id)
         update_backtest(run_id, status=status, finished_at=finished_at)
         update_task(
             task_id,

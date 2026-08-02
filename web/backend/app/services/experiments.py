@@ -58,6 +58,7 @@ def record_experiment_versions(
     }
     strategy_version_id = _stable_id("strategy", strategy_payload)
     dataset_version_id = _stable_id("dataset", dataset_payload)
+    dataset_release_id = fingerprint.get("datasetReleaseId")
     experiment_id = run_id
     with db() as connection:
         connection.execute(
@@ -95,8 +96,8 @@ def record_experiment_versions(
                 (id, dataset_key, asset_class, market, venue, resolution, data_type, adjust, symbol,
                  start_date, end_date, row_count, status_count, benchmark_symbol, benchmark_row_count,
                  data_batch_id, lean_zip_sha256, factor_file_sha256, parquet_dataset_id, parquet_file_sha256,
-                 metadata_json, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata_json, created_at, dataset_release_id)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(id) do update set
                 row_count = excluded.row_count,
                 status_count = excluded.status_count,
@@ -106,7 +107,8 @@ def record_experiment_versions(
                 factor_file_sha256 = excluded.factor_file_sha256,
                 parquet_dataset_id = excluded.parquet_dataset_id,
                 parquet_file_sha256 = excluded.parquet_file_sha256,
-                metadata_json = excluded.metadata_json
+                metadata_json = excluded.metadata_json,
+                dataset_release_id = excluded.dataset_release_id
             """,
             (
                 dataset_version_id,
@@ -131,7 +133,12 @@ def record_experiment_versions(
                 data.get("parquetFileSha256"),
                 json_dump(dataset_payload),
                 now,
+                dataset_release_id,
             ),
+        )
+        connection.execute(
+            "update backtest_runs set dataset_release_id=? where id=?",
+            (dataset_release_id, run_id),
         )
         connection.execute(
             """

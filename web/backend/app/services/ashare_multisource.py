@@ -327,6 +327,39 @@ def list_quality_reports(limit: int = 100) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def list_quality_report_summaries(limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 200))
+    bounded_offset = max(0, int(offset))
+    with db() as connection:
+        total = connection.execute("select count(*) as count from data_quality_reports").fetchone()
+        rows = connection.execute(
+            """
+            select id,report_type,asset_class,market,symbol,start_date,end_date,
+                   severity,created_at
+            from data_quality_reports
+            order by created_at desc limit ? offset ?
+            """,
+            (bounded_limit, bounded_offset),
+        ).fetchall()
+    return {
+        "items": rows_to_dicts(rows),
+        "count": int(total["count"] or 0),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
+
+
+def quality_report(report_id: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            "select * from data_quality_reports where id=?",
+            (report_id,),
+        ).fetchone()
+    from ..db import row_to_dict
+
+    return row_to_dict(row)
+
+
 def blocking_quality_reports(
     symbol: str,
     trade_date: str | None = None,

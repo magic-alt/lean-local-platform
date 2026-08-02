@@ -86,7 +86,7 @@ def test_celery_beat_schedules_weekday_derived_maintenance():
     assert "1-5" in str(schedule["schedule"])
 
 
-def test_source_certification_recovery_replaces_orphaned_maintenance_run(tmp_path, monkeypatch):
+def test_source_certification_recovery_resumes_orphaned_maintenance_run(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from types import SimpleNamespace
@@ -126,17 +126,17 @@ def test_source_certification_recovery_replaces_orphaned_maintenance_run(tmp_pat
 
     result = worker.recover_source_certifications_task()
 
-    assert result["status"] == "recovery_scheduled"
-    assert result["runId"] != orphaned["id"]
+    assert result["status"] == "orphan_checkpoint_resumed"
+    assert result["runId"] == orphaned["id"]
     assert discarded == [orphaned["id"]]
     with db() as connection:
         stale = connection.execute(
             "select status,error,finished_at from derived_maintenance_runs where id=?",
             (orphaned["id"],),
         ).fetchone()
-    assert stale["status"] == "failed"
+    assert stale["status"] == "queued"
     assert stale["error"] == "orphaned_after_worker_restart"
-    assert stale["finished_at"]
+    assert stale["finished_at"] is None
 
 
 def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monkeypatch):
@@ -186,7 +186,7 @@ def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monke
     assert incremental_start == "2005-01-01"
 
 
-def test_clickhouse_child_failure_marks_overall_run_partial(tmp_path, monkeypatch):
+def test_clickhouse_child_failure_schedules_checkpoint_retry(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from app.services import derived_maintenance, parquet_lake
@@ -224,7 +224,8 @@ def test_clickhouse_child_failure_marks_overall_run_partial(tmp_path, monkeypatc
     run = derived_maintenance.create_maintenance_run(layers=["clickhouse"])
     completed = derived_maintenance.run_maintenance(run["id"])
 
-    assert completed["status"] == "partial"
+    assert completed["status"] == "retry_wait"
+    assert completed["next_retry_at"]
     assert completed["summary"]["errors"][0]["error"] == "mirror unavailable"
     assert derived_maintenance.watermarks()["items"][0]["status"] == "failed"
 

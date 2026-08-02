@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,6 +39,7 @@ from ..services import data_gateway
 from ..services import research_runs
 from ..services.strategies import get_template
 from ..services.workflow_lineage import record_edge
+from ..services.reproducibility import certificate_for_run, golden_pairs
 from ..tasks.worker import run_backtest_task
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -123,20 +124,24 @@ def _with_artifacts(run: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("")
 def backtests(
+    name: str | None = None,
     status: str | None = None,
     projectId: str | None = None,
     symbol: str | None = None,
+    market: str | None = None,
     fromDate: str | None = None,
     toDate: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     paged: bool = True,
 ):
     items = query_backtests(
         {
+            "name": name,
             "status": status,
             "project_id": projectId,
             "symbol": symbol,
+            "market": market,
             "from_date": fromDate,
             "to_date": toDate,
         }
@@ -258,6 +263,19 @@ def detail(run_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="Backtest run not found.")
     return _with_artifacts(run)
+
+
+@router.get("/{run_id}/reproducibility-certificate")
+def reproducibility_certificate(run_id: str):
+    item = certificate_for_run(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Reproducibility certificate not found.")
+    return item
+
+
+@router.get("/reproducibility/golden-pairs")
+def reproducibility_golden_pairs(limit: int = 100):
+    return golden_pairs(limit)
 
 
 @router.delete("/{run_id}")

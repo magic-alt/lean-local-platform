@@ -605,3 +605,18 @@ Paper v2 表与 API 覆盖 account、generation、opening ledger、deployment、
 ## 20. 结论
 
 当前平台是“真实引擎、真实数据治理、丰富领域代码”的研究级系统，但不是 Level 5。解除判定至少需要：原子化回测最终 gate 与冻结版本、清除并防止状态孤儿、建立当前可导航 Walk-Forward 证据、在实际库保留两个以上可重算 Paper 账户，以及用当前数据库中的 Golden Run 证明复现性。随后才能补做真实浏览器四视口与完整用户旅程复审。
+
+## 21. P1 整改实现附录
+
+本节记录审计之后完成的代码整改，不改写 §1–20 的历史实际环境事实、48 分或 `LEVEL5_FAIL` 判定。六项状态均为 `CODE_FIXED_REVALIDATION_REQUIRED`：迁移 `0040_p1_trust_and_reproducibility` 必须先在实际 MySQL 应用，随后按原验收条件采集新证据，才能关闭实际环境问题。
+
+| Issue | 已实现控制 | 自动化验证 | 仍需实际环境验收 |
+| --- | --- | --- | --- |
+| ACT-P1-001 | Paper trust 改为 account + generation + active Dataset Release + TTL；校验账户、checkpoint 和 report 仍存在；空列表默认 false | 账户归档后立即失信测试 | 创建/复用正式 Paper cohort 后重算并认证 |
+| ACT-P1-002 | 单 active maintenance run、attempt/heartbeat、分 scope/layer checkpoint、指数退避、原 run resume、最大尝试和外部告警 | orphan resume、唯一 active、checkpoint schema 测试 | 运行 7 日并证明无 MySQL 2013/orphan chain |
+| ACT-P1-003 | backtest/task/QA 默认 list summary；详情端点保留；limit 硬上限 200；Backtest History 使用服务端分页 | 1 MB 嵌入快照下组合响应 <200 KB；前端 build | 对当前 3/9 条 authenticated GET 重新测量 |
+| ACT-P1-004 | canonical capability inventory 使用 `unavailable/metadata_only/data_ready/executable`；高风险 scope preflight fail-closed | futures 0→metadata→data-ready 三态测试 | 实际 API/UI 核对 ETF/future/option/cbond/minute/tick |
+| ACT-P1-005 | 新增 immutable `dataset_releases`；Parquet、run-scoped dataset version、backtest 和 Source Gate 统一引用 release ID；MySQL 无 release 时 fail-closed | release 唯一性及 Parquet authority 测试 | 应用迁移并 recertify 当前 equity/index 两个 scope |
+| ACT-P1-006 | 成功的 certified-release run 生成 stored-object certificate，含 image/project/release/cache/config/orders/fills/equity/canonical/artifact digests；提供 fetch 和 golden-pair 查询 | 两个同 input/canonical output certificate 形成 golden pair | 实际运行最小双跑并下载证书 |
+
+代码验证：后端全量 `580 passed, 2 skipped`，新增 P1 专项 `6 passed`，前端 `npm run build` PASS；ECharts circular warning 属原 ACT-P3-002，不作为本轮 P1 关闭证据。

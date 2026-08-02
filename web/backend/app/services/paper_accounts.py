@@ -84,20 +84,76 @@ class CanonicalStateDivergence(RuntimeError):
     """Raised when an immutable ledger checkpoint no longer reproduces."""
 
 
-def _data_trust() -> dict[str, Any]:
-    """Return a fresh response payload so callers cannot mutate shared state."""
-    try:
-        with db() as connection:
-            row = connection.execute(
-                "select value_json from settings where key='paperAccountValuationTrust'",
-            ).fetchone()
-        if row:
-            value = json.loads(str(row["value_json"]))
-            if isinstance(value, dict) and value.get("valuationTrusted") is True:
-                return value
-    except Exception:
-        pass
-    return dict(PAPER_ACCOUNT_DATA_TRUST)
+def _data_trust(account_ids: str | Iterable[str] | None = None) -> dict[str, Any]:
+    """Trust only live account generations bound to a live certified release and TTL."""
+    if isinstance(account_ids, str):
+        requested = [account_ids]
+    else:
+        requested = list(dict.fromkeys(str(item) for item in (account_ids or []) if item))
+    if not requested:
+        return dict(PAPER_ACCOUNT_DATA_TRUST)
+    placeholders = ",".join("?" for _ in requested)
+    now = utc_now()
+    with db() as connection:
+        accounts = rows_to_dicts(
+            connection.execute(
+                f"select id,current_generation,status from paper_accounts where id in ({placeholders})",
+                requested,
+            ).fetchall()
+        )
+        certifications = rows_to_dicts(
+            connection.execute(
+                f"""
+                select trust.*,release.status as release_status,
+                       release.is_production as release_is_production,
+                       release.is_certified as release_is_certified,
+                       (select count(*) from paper_account_checkpoints checkpoint
+                        where checkpoint.paper_account_id=trust.paper_account_id
+                          and checkpoint.generation=trust.account_generation) as actual_checkpoint_count,
+                       (select count(*) from paper_account_daily_reports report
+                        join paper_execution_cycles report_cycle on report_cycle.id=report.cycle_id
+                        where report.paper_account_id=trust.paper_account_id
+                          and report_cycle.account_generation=trust.account_generation) as actual_result_count
+                from paper_account_trust_certifications trust
+                join dataset_releases release on release.id=trust.dataset_release_id
+                where trust.paper_account_id in ({placeholders}) and trust.status='active'
+                  and trust.expires_at>? and trust.revoked_at is null
+                order by trust.certified_at desc
+                """,
+                [*requested, now],
+            ).fetchall()
+        )
+    account_by_id = {str(item["id"]): item for item in accounts if item.get("status") != "archived"}
+    cert_by_account: dict[str, dict[str, Any]] = {}
+    for item in certifications:
+        account_id = str(item["paper_account_id"])
+        account = account_by_id.get(account_id)
+        valid = bool(
+            account
+            and int(account["current_generation"]) == int(item["account_generation"])
+            and item.get("release_status") == "active"
+            and item.get("release_is_production")
+            and item.get("release_is_certified")
+            and int(item.get("actual_checkpoint_count") or 0) >= int(item.get("checkpoint_count") or 0)
+            and int(item.get("actual_result_count") or 0) >= int(item.get("result_count") or 0)
+        )
+        if valid and account_id not in cert_by_account:
+            cert_by_account[account_id] = item
+    missing = [account_id for account_id in requested if account_id not in cert_by_account]
+    if missing:
+        return dict(PAPER_ACCOUNT_DATA_TRUST)
+    selected = [cert_by_account[account_id] for account_id in requested]
+    return {
+        "valuationTrusted": True,
+        "reason": None,
+        "accountIds": requested,
+        "generationByAccount": {
+            str(item["paper_account_id"]): int(item["account_generation"])
+            for item in selected
+        },
+        "datasetReleaseIds": sorted({str(item["dataset_release_id"]) for item in selected}),
+        "expiresAt": min(str(item["expires_at"]) for item in selected),
+    }
 
 
 def _decimal(value: Any, *, positive: bool = False, default: str = "0") -> Decimal:
@@ -445,7 +501,7 @@ def list_accounts(
             tuple(params + [limit, offset]),
         ).fetchall()
     result = _paged(rows_to_dicts(rows), total=int(total_row["count"] or 0), limit=limit, offset=offset)
-    result["dataTrust"] = _data_trust()
+    result["dataTrust"] = _data_trust([item["id"] for item in result["items"]])
     return result
 
 
@@ -726,7 +782,7 @@ def pause_accounts_for_data_trust() -> dict[str, Any]:
     return {
         "pausedAccountIds": account_ids,
         "pausedCount": len(account_ids),
-        "dataTrust": _data_trust(),
+        "dataTrust": _data_trust(account_ids),
     }
 
 
@@ -2252,10 +2308,13 @@ def verify_projection_history(account_id: str) -> dict[str, Any]:
         reports = rows_to_dicts(
             connection.execute(
                 """
-                select cycle_id,trading_date,result_digest from paper_account_daily_reports
-                where paper_account_id=? order by trading_date,id
+                select report.cycle_id,report.trading_date,report.result_digest
+                from paper_account_daily_reports report
+                join paper_execution_cycles cycle on cycle.id=report.cycle_id
+                where report.paper_account_id=? and cycle.account_generation=?
+                order by report.trading_date,report.id
                 """,
-                (account_id,),
+                (account_id, generation),
             ).fetchall()
         )
         checkpoints = rows_to_dicts(
@@ -2269,6 +2328,18 @@ def verify_projection_history(account_id: str) -> dict[str, Any]:
                 (account_id, generation),
             ).fetchall()
         )
+        release = connection.execute(
+            """
+            select run.dataset_release_id
+            from paper_strategy_deployments deployment
+            join backtest_runs run on run.id=deployment.source_backtest_id
+            join dataset_releases release on release.id=run.dataset_release_id
+            where deployment.paper_account_id=? and deployment.generation=?
+              and release.status='active' and release.is_production=1 and release.is_certified=1
+            order by deployment.version desc limit 1
+            """,
+            (account_id, generation),
+        ).fetchone()
     snapshots_by_date = {str(item["trading_date"]): item for item in snapshots}
     report_cycle_ids = {str(item["cycle_id"]) for item in reports}
     failures: list[str] = []
@@ -2313,6 +2384,7 @@ def verify_projection_history(account_id: str) -> dict[str, Any]:
         "snapshots": len(snapshots),
         "reports": len(reports),
         "checkpoints": len(checkpoints),
+        "datasetReleaseId": release["dataset_release_id"] if release else None,
         "passed": not failures,
         "failures": failures,
     }
@@ -2358,34 +2430,72 @@ def rebuild_projection_history(account_id: str) -> dict[str, Any]:
             }
         )
     verification = verify_projection_history(account_id)
+    trust = (
+        mark_projection_history_trusted(verification)
+        if verification.get("passed") and verification.get("datasetReleaseId")
+        else _data_trust(account_id)
+    )
     return {
         "accountId": account_id,
         "generation": generation,
         "rebuilt": rebuilt,
         "verification": verification,
+        "dataTrust": trust,
     }
 
 
-def mark_projection_history_trusted(evidence: dict[str, Any]) -> dict[str, Any]:
+def mark_projection_history_trusted(evidence: dict[str, Any], *, ttl_days: int = 30) -> dict[str, Any]:
     if not evidence.get("passed"):
         raise ValueError("Projection history cannot be trusted without passing verification.")
-    value = {
-        "valuationTrusted": True,
-        "reason": "historical_projection_recomputed_and_verified",
-        "verifiedAt": utc_now(),
-        "evidence": evidence,
-    }
+    account_id = str(evidence.get("accountId") or "")
+    generation = int(evidence.get("generation") or 0)
+    release_id = str(evidence.get("datasetReleaseId") or "")
+    if not account_id or generation <= 0 or not release_id:
+        raise ValueError("accountId, generation and datasetReleaseId are required for trust certification.")
+    now = datetime.now(timezone.utc)
+    certified_at = now.isoformat()
+    expires_at = (now + timedelta(days=max(1, min(int(ttl_days), 365)))).isoformat()
+    certification_id = str(uuid.uuid4())
     with db() as connection:
+        account = connection.execute(
+            "select current_generation,status from paper_accounts where id=?",
+            (account_id,),
+        ).fetchone()
+        release = connection.execute(
+            "select status,is_production,is_certified from dataset_releases where id=?",
+            (release_id,),
+        ).fetchone()
+        if not account or account["status"] == "archived" or int(account["current_generation"]) != generation:
+            raise ValueError("Paper account generation is not current.")
+        if not release or release["status"] != "active" or not release["is_production"] or not release["is_certified"]:
+            raise ValueError("Dataset release is not active and certified.")
         connection.execute(
             """
-            insert into settings(key,value_json,updated_at)
-            values ('paperAccountValuationTrust',?,?)
-            on conflict(key) do update set
-                value_json=excluded.value_json,updated_at=excluded.updated_at
+            update paper_account_trust_certifications
+            set status='revoked',revoked_at=?,revoke_reason='superseded_by_recertification'
+            where paper_account_id=? and status='active'
             """,
-            (json_dump(value), utc_now()),
+            (certified_at, account_id),
         )
-    return value
+        connection.execute(
+            """
+            insert into paper_account_trust_certifications
+                (id,paper_account_id,account_generation,dataset_release_id,status,
+                 checkpoint_count,result_count,evidence_json,certified_at,expires_at)
+            values (?,?,?,?,'active',?,?,?,?,?)
+            on conflict(paper_account_id,account_generation,dataset_release_id) do update set
+                status='active',checkpoint_count=excluded.checkpoint_count,
+                result_count=excluded.result_count,evidence_json=excluded.evidence_json,
+                certified_at=excluded.certified_at,expires_at=excluded.expires_at,
+                revoked_at=null,revoke_reason=null
+            """,
+            (
+                certification_id, account_id, generation, release_id,
+                int(evidence.get("checkpoints") or 0), int(evidence.get("reports") or 0),
+                json_dump(evidence), certified_at, expires_at,
+            ),
+        )
+    return _data_trust(account_id)
 
 
 def _enqueue_notification(
@@ -2673,7 +2783,7 @@ def get_overview(account_id: str) -> dict[str, Any]:
             "watermark": watermark,
             "qa": qa,
         },
-        "dataTrust": _data_trust(),
+        "dataTrust": _data_trust(account_id),
     }
 
 
@@ -2923,7 +3033,7 @@ def performance(account_id: str, start_date: str | None = None, end_date: str | 
         "valuationDate": points[-1]["tradingDate"] if points else None,
         "missingDates": [],
         "points": points,
-        "dataTrust": _data_trust(),
+        "dataTrust": _data_trust(account_id),
     }
 
 
@@ -3010,7 +3120,7 @@ def compare_accounts(account_ids: list[str], start_date: str | None = None, end_
         "valuationDate": common_valuation,
         "missingData": [item["id"] for item in accounts if not item.get("last_valuation_at")],
         "accounts": rows,
-        "dataTrust": _data_trust(),
+        "dataTrust": _data_trust(unique_ids),
     }
 
 

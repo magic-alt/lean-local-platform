@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **264** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **269** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -29,9 +29,10 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/backtests` | Backtests | `status` (query)<br>`projectId` (query)<br>`symbol` (query)<br>`fromDate` (query)<br>`toDate` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
+| `GET` | `/api/backtests` | Backtests | `name` (query)<br>`status` (query)<br>`projectId` (query)<br>`symbol` (query)<br>`market` (query)<br>`fromDate` (query)<br>`toDate` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/backtests` | Create Backtest | body `BacktestRequest` | `200` - |
 | `POST` | `/api/backtests/preflight` | Preflight Backtest | body `BacktestRequest` | `200` - |
+| `GET` | `/api/backtests/reproducibility/golden-pairs` | Reproducibility Golden Pairs | `limit` (query) | `200` - |
 | `DELETE` | `/api/backtests/{run_id}` | Delete | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}` | Detail | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/admission` | Admission | `run_id` (path, required)<br>`profile` (query) | `200` - |
@@ -40,6 +41,7 @@
 | `GET` | `/api/backtests/{run_id}/chart-data` | Chart Data | `run_id` (path, required)<br>`symbol` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/logs` | Logs | `run_id` (path, required)<br>`offset` (query)<br>`cursor` (query)<br>`limit` (query) | `200` - |
 | `GET` | `/api/backtests/{run_id}/optimization-draft` | Optimization Draft | `run_id` (path, required) | `200` - |
+| `GET` | `/api/backtests/{run_id}/reproducibility-certificate` | Reproducibility Certificate | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/result` | Result | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/screening` | Screening | `run_id` (path, required) | `200` - |
 | `GET` | `/api/backtests/{run_id}/status` | Status | `run_id` (path, required) | `200` - |
@@ -66,6 +68,7 @@
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/asset-classes` | Available Asset Classes | - | `200` - |
 | `GET` | `/api/data-assets` | Data Assets | `status` (query)<br>`includeSuperseded` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
+| `GET` | `/api/data/capabilities` | Data Capabilities | - | `200` - |
 | `GET` | `/api/data/catalog` | Data Catalog | - | `200` - |
 | `GET` | `/api/data/coverage/ashare` | Data Coverage Ashare | `symbols` (query, required)<br>`benchmark` (query)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
 | `GET` | `/api/data/coverage/benchmark/{symbol}` | Data Coverage Benchmark | `symbol` (path, required)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
@@ -94,9 +97,11 @@
 | `POST` | `/api/data/quality/ashare/daily/compare` | Compare Ashare Daily Data | body `AshareDailyCompareRequest` | `200` - |
 | `POST` | `/api/data/quality/ashare/daily/compare-batch` | Compare Ashare Daily Data Batch | body `AshareDailyCompareBatchRequest` | `200` - |
 | `GET` | `/api/data/quality/cross-asset` | Cross Asset Quality Status | - | `200` - |
-| `GET` | `/api/data/quality/reports` | Data Quality Reports | `limit` (query) | `200` - |
+| `GET` | `/api/data/quality/reports` | Data Quality Reports | `limit` (query)<br>`offset` (query) | `200` - |
+| `GET` | `/api/data/quality/reports/{report_id}` | Data Quality Report | `report_id` (path, required) | `200` - |
 | `GET` | `/api/data/query` | Query Data | `symbol` (query, required)<br>`assetClass` (query)<br>`venue` (query)<br>`market` (query)<br>`resolution` (query)<br>`dataType` (query)<br>`source` (query)<br>`providerSource` (query)<br>`providerMode` (query)<br>`allowResearchSource` (query)<br>`adjust` (query)<br>`startDate` (query)<br>`endDate` (query)<br>`limit` (query) | `200` - |
 | `POST` | `/api/data/query` | Query Data Scope | body `DataQueryRequest` | `200` - |
+| `GET` | `/api/data/releases` | Dataset Releases | `status` (query)<br>`limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/data/resolve` | Resolve Data Scope | body `DataScope` | `200` - |
 | `GET` | `/api/data/sync-runs` | Data Sync Runs | `limit` (query) | `200` - |
 | `POST` | `/api/data/sync-runs` | Create Data Sync Run | body `DataSyncRequest` | `200` - |
