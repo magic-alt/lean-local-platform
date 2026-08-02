@@ -26,7 +26,7 @@ PREVIEW_DATASETS = {
     "opt_basic",
 }
 
-ARCHIVE_DATASETS = {"index_basic", "index_daily", "fut_basic", "opt_basic"}
+ARCHIVE_DATASETS = {"index_basic", "fut_basic", "opt_basic"}
 CURRENT_CONTRACT_DATASETS = {"fut_basic", "opt_basic"}
 DATE_FIELDS = {
     "index_basic": "list_date",
@@ -231,6 +231,30 @@ def _sql_preview(
             normalized = normalize_symbol(keyword, "china")
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
             values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
+    elif dataset == "index_daily":
+        # Index sync materializes every retained batch into the canonical bar
+        # table.  Reading the latest raw archive here used to expose only the
+        # newest incremental response (often a single bar) and made historical
+        # candlestick previews unavailable even though the full series existed.
+        table = "market_daily_bars"
+        select = (
+            "symbol,trade_date,open,high,low,close,prev_close,"
+            "pct_change,volume,amount,source"
+        )
+        date_column = "trade_date"
+        order_by = "trade_date desc, symbol"
+        clauses.extend([
+            "asset_class='index'",
+            "market='china'",
+            "resolution='daily'",
+            "data_type='trade'",
+            "adjust='raw'",
+            "source='tushare'",
+        ])
+        if keyword:
+            normalized = normalize_symbol(keyword, "china")
+            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     else:  # pragma: no cover - guarded by caller
         return [], 0
     if start_date and date_column:
@@ -249,6 +273,12 @@ def _sql_preview(
             f"select {select} from {table}{where} order by {order_by} limit ? offset ?",
             [*values, limit, offset],
         ).fetchall())
+    if dataset == "index_daily":
+        for row in rows:
+            symbol = str(row.pop("symbol", "") or "")
+            row["ts_code"] = f"{symbol}.{'SZ' if symbol.startswith('399') else 'SH'}"
+            row["pct_chg"] = row.pop("pct_change", None)
+            row["vol"] = row.pop("volume", None)
     return rows, count
 
 

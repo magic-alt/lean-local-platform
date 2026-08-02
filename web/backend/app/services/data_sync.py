@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -40,6 +41,24 @@ from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
 
 
 T = TypeVar("T")
+
+
+def _finite_number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _first_finite_number(*values: Any) -> float | None:
+    for value in values:
+        number = _finite_number(value)
+        if number is not None:
+            return number
+    return None
 
 
 @dataclass(frozen=True)
@@ -371,6 +390,34 @@ _BULK_MARKET_VARIANTS: dict[str, tuple[str, ...]] = {
     "opt_basic": ("SSE", "SZSE", "CFFEX", "DCE", "CZCE", "SHFE"),
 }
 
+# Keep the workstation's benchmark library deliberately small, but include the
+# broad A-share indices exposed by the built-in research and strategy flows.
+# The previous single-code query only synchronized CSI 300, while Index Preview
+# made every index-basic code look chartable.
+DEFAULT_INDEX_DAILY_CODES: tuple[str, ...] = (
+    "000001.SH",  # SSE Composite
+    "000016.SH",  # SSE 50
+    "000300.SH",  # CSI 300
+    "000688.SH",  # STAR 50
+    "000852.SH",  # CSI 1000
+    "000905.SH",  # CSI 500
+    "399001.SZ",  # Shenzhen Component
+    "399006.SZ",  # ChiNext
+)
+
+
+def _missing_default_index_daily_codes() -> set[str]:
+    expected = {code.split(".", 1)[0] for code in DEFAULT_INDEX_DAILY_CODES}
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select distinct symbol from market_daily_bars
+            where asset_class='index' and market='china' and source='tushare'
+            """
+        ).fetchall()
+    available = {str(row["symbol"] or "") for row in rows}
+    return expected - available
+
 
 def _complete_global_query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str, Any]]:
     """Fetch complete small catalogs and split capped long index windows."""
@@ -387,17 +434,25 @@ def _complete_global_query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) 
         start = date.fromisoformat(str(params["start_date"])[:4] + "-" + str(params["start_date"])[4:6] + "-" + str(params["start_date"])[6:8])
         end = date.fromisoformat(str(params["end_date"])[:4] + "-" + str(params["end_date"])[4:6] + "-" + str(params["end_date"])[6:8])
         records = []
-        cursor = start
-        while cursor <= end:
-            window_end = min(end, cursor + timedelta(days=2_499))
-            records.extend(
-                _query(
-                    pro,
-                    spec,
-                    {**params, "start_date": _compact(cursor), "end_date": _compact(window_end)},
+        requested_code = str(params.get("ts_code") or "").strip().upper()
+        index_codes = DEFAULT_INDEX_DAILY_CODES if requested_code in {"", "000300.SH"} else (requested_code,)
+        for index_code in index_codes:
+            cursor = start
+            while cursor <= end:
+                window_end = min(end, cursor + timedelta(days=2_499))
+                records.extend(
+                    _query(
+                        pro,
+                        spec,
+                        {
+                            **params,
+                            "ts_code": index_code,
+                            "start_date": _compact(cursor),
+                            "end_date": _compact(window_end),
+                        },
+                    )
                 )
-            )
-            cursor = window_end + timedelta(days=1)
+                cursor = window_end + timedelta(days=1)
         deduplicated = {_record_key(spec, row): row for row in records}
         return list(deduplicated.values())
     return _query(pro, spec, params)
@@ -2171,9 +2226,9 @@ def _normalize_optional(
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             symbol = str(row.get("symbol") or row.get("ts_code") or "").split(".", 1)[0].upper()
-            close = row.get("close")
+            close = _finite_number(row.get("close"))
             trade_date = row.get("trade_date") or row.get("date")
-            if not symbol or not trade_date or close in (None, ""):
+            if not symbol or not trade_date or close is None:
                 continue
             grouped.setdefault(symbol, []).append(
                 {
@@ -2182,14 +2237,14 @@ def _normalize_optional(
                     # TuShare's pre-launch CSI history can contain close-only
                     # rows.  A flat OHLC bar preserves that published close
                     # without inventing an intraday range.
-                    "open": row.get("open") if row.get("open") not in (None, "") else close,
-                    "high": row.get("high") if row.get("high") not in (None, "") else close,
-                    "low": row.get("low") if row.get("low") not in (None, "") else close,
+                    "open": _finite_number(row.get("open")) or close,
+                    "high": _finite_number(row.get("high")) or close,
+                    "low": _finite_number(row.get("low")) or close,
                     "close": close,
-                    "prev_close": row.get("pre_close") or row.get("prev_close"),
-                    "pct_change": row.get("pct_chg") or row.get("pct_change"),
-                    "volume": float(row.get("vol") or row.get("volume") or 0) * (100 if "vol" in row else 1),
-                    "amount": float(row.get("amount") or 0) * 1000,
+                    "prev_close": _first_finite_number(row.get("pre_close"), row.get("prev_close")),
+                    "pct_change": _first_finite_number(row.get("pct_chg"), row.get("pct_change")),
+                    "volume": (_first_finite_number(row.get("vol"), row.get("volume")) or 0) * (100 if "vol" in row else 1),
+                    "amount": (_finite_number(row.get("amount")) or 0) * 1000,
                     "adj_factor": 1.0,
                 }
             )
@@ -3366,6 +3421,12 @@ def _sync_generic(
         persisted_latest = coverage_by_scope.get(scope_key) or (
             latest_by_instrument.get(symbol) if symbol else global_latest
         )
+        # Deployments created before the multi-benchmark catalog have a global
+        # CSI 300 watermark.  Do not let that watermark make newly introduced
+        # index codes start at yesterday; one incremental run must backfill the
+        # missing histories from the configured initial boundary.
+        if spec.key == "index_daily" and _missing_default_index_daily_codes():
+            persisted_latest = None
         latest = None if full_refresh else persisted_latest
         initial_start = str(item.get("listed_date") or "1990-01-01") if item else "1990-01-01"
         if minimum_start_date:
@@ -3726,7 +3787,12 @@ def run_sync(
             date.fromisoformat(end_date) - timedelta(days=history_bars * 8 // 5 + 60)
         ).isoformat()
     try:
-        audit = audit_existing_data()
+        # The legacy-source audit scans A-share daily bars and is relevant only
+        # when that dataset participates in the run.  Running it for a targeted
+        # index or contract-catalog refresh needlessly scans the largest table
+        # and can exhaust a workstation MySQL instance before the requested
+        # dataset is touched.
+        audit = audit_existing_data() if "daily" in selected_keys else {"detected": 0}
         probe_keys = _permission_probe_keys(selected_keys)
         if probe_keys:
             probe_permissions(adapter, only=probe_keys, run_id=run_id, task_id=task_id)

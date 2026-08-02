@@ -1,9 +1,12 @@
 import type { DataQueryRow } from "../api";
 
-export function candlestickOption(rows: DataQueryRow[], symbol: string) {
+export function candlestickOption(rows: DataQueryRow[], symbol: string, initialWindowSize?: number) {
   const dates = rows.map((row) => row.timestamp.slice(0, 10));
   const upColor = "#cf1322";
   const downColor = "#389e0d";
+  const zoomStart = initialWindowSize && rows.length > initialWindowSize
+    ? ((rows.length - initialWindowSize) / rows.length) * 100
+    : 0;
   return {
     animation: false,
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
@@ -22,8 +25,8 @@ export function candlestickOption(rows: DataQueryRow[], symbol: string) {
       { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { formatter: "{value}" } }
     ],
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: 0, end: 100 },
-      { type: "slider", xAxisIndex: [0, 1], bottom: 8, start: 0, end: 100 }
+      { type: "inside", xAxisIndex: [0, 1], start: zoomStart, end: 100 },
+      { type: "slider", xAxisIndex: [0, 1], bottom: 8, start: zoomStart, end: 100 }
     ],
     series: [
       {

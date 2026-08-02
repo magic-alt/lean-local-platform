@@ -1285,7 +1285,11 @@ def test_run_sync_refreshes_market_cutoff_after_trade_calendar(tmp_path, monkeyp
             "where dataset_key in ('trade_cal','index_daily')"
         )
 
-    monkeypatch.setattr(data_sync, "audit_existing_data", lambda: {})
+    monkeypatch.setattr(
+        data_sync,
+        "audit_existing_data",
+        lambda: (_ for _ in ()).throw(AssertionError("index-only sync must not scan A-share daily bars")),
+    )
     monkeypatch.setattr(data_sync, "probe_permissions", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         data_sync,
@@ -1643,7 +1647,7 @@ def test_complete_index_daily_query_splits_provider_capped_history():
             calls.append(params)
             return [
                 {
-                    "ts_code": "000300.SH",
+                    "ts_code": params["ts_code"],
                     "trade_date": params["end_date"],
                 }
             ]
@@ -1654,6 +1658,7 @@ def test_complete_index_daily_query_splits_provider_capped_history():
     )
 
     assert len(calls) > 1
+    assert {params["ts_code"] for params in calls} == set(data_sync.DEFAULT_INDEX_DAILY_CODES)
     for params in calls:
         start = date.fromisoformat(
             f"{params['start_date'][:4]}-{params['start_date'][4:6]}-{params['start_date'][6:8]}"
@@ -1663,6 +1668,29 @@ def test_complete_index_daily_query_splits_provider_capped_history():
         )
         assert (end - start).days <= 2_499
     assert len(rows) == len(calls)
+
+
+def test_index_daily_detects_default_codes_missing_behind_legacy_global_watermark(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import init_db
+    from app.services import data_sync
+    from app.services.market_repository import upsert_market_daily_bars
+
+    init_db()
+    upsert_market_daily_bars(
+        [{"trade_date": "2026-07-17", "close": 4000}],
+        symbol="000300",
+        asset_class="index",
+        market="china",
+        venue="china",
+        source="tushare",
+    )
+
+    missing = data_sync._missing_default_index_daily_codes()
+
+    assert "000300" not in missing
+    assert "000001" in missing
+    assert missing == {code.split(".", 1)[0] for code in data_sync.DEFAULT_INDEX_DAILY_CODES} - {"000300"}
 
 
 def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, monkeypatch):
@@ -1689,12 +1717,14 @@ def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, mon
             {
                 "ts_code": "000300.SH",
                 "trade_date": "20030909",
-                "open": None,
-                "high": None,
-                "low": None,
+                "open": float("nan"),
+                "high": float("nan"),
+                "low": float("nan"),
                 "close": 1172.051,
-                "vol": 0,
-                "amount": 0,
+                "pre_close": float("nan"),
+                "pct_chg": float("nan"),
+                "vol": float("nan"),
+                "amount": float("nan"),
             },
         ],
         "governed-index-run",
@@ -1708,6 +1738,8 @@ def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, mon
         ).fetchall()
     assert len(rows) == 2
     assert rows[0]["open"] == rows[0]["close"] == 1172.051
+    assert rows[0]["high"] == rows[0]["low"] == 1172.051
+    assert rows[0]["volume"] == rows[0]["amount"] == 0
     assert rows[1]["volume"] == 12350
     assert rows[1]["amount"] == 456750
     assert rows[1]["source"] == "tushare"

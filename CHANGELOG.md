@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Load complete index history into Data Preview candlestick charts so the initially recent window can be dragged to earlier dates, and remove redundant archive and local-source notices from the index list view.
+- Fix Data Preview by reading complete canonical index history instead of the latest incremental archive, synchronizing the common A-share benchmark indices including `000001.SH`, normalizing non-finite index values before MySQL writes, making futures/options lifecycle preview states explicit, and skipping the unrelated full A-share legacy audit during targeted index/contract refreshes.
 - Add a daily-bar-only gap event study that keeps sector proxies separate, uses exchange `prev_close`, standardizes gaps by prior volatility, reports low-open recovery and high-open giveback from OHLC, excludes company-action flags, and labels daily volume ratios as post-open descriptive data without claiming minute-path, VWAP, or fill-time evidence.
 - Add an executable A-share PIT trend-pullback portfolio template for CSI300/500/1000 and STAR50 with A/B/C scoring variants, immutable adjustment/liquidity/industry/fundamental input snapshots, weekly close signals and next-open MOO fills, portfolio/turnover/capacity controls, structured decision artifacts, admission gates, and Paper-compatible cumulative replay.
 - Add a point-in-time TuShare Pro A-share orderly-pullback candidate study with governed full-market preparation, 500-session path-risk and liquidity screening, A/B/C/Reject audit trails, asynchronous Research runs, reproducible HTML/CSV/Parquet artifacts, frozen run snapshots, and a Notebook case template.

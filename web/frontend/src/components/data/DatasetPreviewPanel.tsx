@@ -105,6 +105,15 @@ const TABLE_WIDTH: Record<string, number> = {
   opt_basic: 1250,
 };
 
+const INDEX_CHART_PAGE_SIZE = 500;
+
+function normalizedChartDate(value: unknown) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  return digits.length === 8
+    ? `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`
+    : "";
+}
+
 class DatasetPreviewErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
   { error?: Error }
@@ -199,16 +208,29 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
     setChartError("");
     setChartLoading(true);
     try {
-      const response = await api.datasetPreview("index_daily", {
+      const firstPage = await api.datasetPreview("index_daily", {
         keyword: indexCode,
-        limit: 500,
+        limit: INDEX_CHART_PAGE_SIZE,
       });
       if (sequence !== chartRequestSequence.current) return;
-      const items = Array.isArray(response.items)
-        ? response.items.filter((item) => String(item?.ts_code || "") === indexCode)
-        : [];
-      setIndexChartResult({ ...response, items, count: items.length, offset: 0 });
-      if (items.length === 0) setChartError(`${indexCode} 暂无可用指数日线，无法绘制 K 线。`);
+      const total = Math.max(0, Number(firstPage.count) || 0);
+      const remainingOffsets = Array.from(
+        { length: Math.max(0, Math.ceil(total / INDEX_CHART_PAGE_SIZE) - 1) },
+        (_, pageIndex) => (pageIndex + 1) * INDEX_CHART_PAGE_SIZE,
+      );
+      const remainingPages = await Promise.all(remainingOffsets.map((offset) => api.datasetPreview("index_daily", {
+        keyword: indexCode,
+        limit: INDEX_CHART_PAGE_SIZE,
+        offset,
+      })));
+      if (sequence !== chartRequestSequence.current) return;
+      const items = [firstPage, ...remainingPages]
+        .flatMap((page) => Array.isArray(page.items) ? page.items : [])
+        .filter((item) => String(item?.ts_code || "") === indexCode);
+      setIndexChartResult({ ...firstPage, items, count: items.length, offset: 0 });
+      if (items.length === 0) {
+        setChartError(`${indexCode} 尚未同步到本地指数日线；请先执行一次数据更新，再绘制 K 线。`);
+      }
     } catch (error) {
       if (sequence !== chartRequestSequence.current) return;
       setChartError((error as Error).message || `${indexCode} 指数日线加载失败`);
@@ -246,21 +268,25 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
       : dataset === "index_basic"
         ? indexChartResult?.items
         : undefined;
-    return (items ?? []).map((item) => ({
-      timestamp: String(item.trade_date || ""),
-      open: Number(item.open || 0),
-      high: Number(item.high || 0),
-      low: Number(item.low || 0),
-      close: Number(item.close || 0),
-      volume: Number(item.vol || 0),
-      source: "tushare:index_daily",
-    })).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    return (items ?? [])
+      .map((item) => ({ item, timestamp: normalizedChartDate(item.trade_date) }))
+      .filter(({ timestamp }) => Boolean(timestamp))
+      .map(({ item, timestamp }) => ({
+        timestamp,
+        open: Number(item.open || 0),
+        high: Number(item.high || 0),
+        low: Number(item.low || 0),
+        close: Number(item.close || 0),
+        volume: Number(item.vol || 0),
+        source: "tushare:index_daily",
+      }))
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
   }, [dataset, indexChartResult?.items, result?.items]);
   const chartTitle = dataset === "index_basic"
     ? selectedIndexCode
     : String(result?.items[0]?.ts_code || "指数");
   const previewMessage = result?.scope === "currently_tradable"
-    ? "当前可交易合约（按上市与最后交易日筛选）"
+    ? `${selected.label} · 当前有效合约`
     : result?.storage === "compressed_archive"
       ? "读取压缩批次归档，不恢复逐行 JSON"
       : "读取规范化 MySQL 表";
@@ -288,20 +314,22 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         <Input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} style={{ width: 150 }} />
         <Button type="primary" icon={<ReloadOutlined />} loading={loading} onClick={() => void load(1)}>查询数据库</Button>
       </div>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message={previewMessage}
-        description={previewDescription}
-      />
-      {loadError && <Alert type="error" showIcon closable message="查询失败" description={loadError} style={{ marginBottom: 12 }} />}
-      {dataset === "index_basic" && selectedIndexCode && (
+      {dataset !== "index_basic" && (
         <Alert
-          type={chartError ? "warning" : "info"}
+          type="info"
           showIcon
-          message={`${selectedIndexCode} 指数 K 线`}
-          description={chartError || "指数日线来自本地 index_daily 归档。"}
+          style={{ marginBottom: 12 }}
+          message={previewMessage}
+          description={previewDescription}
+        />
+      )}
+      {loadError && <Alert type="error" showIcon closable message="查询失败" description={loadError} style={{ marginBottom: 12 }} />}
+      {dataset === "index_basic" && selectedIndexCode && chartError && (
+        <Alert
+          type="warning"
+          showIcon
+          message="指数 K 线加载失败"
+          description={chartError}
           action={<Button size="small" onClick={() => {
             chartRequestSequence.current += 1;
             setSelectedIndexCode("");
@@ -313,7 +341,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         />
       )}
       <Spin spinning={chartLoading}>
-        {chartRows.length > 0 && <LeanChart option={candlestickOption(chartRows, chartTitle)} style={{ height: 520, marginBottom: 12 }} />}
+        {chartRows.length > 0 && <LeanChart option={candlestickOption(chartRows, chartTitle, INDEX_CHART_PAGE_SIZE)} style={{ height: 520, marginBottom: 12 }} />}
       </Spin>
       <Spin spinning={loading}>
         <div className="dataset-preview-table-scroll">
@@ -358,7 +386,14 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
               })}
             </tbody>
           </table>
-          {!loading && (result?.items.length ?? 0) === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配记录" />}
+          {!loading && (result?.items.length ?? 0) === 0 && (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={result?.scope === "currently_tradable"
+                ? "本地归档中暂无符合当前日期与筛选条件的有效合约"
+                : "暂无匹配记录"}
+            />
+          )}
         </div>
       </Spin>
       <div className="dataset-preview-pagination">

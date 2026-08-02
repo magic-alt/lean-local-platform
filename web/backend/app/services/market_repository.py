@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime
 from typing import Any
@@ -59,9 +60,10 @@ def optional_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def bool_int(value: Any, default: bool = False) -> int:
