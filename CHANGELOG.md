@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add production-only acceptance scripts for remaining actual-environment P1 evidence:
+  `run_external_webhook_acceptance.py`, `run_capacity_stability_acceptance.py`,
+  and `run_maintenance_stability_acceptance.py`，并补齐对应脚本级别测试；同时更新
+  Level5 Runbook 的三项前置封版证据重跑清单与判定条件。
 - Record the 2026-08-04 final-seal acceptance without widening production scope: repair only the retired-API shadow replay and max-position acceptance gates, rerun Level 3, Level 4, Paper and negative controls, freeze unsupported modes fail-closed, and issue a hash-bound release certificate that remains `NOT_CERTIFIED` while the existing three P1 and one P2 findings are open.
 - Revalidate the repaired actual environment as audit iteration 4 with one converged 233-path/0043 release, a real three-stage Walk-Forward certificate, two reused Paper accounts completing 23 successful sessions with ledger replay and cohort certification, actual timeout/idempotency replay, bounded alert payloads, and a conservative 89/100 Level 5 fail verdict that keeps only real webhook/24-hour, capacity/24-hour, data/7-day, and Browser evidence open.
 - Finish the remaining actual-environment remediation with an indexed, bounded-memory production-lineage query that avoids MySQL OOM during recertification; a bounded and countable Alert Events PageEnvelope with capped delivery history; dependency health that degrades cleanly during worker outages; serialized-by-default LEAN execution with tmpfs strategy staging and allowlisted support files; fail-closed rejection of research-only/screening backtests as Paper execution seeds; resilient existing-account Paper acceptance for MySQL DECIMAL values, error-state recovery, reserved words, gap-only continuation, and explicit zero-session collecting-cohort rebinding to replacement deployments; migration-version-neutral architecture documentation; and a single ECharts/zrender vendor chunk that removes circular build warnings.

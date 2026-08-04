@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import socket
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -319,6 +320,111 @@ def test_external_webhook_acceptance_requires_public_endpoint(monkeypatch):
         raise AssertionError("private webhook endpoint should not certify")
 
 
+def test_daily_shadow_audit_api_includes_bearer(monkeypatch, tmp_path):
+    module = _load_script(
+        "audit_external_webhook_contract_auth",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+    token_file = tmp_path / "api_token"
+    token_file.write_text("unit-token\n", encoding="utf-8")
+    monkeypatch.setenv("LEAN_API_TOKEN", "")
+    monkeypatch.setenv("LEAN_API_TOKEN_FILE", str(token_file))
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        captured["method"] = request.get_method()
+        return _Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    status, payload = module._api("http://localhost", "/api/health")
+
+    assert status == 200
+    assert payload == {"ok": True}
+    assert captured == {"authorization": "Bearer unit-token", "method": "GET"}
+
+
+def test_external_webhook_acceptance_reachable_and_successful_with_health_recovery(monkeypatch):
+    module = _load_script(
+        "audit_external_webhook_contract_run",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+
+    monkeypatch.setattr(module, "init_db", lambda: None)
+    monkeypatch.setenv("LEAN_API_TOKEN", "test-token")
+
+    def fake_emit_alert(
+        event_type,
+        severity,
+        title,
+        message,
+        source,
+        related_id,
+        details,
+        dedupe_key,
+        webhook_url,
+    ):
+        return {
+            "id": "alert-1",
+            "delivery": {
+                "channel": "webhook",
+                "status": "success",
+                "attempt_count": 1,
+                "response_code": 200,
+            },
+        }
+
+    monkeypatch.setattr(module, "emit_alert", fake_emit_alert)
+
+    monkeypatch.setattr(
+        module,
+        "_load_alert_deliveries",
+        lambda _alert_id: [
+            {
+                "channel": "webhook",
+                "status": "success",
+                "attempt_count": 1,
+                "response_code": 200,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_api",
+        lambda base_url, path, **_kwargs: (
+            200,
+            {"channels": [{"channel": "webhook", "status": "success", "ok": True}]},
+        ),
+    )
+
+    monkeypatch.setattr(
+        module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("203.0.113.10", 443),
+            )
+        ],
+    )
+
+    result = module.run(
+        "https://example.com/webhook",
+        allow_local=True,
+        monitor_hours=0,
+        poll_seconds=0.1,
+        require_health_recovery=True,
+    )
+
+    assert result["passed"] is True
+    assert result["hasPersistedSuccess"] is True
+    assert result["boundedAttempts"] is True
+
+
 def test_external_webhook_acceptance_requires_persisted_2xx(monkeypatch):
     module = _load_script(
         "audit_external_webhook_delivery_contract",
@@ -349,6 +455,73 @@ def test_external_webhook_acceptance_requires_persisted_2xx(monkeypatch):
     assert result["status"] == "EXTERNAL_WEBHOOK_PASS"
     assert result["responseCode"] == 202
     assert result["endpoint"] == "https://notifications.example.test/lean"
+
+
+def test_external_webhook_acceptance_fails_without_delivered_persisted_success(monkeypatch):
+    module = _load_script(
+        "audit_external_webhook_delivery_contract_fail",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+    monkeypatch.setattr(module, "_assert_external_endpoint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "init_db", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "emit_alert",
+        lambda *_args, **_kwargs: {
+            "id": "alert-1",
+            "delivery": {
+                "id": "delivery-1",
+                "channel": "webhook",
+                "status": "success",
+                "response_code": 202,
+                "attempt_count": 5,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_load_alert_deliveries",
+        lambda _alert_id: [
+            {
+                "channel": "webhook",
+                "status": "failed",
+                "response_code": 500,
+                "attempt_count": 10,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_api",
+        lambda base_url, path, **_kwargs: (
+            200,
+            {"channels": [{"channel": "webhook", "status": "failed", "ok": False}]},
+        ),
+    )
+    monkeypatch.setattr(
+        module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("203.0.113.10", 443),
+            )
+        ],
+    )
+
+    result = module.run(
+        "https://notifications.example.test/lean",
+        monitor_hours=0,
+        poll_seconds=0.1,
+        require_health_recovery=True,
+    )
+
+    assert result["status"] == "EXTERNAL_WEBHOOK_FAIL"
+    assert result["passed"] is False
+    assert result["hasPersistedSuccess"] is False
 
 
 def test_level4_audit_authenticates_json_and_csv_requests(tmp_path, monkeypatch):
@@ -522,3 +695,256 @@ def test_level4_walk_forward_requires_train_validation_and_oos():
 
     assert status == "failed"
     assert any(item.startswith("walk_forward_fold_phase_invalid") for item in failures)
+
+
+def test_capacity_stability_run_passes_with_ok_snapshot(monkeypatch):
+    module = _load_script(
+        "capacity_stability_acceptance_contract",
+        "scripts/run_capacity_stability_acceptance.py",
+    )
+
+    def fake_api(base_url, path, timeout):
+        assert path == "/api/operational/resources"
+        return 200, {
+            "status": "ok",
+            "snapshot": {
+                "status": "ok",
+                "container": {"hostname": "api", "role": "backend"},
+                "memory": {
+                    "usedPercent": 42.0,
+                    "headroomPercent": 58.0,
+                    "source": "proc_meminfo",
+                },
+                "cpu": {
+                    "usedPercent": 12.0,
+                    "cpuCount": 16,
+                },
+                "queue": {
+                    "maxDepth": 3,
+                },
+                "disk": {
+                    "usedPercent": 35.0,
+                },
+            },
+        }
+
+    monkeypatch.setattr(module, "_api", fake_api)
+
+    result = module.run(api_url="http://127.0.0.1:8000", window_hours=0, poll_seconds=0.0)
+
+    assert result["passed"] is True
+    assert result["status"] == "CAPACITY_STABILITY_PASS"
+    assert result["resourceSnapshotCount"] == 1
+    assert result["sampleCount"] == 1
+    assert result["observations"][0]["snapshotStatus"] == "ok"
+
+
+def test_capacity_stability_run_fails_on_warning_status(monkeypatch):
+    module = _load_script(
+        "capacity_stability_acceptance_contract_warn",
+        "scripts/run_capacity_stability_acceptance.py",
+    )
+
+    def fake_api(base_url, path, timeout):
+        return 200, {
+            "status": "degraded",
+            "snapshot": {
+                "status": "degraded",
+                "container": {"hostname": "api", "role": "backend"},
+                "memory": {
+                    "usedPercent": 88.2,
+                    "headroomPercent": 11.8,
+                    "source": "proc_meminfo",
+                },
+                "cpu": {
+                    "usedPercent": 86.4,
+                    "cpuCount": 16,
+                },
+                "queue": {
+                    "maxDepth": 8,
+                },
+                "disk": {
+                    "usedPercent": 40.0,
+                },
+            },
+        }
+
+    monkeypatch.setattr(module, "_api", fake_api)
+
+    result = module.run(api_url="http://127.0.0.1:8000", window_hours=0, poll_seconds=0.0)
+
+    assert result["passed"] is False
+    assert result["status"] == "CAPACITY_STABILITY_FAIL"
+    assert result["observations"][0]["snapshotStatus"] == "degraded"
+
+
+def test_capacity_stability_run_accepts_top_level_status_without_snapshot_status(monkeypatch):
+    module = _load_script(
+        "capacity_stability_acceptance_contract_top_level",
+        "scripts/run_capacity_stability_acceptance.py",
+    )
+
+    def fake_api(base_url, path, timeout):
+        return 200, {
+            "status": "ok",
+            "snapshot": {
+                "container": {"hostname": "api", "role": "backend"},
+                "memory": {
+                    "usedPercent": 42.0,
+                    "headroomPercent": 58.0,
+                    "source": "proc_meminfo",
+                },
+                "cpu": {
+                    "usedPercent": 12.0,
+                    "cpuCount": 16,
+                },
+                "queue": {
+                    "maxDepth": 3,
+                },
+                "disk": {
+                    "usedPercent": 35.0,
+                },
+            },
+        }
+
+    monkeypatch.setattr(module, "_api", fake_api)
+    result = module.run(api_url="http://127.0.0.1:8000", window_hours=0, poll_seconds=0.0)
+
+    assert result["passed"] is True
+    assert result["status"] == "CAPACITY_STABILITY_PASS"
+    assert result["resourceSnapshotCount"] == 1
+
+
+def test_maintenance_stability_acceptance_passes_for_single_active_and_checkpoint_resume_success(monkeypatch):
+    module = _load_script(
+        "maintenance_stability_acceptance_contract_pass",
+        "scripts/run_maintenance_stability_acceptance.py",
+    )
+
+    now = datetime.now().astimezone().replace(microsecond=0)
+
+    def fake_runs(_start_iso=""):
+        return [
+            {
+                "id": "run-running",
+                "status": "running",
+                "created_at": (now - timedelta(hours=1)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": None,
+            },
+            {
+                "id": "run-2",
+                "status": "success",
+                "created_at": (now - timedelta(hours=10)).isoformat(),
+                "attempt_count": 3,
+                "max_attempts": 5,
+                "checkpoint_json": json.dumps(
+                    {
+                        "attempt": 3,
+                        "completedUnits": ["equity", "index"],
+                        "currentUnit": "done",
+                    }
+                ),
+                "summary_json": None,
+            },
+        ]
+
+    monkeypatch.setattr(module, "_query_runs", fake_runs)
+
+    result = module.run(window_hours=24)
+
+    assert result["passed"] is True
+    assert result["status"] == "MAINTENANCE_STABILITY_PASS"
+    assert result["activeRunCount"] == 1
+    assert result["runWindow"]["checkpointResumePassed"] is True
+
+
+def test_maintenance_stability_acceptance_passes_when_no_resume_candidate(monkeypatch):
+    module = _load_script(
+        "maintenance_stability_acceptance_contract_no_resume",
+        "scripts/run_maintenance_stability_acceptance.py",
+    )
+
+    now = datetime.now().astimezone().replace(microsecond=0)
+
+    def fake_runs(_start_iso=""):
+        return [
+            {
+                "id": "run-running",
+                "status": "running",
+                "created_at": (now - timedelta(hours=1)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": None,
+            },
+            {
+                "id": "run-success",
+                "status": "success",
+                "created_at": (now - timedelta(hours=10)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": None,
+            },
+        ]
+
+    monkeypatch.setattr(module, "_query_runs", fake_runs)
+
+    result = module.run(window_hours=24)
+
+    assert result["passed"] is True
+    assert result["status"] == "MAINTENANCE_STABILITY_PASS"
+    assert result["runWindow"]["checkpointResumePassed"] is True
+
+
+def test_maintenance_stability_acceptance_fails_for_multiple_active_and_mysql_failure(monkeypatch):
+    module = _load_script(
+        "maintenance_stability_acceptance_contract_fail",
+        "scripts/run_maintenance_stability_acceptance.py",
+    )
+
+    now = datetime.now().astimezone().replace(microsecond=0)
+
+    def fake_runs(_start_iso=""):
+        return [
+            {
+                "id": "run-1",
+                "status": "running",
+                "created_at": (now - timedelta(hours=1)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": None,
+            },
+            {
+                "id": "run-2",
+                "status": "running",
+                "created_at": (now - timedelta(hours=2)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": None,
+            },
+            {
+                "id": "run-3",
+                "status": "failed",
+                "created_at": (now - timedelta(hours=5)).isoformat(),
+                "attempt_count": 1,
+                "max_attempts": 5,
+                "checkpoint_json": None,
+                "summary_json": {},
+                "error": "server closed unexpectedly due mysql 2013",
+            },
+        ]
+
+    monkeypatch.setattr(module, "_query_runs", fake_runs)
+    result = module.run(window_hours=24)
+
+    assert result["passed"] is False
+    assert result["status"] == "MAINTENANCE_STABILITY_FAIL"
+    assert result["runWindow"]["activeRunCount"] == 2
+    assert result["runWindow"]["criticalNoMysqlOrOrphanFailure"] is False
+    assert len(result["runWindow"]["failureTraces"]) == 1

@@ -115,6 +115,38 @@ curl -fsS -X POST -H "Authorization: Bearer $LEAN_API_TOKEN" \
 acknowledge 表示已接单，不表示故障消失；只有指标恢复、账本对账和依赖健康均通过后
 才能 resolve。
 
+## P1 三项闭环前置证据
+
+在开始下一轮最终签发前，需要在 actual 环境按固定窗口重跑以下脚本并保存证据：
+
+```bash
+web/backend/.venv/bin/python scripts/run_external_webhook_acceptance.py \
+  --webhook-url "$LEAN_ALERT_WEBHOOK_URL" \
+  --monitor-hours 24 \
+  --poll-seconds 20 \
+  --requeue-dead-letter \
+  --evidence web/runtime/audit/external-webhook-acceptance.json
+
+web/backend/.venv/bin/python scripts/run_capacity_stability_acceptance.py \
+  --window-hours 24 \
+  --poll-seconds 20 \
+  --evidence web/runtime/audit/capacity-stability-acceptance.json
+
+web/backend/.venv/bin/python scripts/run_maintenance_stability_acceptance.py \
+  --window-hours 168 \
+  --evidence web/runtime/audit/maintenance-stability-acceptance.json
+```
+
+通过条件：
+
+- ACT-P1-007：`EXTERNAL_WEBHOOK_PASS` 且 `thirdPartyCertified=true`；`hasPersistedSuccess=true`；
+  `attemptCount` 不超 `maxConfiguredAttempts`；`deliveryRecovered=true`；
+  `deadLetterRegressed=true`；`healthRecovered=true`。
+- ACT-P1-008：`CAPACITY_STABILITY_PASS`；`resourceViolations` 为空；`snapshotStatus` 在 24h 内始终不为
+  `warning/degraded/critical`。
+- ACT-P1-002：`MAINTENANCE_STABILITY_PASS`；`criticalNoMysqlOrOrphanFailure=true`；
+  `activeOverlapOk=true`；`checkpointResumePassed=true`（若窗口内出现重试尝试）。
+
 ## 资源压力阈值与处置
 
 默认阈值如下；warning/critical 必须满足 warning ≤ critical：
