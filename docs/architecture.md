@@ -1,16 +1,21 @@
 # Architecture
 
-Last reviewed: 2026-07-29.
+Last reviewed: 2026-08-04.
 
 This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
 
+The sealed production topology is one local machine and A-share daily data only. Research, LEAN Backtest, Optimization, Reports and Paper Account are the only production surfaces. Cross-asset workflows are `research_only` or `preview_only`; live execution and minute/Tick execution are disabled; incomplete point-in-time windows fail closed; scheduled unattended operation is not ready unless an external alert channel has persisted a successful delivery. These are deployment boundaries, not invitations to add fallback engines or synthetic data.
+
 ## Current Level
 
-The main chains are implemented. The 2026-07-25 local evidence accepts Level 3,
-Level 3+, the 21-day Paper v2 baseline, and the six-checkpoint interruption
-chain. Overall operational release remains not ready because production-scale
-restore, credential and supply-chain gates are separate. Historical failures
-remain preserved:
+The main chains are implemented. The 2026-08-04 final-seal run accepts Level 3
+and the existing two-account, 23-session Paper cohort, but rejects the overall
+release because the real Level 4 run encountered repeated MySQL restarts, the
+external Webhook has no persisted 2xx/24-hour window, the capacity and data
+stability windows are reset, and no controllable Browser instance was available.
+The authoritative decision and evidence mapping are in
+`docs/audit/final-seal-certification-2026-08-04.md`. Historical
+failures remain preserved:
 
 - Web -> FastAPI -> Celery -> LEAN Docker -> raw artifacts -> parser -> report/UI is operational.
 - A-share preflight checks data coverage, benchmark coverage, QA gates and trading-rule metadata before dispatch.

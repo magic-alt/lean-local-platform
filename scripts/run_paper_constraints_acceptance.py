@@ -181,6 +181,7 @@ def _run_single_reason(
         params["cash"] = 5000000
         params["maxPositionWeight"] = 0.4
         params["symbols"] = [primary, secondary]
+        params["watchlist"] = ",".join([primary, secondary])
     elif reason == "st_blocked":
         signal_symbol = primary
         with db() as connection:

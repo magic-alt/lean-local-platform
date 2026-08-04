@@ -28,6 +28,7 @@ from app.services.data_coverage import ashare_coverage, benchmark_coverage  # no
 from app.services.db_object_store import put_bytes  # noqa: E402
 from app.services.lean_cache import ensure_ashare_lean_cache  # noqa: E402
 from app.services.parquet_lake import parquet_consistency_report  # noqa: E402
+from app.services.paper import create_session, list_orders, run_replay  # noqa: E402
 from app.services.pipeline_tracking import finish_pipeline_run, record_pipeline_step, start_pipeline_run  # noqa: E402
 from app.services.provider_certification import provider_availability_report, warning_allowlist_status  # noqa: E402
 from app.services.source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE, resolve_effective_data_source, resolve_source_context, source_priority_for_window  # noqa: E402
@@ -273,41 +274,41 @@ def _backtest_smoke(
 
 
 def _paper_replay(api_url: str, symbols: list[str], benchmark: str, source: str, start: str, end: str, execution_policy: str) -> dict[str, Any]:
-    status, session = _api(
-        api_url,
-        "POST",
-        "/api/paper",
-        {
-            "name": "Daily Shadow Pipeline Paper Replay",
-            "symbol": symbols[0],
-            "symbols": symbols,
-            "assetClass": "equity",
-            "market": "china",
-            "cash": 5000000,
-            "benchmarkSymbol": benchmark,
-            "executionPolicy": execution_policy,
-            "source": source,
-            "maxPositions": max(1, len(symbols)),
-            "maxPositionWeight": min(0.4, 1 / max(1, len(symbols))),
-            "signalTargetPercent": min(0.4, 1 / max(1, len(symbols))),
-            "watchlist": ",".join(symbols),
-            "fast": 3,
-            "slow": 5,
-        },
-        timeout=30,
-    )
-    if status >= 400:
-        return {"status": "critical", "error": session, "httpStatus": status}
-    session_id = session["id"]
-    status, result = _api(api_url, "POST", f"/api/paper/{session_id}/replay", {"startDate": start, "endDate": end, "autoSignal": True}, timeout=600)
-    if status >= 400:
-        return {"status": "critical", "sessionId": session_id, "error": result, "httpStatus": status}
-    _, orders = _api(api_url, "GET", f"/api/paper/{session_id}/orders", timeout=30)
-    _, reports = _api(api_url, "GET", f"/api/paper/{session_id}/reports?light=true&limit=1000", timeout=30)
-    report_items = reports.get("items") if isinstance(reports, dict) else reports
+    del api_url
+    try:
+        session = create_session(
+            {
+                "name": "Daily Shadow Pipeline Paper Replay",
+                "symbol": symbols[0],
+                "symbols": symbols,
+                "assetClass": "equity",
+                "market": "china",
+                "cash": 5000000,
+                "benchmarkSymbol": benchmark,
+                "executionPolicy": execution_policy,
+                "source": source,
+                "maxPositions": max(1, len(symbols)),
+                "maxPositionWeight": min(0.4, 1 / max(1, len(symbols))),
+                "signalTargetPercent": min(0.4, 1 / max(1, len(symbols))),
+                "watchlist": ",".join(symbols),
+                "fast": 3,
+                "slow": 5,
+            }
+        )
+        session_id = session["id"]
+        result = run_replay(session_id, start, end, auto_signal=True)
+        orders = list_orders(session_id)
+        report_items = result.get("reports") or []
+    except Exception as exc:
+        return {
+            "status": "critical",
+            "error": {"type": type(exc).__name__, "detail": str(exc)},
+            "interface": "internal_shadow_replay",
+        }
     rejects = [order for order in orders if order.get("status") == "rejected"]
     return {
         "status": "ok" if report_items else "critical",
+        "interface": "internal_shadow_replay",
         "sessionId": session_id,
         "tradingDays": result.get("tradingDays"),
         "reports": len(report_items or []),

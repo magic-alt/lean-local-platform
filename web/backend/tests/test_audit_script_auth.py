@@ -103,6 +103,38 @@ def test_daily_shadow_backtest_requires_governed_project(monkeypatch):
     assert captured["payload"]["symbol"] == "600519"
 
 
+def test_daily_shadow_paper_replay_uses_internal_non_api_interface(monkeypatch):
+    module = _load_script("audit_daily_shadow_paper", "scripts/run_daily_shadow_pipeline.py")
+    monkeypatch.setattr(module, "create_session", lambda payload: {"id": "shadow-session"})
+    monkeypatch.setattr(
+        module,
+        "run_replay",
+        lambda session_id, start, end, auto_signal: {
+            "tradingDays": 21,
+            "reports": [{"trade_date": end}],
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "list_orders",
+        lambda session_id: [{"status": "filled", "reason": None}],
+    )
+
+    result = module._paper_replay(
+        "http://unused",
+        ["600519"],
+        "000300",
+        "tushare",
+        "2023-01-03",
+        "2023-11-30",
+        "next_open",
+    )
+
+    assert result["status"] == "ok"
+    assert result["interface"] == "internal_shadow_replay"
+    assert result["tradingDays"] == 21
+
+
 def test_daily_shadow_backtest_supplies_dynamic_universe_schedule(monkeypatch):
     module = _load_script(
         "audit_daily_shadow_dynamic_contract",

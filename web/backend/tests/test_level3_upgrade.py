@@ -161,6 +161,45 @@ def test_level3_scripts_support_dry_run(monkeypatch, capsys):
     assert "LEVEL3_CANDIDATE" in capsys.readouterr().out
 
 
+def test_max_positions_acceptance_keeps_both_symbols_in_watchlist(monkeypatch):
+    from scripts import run_paper_constraints_acceptance as acceptance
+
+    captured = {}
+    monkeypatch.setattr(acceptance, "_trade_pair", lambda *args: ("2024-01-03", "2024-01-04"))
+    monkeypatch.setattr(
+        acceptance,
+        "create_session",
+        lambda payload: captured.update(payload) or {"id": "constraint-session"},
+    )
+    monkeypatch.setattr(acceptance, "create_signal", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        acceptance,
+        "run_replay",
+        lambda *args, **kwargs: {"tradingDays": 2, "reports": [{}, {}]},
+    )
+    monkeypatch.setattr(
+        acceptance,
+        "list_orders",
+        lambda session_id: [
+            {"status": "filled", "reason": None},
+            {"status": "rejected", "reason": "max_positions"},
+        ],
+    )
+
+    result = acceptance._run_single_reason(
+        "max_positions",
+        ["600519", "000001"],
+        "000300",
+        "tushare",
+        "2024-01-03",
+        "2024-01-04",
+        reference_coverage={},
+    )
+
+    assert captured["watchlist"] == "600519,000001"
+    assert result["passed"] is True
+
+
 def test_cleanup_report_artifacts_dry_run_does_not_delete(tmp_path, monkeypatch, capsys):
     configure_temp_db(tmp_path, monkeypatch)
 

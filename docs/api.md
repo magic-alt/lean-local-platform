@@ -6,7 +6,14 @@ token from `LEAN_API_TOKEN` or the 0600 runtime token file; the frontend proxy
 uses the same protected local session. Disabling authentication is permitted
 only in explicitly isolated tests.
 
-Last reviewed: 2026-07-26. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide.
+Last reviewed: 2026-08-04. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide. The final-seal release keeps the existing 233-path contract: no page or API was added. The retired legacy `/api/paper` session surface remains unavailable; acceptance-only shadow replay calls the internal service directly and Paper Account remains the supported production interface.
+
+The API production boundary is local A-share daily Research, LEAN Backtest,
+Optimization, Reports and Paper Account. Unsupported asset/resolution/live
+requests and incomplete PIT inputs must be rejected or explicitly reported as
+research/preview-only. Health may report execution as available while operational
+readiness is degraded; unattended scheduling is fail-closed when no external
+alert delivery has a persisted success.
 
 ## Common Behavior
 

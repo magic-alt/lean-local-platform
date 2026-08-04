@@ -1,6 +1,8 @@
 # Roadmap
 
-Last reviewed: 2026-07-26. LEAN remains the only production backtest engine. Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), the [2026-07-25 P0 trust release](history/p0-trust-release-2026-07-25.md), and the [history index](history/README.md).
+Last reviewed: 2026-08-04. LEAN remains the only production backtest engine. The current final-seal decision in `docs/audit/final-seal-certification-2026-08-04.md` is `NOT_CERTIFIED`: P0=0, P1=3 and P2=1. The frozen production boundary is local single-machine A-share daily Research, LEAN Backtest, Optimization, Reports and Paper Account. Cross-asset, live trading, minute/Tick, incomplete PIT windows and unattended operation without a working alert channel remain research-only, preview-only, disabled or fail-closed.
+
+Historical issues and point-in-time evidence are retained in the [2026-07 platform audit](history/platform-audit-2026-07.md), the [2026-07-22 independent audit](history/independent-audit-2026-07-22.md), the [2026-07-23 remediation tracker](history/independent-audit-remediation-2026-07-23.md), the [2026-07-24 independent re-audit](history/independent-audit-2026-07-24.md), the [2026-07-25 P0 trust release](history/p0-trust-release-2026-07-25.md), `docs/audit/actual-environment-system-review-2026-08-02.md`, and the [history index](history/README.md).
 
 ## Level 3: Reliable Backtest Chain
 
