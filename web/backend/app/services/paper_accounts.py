@@ -2673,6 +2673,22 @@ def schedule_due_deployments(now: datetime | None = None) -> dict[str, Any]:
     return {"queued": queued, "waitingData": waiting}
 
 
+def _resume_interrupted_backtest(paper_run: dict[str, Any]) -> str:
+    from celery import chain
+
+    from ..tasks.worker import finalize_paper_walkforward_task, run_backtest_task
+
+    workflow = chain(
+        run_backtest_task.si(
+            str(paper_run["task_id"]),
+            str(paper_run["backtest_run_id"]),
+        ),
+        finalize_paper_walkforward_task.si(str(paper_run["id"])),
+    )
+    dispatched = workflow.apply_async()
+    return str(dispatched.id)
+
+
 def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, stale_minutes))).isoformat()
     with db() as connection:
@@ -2687,6 +2703,7 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
             ).fetchall()
         )
     recovered: list[str] = []
+    resumed: list[str] = []
     failed: list[str] = []
     for cycle in rows:
         paper_run = paper_runtime.get_walkforward_run(str(cycle.get("paper_run_id") or ""))
@@ -2713,6 +2730,31 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
                         ).fetchone()
                     )
                 runner_status = str((runner or {}).get("status") or "")
+                if backtest_status in {"queued", "running"} and runner_status == "success":
+                    replacement_task_id = _resume_interrupted_backtest(paper_run)
+                    with db() as connection:
+                        connection.execute(
+                            """
+                            update paper_execution_cycles
+                            set updated_at=?,version=version+1
+                            where id=?
+                            """,
+                            (utc_now(), cycle["id"]),
+                        )
+                        _append_cycle_event(
+                            connection,
+                            cycle["id"],
+                            str(cycle["status"]),
+                            str(cycle["status"]),
+                            "lean_postprocessing_recovered",
+                            {
+                                "paperRunId": paper_run["id"],
+                                "backtestRunId": paper_run.get("backtest_run_id"),
+                                "replacementTaskId": replacement_task_id,
+                            },
+                        )
+                    resumed.append(cycle["id"])
+                    continue
                 if backtest_status in {"failed", "cancelled"} or runner_status == "failed":
                     reason = str(
                         backtest.get("error")
@@ -2733,7 +2775,7 @@ def recover_orphaned_cycles(stale_minutes: int = 15) -> dict[str, Any]:
         except Exception as exc:
             fail_cycle(cycle["id"], "recovery_failed", str(exc))
             failed.append(cycle["id"])
-    return {"recovered": recovered, "failed": failed}
+    return {"recovered": recovered, "resumed": resumed, "failed": failed}
 
 
 def get_overview(account_id: str) -> dict[str, Any]:

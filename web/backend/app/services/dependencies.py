@@ -209,10 +209,13 @@ def check_backtest_worker() -> dict[str, Any]:
 
 def _delegated_runner_checks(worker: dict[str, Any]) -> list[dict[str, Any]]:
     available = bool(worker.get("ok"))
+    worker_detail = worker.get("detail")
+    workers = worker_detail.get("workers") or [] if isinstance(worker_detail, dict) else []
     detail = {
         "mode": "delegated_to_backtest_worker",
         "localDockerSocket": False,
-        "workers": (worker.get("detail") or {}).get("workers") or [],
+        "workers": workers,
+        **({"workerError": worker_detail} if isinstance(worker_detail, str) and worker_detail else {}),
     }
     return [
         {"service": "docker", "ok": available, "detail": detail},

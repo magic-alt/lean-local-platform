@@ -59,6 +59,20 @@ def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeyp
     assert items["lean_runner"]["detail"]["mode"] == "delegated_to_backtest_worker"
 
 
+def test_delegated_runner_checks_preserve_worker_failure_without_crashing():
+    checks = dependencies._delegated_runner_checks(
+        {
+            "service": "backtest_worker",
+            "ok": False,
+            "detail": "celery ping timed out",
+        }
+    )
+
+    assert all(item["ok"] is False for item in checks)
+    assert all(item["detail"]["workers"] == [] for item in checks)
+    assert all(item["detail"]["workerError"] == "celery ping timed out" for item in checks)
+
+
 def test_scheduled_automation_without_alert_channel_is_degraded(monkeypatch):
     monkeypatch.setattr(dependencies, "SCHEDULED_AUTOMATION_ENABLED", True)
     monkeypatch.setattr(dependencies, "external_alert_channel_configured", lambda: False)

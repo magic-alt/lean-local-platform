@@ -204,7 +204,7 @@
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/alert-deliveries/health` | Alert Delivery Health | - | `200` - |
 | `POST` | `/api/alert-deliveries/requeue-dead-letter` | Requeue Alert Dead Letters | - | `200` - |
-| `GET` | `/api/alert-events` | Alert Events | `status` (query)<br>`limit` (query) | `200` - |
+| `GET` | `/api/alert-events` | Alert Events | `status` (query)<br>`limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `POST` | `/api/alert-events/{alert_id}/acknowledge` | Acknowledge Alert | `alert_id` (path, required) | `200` - |
 | `POST` | `/api/alert-events/{alert_id}/resolve` | Resolve Alert | `alert_id` (path, required) | `200` - |
 | `GET` | `/api/operational/resources` | Operational Resources | - | `200` - |

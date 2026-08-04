@@ -15,16 +15,10 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return undefined;
           }
-          if (id.includes("/echarts/lib/chart/")) {
-            return "vendor-echarts-charts";
-          }
-          if (id.includes("/echarts/lib/component/")) {
-            return "vendor-echarts-components";
-          }
-          if (id.includes("/zrender/")) {
-            return "vendor-echarts-renderer";
-          }
-          if (id.includes("/echarts/")) {
+          // ECharts and zrender contain intentional cross-package cycles. Keep
+          // them in one chunk so Rollup does not turn those cycles into chunk
+          // initialization-order warnings.
+          if (id.includes("/echarts/") || id.includes("/zrender/")) {
             return "vendor-echarts";
           }
           if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router-dom/")) {

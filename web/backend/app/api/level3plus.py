@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from .common import PageEnvelope
 from ..services.alerts import (
+    count_alert_events,
     list_alert_events,
     notification_delivery_health,
     requeue_dead_letter_deliveries,
@@ -49,9 +51,20 @@ def pipeline_run(run_id: str):
     return payload
 
 
-@router.get("/alert-events")
-def alert_events(status: str | None = None, limit: int = 100):
-    return {"items": list_alert_events(status=status, limit=limit), "limit": limit}
+@router.get("/alert-events", response_model=PageEnvelope)
+def alert_events(status: str | None = None, limit: int = 20, offset: int = 0):
+    bounded_limit = max(1, min(int(limit), 100))
+    bounded_offset = max(0, int(offset))
+    return {
+        "items": list_alert_events(
+            status=status,
+            limit=bounded_limit,
+            offset=bounded_offset,
+        ),
+        "count": count_alert_events(status=status),
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
 
 
 @router.post("/alert-events/{alert_id}/acknowledge")

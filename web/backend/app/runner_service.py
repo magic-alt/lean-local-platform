@@ -179,10 +179,10 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
         {"source": data_dir, "target": "/Lean/Data", "mode": "ro"},
         {"source": results_dir, "target": "/Lean/Results", "mode": "rw"},
         {"source": storage_dir, "target": "/Lean/Launcher/bin/Debug/storage", "mode": "rw"},
-        {"source": project_dir, "target": "/Lean/Project", "mode": "ro"},
+        {"source": project_dir, "target": "/Lean/Staging/Project", "mode": "ro"},
     ]
     if support_dir:
-        mounts.append({"source": support_dir, "target": "/Lean/Run", "mode": "ro"})
+        mounts.append({"source": support_dir, "target": "/Lean/Staging/Run", "mode": "ro"})
     docker = shutil.which("docker")
     if not docker:
         raise HTTPException(status_code=503, detail="runner_docker_unavailable")
@@ -208,7 +208,24 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
         "PYTHONDONTWRITEBYTECODE=1",
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
+        "--tmpfs",
+        "/Lean/Project:rw,noexec,nosuid,nodev,size=64m",
     ]
+    stage_commands = ["cp -a /Lean/Staging/Project/. /Lean/Project/"]
+    if support_dir:
+        command.extend(
+            ["--tmpfs", "/Lean/Run:rw,noexec,nosuid,nodev,size=64m"]
+        )
+        # The support directory is the whole run root and also contains the
+        # growing results tree. Copy only the fixed, server-owned inputs; a
+        # recursive copy can race output creation and stall Docker Desktop's
+        # bind filesystem for minutes.
+        stage_commands.append(
+            "for file in ashare_execution.py ashare_trade_status.json "
+            "ashare-trend-pullback-input.json.gz hk_execution.py trace-context.json; "
+            "do if [ -f /Lean/Staging/Run/$file ]; then "
+            "cp /Lean/Staging/Run/$file /Lean/Run/$file; fi; done"
+        )
     if job.traceId:
         command.extend(["-e", f"LEAN_TRACE_ID={job.traceId}"])
     if job.workflowId:
@@ -218,7 +235,11 @@ def _validate_job(job: RunnerJob) -> dict[str, Any]:
     for mount in mounts:
         suffix = ":ro" if mount["mode"] == "ro" else ""
         command.extend(["-v", f"{mount['source']}:{mount['target']}{suffix}"])
-    command.append(job.image)
+    command.extend(["--entrypoint", "/bin/sh", job.image, "-c"])
+    stage_commands.append(
+        "exec dotnet /Lean/Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll"
+    )
+    command.append(" && ".join(stage_commands))
 
     spec = {
         "schemaVersion": 2,

@@ -72,9 +72,10 @@ web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current latest migration is 0035; every
-  migration has a compensating or explicit irreversible recovery policy in
-  `migrations/rollback_policy.json`. Applied SQL files remain checksum-immutable.
+  Ordered MySQL schema migrations. The current revision is derived from the
+  ordered migration files and verified against `schema_migrations` at runtime;
+  every migration has a compensating or explicit irreversible recovery policy
+  in `migrations/rollback_policy.json`. Applied SQL files remain checksum-immutable.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.

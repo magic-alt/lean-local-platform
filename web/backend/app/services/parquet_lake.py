@@ -402,11 +402,16 @@ def _market_source_lineage(
     if end_date:
         predicates.append("m.trade_date <= ?")
         params.append(end_date)
+    lineage_table = (
+        "market_daily_bars m force index (idx_market_daily_lineage)"
+        if database_backend() == "mysql"
+        else "market_daily_bars m"
+    )
     with db() as connection:
         grouped_rows = connection.execute(
             f"""
             select m.batch_id, m.symbol, count(*) as row_count
-            from market_daily_bars m
+            from {lineage_table}
             where {" and ".join(predicates)}
             group by m.batch_id, m.symbol
             """,

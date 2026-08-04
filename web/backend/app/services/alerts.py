@@ -527,7 +527,26 @@ def emit_alert(
     return item
 
 
-def list_alert_events(status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def count_alert_events(status: str | None = None) -> int:
+    clauses = []
+    params: list[Any] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    sql = "select count(*) as count from alert_events"
+    if clauses:
+        sql += " where " + " and ".join(clauses)
+    with db() as connection:
+        row = connection.execute(sql, params).fetchone()
+    return int(row["count"] or 0) if row else 0
+
+
+def list_alert_events(
+    status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    delivery_limit: int = 3,
+) -> list[dict[str, Any]]:
     clauses = []
     params: list[Any] = []
     if status:
@@ -536,25 +555,55 @@ def list_alert_events(status: str | None = None, limit: int = 100) -> list[dict[
     sql = "select * from alert_events"
     if clauses:
         sql += " where " + " and ".join(clauses)
-    sql += " order by last_seen_at desc limit ?"
-    params.append(max(1, min(int(limit), 1000)))
+    sql += " order by last_seen_at desc limit ? offset ?"
+    params.extend(
+        (
+            max(1, min(int(limit), 100)),
+            max(0, int(offset)),
+        )
+    )
     with db() as connection:
         rows = connection.execute(sql, params).fetchall()
         alert_items = rows_to_dicts(rows)
         alert_ids = [str(item["id"]) for item in alert_items]
         deliveries: dict[str, list[dict[str, Any]]] = {alert_id: [] for alert_id in alert_ids}
+        delivery_counts: dict[str, int] = {alert_id: 0 for alert_id in alert_ids}
         if alert_ids:
             placeholders = ",".join("?" for _ in alert_ids)
-            delivery_rows = rows_to_dicts(
+            count_rows = rows_to_dicts(
                 connection.execute(
-                    f"select * from alert_deliveries where alert_id in ({placeholders}) order by updated_at desc",
+                    f"select alert_id,count(*) as count from alert_deliveries "
+                    f"where alert_id in ({placeholders}) group by alert_id",
                     alert_ids,
                 ).fetchall()
             )
+            delivery_counts.update(
+                {str(item["alert_id"]): int(item["count"] or 0) for item in count_rows}
+            )
+            bounded_delivery_limit = max(0, min(int(delivery_limit), 10))
+            delivery_rows = rows_to_dicts(
+                connection.execute(
+                    f"""
+                    select * from (
+                        select delivery.*,
+                               row_number() over (
+                                   partition by delivery.alert_id order by delivery.updated_at desc
+                               ) as delivery_rank
+                        from alert_deliveries delivery
+                        where delivery.alert_id in ({placeholders})
+                    ) ranked
+                    where delivery_rank<=?
+                    order by updated_at desc
+                    """,
+                    [*alert_ids, bounded_delivery_limit],
+                ).fetchall()
+            ) if bounded_delivery_limit else []
             for delivery in delivery_rows:
+                delivery.pop("delivery_rank", None)
                 deliveries.setdefault(str(delivery["alert_id"]), []).append(delivery)
     for item in alert_items:
         item["deliveries"] = deliveries.get(str(item["id"]), [])
+        item["deliveryCount"] = delivery_counts.get(str(item["id"]), 0)
     return alert_items
 
 

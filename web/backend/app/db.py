@@ -2002,6 +2002,10 @@ def init_db() -> None:
                 error_message = coalesce(error_message, error, 'Backend restarted while run was active.'),
                 finished_at = coalesce(finished_at, ?)
             where status in ('queued', 'running', 'interrupted')
+              and not exists (
+                  select 1 from restricted_runner_jobs runner
+                  where runner.run_id=backtest_runs.id and runner.status='success'
+              )
             """,
             (utc_now(),),
         )
@@ -2012,6 +2016,12 @@ def init_db() -> None:
                 error = coalesce(error, 'Backend restarted while task was active.'),
                 finished_at = coalesce(finished_at, ?)
             where status in ('queued', 'running', 'interrupted')
+              and not exists (
+                  select 1 from backtest_runs run
+                  join restricted_runner_jobs runner
+                    on runner.run_id=run.id and runner.status='success'
+                  where run.task_id=tasks.id
+              )
             """,
             (utc_now(),),
         )

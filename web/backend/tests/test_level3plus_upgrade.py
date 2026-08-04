@@ -211,7 +211,13 @@ def test_pipeline_and_alert_api(tmp_path, monkeypatch):
     client = TestClient(app)
     assert client.get("/api/pipeline-runs").status_code == 200
     assert client.get(f"/api/pipeline-runs/{run['id']}").json()["steps"][0]["step_name"] == "environment_check"
-    assert client.get("/api/alert-events").json()["items"][0]["id"] == alert["id"]
+    alert_page = client.get("/api/alert-events").json()
+    assert alert_page["items"][0]["id"] == alert["id"]
+    assert alert_page["count"] == 1
+    assert alert_page["limit"] == 20
+    assert alert_page["offset"] == 0
+    assert len(alert_page["items"][0]["deliveries"]) <= 3
+    assert alert_page["items"][0]["deliveryCount"] >= len(alert_page["items"][0]["deliveries"])
     assert client.post(f"/api/alert-events/{alert['id']}/acknowledge").status_code == 200
 
 

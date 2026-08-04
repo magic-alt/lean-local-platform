@@ -568,6 +568,83 @@ def test_successful_paper_finalization_redelivery_is_noop(monkeypatch):
     assert paper.finalize_walkforward_run("paper-run") == completed
 
 
+def test_first_walkforward_child_establishes_account_specific_history_baseline(monkeypatch):
+    from app.services import paper
+
+    source_order = {
+        "time": "2024-01-02T01:30:00Z",
+        "symbol": "600519",
+        "side": "buy",
+        "quantity": 500,
+        "price": 1700,
+        "status": "filled",
+    }
+    account_sized_order = {**source_order, "quantity": 1500}
+    new_order = {**account_sized_order, "time": "2024-01-03T01:30:00Z", "side": "sell"}
+    monkeypatch.setattr(
+        paper,
+        "get_backtest",
+        lambda run_id: {"id": run_id, "parameters": {"end": "2024-01-02"}},
+    )
+
+    baseline_date, prior_orders, reconciliation = paper._history_reconciliation(
+        {
+            "id": "account-session",
+            "source_backtest_id": "trusted-source",
+            "last_processed_date": None,
+        },
+        {"id": "account-child"},
+        {"orders": [account_sized_order, new_order]},
+    )
+
+    assert baseline_date == "2024-01-02"
+    assert prior_orders == [account_sized_order]
+    assert reconciliation["mode"] == "account_initialization"
+    assert reconciliation["baselineRunId"] == "account-child"
+    assert reconciliation["passed"] is True
+
+    monkeypatch.setattr(
+        paper,
+        "list_walkforward_runs",
+        lambda session_id: [
+            {
+                "status": "success",
+                "trade_date": "2024-01-02",
+                "backtest_run_id": "previous-account-child",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        paper,
+        "get_result",
+        lambda run_id: {"orders": [account_sized_order]} if run_id == "previous-account-child" else None,
+    )
+    _, _, next_reconciliation = paper._history_reconciliation(
+        {
+            "id": "account-session",
+            "source_backtest_id": "trusted-source",
+            "last_processed_date": "2024-01-02",
+        },
+        {"id": "next-child"},
+        {"orders": [account_sized_order, new_order]},
+    )
+    assert next_reconciliation["mode"] == "previous_paper_run"
+    assert next_reconciliation["baselineRunId"] == "previous-account-child"
+    assert next_reconciliation["passed"] is True
+
+    drifted_order = {**account_sized_order, "quantity": 1400}
+    _, _, drifted = paper._history_reconciliation(
+        {
+            "id": "account-session",
+            "source_backtest_id": "trusted-source",
+            "last_processed_date": "2024-01-02",
+        },
+        {"id": "drifted-child"},
+        {"orders": [drifted_order, new_order]},
+    )
+    assert drifted["passed"] is False
+
+
 def test_paper_replay_auto_signal_executes_before_generating_next_signal(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     import_rows_for_symbol("600519")
@@ -869,6 +946,37 @@ def test_lean_paper_requires_and_freezes_a_validation_passed_backtest(tmp_path, 
 
     candidates = trusted_backtest_candidates("project-macd")
     assert [item["id"] for item in candidates] == ["trusted-run"]
+
+    with db() as connection:
+        connection.execute(
+            "update backtest_runs set parameters_json=? where id=?",
+            (
+                json_dump({
+                    **parameters,
+                    "strategyMode": "SCREENING",
+                    "researchOnly": True,
+                    "tradable": False,
+                    "admissionEligible": False,
+                }),
+                "trusted-run",
+            ),
+        )
+    assert trusted_backtest_candidates("project-macd") == []
+    with pytest.raises(ValueError, match="Research-only or screening"):
+        create_session(
+            {
+                "mode": "lean_walkforward",
+                "name": "Invalid screening paper",
+                "projectId": "project-macd",
+                "sourceBacktestId": "trusted-run",
+                "startDate": "2026-07-14",
+            }
+        )
+    with db() as connection:
+        connection.execute(
+            "update backtest_runs set parameters_json=? where id=?",
+            (json_dump(parameters), "trusted-run"),
+        )
 
     session = create_session(
         {

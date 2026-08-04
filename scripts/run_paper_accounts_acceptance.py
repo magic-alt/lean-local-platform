@@ -28,6 +28,7 @@ from app.services.paper_accounts import (  # noqa: E402
     mark_projection_history_trusted,
     verify_projection_history,
 )
+from app.services.paper_certification import rebind_collecting_cohort_members  # noqa: E402
 
 
 MIN_TRADING_DAYS = 21
@@ -51,7 +52,7 @@ def _acceptance_contract(
         raise ValueError(f"paper_acceptance_requires_at_least_{MIN_ACCOUNTS}_accounts")
     if len(cash_values) != accounts:
         raise ValueError("initial_cash_count_must_equal_accounts")
-    normalized_cash = [str(int(item)) for item in cash_values]
+    normalized_cash = [str(int(Decimal(str(item)))) for item in cash_values]
     if any(int(item) <= 0 for item in normalized_cash):
         raise ValueError("initial_cash_must_be_positive")
     if len(set(normalized_cash)) < MIN_ACCOUNTS:
@@ -292,17 +293,19 @@ def _existing_scope(
             (
                 item
                 for item in items
-                if bool(item.get("is_primary")) and item.get("status") in {"active", "paused"}
+                if bool(item.get("is_primary"))
+                and item.get("status") in {"active", "paused", "error"}
             ),
             None,
         )
         if primary is None:
             raise RuntimeError(f"active_primary_deployment_missing:{account['id']}")
-        if primary["status"] == "paused":
+        if primary["status"] in {"paused", "error"}:
+            action = "activate" if primary["status"] == "error" else "resume"
             primary = _expect(
-                *_api(base_url, "POST", f"/api/paper/deployments/{primary['id']}/activate"),
+                *_api(base_url, "POST", f"/api/paper/deployments/{primary['id']}/{action}"),
                 {200},
-                "activate_deployment",
+                f"{action}_deployment",
             )
         if account["status"] != "active":
             _expect(
@@ -317,11 +320,13 @@ def _existing_scope(
             trusted = connection.execute(
                 """
                 select run.id from backtest_runs run
-                join dataset_releases release on release.id=run.dataset_release_id
+                join dataset_releases dataset_release on dataset_release.id=run.dataset_release_id
                 join reproducibility_certificates certificate
                   on certificate.id=run.reproducibility_certificate_id
                 where run.id=? and run.status='success' and run.trust_status='trusted'
-                  and release.status='active' and release.is_production=1 and release.is_certified=1
+                  and dataset_release.status='active'
+                  and dataset_release.is_production=1
+                  and dataset_release.is_certified=1
                   and certificate.status='valid'
                 """,
                 (deployment["source_backtest_id"],),
@@ -468,27 +473,57 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     cycles: list[dict[str, Any]] = []
+    if existing_mode:
+        for account in accounts:
+            existing_cycles = _expect(
+                *_api(
+                    args.base_url,
+                    "GET",
+                    f"/api/paper/accounts/{account['id']}/cycles?limit=200",
+                ),
+                {200},
+                "existing_cycles",
+            )
+            cycles.extend(
+                item for item in existing_cycles.get("items") or []
+                if item.get("status") == "succeeded"
+            )
     idempotency: list[dict[str, Any]] = []
     next_dates: list[str | None] = [args.trading_date for _ in accounts]
     for _date_index in range(contract["requiredTradingDays"]):
-        with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
-            futures = [
-                pool.submit(
+        completed_dates = {
+            str(account["id"]): {
+                str(item["trading_date"])
+                for item in cycles
+                if str(item["paper_account_id"]) == str(account["id"])
+                and item.get("status") == "succeeded"
+            }
+            for account in accounts
+        }
+        pending_indexes = [
+            index
+            for index, account in enumerate(accounts)
+            if len(completed_dates[str(account["id"])]) < contract["requiredTradingDays"]
+        ]
+        if not pending_indexes:
+            break
+        with ThreadPoolExecutor(max_workers=len(pending_indexes)) as pool:
+            futures = {
+                index: pool.submit(
                     _dispatch_cycle,
                     args.base_url,
-                    account["id"],
-                    deployment["id"],
+                    accounts[index]["id"],
+                    deployments[index]["id"],
                     next_dates[index],
                     args.timeout,
                 )
-                for index, (account, deployment) in enumerate(
-                    zip(accounts, deployments, strict=True)
-                )
-            ]
-            completed_items = [future.result() for future in futures]
-        for index, ((completed, duplicate_evidence), deployment) in enumerate(
-            zip(completed_items, deployments, strict=True)
-        ):
+                for index in pending_indexes
+            }
+            completed_items = {
+                index: future.result() for index, future in futures.items()
+            }
+        for index, (completed, duplicate_evidence) in completed_items.items():
+            deployment = deployments[index]
             cycles.append(completed)
             idempotency.append(duplicate_evidence)
             next_status, next_payload = _api(
@@ -581,6 +616,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not all(item["passed"] for item in projection_verification):
         raise RuntimeError(f"projection_history_verification_failed:{projection_verification}")
     data_trust = [mark_projection_history_trusted(item) for item in projection_verification]
+    current_bindings = {
+        str(member["paper_account_id"]): str(member.get("deployment_id") or "")
+        for member in cohort.get("members") or []
+    }
+    requested_bindings = {
+        str(account["id"]): str(deployment["id"])
+        for account, deployment in zip(accounts, deployments, strict=True)
+    }
+    if current_bindings != requested_bindings:
+        cohort = rebind_collecting_cohort_members(str(cohort["id"]), requested_bindings)
     cohort = _expect(
         *_api(
             args.base_url,
@@ -642,8 +687,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "account_isolation",
                 "concurrent_multi_account_dispatch",
                 "ledger_digest_replay",
-                "waiting_data_recovery",
-                "six_checkpoint_recovery",
+                *(["waiting_data_recovery"] if args.require_waiting_data else []),
+                *(["six_checkpoint_recovery"] if args.with_fault else []),
             ],
         },
         "accountIds": [account["id"] for account in accounts],
@@ -668,6 +713,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "idempotency": idempotency,
         "failureRejectEvidence": {
+            "fillCounts": [item["fill_count"] for item in cycles],
             "rejectedCounts": [item["rejected_count"] for item in cycles],
             "signalCounts": [item["signal_count"] for item in cycles],
         },

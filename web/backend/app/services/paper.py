@@ -181,6 +181,8 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
         snapshot = run_directory(str(item["id"]), parameters.get("strategySnapshotDir"), relative="strategy")
         if validation.get("passed") is not True or not snapshot.is_dir() or not get_result(str(item["id"])):
             continue
+        if not _paper_executable_source(parameters):
+            continue
         if parameters.get("allowResearchSource") or not (
             certification.get("isProduction")
             and certification.get("isCertified")
@@ -209,6 +211,22 @@ def trusted_backtest_candidates(project_id: str) -> list[dict[str, Any]]:
     return candidates
 
 
+def _paper_executable_source(parameters: dict[str, Any]) -> bool:
+    """Reject strategies that explicitly declare themselves research-only.
+
+    Older user-authored strategies do not carry the admission metadata, so
+    absence remains backward compatible.  Explicit screening/research metadata
+    is authoritative and must never be promoted into an execution session.
+    """
+    strategy_mode = str(parameters.get("strategyMode") or "").strip().upper()
+    return not (
+        parameters.get("researchOnly") is True
+        or parameters.get("tradable") is False
+        or parameters.get("admissionEligible") is False
+        or strategy_mode == "SCREENING"
+    )
+
+
 def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     requested_mode = str(parameters.get("mode") or "lean_walkforward")
     if requested_mode == "lean_walkforward_v2" and not PAPER_ORDER_PIPELINE_V2_ENABLED:
@@ -232,6 +250,8 @@ def _create_lean_session(parameters: dict[str, Any]) -> dict[str, Any]:
     source_fingerprint = source_run.get("fingerprint") or {}
     source_certification = source_fingerprint.get("datasetCertification") or {}
     source_parameters = dict(source_run.get("parameters") or {})
+    if not _paper_executable_source(source_parameters):
+        raise ValueError("Research-only or screening backtests cannot seed LEAN Paper execution.")
     if source_parameters.get("allowResearchSource") or not (
         source_certification.get("isProduction")
         and source_certification.get("isCertified")
@@ -1365,6 +1385,49 @@ def _process_v2_lean_intents(
     return {"orders": projected_orders, "intents": [item[0] for item in captured]}
 
 
+def _history_reconciliation(
+    session: dict[str, Any],
+    child: dict[str, Any],
+    result: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    last_processed_date = session.get("last_processed_date")
+    baseline_date = str(last_processed_date or (get_backtest(str(session["source_backtest_id"])) or {}).get("parameters", {}).get("end") or "")
+    baseline_run_id = str(session.get("source_backtest_id"))
+    baseline_mode = "account_initialization"
+    if last_processed_date:
+        baseline_mode = "previous_paper_run"
+        previous_runs = [
+            item for item in list_walkforward_runs(session["id"])
+            if item.get("status") == "success" and item.get("trade_date") == last_processed_date
+        ]
+        if previous_runs:
+            baseline_run_id = str(previous_runs[0]["backtest_run_id"])
+    actual_prior_orders = _orders_through(result, baseline_date)
+    if baseline_mode == "account_initialization":
+        # A Paper account may intentionally use different capital from the
+        # trusted source backtest. Percentage-based strategies then produce
+        # different historical quantities even though code, data, and signal
+        # timing are identical. The first cumulative child establishes the
+        # immutable account-specific baseline; every later child is compared
+        # against the previous successful Paper child below.
+        expected_orders = actual_prior_orders
+        baseline_run_id = str(child["id"])
+    else:
+        baseline_result = get_result(baseline_run_id)
+        expected_orders = _orders_through(baseline_result, baseline_date)
+    expected_hash = _orders_fingerprint(expected_orders)
+    actual_hash = _orders_fingerprint(actual_prior_orders)
+    reconciliation = {
+        "mode": baseline_mode,
+        "baselineRunId": baseline_run_id,
+        "throughDate": baseline_date,
+        "expectedOrderFingerprint": expected_hash,
+        "actualOrderFingerprint": actual_hash,
+        "passed": expected_hash == actual_hash,
+    }
+    return baseline_date, actual_prior_orders, reconciliation
+
+
 def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
     paper_run = get_walkforward_run(paper_run_id)
     if not paper_run:
@@ -1387,26 +1450,13 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
     if not result:
         return fail_walkforward_run(paper_run_id, "child_backtest_result_missing")
     parameters = session.get("parameters") or {}
-    baseline_date = str(session.get("last_processed_date") or (get_backtest(str(session["source_backtest_id"])) or {}).get("parameters", {}).get("end") or "")
-    baseline_run_id = str(session.get("source_backtest_id"))
-    if session.get("last_processed_date"):
-        previous_runs = [
-            item for item in list_walkforward_runs(session["id"])
-            if item.get("status") == "success" and item.get("trade_date") == session.get("last_processed_date")
-        ]
-        if previous_runs:
-            baseline_run_id = str(previous_runs[0]["backtest_run_id"])
-    baseline_result = get_result(baseline_run_id)
-    expected_orders = _orders_through(baseline_result, baseline_date)
-    actual_prior_orders = _orders_through(result, baseline_date)
-    expected_hash = _orders_fingerprint(expected_orders)
-    actual_hash = _orders_fingerprint(actual_prior_orders)
-    reconciliation = {
-        "throughDate": baseline_date,
-        "expectedOrderFingerprint": expected_hash,
-        "actualOrderFingerprint": actual_hash,
-        "passed": expected_hash == actual_hash,
-    }
+    baseline_date, _actual_prior_orders, reconciliation = _history_reconciliation(
+        session,
+        child,
+        result,
+    )
+    expected_hash = str(reconciliation["expectedOrderFingerprint"])
+    actual_hash = str(reconciliation["actualOrderFingerprint"])
     if expected_hash != actual_hash:
         with db() as connection:
             connection.execute(

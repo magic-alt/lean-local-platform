@@ -35,6 +35,26 @@ def test_restricted_runner_builds_fixed_command_from_structured_paths(monkeypatc
     assert "--cap-drop" in spec["command"]
     assert "--privileged" not in spec["command"]
     assert "--mount" not in spec["command"]
+    assert "/Lean/Project:rw,noexec,nosuid,nodev,size=64m" in spec["command"]
+    assert [item["target"] for item in spec["mounts"] if item["source"].endswith("/strategy")] == [
+        "/Lean/Staging/Project"
+    ]
+    assert spec["command"][-2] == "-c"
+    assert "cp -a /Lean/Staging/Project/. /Lean/Project/" in spec["command"][-1]
+
+
+def test_restricted_runner_stages_only_allowlisted_support_inputs(monkeypatch):
+    monkeypatch.setattr(runner_service.shutil, "which", lambda name: "/usr/bin/docker")
+    payload = _valid_payload()
+    payload["supportDir"] = f"{runner_service.HOST_PLATFORM_DIR}/web/runtime/runs/unit"
+
+    spec = runner_service._validate_job(runner_service.RunnerJob(**payload))
+    stage_command = spec["command"][-1]
+
+    assert "ashare_execution.py" in stage_command
+    assert "ashare_trade_status.json" in stage_command
+    assert "cp -a /Lean/Staging/Run/." not in stage_command
+    assert "/Lean/Staging/Run/results" not in stage_command
 
 
 @pytest.mark.parametrize(

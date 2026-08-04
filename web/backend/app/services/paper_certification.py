@@ -98,6 +98,83 @@ def create_cohort(
     return refresh_cohort(cohort_id)
 
 
+def rebind_collecting_cohort_members(
+    cohort_id: str,
+    deployment_ids: dict[str, str],
+) -> dict[str, Any]:
+    """Rebind an empty collecting cohort to explicit replacement deployments.
+
+    Cohort evidence becomes immutable as soon as any member has certified
+    sessions or the cohort leaves ``collecting``.  Before that point a source
+    admission fix may legitimately replace a deployment; requiring explicit
+    account-to-deployment IDs keeps that repair auditable and prevents an
+    implicit switch to whichever deployment happens to be newest.
+    """
+    now = utc_now()
+    with db() as connection:
+        cohort = row_to_dict(
+            connection.execute(
+                "select * from paper_certification_cohorts where id=?",
+                (cohort_id,),
+            ).fetchone()
+        )
+        if not cohort:
+            raise KeyError("Paper certification cohort not found.")
+        if cohort["status"] != "collecting":
+            raise ValueError("Certified or invalid cohort bindings are immutable.")
+        members = rows_to_dicts(
+            connection.execute(
+                "select * from paper_certification_members where cohort_id=?",
+                (cohort_id,),
+            ).fetchall()
+        )
+        expected_accounts = {str(member["paper_account_id"]) for member in members}
+        if set(deployment_ids) != expected_accounts:
+            raise ValueError("Deployment bindings must cover every cohort member exactly once.")
+        if any(
+            member["status"] != "collecting" or int(member.get("certified_sessions") or 0) != 0
+            for member in members
+        ):
+            raise ValueError("Cohort bindings are immutable after session evidence is certified.")
+        for member in members:
+            account_id = str(member["paper_account_id"])
+            deployment = row_to_dict(
+                connection.execute(
+                    """
+                    select * from paper_strategy_deployments
+                    where id=? and paper_account_id=? and is_primary=1
+                    """,
+                    (deployment_ids[account_id], account_id),
+                ).fetchone()
+            )
+            if not deployment or deployment["status"] not in {"active", "paused", "error"}:
+                raise ValueError(f"Current primary deployment is unavailable for account {account_id}.")
+            connection.execute(
+                """
+                update paper_certification_members
+                set deployment_id=?,strategy_fingerprint=?,dataset_fingerprint=?,
+                    status='collecting',certified_sessions=0,evidence_json=null,
+                    evidence_digest=null,refreshed_at=?
+                where id=?
+                """,
+                (
+                    deployment["id"],
+                    deployment["strategy_fingerprint"],
+                    deployment["dataset_fingerprint"],
+                    now,
+                    member["id"],
+                ),
+            )
+        connection.execute(
+            """
+            update paper_certification_cohorts
+            set evidence_digest=null,refreshed_at=? where id=?
+            """,
+            (now, cohort_id),
+        )
+    return get_cohort(cohort_id)
+
+
 def _refresh_member(connection: Any, member: dict[str, Any], required_sessions: int, now: str) -> dict[str, Any]:
     account = connection.execute(
         "select * from paper_accounts where id=?",

@@ -81,6 +81,54 @@ def _deployment(account_id: str, tmp_path: Path, monkeypatch, *, signal_mode: st
     )
 
 
+def test_empty_collecting_cohort_can_rebind_explicit_replacement_deployments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _init()
+    from app.db import db
+    from app.services import paper_accounts, paper_certification
+
+    first = _account("cohort-rebind-a", "1000000")
+    second = _account("cohort-rebind-b", "3000000")
+    first_deployment = _deployment(first["id"], tmp_path, monkeypatch)
+    second_deployment = _deployment(second["id"], tmp_path, monkeypatch)
+    cohort = paper_certification.create_cohort(
+        name="collecting replacement",
+        account_ids=[first["id"], second["id"]],
+    )
+    replacement = paper_accounts.update_deployment(
+        first_deployment["id"],
+        {"universeConfig": {"symbols": ["600519"]}},
+    )
+
+    rebound = paper_certification.rebind_collecting_cohort_members(
+        cohort["id"],
+        {
+            first["id"]: replacement["id"],
+            second["id"]: second_deployment["id"],
+        },
+    )
+
+    bindings = {member["paper_account_id"]: member["deployment_id"] for member in rebound["members"]}
+    assert bindings[first["id"]] == replacement["id"]
+    assert bindings[second["id"]] == second_deployment["id"]
+    assert all(member["certified_sessions"] == 0 for member in rebound["members"])
+    with db() as connection:
+        connection.execute(
+            "update paper_certification_cohorts set status='certified' where id=?",
+            (cohort["id"],),
+        )
+    with pytest.raises(ValueError, match="bindings are immutable"):
+        paper_certification.rebind_collecting_cohort_members(
+            cohort["id"],
+            {
+                first["id"]: replacement["id"],
+                second["id"]: second_deployment["id"],
+            },
+        )
+
+
 def test_account_creation_writes_only_opening_ledger_and_projection() -> None:
     _init()
     from app.db import db
@@ -826,6 +874,116 @@ def test_orphan_recovery_fails_closed_when_restricted_runner_failed(tmp_path, mo
     failed_cycle = paper_accounts.get_cycle(cycle["id"])
     assert failed_cycle["status"] == "failed"
     assert failed_cycle["failure_code"] == "orphaned_lean_run"
+
+
+def test_orphan_recovery_resumes_postprocessing_after_runner_success(tmp_path, monkeypatch) -> None:
+    _init()
+    from app.db import db
+    from app.services import paper_accounts
+
+    account = _account("Postprocessing Recovery Account")
+    deployment = _deployment(account["id"], tmp_path, monkeypatch)
+    cycle = paper_accounts.ensure_cycle(deployment["id"], "2024-02-01")
+    paper_accounts.transition_cycle(
+        cycle["id"],
+        "running",
+        event_type="worker_started",
+        expected={"scheduled"},
+        fields={"paper_run_id": "paper-run-resume", "updated_at": "2020-01-01T00:00:00+00:00"},
+    )
+    paper_run = {
+        "id": "paper-run-resume",
+        "status": "running",
+        "task_id": "backtest-task-resume",
+        "backtest_run_id": "backtest-resume",
+    }
+    monkeypatch.setattr(
+        paper_accounts.paper_runtime,
+        "get_walkforward_run",
+        lambda _run_id: paper_run,
+    )
+    monkeypatch.setattr(
+        paper_accounts,
+        "get_backtest",
+        lambda _run_id: {"id": "backtest-resume", "status": "running"},
+    )
+    resumed: list[dict] = []
+    monkeypatch.setattr(
+        paper_accounts,
+        "_resume_interrupted_backtest",
+        lambda item: resumed.append(item) or "replacement-task",
+    )
+    with db() as connection:
+        connection.execute(
+            """
+            insert into restricted_runner_jobs
+                (id,run_id,spec_digest,image_digest,command_json,mounts_json,
+                 resource_limits_json,network_policy,status,exit_code,created_at,finished_at)
+            values ('runner-success','backtest-resume','digest','image','[]','[]',
+                    '{}','none','success',0,'2020-01-01T00:00:00+00:00',
+                    '2020-01-01T00:01:00+00:00')
+            """
+        )
+    recovered = paper_accounts.recover_orphaned_cycles(stale_minutes=1)
+
+    assert recovered == {"recovered": [], "resumed": [cycle["id"]], "failed": []}
+    assert resumed == [paper_run]
+    current = paper_accounts.get_cycle(cycle["id"])
+    assert current["status"] == "running"
+    with db() as connection:
+        event = connection.execute(
+            """
+            select event_type,payload_json from paper_execution_cycle_events
+            where cycle_id=? order by sequence desc limit 1
+            """,
+            (cycle["id"],),
+        ).fetchone()
+    assert event["event_type"] == "lean_postprocessing_recovered"
+    assert "replacement-task" in event["payload_json"]
+
+
+def test_backend_restart_preserves_run_with_successful_delegated_runner() -> None:
+    _init()
+    from app.db import db, init_db, utc_now
+
+    now = utc_now()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into tasks
+                (id,kind,status,title,parameters_json,log_path,created_at)
+            values ('restart-task','backtest','running','Restart recovery','{}','/tmp/restart.log',?)
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id,task_id,symbol,asset_class,venue,resolution,data_type,parameters_json,
+                 status,docker_image,results_dir,created_at)
+            values ('restart-run','restart-task','600519','equity','china','daily','trade',
+                    '{}','running','lean:test','/tmp/restart-results',?)
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            insert into restricted_runner_jobs
+                (id,run_id,spec_digest,image_digest,command_json,mounts_json,
+                 resource_limits_json,network_policy,status,exit_code,created_at,finished_at)
+            values ('restart-runner','restart-run','digest','image','[]','[]','{}','none',
+                    'success',0,?,?)
+            """,
+            (now, now),
+        )
+
+    init_db()
+
+    with db() as connection:
+        task = connection.execute("select status,error from tasks where id='restart-task'").fetchone()
+        run = connection.execute("select status,error from backtest_runs where id='restart-run'").fetchone()
+    assert dict(task) == {"status": "running", "error": None}
+    assert dict(run) == {"status": "running", "error": None}
 
 
 def test_paper_account_api_validates_lifecycle() -> None:

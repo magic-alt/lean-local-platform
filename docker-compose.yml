@@ -427,7 +427,11 @@ services:
   backtest-worker:
     extends:
       service: worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-2} --queues=backtest --hostname=backtest@%h
+    # Python.NET initialization in the pinned LEAN image is not reliable when
+    # two sibling containers import the same read-only strategy snapshot at
+    # once on Docker Desktop. Keep the safe default serial; operators may raise
+    # it only after validating their runner/filesystem combination.
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-1} --queues=backtest --hostname=backtest@%h
     environment:
       LEAN_RELEASE_ROLE: backtest-worker
       LEAN_RUNNER_URL: http://lean-runner:8010
