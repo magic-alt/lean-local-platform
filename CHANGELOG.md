@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Add a read-only Qlib research bridge with checksum-verified Object Store artifacts, idempotent external-run registration, immutable latest target snapshots, and a fail-closed Backtest draft handoff that never submits orders automatically.
+
 - Add production-only acceptance scripts for remaining actual-environment P1 evidence:
   `run_external_webhook_acceptance.py`, `run_capacity_stability_acceptance.py`,
   and `run_maintenance_stability_acceptance.py`，并补齐对应脚本级别测试；同时更新

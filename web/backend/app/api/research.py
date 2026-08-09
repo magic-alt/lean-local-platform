@@ -65,6 +65,39 @@ class SnapshotRequest(BaseModel):
     researchRunId: str | None = None
 
 
+class QlibArtifactRef(BaseModel):
+    name: str
+    objectKey: str
+    sha256: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    rows: int | None = Field(default=None, ge=0)
+
+
+class QlibTarget(BaseModel):
+    instrument: str
+    targetWeight: float = Field(ge=0, le=1)
+    score: float | None = None
+
+
+class QlibLatestTargets(BaseModel):
+    signalDate: str
+    tradeDate: str
+    targets: list[QlibTarget]
+
+
+class QlibImportRequest(BaseModel):
+    schemaVersion: str
+    externalRunId: str
+    runKind: str
+    name: str | None = None
+    dataset: dict[str, Any]
+    model: dict[str, Any]
+    folds: list[dict[str, Any]] = Field(default_factory=list)
+    execution: dict[str, Any]
+    metrics: dict[str, Any]
+    artifacts: list[QlibArtifactRef] = Field(default_factory=list)
+    latestTargets: QlibLatestTargets
+
+
 @router.get("/templates")
 def templates():
     return {"items": research_analysis.TEMPLATES, "count": len(research_analysis.TEMPLATES)}
@@ -94,6 +127,16 @@ def create_run(request: ResearchRunRequest):
             parameters=request.parameters,
         )
         return _dispatch_async_run(run)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/imports/qlib")
+def import_qlib_run(request: QlibImportRequest):
+    try:
+        return research_runs.import_qlib_run(request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
