@@ -486,8 +486,10 @@ def test_long_daily_basic_and_index_weight_ranges_are_windowed():
     pro = WindowPro()
     adapter = TushareAdapter(pro=pro)
     assert adapter.daily_basic_rows("600519", "1990-01-01", "2026-07-17") == []
-    assert len(pro.daily_basic_calls) == 4
+    assert len(pro.daily_basic_calls) == 2
     assert pro.daily_basic_calls[0]["start_date"] == "19900101"
+    assert pro.daily_basic_calls[0]["end_date"] == "20111126"
+    assert pro.daily_basic_calls[1]["start_date"] == "20111127"
     assert pro.daily_basic_calls[-1]["end_date"] == "20260717"
 
     assert adapter.index_weight_rows("000300", "2024-01-01", "2026-07-17") == []
@@ -529,6 +531,71 @@ def test_daily_basic_trade_date_fetch_normalizes_the_whole_market():
             "source": "tushare:daily_basic",
         },
     ]
+
+
+def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
+    from app.services.tushare_adapter import TushareAdapter
+
+    class MarketDatePro:
+        def __init__(self):
+            self.daily_calls = []
+            self.dividend_calls = []
+
+        def daily(self, **kwargs):
+            self.daily_calls.append(kwargs)
+            return FakeFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260717",
+                        "open": 10.0,
+                        "high": 10.5,
+                        "low": 9.8,
+                        "close": 10.2,
+                        "pre_close": 10.0,
+                        "pct_chg": 2.0,
+                        "vol": 12.0,
+                        "amount": 34.0,
+                    }
+                ]
+            )
+
+        def dividend(self, **kwargs):
+            self.dividend_calls.append(kwargs)
+            return FakeFrame(
+                [
+                    {
+                        "ts_code": "600000.SH",
+                        "end_date": "20251231",
+                        "ann_date": "20260320",
+                        "ex_date": "20260717",
+                        "cash_div_tax": 10.0,
+                        "div_proc": "实施",
+                    }
+                ]
+            )
+
+    pro = MarketDatePro()
+    adapter = TushareAdapter(pro=pro)
+
+    daily = adapter.daily_rows_for_date("2026-07-17")
+    dividends = adapter.dividend_rows_for_date("2026-07-17")
+
+    assert pro.daily_calls == [
+        {
+            "ts_code": "",
+            "trade_date": "20260717",
+            "fields": "ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        }
+    ]
+    assert daily[0]["symbol"] == "000001"
+    assert daily[0]["date"] == "2026-07-17"
+    assert daily[0]["volume"] == 1200
+    assert pro.dividend_calls[0]["ts_code"] == ""
+    assert pro.dividend_calls[0]["ex_date"] == "20260717"
+    assert dividends[0]["symbol"] == "600000"
+    assert dividends[0]["ex_date"] == "2026-07-17"
+    assert dividends[0]["cash_dividend"] == 1.0
 
 
 class HongKongPro:

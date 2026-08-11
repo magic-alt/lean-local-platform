@@ -44,6 +44,8 @@
     "0040_p1_trust_and_reproducibility": {"mode": "compensating", "action": "Stop release, certificate, Paper trust, capability, and maintenance writers; preserve all evidence and remove nullable references only through a reviewed forward migration."},
     "0041_p0_terminal_trust_and_release_identity": {"mode": "compensating", "action": "Stop trusted Backtest, Paper, and Walk-Forward consumers; preserve trust and certificate evidence; remove additive fields only through a reviewed forward migration."},
     "0042_p1_notification_capacity_controls": {"mode": "compensating", "action": "Stop notification workers, preserve delivery and dead-letter evidence, and remove additive terminal fields only through a reviewed forward migration."},
-    "0043_p1_lineage_query_index": {"mode": "compensating", "action": "Keep the additive lineage index while certification remains enabled; drop it only through a reviewed forward migration after confirming no lineage query depends on it."}
+    "0043_p1_lineage_query_index": {"mode": "compensating", "action": "Keep the additive lineage index while certification remains enabled; drop it only through a reviewed forward migration after confirming no lineage query depends on it."},
+    "0044_qlib_research_imports": {"mode": "compensating", "action": "Stop Qlib imports, archive manifests and signal snapshots, and drop the additive tables only through a reviewed forward migration."},
+    "0045_daily_basic_wide_storage": {"mode": "compensating", "action": "Stop daily_basic writers, archive the wide table, and remove the compatibility views and table only through a reviewed forward migration."}
   }
 }

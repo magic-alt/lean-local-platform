@@ -231,7 +231,7 @@ def _load_panel(start_date: str, end_date: str) -> tuple[pl.DataFrame, pl.DataFr
           max(case when factor_name='pb' then value end) pb,
           max(case when factor_name='ps_ttm' then value end) ps_ttm,
           max(case when factor_name='total_mv_cny' then value end) total_mv
-        from factor_values where source='tushare:daily_basic' and trade_date between ? and ?
+        from daily_basic_factor_values where trade_date between ? and ?
           and factor_name in ('turnover_rate','volume_ratio','pe_ttm','pb','ps_ttm','total_mv_cny')
         group by symbol,trade_date
         """,

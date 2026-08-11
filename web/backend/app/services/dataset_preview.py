@@ -214,11 +214,10 @@ def _sql_preview(
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
             values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     elif dataset == "daily_basic":
-        table = "factor_values"
+        table = "daily_basic_factor_values"
         select = "symbol,trade_date,factor_name,value,source"
         date_column = "trade_date"
         order_by = "trade_date desc, symbol, factor_name"
-        clauses.append("source='tushare:daily_basic'")
         if keyword:
             compact_symbol = keyword.upper().replace(".", "")
             for affix in ("SH", "SZ", "BJ"):

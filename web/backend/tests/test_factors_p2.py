@@ -48,6 +48,62 @@ def seed_factor_dataset():
     upsert_daily_bars(rows, source="unit", batch_id="factor-bars", adjust="raw")
 
 
+def test_daily_basic_bulk_writer_expands_normalized_provider_rows(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.db import db
+    from app.research import factors
+
+    symbol_calls = 0
+    date_calls = 0
+    normalize_symbol = factors._symbol
+    normalize_date = factors._date
+
+    def count_symbol(value):
+        nonlocal symbol_calls
+        symbol_calls += 1
+        return normalize_symbol(value)
+
+    def count_date(value):
+        nonlocal date_calls
+        date_calls += 1
+        return normalize_date(value)
+
+    monkeypatch.setattr(factors, "_symbol", count_symbol)
+    monkeypatch.setattr(factors, "_date", count_date)
+
+    written = factors.upsert_daily_basic_factor_values(
+        [
+            {
+                "symbol": "000001",
+                "trade_date": "2024-01-02",
+                "factors": {"pe_ttm": 8.5, "pb": 0.7},
+            },
+            {
+                "symbol": "600000",
+                "trade_date": "2024-01-02",
+                "factors": {"pe_ttm": 6.2},
+            },
+        ],
+        batch_id="daily-basic-fast",
+        bulk=True,
+        chunk_rows=1,
+    )
+
+    assert written == 2
+    assert symbol_calls == 2
+    assert date_calls == 2
+    with db() as connection:
+        rows = connection.execute(
+            "select symbol,trade_date,factor_name,value,batch_id "
+            "from daily_basic_factor_values order by symbol,factor_name"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("000001", "2024-01-02", "pb", 0.7, "daily-basic-fast"),
+        ("000001", "2024-01-02", "pe_ttm", 8.5, "daily-basic-fast"),
+        ("600000", "2024-01-02", "pe_ttm", 6.2, "daily-basic-fast"),
+    ]
+
+
 def test_factor_evaluation_computes_ic_rank_ic_and_quantiles(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
     seed_factor_dataset()

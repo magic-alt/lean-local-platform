@@ -139,7 +139,7 @@ def preparation_preview(start_date: str, end_date: str) -> dict[str, Any]:
         ).fetchone()
         counts = {}
         for key, sql in {
-            "dailyBasic": "select count(*) n from factor_values where source='tushare:daily_basic' and trade_date between ? and ?",
+            "dailyBasic": "select count(*) n from daily_basic_factor_values where trade_date between ? and ?",
             "financial": "select count(*) n from financial_statements where effective_date <= ? and report_date >= ?",
             "nameHistory": "select count(*) n from security_name_history where start_date <= ?",
             "industry": "select count(*) n from industry_membership where in_date <= ?",

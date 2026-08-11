@@ -391,7 +391,7 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
             rows = connection.execute(
                 f"""
                 select symbol,factor_name,trade_date,value
-                from factor_values
+                from all_factor_values
                 where symbol in ({placeholders})
                   and factor_name in ('pe','pe_ttm','pb')
                   and trade_date<=?

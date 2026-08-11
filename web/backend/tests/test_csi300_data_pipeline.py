@@ -148,7 +148,7 @@ def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend
 
     with db() as connection:
         factor = connection.execute(
-            "select value from factor_values where symbol = '600519' and factor_name = 'pe_ttm'"
+            "select value from daily_basic_factor_values where symbol = '600519' and factor_name = 'pe_ttm'"
         ).fetchone()
         suspended_bar = connection.execute(
             "select close, volume from ashare_daily_bars where symbol = '600519' and trade_date = '2024-01-03'"

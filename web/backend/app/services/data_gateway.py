@@ -219,7 +219,7 @@ def query(
                 connection.execute(
                     f"""
                     select symbol, trade_date, factor_name, value, source
-                    from factor_values where {' and '.join(clauses)}
+                    from all_factor_values where {' and '.join(clauses)}
                     order by trade_date, symbol, factor_name limit ?
                     """,
                     params,

@@ -194,13 +194,23 @@ limits, and do not mount the shared object store or a host gateway alias.
 
 High-throughput TuShare synchronization can be tuned with
 `LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
-`LEAN_TUSHARE_FETCH_CONCURRENCY`, `LEAN_STK_LIMIT_FETCH_CONCURRENCY`,
+`LEAN_TUSHARE_FETCH_CONCURRENCY`, `LEAN_DAILY_BASIC_FETCH_CONCURRENCY`,
+`LEAN_DIVIDEND_FETCH_CONCURRENCY`,
+`LEAN_STK_LIMIT_FETCH_CONCURRENCY`,
 `LEAN_SUSPEND_FETCH_CONCURRENCY`, `LEAN_DATA_SYNC_BATCH_UNITS`, and
 `LEAN_DATA_SYNC_CHUNK_ROWS`. Daily history additionally uses
-`LEAN_DAILY_SYNC_BATCH_UNITS` and `LEAN_DAILY_SYNC_CHUNK_ROWS`; the defaults
+`LEAN_DAILY_SYNC_BATCH_UNITS`, `LEAN_DAILY_SYNC_CHUNK_ROWS`, and
+`LEAN_DAILY_INCREMENT_BATCH_DATES`; the defaults
 aggregate 64 instruments or 500,000 rows. Initial `stk_limit` and `suspend_d`
 history use concurrent instrument prefetch plus a sequential batch writer;
 later increments use one market-wide request per missing trade date.
+Initial `daily_basic` history uses 8,000-calendar-day per-symbol windows and a
+specialized chunked wide-table writer that persists each provider row once
+instead of expanding it into up to 15 indexed factor rows. Compatibility views
+keep legacy EAV batches readable while new synchronization uses the wide table.
+Daily-bar and dividend increments use one market-wide request per missing trade
+date instead of contacting every listed instrument; initial dividend history
+uses the same concurrent, chunked ingestion path as the other bulk datasets.
 
 The workstation profile bounds each on-demand MySQL write estimate.
 `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 GiB and applies only to a

@@ -67,12 +67,15 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 | --- | --- |
 | `LEAN_TUSHARE_CALLS_PER_MINUTE` | TuShare 限速；5000 积分账户不超过 500/min |
 | `LEAN_TUSHARE_FETCH_CONCURRENCY` | 通用有界并发预取 |
+| `LEAN_DAILY_BASIC_FETCH_CONCURRENCY` | `daily_basic` 历史预取并发，默认 32；仍受全局 500/min 限速器约束 |
+| `LEAN_DIVIDEND_FETCH_CONCURRENCY` | `dividend` 首次历史预取并发，默认 32；增量改为按除权日拉取全市场 |
 | `LEAN_STK_LIMIT_FETCH_CONCURRENCY` | `stk_limit` 初始历史预取并发 |
 | `LEAN_SUSPEND_FETCH_CONCURRENCY` | `suspend_d` 初始历史预取并发 |
 | `LEAN_DATA_SYNC_BATCH_UNITS` | 通用状态数据每次聚合提交工作单元，默认 32 |
 | `LEAN_DATA_SYNC_CHUNK_ROWS` | SQL/归档分块行数 |
 | `LEAN_DAILY_SYNC_BATCH_UNITS` | `daily` 每次聚合股票数，默认 64 |
 | `LEAN_DAILY_SYNC_CHUNK_ROWS` | `daily` 单批行数上限，默认 500,000 |
+| `LEAN_DAILY_INCREMENT_BATCH_DATES` | `daily` 全市场增量每次聚合提交的交易日数，默认 16 |
 | `LEAN_RAW_ARCHIVE_GZIP_LEVEL` | raw archive 压缩等级，默认 1；提高会节省少量空间但增加同步 CPU 时间 |
 
 不要仅提高并发。先观察 Provider 等待、MySQL 写入、CPU、内存、Docker I/O 和磁盘增长。

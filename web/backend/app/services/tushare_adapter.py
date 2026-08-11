@@ -426,7 +426,10 @@ class TushareAdapter:
 
     def daily_basic_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         records_by_date: dict[str, dict[str, Any]] = {}
-        for window_start, window_end in _date_windows(start_date, end_date):
+        # The endpoint caps responses at 6,000 rows. An 8,000-calendar-day
+        # window remains below that ceiling for one A-share and cuts a
+        # 1990-present history from four provider calls to two.
+        for window_start, window_end in _date_windows(start_date, end_date, max_days=8000):
             frame = self.pro.daily_basic(
                 ts_code=to_tushare_stock_code(symbol),
                 start_date=window_start,
@@ -714,6 +717,30 @@ class TushareAdapter:
                 "cash_div_tax,record_date,ex_date,pay_date,div_listdate,imp_ann_date,base_date,base_share"
             ),
         )
+        return self._normalize_dividend_rows(frame, start_date, end_date, symbol)
+
+    def dividend_rows_for_date(self, ex_date: str) -> list[dict[str, Any]]:
+        """Fetch the full market's ex-dividend actions for one trade date."""
+        compact_date = _compact_date(ex_date, "ex_date")
+        frame = self.pro.dividend(
+            ts_code="",
+            ann_date="",
+            record_date="",
+            ex_date=compact_date,
+            fields=(
+                "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,"
+                "cash_div_tax,record_date,ex_date,pay_date,div_listdate,imp_ann_date,base_date,base_share"
+            ),
+        )
+        return self._normalize_dividend_rows(frame, ex_date, ex_date, "")
+
+    @staticmethod
+    def _normalize_dividend_rows(
+        frame: Any,
+        start_date: str,
+        end_date: str,
+        fallback_symbol: str,
+    ) -> list[dict[str, Any]]:
         start = _compact_date(start_date, "start_date")
         end = _compact_date(end_date, "end_date")
         rows: list[dict[str, Any]] = []
@@ -731,7 +758,7 @@ class TushareAdapter:
                 stock_dividend = bonus + conversion if bonus or conversion else None
             rows.append(
                 {
-                    "symbol": from_tushare_code(item.get("ts_code") or symbol),
+                    "symbol": from_tushare_code(item.get("ts_code") or fallback_symbol),
                     "ex_date": _iso_date(compact_ex_date),
                     "action_type": "dividend",
                     "cash_dividend": _finite_float(item.get("cash_div_tax") or item.get("cash_div"), multiplier=0.1),
@@ -913,6 +940,48 @@ class TushareAdapter:
                 }
             )
         return sorted(rows, key=lambda row: row["date"])
+
+    def daily_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        """Fetch raw daily bars for the full A-share market in one request."""
+        compact_date = _compact_date(trade_date, "trade_date")
+        frame = self.pro.daily(
+            ts_code="",
+            trade_date=compact_date,
+            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        )
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            normalized_date = _iso_date(item.get("trade_date"))
+            symbol = from_tushare_code(item.get("ts_code") or "")
+            close = _finite_float(item.get("close"))
+            high = _finite_float(item.get("high"))
+            low = _finite_float(item.get("low"))
+            open_price = _finite_float(item.get("open"))
+            if not symbol or not normalized_date or None in {open_price, high, low, close}:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": normalized_date,
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": int((_float(item.get("vol")) or 0) * 100),
+                    "amount": (_float(item.get("amount")) or 0) * 1000,
+                    "prev_close": _finite_float(item.get("pre_close")),
+                    "pct_change": _finite_float(item.get("pct_chg")),
+                    "adj_factor": 1.0,
+                    "adj_factor_verified": False,
+                    "limitUp": None,
+                    "limitDown": None,
+                    "isLimitUp": None,
+                    "isLimitDown": None,
+                    "canBuy": None,
+                    "canSell": None,
+                }
+            )
+        return sorted(rows, key=lambda row: row["symbol"])
 
     def index_daily_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         """Fetch an index explicitly so overlapping stock codes cannot be mistaken for an index."""

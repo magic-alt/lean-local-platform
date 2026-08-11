@@ -149,8 +149,8 @@ def _daily_counts(trade_date: str) -> dict[str, int]:
         ).fetchone()
         basics = connection.execute(
             """
-            select count(distinct symbol) n from factor_values
-            where trade_date=? and factor_name='pe_ttm' and source='tushare:daily_basic'
+            select count(distinct symbol) n from daily_basic_factor_values
+            where trade_date=? and factor_name='pe_ttm'
             """,
             (trade_date,),
         ).fetchone()
@@ -487,10 +487,9 @@ def _latest_factors(symbols: list[str], trade_date: str) -> dict[str, dict[str, 
         with db() as connection:
             rows = connection.execute(
                 f"""
-                select symbol,factor_name,value from factor_values
+                select symbol,factor_name,value from daily_basic_factor_values
                 where symbol in ({placeholders}) and trade_date=?
                   and factor_name in ('pe_ttm','total_mv_cny','circ_mv_cny')
-                  and source='tushare:daily_basic'
                 """,
                 [*chunk, trade_date],
             ).fetchall()

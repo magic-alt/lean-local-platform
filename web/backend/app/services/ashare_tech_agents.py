@@ -287,7 +287,7 @@ def _latest_fundamentals(symbols: list[str], as_of_date: str) -> dict[str, dict[
         factors = connection.execute(
             f"""
             select symbol,factor_name,value,trade_date,source
-            from factor_values
+            from all_factor_values
             where symbol in ({placeholders})
               and factor_name in ({factor_placeholders}) and trade_date <= ?
             order by symbol,trade_date,factor_name

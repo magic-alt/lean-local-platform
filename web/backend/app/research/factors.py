@@ -11,6 +11,25 @@ from ..lean_engine.symbols import normalize_symbol, parse_date
 from ..services.ashare_repository import trade_dates_between, universe_as_of
 
 
+DAILY_BASIC_FACTOR_COLUMNS = {
+    "turnover_rate": "turnover_rate",
+    "turnover_rate_float": "turnover_rate_float",
+    "volume_ratio": "volume_ratio",
+    "pe": "pe",
+    "pe_ttm": "pe_ttm",
+    "pb": "pb",
+    "ps": "ps",
+    "ps_ttm": "ps_ttm",
+    "dividend_yield": "dividend_yield",
+    "dividend_yield_ttm": "dividend_yield_ttm",
+    "total_share_shares": "total_share_shares",
+    "float_share_shares": "float_share_shares",
+    "free_share_shares": "free_share_shares",
+    "total_mv_cny": "total_mv_cny",
+    "circ_mv_cny": "circ_mv_cny",
+}
+
+
 def available_engines() -> dict[str, bool]:
     return {
         "python": True,
@@ -51,6 +70,26 @@ def upsert_factor_values(
     *,
     bulk: bool = False,
 ) -> int:
+    if records and all(
+        str(record.get("source") or source) == "tushare:daily_basic"
+        and str(record.get("factor_name") or record.get("factorName")) in DAILY_BASIC_FACTOR_COLUMNS
+        for record in records
+    ):
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for record in records:
+            symbol = str(record["symbol"])
+            trade_date = str(record.get("trade_date") or record.get("tradeDate"))
+            grouped.setdefault(
+                (symbol, trade_date),
+                {"symbol": symbol, "trade_date": trade_date, "factors": {}},
+            )["factors"][str(record.get("factor_name") or record.get("factorName"))] = record["value"]
+        upsert_daily_basic_factor_values(
+            list(grouped.values()),
+            source="tushare:daily_basic",
+            batch_id=batch_id,
+            bulk=bulk,
+        )
+        return len(records)
     now = utc_now()
     values = []
     for record in records:
@@ -81,6 +120,80 @@ def upsert_factor_values(
     return len(values)
 
 
+def upsert_daily_basic_factor_values(
+    records: list[dict[str, Any]],
+    *,
+    source: str = "tushare:daily_basic",
+    batch_id: str | None = None,
+    bulk: bool = False,
+    chunk_rows: int = 25_000,
+) -> int:
+    """Persist one wide row per symbol/date instead of up to 15 EAV rows."""
+    if not records:
+        return 0
+    now = utc_now()
+    written = 0
+    rows_per_chunk = max(1, int(chunk_rows))
+    connection_factory = bulk_db if bulk else db
+    with connection_factory() as connection:
+        for offset in range(0, len(records), rows_per_chunk):
+            values: list[tuple[Any, ...]] = []
+            for record in records[offset : offset + rows_per_chunk]:
+                symbol = _symbol(record["symbol"])
+                trade_date = _date(record.get("trade_date") or record.get("tradeDate"))
+                factors = dict(record.get("factors") or {})
+                unknown = set(factors) - set(DAILY_BASIC_FACTOR_COLUMNS)
+                if unknown:
+                    raise LeanWebError(f"unsupported daily_basic factors: {', '.join(sorted(unknown))}")
+                normalized: dict[str, float | None] = {}
+                for name in DAILY_BASIC_FACTOR_COLUMNS:
+                    raw_value = factors.get(name)
+                    if raw_value is None:
+                        normalized[name] = None
+                        continue
+                    value = float(raw_value)
+                    if not math.isfinite(value):
+                        raise LeanWebError("factor value must be finite.")
+                    normalized[name] = value
+                values.append(
+                    (
+                        symbol,
+                        trade_date,
+                        *(normalized[name] for name in DAILY_BASIC_FACTOR_COLUMNS),
+                        source,
+                        batch_id,
+                        now,
+                    )
+                )
+            if values:
+                connection.executemany(
+                    """
+                    insert into daily_basic_values
+                        (symbol,trade_date,turnover_rate,turnover_rate_float,volume_ratio,
+                         pe,pe_ttm,pb,ps,ps_ttm,dividend_yield,dividend_yield_ttm,
+                         total_share_shares,float_share_shares,free_share_shares,total_mv_cny,
+                         circ_mv_cny,source,batch_id,created_at)
+                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    on conflict(symbol,trade_date,source) do update set
+                        turnover_rate=excluded.turnover_rate,
+                        turnover_rate_float=excluded.turnover_rate_float,
+                        volume_ratio=excluded.volume_ratio,
+                        pe=excluded.pe,pe_ttm=excluded.pe_ttm,pb=excluded.pb,
+                        ps=excluded.ps,ps_ttm=excluded.ps_ttm,
+                        dividend_yield=excluded.dividend_yield,
+                        dividend_yield_ttm=excluded.dividend_yield_ttm,
+                        total_share_shares=excluded.total_share_shares,
+                        float_share_shares=excluded.float_share_shares,
+                        free_share_shares=excluded.free_share_shares,
+                        total_mv_cny=excluded.total_mv_cny,circ_mv_cny=excluded.circ_mv_cny,
+                        batch_id=excluded.batch_id,created_at=excluded.created_at
+                    """,
+                    values,
+                )
+                written += len(values)
+    return written
+
+
 def _factor_values(symbols: list[str], trade_date: str, factor_names: list[str]) -> dict[str, dict[str, float]]:
     if not symbols or not factor_names:
         return {}
@@ -89,7 +202,7 @@ def _factor_values(symbols: list[str], trade_date: str, factor_names: list[str])
     with db() as connection:
         rows = connection.execute(
             f"""
-            select symbol, factor_name, value from factor_values
+            select symbol, factor_name, value from all_factor_values
             where trade_date = ?
               and symbol in ({symbol_placeholders})
               and factor_name in ({factor_placeholders})

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Speed up initial `daily_basic` history synchronization with safe 8,000-day request windows, dedicated 32-way bounded prefetch, and one-row-per-symbol/date wide storage that replaces up to 15 indexed EAV writes while retaining legacy compatibility reads.
+
+- Eliminate per-symbol API amplification from `daily` and `dividend` increments by fetching each missing trade/ex-dividend date market-wide, and move initial dividend history onto the concurrent chunked ingestion pipeline.
+
 - Limit the local MLflow tracking server to one worker and raise its default memory limit to 2 GiB so the current ML image starts reliably.
 
 - Include `daily_basic` and `dividend` in the Data page's default full/incremental MySQL update, use market-wide trade-date calls for efficient `daily_basic` increments, and expose both canonical tables in Data Preview.

@@ -1063,12 +1063,136 @@ def test_daily_basic_increment_fetches_market_once_per_trade_date(tmp_path, monk
     assert adapter.calls == ["2026-07-17"]
     with db() as connection:
         factors = connection.execute(
-            "select symbol,trade_date,factor_name,value from factor_values order by symbol"
+            "select symbol,trade_date,factor_name,value from daily_basic_factor_values order by symbol"
         ).fetchall()
     assert [(row["symbol"], row["trade_date"], row["factor_name"], row["value"]) for row in factors] == [
         ("000001", "2026-07-17", "pe_ttm", 12.0),
         ("600000", "2026-07-17", "pe_ttm", 12.0),
     ]
+
+
+def test_daily_increment_fetches_market_once_per_trade_date(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03"},
+            {"symbol": "600000", "listed_date": "1999-11-10"},
+        ],
+    )
+    monkeypatch.setattr(
+        data_sync,
+        "import_ashare_research_batch",
+        lambda entries, **kwargs: {
+            "rows": sum(len(entry["rows"]) for entry in entries),
+            "updatedRows": 0,
+            "batch_id": "daily-date-batch",
+        },
+    )
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-17',1,'test','test')"
+        )
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','daily',?,'1990-01-01','2026-07-16','old',0,'passed',?)
+            """,
+            [("000001", utc_now()), ("600000", utc_now())],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def daily_rows_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [
+                {
+                    "symbol": symbol,
+                    "date": trade_date,
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.8,
+                    "close": 10.2,
+                    "volume": 100,
+                    "adj_factor": 1.0,
+                }
+                for symbol in ("000001", "600000")
+            ]
+
+    adapter = Adapter()
+    assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (1, 2, 0, 0)
+    assert adapter.calls == ["2026-07-17"]
+
+
+def test_dividend_increment_fetches_market_once_per_ex_date(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["dividend"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "dividend")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03"},
+            {"symbol": "600000", "listed_date": "1999-11-10"},
+        ],
+    )
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-17',1,'test','test')"
+        )
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','dividend',?,'1990-01-01','2026-07-16','old',0,'passed',?)
+            """,
+            [("000001", utc_now()), ("600000", utc_now())],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def dividend_rows_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [
+                {
+                    "symbol": "600000",
+                    "ex_date": trade_date,
+                    "action_type": "dividend",
+                    "cash_dividend": 0.1,
+                    "source": "tushare:dividend",
+                    "metadata": {"announce_date": "2026-06-01", "process": "实施"},
+                }
+            ]
+
+    adapter = Adapter()
+    assert data_sync._sync_generic(adapter, spec, run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
+    assert adapter.calls == ["2026-07-17"]
+    with db() as connection:
+        action = connection.execute(
+            "select symbol,ex_date,cash_dividend from corporate_actions"
+        ).fetchone()
+    assert (action["symbol"], action["ex_date"], action["cash_dividend"]) == (
+        "600000",
+        "2026-07-17",
+        0.1,
+    )
 
 
 def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_path, monkeypatch):

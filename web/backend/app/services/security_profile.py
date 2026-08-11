@@ -85,7 +85,7 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
                 ("trade_status", "交易状态/涨跌停", "ashare_trade_status", "trade_date"),
                 ("adjustment_factors", "复权因子", "adjustment_factors", "trade_date"),
                 ("corporate_actions", "公司行动", "corporate_actions", "ex_date"),
-                ("factor_values", "每日指标/因子", "factor_values", "trade_date"),
+                ("factor_values", "每日指标/因子", "all_factor_values", "trade_date"),
                 ("financial_statements", "财务报表", "financial_statements", "report_date"),
             )
             for key, label, table, date_column in specs:
