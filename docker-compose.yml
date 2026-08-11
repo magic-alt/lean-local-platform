@@ -97,7 +97,7 @@ services:
     build:
       context: .
       dockerfile: web/backend/Dockerfile.ml
-    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri mysql+pymysql://lean:lean@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
+    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri mysql+pymysql://lean:lean@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
     ports:
       - "127.0.0.1:${LEAN_MLFLOW_PORT:-5000}:5000"
     volumes:
@@ -112,7 +112,7 @@ services:
       mlflow-db-init:
         condition: service_completed_successfully
     cpus: "${LEAN_MLFLOW_CPUS:-1.0}"
-    mem_limit: ${LEAN_MLFLOW_MEMORY:-1g}
+    mem_limit: ${LEAN_MLFLOW_MEMORY:-2g}
 
   clickhouse:
     logging: *bounded-logging
