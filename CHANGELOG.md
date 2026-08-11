@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Parallelize independent TuShare stock-master, index-history and index/futures/options catalog partitions under the shared account rate limiter; batch all index daily symbols into one canonical MySQL write and bulk-upsert trade-calendar sessions. Normalize duplicate dividend proposal/implementation revisions to the canonical ex-date action before validation.
+
 - Speed up initial `daily_basic` history synchronization with safe 8,000-day request windows, dedicated 32-way bounded prefetch, and one-row-per-symbol/date wide storage that replaces up to 15 indexed EAV writes while retaining legacy compatibility reads.
 
 - Eliminate per-symbol API amplification from `daily` and `dividend` increments by fetching each missing trade/ex-dividend date market-wide, and move initial dividend history onto the concurrent chunked ingestion pipeline.

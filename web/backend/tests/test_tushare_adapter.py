@@ -598,6 +598,37 @@ def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
     assert dividends[0]["cash_dividend"] == 1.0
 
 
+def test_dividend_normalization_keeps_one_authoritative_action_per_ex_date():
+    from app.services.tushare_adapter import TushareAdapter
+
+    rows = TushareAdapter._normalize_dividend_rows(
+        [
+            {
+                "ts_code": "600000.SH",
+                "ex_date": "20260717",
+                "ann_date": "20260601",
+                "div_proc": "预案",
+                "cash_div": 1.0,
+            },
+            {
+                "ts_code": "600000.SH",
+                "ex_date": "20260717",
+                "ann_date": "20260602",
+                "pay_date": "20260720",
+                "div_proc": "实施",
+                "cash_div": 1.2,
+            },
+        ],
+        "2026-07-17",
+        "2026-07-17",
+        "",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["cash_dividend"] == 0.12
+    assert rows[0]["metadata"]["process"] == "实施"
+
+
 class HongKongPro:
     def hk_basic(self, **kwargs):
         return FakeFrame([

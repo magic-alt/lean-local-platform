@@ -1819,9 +1819,9 @@ def test_complete_global_query_covers_all_contract_exchanges():
     spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "fut_basic")
     rows = data_sync._complete_global_query(Pro(), spec, {"exchange": "CFFEX"})
 
-    assert [params["exchange"] for _, params in calls] == [
+    assert {params["exchange"] for _, params in calls} == {
         "CFFEX", "DCE", "CZCE", "SHFE", "INE", "GFEX"
-    ]
+    }
     assert len(rows) == 6
 
 
@@ -1933,6 +1933,34 @@ def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, mon
     assert rows[1]["amount"] == 456750
     assert rows[1]["source"] == "tushare"
     assert rows[1]["batch_id"] == "governed-index-run"
+
+
+def test_index_daily_normalizer_batches_all_benchmark_symbols(monkeypatch):
+    from app.services import data_sync
+
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "index_daily")
+    calls = []
+    monkeypatch.setattr(
+        data_sync,
+        "upsert_market_daily_bars_batch",
+        lambda rows, **kwargs: calls.append((rows, kwargs)),
+    )
+
+    data_sync._normalize_optional(
+        spec,
+        [
+            {"ts_code": "000300.SH", "trade_date": "20260717", "close": 4000},
+            {"ts_code": "000905.SH", "trade_date": "20260717", "close": 6000},
+        ],
+        "batch",
+        bulk=True,
+    )
+
+    assert len(calls) == 1
+    rows, kwargs = calls[0]
+    assert {row["symbol"] for row in rows} == {"000300", "000905"}
+    assert kwargs["asset_class"] == "index"
+    assert kwargs["bulk"] is True
 
 
 def test_daily_catalog_coverage_uses_normalized_table(tmp_path, monkeypatch):

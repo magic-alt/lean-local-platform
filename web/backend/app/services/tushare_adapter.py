@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from typing import Any
 import hashlib
@@ -204,9 +205,16 @@ class TushareAdapter:
         statuses = list_statuses or ["L", "D", "P"]
         records: list[dict[str, Any]] = []
         fields = "ts_code,symbol,name,area,industry,market,list_date,delist_date,list_status"
-        for status in statuses:
-            frame = self.pro.stock_basic(exchange="", list_status=status, fields=fields)
-            for item in _records(frame):
+        concurrency = max(1, min(len(statuses), int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
+
+        def fetch(status: str) -> list[dict[str, Any]]:
+            return _records(self.pro.stock_basic(exchange="", list_status=status, fields=fields))
+
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-stock-basic") as executor:
+            futures = [executor.submit(fetch, status) for status in statuses]
+            frames = [future.result() for future in futures]
+        for frame_records in frames:
+            for item in frame_records:
                 symbol = from_tushare_code(item.get("ts_code") or item.get("symbol"))
                 if len(symbol) != 6 or not symbol.isdigit():
                     continue
@@ -227,7 +235,7 @@ class TushareAdapter:
                         "source": "tushare:stock_basic",
                     }
                 )
-        return records
+        return sorted(records, key=lambda item: (str(item["symbol"]), str(item["status"])))
 
     def namechange_rows(self, symbol: str) -> list[dict[str, Any]]:
         frame = self.pro.namechange(
@@ -775,7 +783,28 @@ class TushareAdapter:
                     },
                 }
             )
-        return sorted(rows, key=lambda row: (row["ex_date"], row["symbol"]))
+        # `corporate_actions` intentionally models one economic action per
+        # symbol/ex-date/type. TuShare can return repeated proposal/implementation
+        # revisions for that same action (and occasionally exact duplicates) in a
+        # market-wide ex-date response. Keep the most authoritative revision so
+        # the validation gate sees the same natural key as the canonical table.
+        def revision_rank(row: dict[str, Any]) -> tuple[int, int, int, str, str]:
+            metadata = row.get("metadata") or {}
+            process = str(metadata.get("process") or "").strip()
+            completed = int(process in {"实施", "实施方案", "实施完成", "实施中"})
+            economic_fields = ("cash_dividend", "stock_dividend", "split_ratio", "allotment_ratio")
+            economic_values = sum(int(row.get(field) is not None) for field in economic_fields)
+            pay_date = str(metadata.get("pay_date") or "")
+            announce_date = str(metadata.get("announce_date") or "")
+            return completed, economic_values, int(bool(pay_date)), pay_date, announce_date
+
+        deduplicated: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in rows:
+            key = (str(row["symbol"]), str(row["ex_date"]), str(row["action_type"]))
+            current = deduplicated.get(key)
+            if current is None or revision_rank(row) > revision_rank(current):
+                deduplicated[key] = row
+        return sorted(deduplicated.values(), key=lambda row: (row["ex_date"], row["symbol"], row["action_type"]))
 
     def index_weight_rows(self, index_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         records_by_key: dict[tuple[str, str], dict[str, Any]] = {}

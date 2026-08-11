@@ -389,24 +389,35 @@ def upsert_data_gap_resolutions(
 
 def upsert_trade_calendar(market: str, trade_dates: list[str], source: str, batch_id: str | None = None) -> None:
     unique_dates = sorted(set(trade_dates))
+    if not unique_dates:
+        return
+    parameters = [
+        (
+            market,
+            trade_date,
+            1,
+            unique_dates[index - 1] if index > 0 else None,
+            unique_dates[index + 1] if index + 1 < len(unique_dates) else None,
+            source,
+            batch_id,
+        )
+        for index, trade_date in enumerate(unique_dates)
+    ]
     with db() as connection:
-        for index, trade_date in enumerate(unique_dates):
-            prev_date = unique_dates[index - 1] if index > 0 else None
-            next_date = unique_dates[index + 1] if index + 1 < len(unique_dates) else None
-            connection.execute(
-                """
-                insert into trade_calendar
-                    (market, trade_date, is_open, prev_trade_date, next_trade_date, source, batch_id)
-                values (?, ?, ?, ?, ?, ?, ?)
-                on conflict(market, trade_date) do update set
-                    is_open = excluded.is_open,
-                    prev_trade_date = coalesce(excluded.prev_trade_date, trade_calendar.prev_trade_date),
-                    next_trade_date = coalesce(excluded.next_trade_date, trade_calendar.next_trade_date),
-                    source = excluded.source,
-                    batch_id = excluded.batch_id
-                """,
-                (market, trade_date, 1, prev_date, next_date, source, batch_id),
-            )
+        connection.executemany(
+            """
+            insert into trade_calendar
+                (market, trade_date, is_open, prev_trade_date, next_trade_date, source, batch_id)
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(market, trade_date) do update set
+                is_open = excluded.is_open,
+                prev_trade_date = coalesce(excluded.prev_trade_date, trade_calendar.prev_trade_date),
+                next_trade_date = coalesce(excluded.next_trade_date, trade_calendar.next_trade_date),
+                source = excluded.source,
+                batch_id = excluded.batch_id
+            """,
+            parameters,
+        )
 
 
 def trade_dates_between(market: str, start: str, end: str) -> list[str]:

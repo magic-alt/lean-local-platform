@@ -34,7 +34,7 @@ from .ashare_repository import (
 )
 from .data import import_ashare_research_batch
 from .db_object_store import put_bytes
-from .market_repository import upsert_market_daily_bars
+from .market_repository import upsert_market_daily_bars_batch
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
@@ -454,39 +454,54 @@ def _missing_default_index_daily_codes() -> set[str]:
 
 
 def _complete_global_query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Fetch complete small catalogs and split capped long index windows."""
+    """Fetch independent market partitions concurrently, preserving request order."""
+    concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
+
+    def fetch_many(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(requests) == 1:
+            return _call_with_retry(lambda: _query(pro, spec, requests[0]))
+        # The shared proxy enforces the account-wide rolling quota. Keep result
+        # order deterministic while independent partitions are in flight.
+        with ThreadPoolExecutor(
+            max_workers=min(concurrency, len(requests)),
+            thread_name_prefix=f"tushare-{spec.key}",
+        ) as executor:
+            futures = [
+                executor.submit(_call_with_retry, lambda request=request: _query(pro, spec, request))
+                for request in requests
+            ]
+            records: list[dict[str, Any]] = []
+            for future in futures:
+                records.extend(future.result())
+        return records
+
     variants = _BULK_MARKET_VARIANTS.get(spec.key)
     if variants:
-        records: list[dict[str, Any]] = []
-        for value in variants:
-            key = "exchange" if spec.key in {"fut_basic", "opt_basic"} else "market"
-            records.extend(_query(pro, spec, {**params, key: value}))
+        key = "exchange" if spec.key in {"fut_basic", "opt_basic"} else "market"
+        records = fetch_many([{**params, key: value} for value in variants])
         deduplicated = {_record_key(spec, row): row for row in records}
         return list(deduplicated.values())
 
     if spec.key == "index_daily" and params.get("start_date") and params.get("end_date"):
         start = date.fromisoformat(str(params["start_date"])[:4] + "-" + str(params["start_date"])[4:6] + "-" + str(params["start_date"])[6:8])
         end = date.fromisoformat(str(params["end_date"])[:4] + "-" + str(params["end_date"])[4:6] + "-" + str(params["end_date"])[6:8])
-        records = []
         requested_code = str(params.get("ts_code") or "").strip().upper()
         index_codes = DEFAULT_INDEX_DAILY_CODES if requested_code in {"", "000300.SH"} else (requested_code,)
+        requests: list[dict[str, Any]] = []
         for index_code in index_codes:
             cursor = start
             while cursor <= end:
                 window_end = min(end, cursor + timedelta(days=2_499))
-                records.extend(
-                    _query(
-                        pro,
-                        spec,
-                        {
-                            **params,
-                            "ts_code": index_code,
-                            "start_date": _compact(cursor),
-                            "end_date": _compact(window_end),
-                        },
-                    )
+                requests.append(
+                    {
+                        **params,
+                        "ts_code": index_code,
+                        "start_date": _compact(cursor),
+                        "end_date": _compact(window_end),
+                    }
                 )
                 cursor = window_end + timedelta(days=1)
+        records = fetch_many(requests)
         deduplicated = {_record_key(spec, row): row for row in records}
         return list(deduplicated.values())
     return _query(pro, spec, params)
@@ -2537,14 +2552,14 @@ def _normalize_optional(
         # remains equity-shaped because strategy templates subscribe through
         # AddEquity, but storage and source lineage must not disguise an index
         # as a listed company with the same numeric code.
-        grouped: dict[str, list[dict[str, Any]]] = {}
+        normalized_rows: list[dict[str, Any]] = []
         for row in rows:
             symbol = str(row.get("symbol") or row.get("ts_code") or "").split(".", 1)[0].upper()
             close = _finite_number(row.get("close"))
             trade_date = row.get("trade_date") or row.get("date")
             if not symbol or not trade_date or close is None:
                 continue
-            grouped.setdefault(symbol, []).append(
+            normalized_rows.append(
                 {
                     "symbol": symbol,
                     "trade_date": trade_date,
@@ -2562,20 +2577,20 @@ def _normalize_optional(
                     "adj_factor": 1.0,
                 }
             )
-        for symbol, benchmark_rows in grouped.items():
-            upsert_market_daily_bars(
-                benchmark_rows,
-                symbol=symbol,
-                asset_class="index",
-                market="china",
-                venue="china",
-                source="tushare",
-                batch_id=batch_id,
-                resolution="daily",
-                data_type="trade",
-                adjust="raw",
-                bulk=bulk,
-            )
+        # One lookup and SQL pipeline covers every benchmark symbol. The former
+        # per-index loop opened a transaction for each individual symbol.
+        upsert_market_daily_bars_batch(
+            normalized_rows,
+            asset_class="index",
+            market="china",
+            venue="china",
+            source="tushare",
+            batch_id=batch_id,
+            resolution="daily",
+            data_type="trade",
+            adjust="raw",
+            bulk=bulk,
+        )
     elif spec.normalizer == "daily_basic":
         upsert_daily_basic_factor_values(
             rows,

@@ -208,6 +208,10 @@ Initial `daily_basic` history uses 8,000-calendar-day per-symbol windows and a
 specialized chunked wide-table writer that persists each provider row once
 instead of expanding it into up to 15 indexed factor rows. Compatibility views
 keep legacy EAV batches readable while new synchronization uses the wide table.
+Index daily history, and the index/futures/options basic catalogs, fan out their
+independent provider partitions under the same bounded concurrency and then use
+one canonical batch writer; normal incremental A-share datasets continue to use
+their market-wide per-trading-date endpoints.
 Daily-bar and dividend increments use one market-wide request per missing trade
 date instead of contacting every listed instrument; initial dividend history
 uses the same concurrent, chunked ingestion path as the other bulk datasets.
