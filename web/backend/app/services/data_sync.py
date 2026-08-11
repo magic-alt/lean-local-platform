@@ -146,8 +146,10 @@ BULK_DATASET_KEYS = {
     "trade_cal",
     "daily",
     "adj_factor",
+    "daily_basic",
     "suspend_d",
     "stk_limit",
+    "dividend",
     "index_basic",
     "index_daily",
     "fut_basic",
@@ -2773,7 +2775,7 @@ def _advance_sparse_market_watermarks(
         )
 
 
-def _sync_stk_limit_fast(
+def _sync_instrument_dataset_fast(
     adapter: TushareAdapter,
     spec: DatasetSpec,
     run_id: str,
@@ -2784,7 +2786,7 @@ def _sync_stk_limit_fast(
     full_refresh: bool,
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
-    """Batch sparse trade-status history and use market-wide increments."""
+    """Batch instrument history and use market-wide daily increments when supported."""
     state = _item_state(run_id, spec.key)
     checkpoint = state.get("checkpoint") or {}
     legacy_resume = max(0, int(checkpoint.get("index") or 0))
@@ -2805,11 +2807,10 @@ def _sync_stk_limit_fast(
     chunk_rows = max(10_000, int(os.environ.get("LEAN_DATA_SYNC_CHUNK_ROWS", "250000")))
     batch_units = max(8, min(64, int(os.environ.get("LEAN_DATA_SYNC_BATCH_UNITS", "32"))))
     general_concurrency = int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))
-    concurrency_key = (
-        "LEAN_SUSPEND_FETCH_CONCURRENCY"
-        if spec.normalizer == "suspend_d"
-        else "LEAN_STK_LIMIT_FETCH_CONCURRENCY"
-    )
+    concurrency_key = {
+        "suspend_d": "LEAN_SUSPEND_FETCH_CONCURRENCY",
+        "daily_basic": "LEAN_DAILY_BASIC_FETCH_CONCURRENCY",
+    }.get(spec.normalizer, "LEAN_STK_LIMIT_FETCH_CONCURRENCY")
     concurrency = max(
         1,
         min(16, int(os.environ.get(concurrency_key, str(min(16, general_concurrency))))),
@@ -2838,7 +2839,10 @@ def _sync_stk_limit_fast(
         and all(str(item.get("listed_date") or "") > market_start_after for item in uncovered_active)
     )
     retry_failed_only = bool(checkpoint.get("retryFailedOnly"))
-    date_fetch_name = "suspend_rows_for_date" if spec.normalizer == "suspend_d" else "limit_prices_for_date"
+    date_fetch_name = {
+        "suspend_d": "suspend_rows_for_date",
+        "daily_basic": "daily_basic_rows_for_date",
+    }.get(spec.normalizer, "limit_prices_for_date")
     date_mode = bool(
         not full_refresh
         and not retry_failed_only
@@ -3109,7 +3113,7 @@ def _sync_stk_limit_fast(
         buffered = []
         buffered_rows = 0
 
-    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-stk-limit") as executor:
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix=f"tushare-{spec.key}") as executor:
         pending: dict[int, Any] = {}
         submit_cursor = 0
         stop_submission = False
@@ -3380,8 +3384,8 @@ def _sync_generic(
             full_refresh=full_refresh,
             minimum_start_date=minimum_start_date,
         )
-    if spec.normalizer in {"stk_limit", "suspend_d"}:
-        return _sync_stk_limit_fast(
+    if spec.normalizer in {"daily_basic", "stk_limit", "suspend_d"}:
+        return _sync_instrument_dataset_fast(
             adapter,
             spec,
             run_id,
@@ -3637,6 +3641,13 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
                     where source='tushare:daily_basic'
                     group by symbol,trade_date
                 ) daily_basic_rows
+                """
+            ).fetchone()
+        elif spec.normalizer == "dividend":
+            aggregate = connection.execute(
+                """
+                select count(*) as count,min(ex_date) as first_date,max(ex_date) as last_date
+                from corporate_actions where source='tushare:dividend'
                 """
             ).fetchone()
         elif spec.normalizer == "financial":
@@ -3920,7 +3931,7 @@ def run_sync(
                 else:
                     dataset_end_date = (
                         market_end_date
-                        if spec.key in {"adj_factor", "suspend_d", "stk_limit", "index_daily"}
+                        if spec.key in {"adj_factor", "daily_basic", "suspend_d", "stk_limit", "index_daily"}
                         else end_date
                     )
                     result = _sync_generic(

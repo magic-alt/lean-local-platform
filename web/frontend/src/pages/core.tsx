@@ -1788,8 +1788,8 @@ export function DataPage() {
     Modal.confirm({
       title: incremental ? "增量更新本地全部市场与研究数据？" : "首次全量建立本地数据库？",
       content: incremental
-        ? "将从已保存的水位和检查点开始，仅拉取新增或缺失数据。港美股和每小时级限频数据不会扫描，仅在实际使用时按需获取。"
-        : "尚未发现成功完成的首次建库记录。将按当前权限全量建立本地市场与研究数据库，完成后系统会持久记住，后续按钮自动切换为增量更新。",
+        ? "将从已保存的水位和检查点开始，仅拉取新增或缺失数据。daily_basic 按缺失交易日整市场更新，dividend 按标的补齐并写入 MySQL；港美股和每小时级限频数据仍按需获取。"
+        : "尚未发现成功完成的首次建库记录。将按当前权限把行情、daily_basic 和 dividend 等默认数据写入本地 MySQL，完成后系统会持久记住，后续按钮自动切换为增量更新。",
       okText: incremental ? "开始增量更新" : "开始全量建库",
       onOk: () => startFullSync("auto")
     });
@@ -1917,7 +1917,7 @@ export function DataPage() {
           showIcon
           style={{ margin: "12px 0" }}
           message="实际接口探测优先于积分推断"
-          description={`一键更新只保留 A 股执行数据、基准指数及 CFFEX/SSE 期货期权合约目录。具体合约行情、财务、基金、港美股、宏观及特色数据仅在 Preview、项目、研究或回测实际使用时查询。当前有 ${syncProgress.denied} 个无权限数据集、${syncProgress.onDemand} 个按需数据集、${syncProgress.retryable} 个暂时限频数据集。`}
+          description={`一键更新写入 MySQL 的 A 股执行数据包含 daily_basic 每日指标与 dividend 分红，公司财务报表仍按研究需要获取；同时保留基准指数及 CFFEX/SSE 期货期权合约目录。具体合约行情、基金、港美股、宏观及特色数据按需查询。当前有 ${syncProgress.denied} 个无权限数据集、${syncProgress.onDemand} 个按需数据集、${syncProgress.retryable} 个暂时限频数据集。`}
         />
         <Card
           size="small"
@@ -2250,8 +2250,8 @@ export function DataPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="10 个一键更新数据集已按业务对象分组"
-          description="股票页合并 stock_basic、daily、adj_factor、suspend_d、stk_limit；其余数据集分别按交易日历、指数、期货和期权预览。"
+          message={`${oneClickCatalogRows.length} 个一键更新数据集已按业务对象分组`}
+          description="股票行情页合并 stock_basic、daily、adj_factor、suspend_d、stk_limit；daily_basic 与 dividend 可在研究数据中直接查询规范化 MySQL 表。"
         />
         <Tabs
           destroyOnHidden={false}
@@ -2266,6 +2266,14 @@ export function DataPage() {
               label: "交易日历 Preview",
               children: <DatasetPreviewPanel datasets={[
                 { key: "trade_cal", label: "交易日历 · trade_cal", keywordPlaceholder: "可按市场或来源筛选" }
+              ]} />
+            },
+            {
+              key: "research-data",
+              label: "研究数据 Preview",
+              children: <DatasetPreviewPanel datasets={[
+                { key: "daily_basic", label: "每日指标 · daily_basic", keywordPlaceholder: "股票代码或指标名，例如 600519 / pe_ttm" },
+                { key: "dividend", label: "分红送转 · dividend", keywordPlaceholder: "股票代码，例如 600519" }
               ]} />
             },
             {

@@ -63,11 +63,13 @@ config/data-sources/          可移植的数据来源 manifest；纳入版本�
 
 Data 页一键更新范围以代码中的 `BULK_DATASET_KEYS` 为准，当前为：
 
-`stock_basic`、`trade_cal`、`daily`、`adj_factor`、`suspend_d`、
-`stk_limit`、`index_basic`、`index_daily`、`fut_basic`、`opt_basic`。
+`stock_basic`、`trade_cal`、`daily`、`adj_factor`、`daily_basic`、
+`suspend_d`、`stk_limit`、`dividend`、`index_basic`、`index_daily`、
+`fut_basic`、`opt_basic`。
 
 首次完整成功后系统保存建库状态和水位，按钮切换为增量更新。`daily_basic`
-等其他数据集通过按需操作单独下载。
+规范化写入 `factor_values`，`dividend` 写入 `corporate_actions`；其他数据集
+通过按需操作单独下载。
 
 同步完成状态采用证据门禁：每个数据集必须同时具有 ready item、成功
 ingestion manifest、适用的 watermark，以及可读取的 raw archive。日线变更会

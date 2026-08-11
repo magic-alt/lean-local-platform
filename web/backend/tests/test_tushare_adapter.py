@@ -496,6 +496,41 @@ def test_long_daily_basic_and_index_weight_ranges_are_windowed():
     assert pro.index_weight_calls[-1]["end_date"] == "20260717"
 
 
+def test_daily_basic_trade_date_fetch_normalizes_the_whole_market():
+    from app.services.tushare_adapter import TushareAdapter
+
+    class DatePro:
+        def __init__(self):
+            self.calls = []
+
+        def daily_basic(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeFrame([
+                {"ts_code": "000001.SZ", "trade_date": "20260717", "pe_ttm": 8.5},
+                {"ts_code": "600000.SH", "trade_date": "20260717", "pb": 0.7},
+            ])
+
+    pro = DatePro()
+    rows = TushareAdapter(pro=pro).daily_basic_rows_for_date("2026-07-17")
+
+    assert pro.calls[0]["trade_date"] == "20260717"
+    assert set(pro.calls[0]) == {"trade_date", "fields"}
+    assert rows == [
+        {
+            "symbol": "000001",
+            "trade_date": "2026-07-17",
+            "factors": {"pe_ttm": 8.5},
+            "source": "tushare:daily_basic",
+        },
+        {
+            "symbol": "600000",
+            "trade_date": "2026-07-17",
+            "factors": {"pb": 0.7},
+            "source": "tushare:daily_basic",
+        },
+    ]
+
+
 class HongKongPro:
     def hk_basic(self, **kwargs):
         return FakeFrame([

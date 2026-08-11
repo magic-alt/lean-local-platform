@@ -8,7 +8,7 @@ import { candlestickOption } from "../../charts/candlestick";
 import { LeanChart } from "../../charts/LeanChart";
 
 export interface PreviewDatasetOption {
-  key: "trade_cal" | "index_basic" | "index_daily" | "fut_basic" | "opt_basic";
+  key: "trade_cal" | "daily_basic" | "dividend" | "index_basic" | "index_daily" | "fut_basic" | "opt_basic";
   label: string;
   keywordPlaceholder: string;
 }
@@ -50,6 +50,21 @@ const COLUMNS: Record<string, PreviewColumn[]> = {
     { title: "上一交易日", dataIndex: "prev_trade_date", width: 120, render: dateValue },
     { title: "下一交易日", dataIndex: "next_trade_date", width: 120, render: dateValue },
     { title: "来源", dataIndex: "source", ellipsis: true },
+  ],
+  daily_basic: [
+    { title: "股票代码", dataIndex: "symbol", width: 110, render: textValue },
+    { title: "交易日", dataIndex: "trade_date", width: 120, render: dateValue },
+    { title: "指标", dataIndex: "factor_name", width: 190, render: textValue },
+    { title: "值", dataIndex: "value", width: 150, render: (value: unknown) => numberValue(value, 4) },
+    { title: "来源", dataIndex: "source", width: 190, ellipsis: true, render: textValue },
+  ],
+  dividend: [
+    { title: "股票代码", dataIndex: "symbol", width: 110, render: textValue },
+    { title: "除权除息日", dataIndex: "ex_date", width: 120, render: dateValue },
+    { title: "类型", dataIndex: "action_type", width: 100, render: textValue },
+    { title: "现金分红/股", dataIndex: "cash_dividend", width: 130, render: (value: unknown) => numberValue(value, 4) },
+    { title: "送转股/股", dataIndex: "stock_dividend", width: 120, render: (value: unknown) => numberValue(value, 4) },
+    { title: "来源", dataIndex: "source", width: 180, ellipsis: true, render: textValue },
   ],
   index_basic: [
     { title: "指数代码", dataIndex: "ts_code", width: 120, render: textValue },
@@ -99,6 +114,8 @@ const COLUMNS: Record<string, PreviewColumn[]> = {
 
 const TABLE_WIDTH: Record<string, number> = {
   trade_cal: 700,
+  daily_basic: 800,
+  dividend: 850,
   index_basic: 1080,
   index_daily: 1100,
   fut_basic: 1120,

@@ -18,8 +18,10 @@ PREVIEW_DATASETS = {
     "trade_cal",
     "daily",
     "adj_factor",
+    "daily_basic",
     "suspend_d",
     "stk_limit",
+    "dividend",
     "index_basic",
     "index_daily",
     "fut_basic",
@@ -211,6 +213,25 @@ def _sql_preview(
             normalized = normalize_symbol(keyword, "china")
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
             values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
+    elif dataset == "daily_basic":
+        table = "factor_values"
+        select = "symbol,trade_date,factor_name,value,source"
+        date_column = "trade_date"
+        order_by = "trade_date desc, symbol, factor_name"
+        clauses.append("source='tushare:daily_basic'")
+        if keyword:
+            compact_symbol = keyword.upper().replace(".", "")
+            for affix in ("SH", "SZ", "BJ"):
+                if compact_symbol.startswith(affix):
+                    compact_symbol = compact_symbol[len(affix):]
+                elif compact_symbol.endswith(affix):
+                    compact_symbol = compact_symbol[:-len(affix)]
+            if compact_symbol.isdigit() and len(compact_symbol) == 6:
+                clauses.append("symbol = ?")
+                values.append(compact_symbol)
+            else:
+                clauses.append("(symbol like ? or factor_name like ?)")
+                values.extend([f"%{keyword}%", f"%{keyword}%"])
     elif dataset == "suspend_d":
         table = "ashare_trade_status"
         select = "symbol,trade_date,is_suspended,can_buy,can_sell,source"
@@ -227,6 +248,19 @@ def _sql_preview(
         date_column = "trade_date"
         order_by = "trade_date desc"
         clauses.append("source='tushare:stk_limit'")
+        if keyword:
+            normalized = normalize_symbol(keyword, "china")
+            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
+    elif dataset == "dividend":
+        table = "corporate_actions"
+        select = (
+            "symbol,ex_date,action_type,cash_dividend,stock_dividend,split_ratio,"
+            "allotment_ratio,allotment_price,source"
+        )
+        date_column = "ex_date"
+        order_by = "ex_date desc, symbol"
+        clauses.append("source='tushare:dividend'")
         if keyword:
             normalized = normalize_symbol(keyword, "china")
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")

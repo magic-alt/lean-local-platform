@@ -75,6 +75,36 @@ def test_symbol_preview_uses_normalized_exact_match():
     assert result["items"][0]["symbol"] == "600519"
 
 
+def test_daily_basic_and_dividend_previews_read_canonical_mysql_tables():
+    init_db()
+    with db() as connection:
+        connection.execute(
+            """
+            insert into factor_values
+                (symbol,trade_date,factor_name,value,source,batch_id,created_at)
+            values ('600519','2026-07-17','pe_ttm',21.5,'tushare:daily_basic','test',?)
+            """,
+            (utc_now(),),
+        )
+        connection.execute(
+            """
+            insert into corporate_actions
+                (symbol,ex_date,action_type,cash_dividend,stock_dividend,source,batch_id,created_at)
+            values ('600519','2026-06-20','dividend',2.5,0.1,'tushare:dividend','test',?)
+            """,
+            (utc_now(),),
+        )
+
+    client = TestClient(app)
+    basic = client.get("/api/data/dataset-preview/daily_basic", params={"keyword": "pe_ttm"})
+    dividend = client.get("/api/data/dataset-preview/dividend", params={"keyword": "SH600519"})
+
+    assert basic.status_code == dividend.status_code == 200
+    assert basic.json()["storage"] == dividend.json()["storage"] == "canonical_table"
+    assert basic.json()["items"][0]["value"] == 21.5
+    assert dividend.json()["items"][0]["cash_dividend"] == 2.5
+
+
 def test_index_daily_preview_reads_full_canonical_history_instead_of_latest_archive():
     init_db()
     _store_archive("index_daily", [

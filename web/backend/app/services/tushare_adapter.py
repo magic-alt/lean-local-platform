@@ -401,6 +401,29 @@ class TushareAdapter:
             "source": "tushare:stock_basic",
         }
 
+    @staticmethod
+    def _normalize_daily_basic_rows(frame: Any, fallback_symbol: str = "") -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for item in _records(frame):
+            trade_date = _iso_date(item.get("trade_date"))
+            if not trade_date:
+                continue
+            factors: dict[str, float] = {}
+            for raw_name, (factor_name, multiplier) in DAILY_BASIC_FACTORS.items():
+                value = _finite_float(item.get(raw_name), multiplier=multiplier)
+                if value is not None:
+                    factors[factor_name] = value
+            if factors:
+                rows.append(
+                    {
+                        "symbol": from_tushare_code(item.get("ts_code") or fallback_symbol),
+                        "trade_date": trade_date,
+                        "factors": factors,
+                        "source": "tushare:daily_basic",
+                    }
+                )
+        return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
+
     def daily_basic_rows(self, symbol: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         records_by_date: dict[str, dict[str, Any]] = {}
         for window_start, window_end in _date_windows(start_date, end_date):
@@ -417,26 +440,18 @@ class TushareAdapter:
                 trade_date = _iso_date(item.get("trade_date"))
                 if trade_date:
                     records_by_date[trade_date] = item
-        rows: list[dict[str, Any]] = []
-        for item in records_by_date.values():
-            trade_date = _iso_date(item.get("trade_date"))
-            if not trade_date:
-                continue
-            factors: dict[str, float] = {}
-            for raw_name, (factor_name, multiplier) in DAILY_BASIC_FACTORS.items():
-                value = _finite_float(item.get(raw_name), multiplier=multiplier)
-                if value is not None:
-                    factors[factor_name] = value
-            if factors:
-                rows.append(
-                    {
-                        "symbol": from_tushare_code(item.get("ts_code") or symbol),
-                        "trade_date": trade_date,
-                        "factors": factors,
-                        "source": "tushare:daily_basic",
-                    }
-                )
-        return sorted(rows, key=lambda row: (row["trade_date"], row["symbol"]))
+        return self._normalize_daily_basic_rows(list(records_by_date.values()), symbol)
+
+    def daily_basic_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        compact_date = _compact_date(trade_date, "trade_date")
+        frame = self.pro.daily_basic(
+            trade_date=compact_date,
+            fields=(
+                "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,"
+                "ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
+            ),
+        )
+        return self._normalize_daily_basic_rows(frame)
 
     def adjustment_factors(self, symbol: str, start_date: str, end_date: str) -> dict[str, float]:
         result: dict[str, float] = {}

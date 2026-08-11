@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Include `daily_basic` and `dividend` in the Data page's default full/incremental MySQL update, use market-wide trade-date calls for efficient `daily_basic` increments, and expose both canonical tables in Data Preview.
+
 - Add a read-only Qlib research bridge with checksum-verified Object Store artifacts, idempotent external-run registration, immutable latest target snapshots, and a fail-closed Backtest draft handoff that never submits orders automatically.
 
 - Add production-only acceptance scripts for remaining actual-environment P1 evidence:
