@@ -348,7 +348,12 @@ def init_storage() -> None:
 
 
 class MySQLConnection:
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        local_infile: bool = False,
+    ) -> None:
         if pymysql is None or DictCursor is None:
             raise RuntimeError("pymysql is required when LEAN_DATABASE_URL uses mysql+pymysql.")
         parsed = urlparse(database_url or DATABASE_URL)
@@ -365,6 +370,7 @@ class MySQLConnection:
             autocommit=False,
             cursorclass=DictCursor,
             connect_timeout=5,
+            local_infile=local_infile,
         )
 
     def execute(self, sql: str, parameters: Iterable[Any] | dict[str, Any] | None = None):
@@ -442,13 +448,21 @@ def _transient_mysql_connection_error(exc: Exception) -> bool:
         return False
 
 
-def _connect_mysql(database_url: str | None = None) -> MySQLConnection:
+def _connect_mysql(
+    database_url: str | None = None,
+    *,
+    local_infile: bool = False,
+) -> MySQLConnection:
     attempts = max(1, min(int(os.environ.get("LEAN_MYSQL_CONNECT_ATTEMPTS", "5")), 10))
     base_delay = max(0.0, min(float(os.environ.get("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0.5")), 5.0))
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return MySQLConnection(database_url)
+            return (
+                MySQLConnection(database_url, local_infile=True)
+                if local_infile
+                else MySQLConnection(database_url)
+            )
         except Exception as exc:
             if not _transient_mysql_connection_error(exc):
                 raise
@@ -667,7 +681,10 @@ def bulk_db() -> Iterable[sqlite3.Connection | MySQLConnection]:
     require_loader = os.environ.get("LEAN_REQUIRE_LOADER_DATABASE", "0").lower() in {"1", "true", "yes", "on"}
     connection: MySQLConnection | None = None
     try:
-        connection = _connect_mysql(loader_url)
+        local_infile = os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower() in {
+            "1", "true", "yes", "on",
+        }
+        connection = _connect_mysql(loader_url, local_infile=local_infile)
         if disable_binlog:
             connection.execute("set session sql_log_bin=0")
     except Exception as exc:
@@ -939,44 +956,6 @@ def init_db() -> None:
                 source text,
                 batch_id text,
                 primary key (market, trade_date)
-            );
-
-            create table if not exists ashare_daily_bars (
-                symbol text not null,
-                trade_date text not null,
-                open real not null,
-                high real not null,
-                low real not null,
-                close real not null,
-                volume real not null,
-                amount real,
-                turnover_rate real,
-                prev_close real,
-                pct_change real,
-                adj_factor real,
-                adjust text not null default 'raw',
-                source text not null,
-                batch_id text not null,
-                created_at text not null,
-                primary key (symbol, trade_date, adjust, source)
-            );
-
-            create table if not exists ashare_trade_status (
-                symbol text not null,
-                trade_date text not null,
-                is_suspended integer not null default 0,
-                limit_up real,
-                limit_down real,
-                is_limit_up integer not null default 0,
-                is_limit_down integer not null default 0,
-                is_one_word_limit_up integer not null default 0,
-                is_one_word_limit_down integer not null default 0,
-                can_buy integer not null default 1,
-                can_sell integer not null default 1,
-                is_st integer not null default 0,
-                source text not null,
-                batch_id text not null,
-                primary key (symbol, trade_date)
             );
 
             create table if not exists adjustment_factors (

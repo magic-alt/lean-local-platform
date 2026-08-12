@@ -80,7 +80,6 @@ def candidate_instruments(symbols: list[str] | None = None) -> list[dict[str, An
         queries = {
             "securities": "select symbol from securities",
             "instruments": "select symbol from instruments where asset_class = 'equity' and market = 'china'",
-            "ashare_daily_bars": "select distinct symbol from ashare_daily_bars",
             "market_daily_bars": "select distinct symbol from market_daily_bars where asset_class = 'equity' and market = 'china'",
         }
         found: dict[str, set[str]] = defaultdict(set)

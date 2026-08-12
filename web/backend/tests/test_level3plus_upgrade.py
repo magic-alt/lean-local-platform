@@ -77,14 +77,6 @@ def seed_level3plus_data(db_module):
                 for source in ("tushare", "jqdata", "akshare"):
                     connection.execute(
                         """
-                        insert into ashare_daily_bars
-                            (symbol, trade_date, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (symbol, trade_date, close, close + 1, close - 1, close, 1000, 100000, "raw", source, "batch", now),
-                    )
-                    connection.execute(
-                        """
                         insert into market_daily_bars
                             (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
                              open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
@@ -94,11 +86,12 @@ def seed_level3plus_data(db_module):
                     )
                 connection.execute(
                     """
-                    insert into ashare_trade_status
-                        (symbol, trade_date, is_suspended, limit_up, limit_down, can_buy, can_sell, is_st, source, batch_id)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    insert into market_trade_status
+                        (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
+                         is_suspended,limit_up,limit_down,can_buy,can_sell,is_st,source,batch_id,updated_at)
+                    values (?,?,'equity','china','china',?,1,?,?,?,?,?,?,?,? ,?)
                     """,
-                    (symbol, trade_date, 0, close * 1.1, close * 0.9, 1, 1, 0, "akshare:unit", "batch"),
+                    (f"inst-{symbol}",symbol,trade_date,0,close * 1.1,close * 0.9,1,1,0,"akshare:unit","batch",now),
                 )
                 connection.execute(
                     "insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id) values (?, ?, ?, ?, ?)",

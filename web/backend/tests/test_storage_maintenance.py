@@ -136,12 +136,11 @@ def test_raw_record_pruning_requires_a_readable_archive(monkeypatch):
         assert connection.execute("select count(*) as n from provider_raw_records").fetchone()["n"] == 0
 
 
-def test_canonical_ashare_writes_skip_duplicate_specialized_tables(monkeypatch):
+def test_canonical_ashare_writes_skip_duplicate_specialized_tables():
     import app.db as db_module
     from app.services import ashare_repository
 
     db_module.init_db()
-    monkeypatch.setenv("LEAN_ASHARE_CANONICAL_WRITES", "1")
     ashare_repository.upsert_daily_bars(
         [{"symbol": "000001", "trade_date": "2026-01-02", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 100}],
         source="tushare",
@@ -156,8 +155,13 @@ def test_canonical_ashare_writes_skip_duplicate_specialized_tables(monkeypatch):
         bulk=True,
     )
     with db_module.db() as connection:
-        assert connection.execute("select count(*) as n from ashare_daily_bars").fetchone()["n"] == 0
-        assert connection.execute("select count(*) as n from ashare_trade_status").fetchone()["n"] == 0
+        legacy = connection.execute(
+            """
+            select count(*) as n from sqlite_master
+            where type in ('table','view') and name in ('ashare_daily_bars','ashare_trade_status')
+            """
+        ).fetchone()
+        assert legacy["n"] == 0
         status = connection.execute(
             "select is_st,is_limit_up from market_trade_status where symbol='000001' and trade_date='2026-01-02'"
         ).fetchone()

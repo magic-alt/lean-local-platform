@@ -47,9 +47,11 @@ def _seed(db_module):
         )
         connection.executemany(
             """
-            insert into ashare_daily_bars
-                (symbol,trade_date,open,high,low,close,volume,amount,adj_factor,adjust,source,batch_id,created_at)
-            values ('000001',?,10,11,9,10,1000000,60000000,1,'raw','unit','batch','2016-01-01')
+            insert into market_daily_bars
+                (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
+                 open,high,low,close,volume,amount,adj_factor,adjust,source,batch_id,created_at)
+            values ('inst-000001','000001','equity','china','china',?,'daily','trade',
+                    10,11,9,10,1000000,60000000,1,'raw','unit','batch','2016-01-01')
             """,
             [(value,) for value in dates],
         )

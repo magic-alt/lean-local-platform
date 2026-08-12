@@ -117,7 +117,11 @@ def import_sample_ashare(tmp_path, monkeypatch):
             "update securities set is_st=1 where symbol='600519'"
         )
         connection.execute(
-            "update ashare_trade_status set is_suspended=1 where symbol='600519' and trade_date='2024-01-04'"
+            """
+            update market_trade_status set is_suspended=1,can_buy=0,can_sell=0
+            where symbol='600519' and trade_date='2024-01-04'
+              and asset_class='equity' and market='china' and venue='china'
+            """
         )
         connection.execute(
             """
@@ -1126,7 +1130,7 @@ def test_suspension_evidence_is_not_overwritten_by_stk_limit_status(tmp_path, mo
     configure_temp_platform(tmp_path, monkeypatch)
 
     from app.db import db
-    from app.services.ashare_repository import upsert_trade_status
+    from app.services.ashare_repository import effective_trade_status, upsert_trade_status
 
     suspended = {
         "symbol": "000301",
@@ -1156,11 +1160,7 @@ def test_suspension_evidence_is_not_overwritten_by_stk_limit_status(tmp_path, mo
         batch_id="limit-batch",
     )
 
-    with db() as connection:
-        row = connection.execute(
-            "select * from ashare_trade_status where symbol=? and trade_date=?",
-            ("000301", "2021-12-22"),
-        ).fetchone()
+    row = effective_trade_status("000301", "2021-12-22")
     assert row["is_suspended"] == 1
     assert row["can_buy"] == 0
     assert row["can_sell"] == 0
@@ -1177,9 +1177,10 @@ def test_execution_coverage_uses_canonical_market_suspension_evidence(tmp_path, 
     with db() as connection:
         connection.execute(
             """
-            insert into ashare_trade_status
-                (symbol,trade_date,is_suspended,can_buy,can_sell,source,batch_id)
-            values (?,?,?,?,?,?,?)
+            insert into market_trade_status
+                (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
+                 is_suspended,can_buy,can_sell,source,batch_id,updated_at)
+            values ('legacy-test-status',?,'equity','china','china',?,1,?,?,?,?,?,'now')
             """,
             ("000301", "2021-12-22", 0, 1, 1, "tushare:stk_limit", "limit-batch"),
         )
@@ -1304,7 +1305,7 @@ def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
     from app.db import db
-    from app.services.ashare_repository import LOOKUP_BATCH_SIZE, upsert_trade_status
+    from app.services.ashare_repository import LOOKUP_BATCH_SIZE, effective_trade_status, upsert_trade_status
 
     start = datetime(2024, 1, 1)
     official_rows = [
@@ -1323,21 +1324,18 @@ def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     upsert_trade_status(inferred_rows, source="unit:ohlcv_inferred", batch_id="inferred-batch")
 
     with db() as connection:
-        ashare = connection.execute(
-            """
-            select count(*) as count, min(can_buy) as min_can_buy, max(can_buy) as max_can_buy,
-                   min(source) as min_source, max(source) as max_source
-            from ashare_trade_status where symbol='600001'
-            """
-        ).fetchone()
         market = connection.execute(
             "select count(*) as count from market_trade_status where symbol='600001'"
         ).fetchone()
 
-    assert ashare["count"] == LOOKUP_BATCH_SIZE + 1
-    assert ashare["min_can_buy"] == ashare["max_can_buy"] == 0
-    assert ashare["min_source"] == ashare["max_source"] == "official-unit"
-    assert market["count"] == LOOKUP_BATCH_SIZE + 1
+    first = effective_trade_status("600001", start.date().isoformat())
+    last = effective_trade_status(
+        "600001", (start + timedelta(days=LOOKUP_BATCH_SIZE)).date().isoformat()
+    )
+    assert first and last
+    assert first["can_buy"] is last["can_buy"] is False
+    assert first["source"] == last["source"] == "official-unit"
+    assert market["count"] == (LOOKUP_BATCH_SIZE + 1) * 2
 
 
 def test_adjustment_factors_write_factor_file_and_corporate_actions(tmp_path, monkeypatch):

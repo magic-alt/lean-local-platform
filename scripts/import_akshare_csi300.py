@@ -100,8 +100,10 @@ def summarize_database(symbols: list[str], start: str, end: str, membership_as_o
         bars = connection.execute(
             f"""
             select count(*) as rows, count(distinct symbol) as symbols, min(trade_date) as first_date, max(trade_date) as last_date
-            from ashare_daily_bars
-            where symbol in ({placeholders}) and trade_date >= ? and trade_date <= ?
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+              and symbol in ({placeholders}) and trade_date >= ? and trade_date <= ?
             """,
             [*symbols, start, end],
         ).fetchone()

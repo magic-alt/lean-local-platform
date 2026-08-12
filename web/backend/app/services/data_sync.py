@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
 import json
@@ -40,9 +40,26 @@ from .tushare_adapter import TushareAdapter
 from .tushare_contracts import contract_for, contract_public_item, coverage_report, sync_contract_catalog
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
 from .tushare_typed_source import persist_typed_source_rows
+from .tushare_lineage import async_lineage_enabled, enqueue_lineage_job, lineage_metrics
 
 
 T = TypeVar("T")
+
+
+# Provider responses are Python dictionaries and are duplicated temporarily by
+# validation, raw lineage archiving, comparison, and canonical writers.  A
+# 500k-row logical batch can therefore consume several GiB even when its wire
+# payload is comparatively small.  Keep the bound in code so an old .env value
+# cannot reintroduce an OOM after a deployment upgrade.
+MAX_SYNC_BATCH_ROWS = 100_000
+
+
+def _sync_batch_rows(env_key: str, default: int = 100_000) -> int:
+    return max(1_000, min(MAX_SYNC_BATCH_ROWS, int(os.environ.get(env_key, str(default)))))
+
+
+def _sync_batch_units(env_key: str, default: int = 16, *, maximum: int = 16) -> int:
+    return max(1, min(maximum, int(os.environ.get(env_key, str(default)))))
 
 
 def _finite_number(value: Any) -> float | None:
@@ -1223,7 +1240,15 @@ def _archive_raw_batch(
                 utc_now(),
             ),
         )
-    typed_source = persist_typed_source_rows(spec.key, rows, run_id)
+    if async_lineage_enabled():
+        typed_source = enqueue_lineage_job(
+            run_id=run_id,
+            dataset_key=spec.key,
+            object_id=object_id,
+            row_count=len(rows),
+        )
+    else:
+        typed_source = persist_typed_source_rows(spec.key, rows, run_id)
     return {
         "id": archive_id,
         "objectId": object_id,
@@ -1273,6 +1298,9 @@ def _save_raw(
 
     if spec.retain_raw and archive:
         _archive_raw_batch(spec, canonical_rows, batch_id)
+    # Drop our reference without mutating the list passed to the archive
+    # implementation (test and alternate stores may retain it for auditing).
+    canonical_rows = []
 
     # The row table now contains only keys, dates and hashes. Reserve enough
     # room for its indexes without multiplying by the removed JSON payload.
@@ -1362,8 +1390,10 @@ def audit_existing_data() -> dict[str, int]:
         rows = connection.execute(
             """
             select source, symbol, min(trade_date) as start_date, max(trade_date) as end_date, count(*) as row_count
-            from ashare_daily_bars
-            where source in ('test', 'manual', 'csv')
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+              and source in ('test', 'manual', 'csv')
             group by source, symbol
             """
         ).fetchall()
@@ -1596,6 +1626,7 @@ def _throughput_metrics(
     committed: int,
     queue_depth: int = 0,
     processed_units: int = 0,
+    fetched_units: int | None = None,
     total_units: int = 0,
     empty_units: int = 0,
     validated: int = 0,
@@ -1603,6 +1634,7 @@ def _throughput_metrics(
     endpoint_calls: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
     rate_units: int | None = None,
+    include_storage: bool = True,
 ) -> dict[str, Any]:
     elapsed = max(0.001, time.monotonic() - started)
     session_units = processed_units if rate_units is None else max(0, rate_units)
@@ -1622,6 +1654,7 @@ def _throughput_metrics(
         "writeRowsPerSecond": round(committed / elapsed, 2),
         "queueDepth": queue_depth,
         "processedUnits": processed_units,
+        "fetchedUnits": processed_units if fetched_units is None else max(0, fetched_units),
         "sessionProcessedUnits": session_units,
         "totalUnits": total_units,
         "emptyUnits": empty_units,
@@ -1632,7 +1665,7 @@ def _throughput_metrics(
         "endpointCalls": endpoint_calls or {},
         "timingsMs": {key: round(value, 2) for key, value in (timings or {}).items()},
         "elapsedSeconds": round(elapsed, 2),
-        **_disk_metrics(),
+        **(_disk_metrics() if include_storage else {}),
     }
 
 
@@ -1759,7 +1792,12 @@ def _latest_open_trade_date(end_date: str, market: str = "china") -> str:
 def _latest_bar(symbol: str) -> str | None:
     with db() as connection:
         row = connection.execute(
-            "select max(trade_date) as trade_date from ashare_daily_bars where symbol=? and adjust='raw' and source='tushare'",
+            """
+            select max(trade_date) as trade_date from market_daily_bars
+            where symbol=? and adjust='raw' and source='tushare'
+              and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+            """,
             (symbol,),
         ).fetchone()
     return str(row["trade_date"]) if row and row["trade_date"] else None
@@ -1770,8 +1808,10 @@ def _latest_bars_by_symbol() -> dict[str, str]:
         rows = connection.execute(
             """
             select symbol,max(trade_date) as trade_date
-            from ashare_daily_bars
+            from market_daily_bars
             where adjust='raw' and source='tushare'
+              and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
             group by symbol
             """
         ).fetchall()
@@ -1981,6 +2021,7 @@ def _sync_daily_by_trade_date(
     *,
     securities: list[dict[str, Any]],
     start_after: str,
+    reconcile_full_snapshot: bool = False,
 ) -> tuple[int, int, int, int]:
     """Increment daily bars with one full-market request per missing session."""
     state = _item_state(run_id, spec.key)
@@ -1992,6 +2033,7 @@ def _sync_daily_by_trade_date(
     api_before = _api_snapshot(adapter)
     endpoint_calls: dict[str, int] = {}
     api_calls = downloaded = committed = empty_units = validated = 0
+    fetched_units = processed
     timings = {
         "fetchWait": 0.0,
         "validate": 0.0,
@@ -2000,8 +2042,8 @@ def _sync_daily_by_trade_date(
         "metadata": 0.0,
     }
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
-    batch_dates = max(1, min(64, int(os.environ.get("LEAN_DAILY_INCREMENT_BATCH_DATES", "16"))))
-    chunk_rows = max(20_000, int(os.environ.get("LEAN_DAILY_SYNC_CHUNK_ROWS", "500000")))
+    batch_dates = _sync_batch_units("LEAN_DAILY_INCREMENT_BATCH_DATES", 16)
+    chunk_rows = _sync_batch_rows("LEAN_DAILY_SYNC_CHUNK_ROWS")
     with db() as connection:
         dates = connection.execute(
             """
@@ -2056,13 +2098,27 @@ def _sync_daily_by_trade_date(
         nonlocal empty_units, last_committed_date
         if not buffered:
             return
+        _item(
+            run_id,
+            spec.key,
+            metrics=_throughput_metrics(
+                started,
+                phase="load",
+                api_calls=api_calls,
+                downloaded=downloaded,
+                committed=committed,
+                queue_depth=0,
+                processed_units=processed,
+                fetched_units=fetched_units,
+                total_units=total,
+                empty_units=empty_units,
+                validated=validated,
+                endpoint_calls=endpoint_calls,
+                timings=timings,
+                rate_units=processed - session_processed_base,
+            ),
+        )
         all_raw_rows = [row for entry in buffered for row in entry["raw_rows"]]
-
-        def archive() -> float:
-            archive_started = time.perf_counter()
-            if all_raw_rows:
-                _archive_raw_batch(spec, all_raw_rows, batch_id)
-            return (time.perf_counter() - archive_started) * 1000
 
         grouped: dict[str, list[dict[str, Any]]] = {}
         for entry in buffered:
@@ -2070,26 +2126,34 @@ def _sync_daily_by_trade_date(
                 grouped.setdefault(str(row["symbol"]), []).append(row)
         first_date = str(buffered[0]["work_key"])
         last_date = str(buffered[-1]["work_key"])
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="daily-increment-archive") as archive_executor:
-            archive_future = archive_executor.submit(archive)
-            stage_started = time.perf_counter()
-            result = import_ashare_research_batch(
-                [
-                    {
-                        "symbol": symbol,
-                        "rows": rows,
-                        "listed_date": securities_by_symbol.get(symbol, {}).get("listed_date"),
-                        "delisted_date": securities_by_symbol.get(symbol, {}).get("delisted_date"),
-                        "snapshot_start": first_date,
-                        "snapshot_end": last_date,
-                    }
-                    for symbol, rows in sorted(grouped.items())
-                ],
-                sync_run_id=run_id,
-                reconcile_full_snapshot=False,
+        import_entries = [
+            {
+                "symbol": symbol,
+                "rows": rows,
+                "listed_date": securities_by_symbol.get(symbol, {}).get("listed_date"),
+                "delisted_date": securities_by_symbol.get(symbol, {}).get("delisted_date"),
+                "snapshot_start": first_date,
+                "snapshot_end": last_date,
+            }
+            for symbol, rows in sorted(grouped.items())
+        ]
+        stage_started = time.perf_counter()
+        if all_raw_rows:
+            _archive_raw_batch(spec, all_raw_rows, batch_id)
+        timings["rawArchive"] += (time.perf_counter() - stage_started) * 1000
+        stage_started = time.perf_counter()
+        result = import_ashare_research_batch(
+            import_entries,
+            sync_run_id=run_id,
+            reconcile_full_snapshot=False,
+        )
+        if reconcile_full_snapshot:
+            _reconcile_daily_trade_date_batch(
+                first_date,
+                last_date,
+                [row for entry in buffered for row in entry["rows"]],
             )
-            timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
-            timings["rawArchive"] += archive_future.result()
+        timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
         row_counts = {str(entry["work_key"]): len(entry["rows"]) for entry in buffered}
         stage_started = time.perf_counter()
         _persist_trade_date_batch_metadata(
@@ -2135,11 +2199,27 @@ def _sync_daily_by_trade_date(
         buffered = []
         buffered_rows = 0
 
+    _item(
+        run_id,
+        spec.key,
+        metrics=_throughput_metrics(
+            started,
+            phase="fetch",
+            api_calls=api_calls,
+            downloaded=downloaded,
+            committed=committed,
+            processed_units=processed,
+            fetched_units=fetched_units,
+            total_units=total,
+            endpoint_calls=endpoint_calls,
+            rate_units=processed - session_processed_base,
+        ),
+    )
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-daily-date") as executor:
         pending: dict[int, Any] = {}
         submit_cursor = 0
         stop_submission = False
-        while submit_cursor < min(len(pending_work), concurrency * 2):
+        while submit_cursor < min(len(pending_work), concurrency):
             entry = pending_work[submit_cursor]
             pending[int(entry["sequence"])] = executor.submit(fetch, entry)
             submit_cursor += 1
@@ -2157,6 +2237,7 @@ def _sync_daily_by_trade_date(
                 endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
                 api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
+                fetched_units += 1
                 stage_started = time.perf_counter()
                 raw_rows = [
                     _raw_row_for_symbol(spec, row, str(row.get("symbol") or ""))
@@ -2178,8 +2259,6 @@ def _sync_daily_by_trade_date(
                     }
                 )
                 buffered_rows += len(rows)
-                if len(buffered) >= batch_dates or buffered_rows >= chunk_rows:
-                    flush()
             except Exception as exc:  # noqa: BLE001
                 flush()
                 failed += 1
@@ -2193,6 +2272,13 @@ def _sync_daily_by_trade_date(
                 for pending_future in pending.values():
                     pending_future.cancel()
                 break
+            else:
+                # A batch-write failure is not an instrument fetch failure.
+                # Let it abort the dataset with all work items still pending;
+                # otherwise the same growing buffer is archived and written
+                # again for every following symbol.
+                if len(buffered) >= batch_dates or buffered_rows >= chunk_rows:
+                    flush()
             finally:
                 if not stop_submission and submit_cursor < len(pending_work):
                     next_entry = pending_work[submit_cursor]
@@ -2217,8 +2303,14 @@ def _sync_daily(
     end_date: str,
     task_id: str | None = None,
     full_refresh: bool = False,
+    reconcile_full_snapshot: bool | None = None,
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
+    reconcile_snapshot = (
+        full_refresh
+        if reconcile_full_snapshot is None
+        else bool(reconcile_full_snapshot)
+    )
     state = _item_state(run_id, "daily")
     checkpoint = state.get("checkpoint") or {}
     resume_after = max(0, int(checkpoint.get("index") or 0))
@@ -2252,7 +2344,19 @@ def _sync_daily(
         len(key) != 10 or key[4:5] != "-" or key[7:8] != "-"
         for key in existing_work
     )
+    date_mode_start_after: str | None = None
     if (
+        full_refresh
+        and not resumed_symbol_work
+        and hasattr(adapter, "daily_rows_for_date")
+        and active_scope_keys
+    ):
+        first_date = min(
+            max(str(item.get("listed_date") or "1990-12-19"), minimum_start_date or "1990-12-19")
+            for item in active_securities
+        )
+        date_mode_start_after = (date.fromisoformat(first_date) - timedelta(days=1)).isoformat()
+    elif (
         not full_refresh
         and not resumed_symbol_work
         and hasattr(adapter, "daily_rows_for_date")
@@ -2260,6 +2364,8 @@ def _sync_daily(
         and market_start_after
         and (not uncovered_active or uncovered_started_after_frontier)
     ):
+        date_mode_start_after = market_start_after
+    if date_mode_start_after:
         return _sync_daily_by_trade_date(
             adapter,
             spec,
@@ -2268,13 +2374,15 @@ def _sync_daily(
             end_date,
             task_id,
             securities=securities,
-            start_after=market_start_after,
+            start_after=date_mode_start_after,
+            reconcile_full_snapshot=reconcile_snapshot,
         )
     latest_by_symbol = {} if full_refresh else _latest_bars_by_symbol()
     started = time.monotonic()
     api_before = _api_snapshot(adapter)
     endpoint_calls: dict[str, int] = {}
     api_calls = downloaded = committed = empty_units = validated = 0
+    fetched_units = processed
     timings = {
         "fetchWait": 0.0,
         "validate": 0.0,
@@ -2283,8 +2391,8 @@ def _sync_daily(
         "metadata": 0.0,
     }
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
-    batch_units = max(8, min(128, int(os.environ.get("LEAN_DAILY_SYNC_BATCH_UNITS", "64"))))
-    chunk_rows = max(20_000, int(os.environ.get("LEAN_DAILY_SYNC_CHUNK_ROWS", "500000")))
+    batch_units = _sync_batch_units("LEAN_DAILY_SYNC_BATCH_UNITS", 16)
+    chunk_rows = _sync_batch_rows("LEAN_DAILY_SYNC_CHUNK_ROWS")
 
     work: list[tuple[int, dict[str, Any], str, str, str]] = []
     for index, security in enumerate(securities, start=1):
@@ -2300,6 +2408,19 @@ def _sync_daily(
         symbol_end = min(end_date, delisted_date) if delisted_date else end_date
         work.append((index, security, symbol, start, symbol_end))
     _ensure_work_items(run_id, spec.key, [(symbol, index) for index, _, symbol, _, _ in work])
+    # A process-level batch failure may reset the item-level checkpoint while
+    # already committed work rows remain durable. Treat those rows as the
+    # source of truth so a resume never downloads the market from symbol one.
+    work_statuses = _work_status(run_id, spec.key)
+    committed_units = sum(status == "committed" for status in work_statuses.values())
+    if committed_units:
+        processed = max(processed, committed_units)
+        session_processed_base = processed
+        work = [
+            item
+            for item in work
+            if work_statuses.get(item[2]) != "committed"
+        ]
 
     def fetch(item: tuple[int, dict[str, Any], str, str, str]) -> list[dict[str, Any]]:
         _, _, symbol, start, symbol_end = item
@@ -2318,53 +2439,86 @@ def _sync_daily(
 
     buffered: list[dict[str, Any]] = []
     buffered_rows = 0
+    last_checkpoint = {
+        "symbol": checkpoint.get("symbol"),
+        "index": max(resume_after, processed),
+        "total": len(securities),
+    }
+    last_activity_published = 0.0
 
-    def publish(last_entry: dict[str, Any], queue_depth: int) -> None:
+    def publish_activity(phase: str, queue_depth: int, *, force: bool = False) -> None:
+        """Publish download activity before a large write batch is committed."""
+        nonlocal last_activity_published
+        now = time.monotonic()
+        if not force and now - last_activity_published < 1.0:
+            return
+        last_activity_published = now
         _item(
-            run_id, "daily", processed=processed, inserted=inserted, updated=updated, failed=failed,
-            checkpoint={"symbol": last_entry["symbol"], "index": last_entry["index"], "total": len(securities)},
+            run_id,
+            "daily",
+            processed=processed,
+            inserted=inserted,
+            updated=updated,
+            failed=failed,
+            checkpoint=last_checkpoint,
             metrics=_throughput_metrics(
-                started, phase="load", api_calls=api_calls, downloaded=downloaded,
-                committed=committed, queue_depth=queue_depth, processed_units=processed,
-                total_units=len(securities), empty_units=empty_units, validated=validated,
-                endpoint_calls=endpoint_calls, timings=timings,
+                started,
+                phase=phase,
+                api_calls=api_calls,
+                downloaded=downloaded,
+                committed=committed,
+                queue_depth=queue_depth,
+                processed_units=processed,
+                fetched_units=fetched_units,
+                total_units=len(securities),
+                empty_units=empty_units,
+                validated=validated,
+                endpoint_calls=endpoint_calls,
+                timings=timings,
                 rate_units=processed - session_processed_base,
+                # The first activity event must reach the UI immediately;
+                # measuring a large MySQL data directory can be deferred until
+                # actual rows have started moving.
+                include_storage=downloaded > 0 or committed > 0,
             ),
         )
+
+    def publish(last_entry: dict[str, Any], queue_depth: int) -> None:
+        nonlocal last_checkpoint
+        last_checkpoint = {
+            "symbol": last_entry["symbol"],
+            "index": last_entry["index"],
+            "total": len(securities),
+        }
+        publish_activity("load", queue_depth, force=True)
 
     def flush(queue_depth: int) -> None:
         nonlocal buffered, buffered_rows, processed, inserted, updated, committed, empty_units
         if not buffered:
             return
+        publish_activity("load", queue_depth, force=True)
         all_audit_rows = [row for entry in buffered for row in entry["raw_rows"]]
-        def archive() -> float:
-            archive_started = time.perf_counter()
-            if all_audit_rows:
-                _archive_raw_batch(spec, all_audit_rows, batch_id)
-            return (time.perf_counter() - archive_started) * 1000
-
-        # Archive serialization/compression is independent from canonical
-        # comparison. Overlap them so provenance retention no longer stalls
-        # the single database writer pipeline.
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="daily-archive") as archive_executor:
-            archive_future = archive_executor.submit(archive)
-            stage_started = time.perf_counter()
-            result = import_ashare_research_batch(
-                [
-                    {
-                        "symbol": entry["symbol"], "rows": entry["rows"],
-                        "listed_date": entry["security"].get("listed_date"),
-                        "delisted_date": entry["security"].get("delisted_date"),
-                        "snapshot_start": entry["start"],
-                        "snapshot_end": entry["end"],
-                    }
-                    for entry in buffered if entry["rows"] or full_refresh
-                ],
-                sync_run_id=run_id,
-                reconcile_full_snapshot=full_refresh,
-            )
-            timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
-            timings["rawArchive"] += archive_future.result()
+        import_entries = [
+            {
+                "symbol": entry["symbol"], "rows": entry["rows"],
+                "listed_date": entry["security"].get("listed_date"),
+                "delisted_date": entry["security"].get("delisted_date"),
+                "snapshot_start": entry["start"],
+                "snapshot_end": entry["end"],
+            }
+            for entry in buffered if entry["rows"] or reconcile_snapshot
+        ]
+        stage_started = time.perf_counter()
+        if all_audit_rows:
+            _archive_raw_batch(spec, all_audit_rows, batch_id)
+        timings["rawArchive"] += (time.perf_counter() - stage_started) * 1000
+        stage_started = time.perf_counter()
+        result = import_ashare_research_batch(
+            import_entries,
+            sync_run_id=run_id,
+            reconcile_full_snapshot=reconcile_snapshot,
+        )
+        timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
         metadata_entries = [
             {
                 "work_key": entry["symbol"], "scope_key": entry["symbol"],
@@ -2394,10 +2548,13 @@ def _sync_daily(
         buffered_rows = 0
         publish(last_entry, queue_depth)
 
+    publish_activity("fetch", len(work), force=True)
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-daily") as executor:
         pending: dict[int, Any] = {}
         submit_cursor = 0
-        while submit_cursor < min(len(work), concurrency * 2):
+        # Futures retain completed response rows while the writer is busy.
+        # Bound read-ahead by the same unit limit as the in-memory write batch.
+        while submit_cursor < min(len(work), concurrency):
             item = work[submit_cursor]
             pending[item[0]] = executor.submit(fetch, item)
             submit_cursor += 1
@@ -2415,6 +2572,7 @@ def _sync_daily(
                 endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
                 api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
+                fetched_units += 1
                 stage_started = time.perf_counter()
                 audit_rows = [_raw_row_for_symbol(spec, row, symbol) for row in rows]
                 validation = _validate_dataset_rows(spec, audit_rows)
@@ -2425,14 +2583,20 @@ def _sync_daily(
                      "end": symbol_end, "rows": rows, "raw_rows": audit_rows, "validation": validation}
                 )
                 buffered_rows += len(rows)
-                if buffered_rows >= chunk_rows or len(buffered) >= batch_units:
-                    flush(len(pending))
+                publish_activity("fetch", len(pending))
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 processed += 1
                 _record_sync_failure(spec, symbol, start, symbol_end, exc)
                 _mark_work_items(run_id, spec.key, [symbol], status="failed", error=str(exc))
                 publish({"symbol": symbol, "index": index}, len(pending))
+            else:
+                # Keep write/metadata/reconciliation exceptions out of the
+                # per-symbol retry path. They invalidate the whole buffered
+                # transaction and must not cause repeated writes of that same
+                # buffer under subsequent symbols.
+                if buffered_rows >= chunk_rows or len(buffered) >= batch_units:
+                    flush(len(pending))
             if submit_cursor < len(work):
                 next_item = work[submit_cursor]
                 pending[next_item[0]] = executor.submit(fetch, next_item)
@@ -2440,9 +2604,58 @@ def _sync_daily(
             if not _current_task(run_id, task_id):
                 break
         flush(len(pending))
-    if full_refresh and failed == 0 and not _cancelled(run_id, task_id):
+    if reconcile_snapshot and failed == 0 and not _cancelled(run_id, task_id):
         _reconcile_daily_manifest_scope(run_id)
     return processed, inserted, updated, failed
+
+
+def _reconcile_daily_trade_date_batch(
+    start_date: str,
+    end_date: str,
+    rows: list[dict[str, Any]],
+) -> int:
+    """Reconcile an authoritative full-rebuild date slice after it is loaded."""
+    keys = sorted(
+        {
+            (str(row.get("symbol") or ""), str(row.get("date") or row.get("trade_date") or ""))
+            for row in rows
+            if row.get("symbol") and (row.get("date") or row.get("trade_date"))
+        }
+    )
+    deleted = 0
+    with bulk_db() as connection:
+        connection.execute(
+            """
+            create temporary table if not exists tmp_daily_date_keys (
+                symbol varchar(32) not null,
+                trade_date varchar(10) not null,
+                primary key(symbol,trade_date)
+            )
+            """
+        )
+        connection.execute("delete from tmp_daily_date_keys")
+        if keys:
+            connection.executemany(
+                "insert into tmp_daily_date_keys(symbol,trade_date) values (?,?)",
+                keys,
+            )
+        for table, source in (
+            ("market_trade_status", "tushare:ohlcv_inferred"),
+            ("market_daily_bars", "tushare"),
+        ):
+            cursor = connection.execute(
+                f"""
+                delete from {table}
+                where source=? and trade_date>=? and trade_date<=?
+                  and not exists (
+                      select 1 from tmp_daily_date_keys k
+                      where k.symbol={table}.symbol and k.trade_date={table}.trade_date
+                  )
+                """,
+                (source, start_date, end_date),
+            )
+            deleted += max(0, int(cursor.rowcount or 0))
+    return deleted
 
 
 def _reconcile_daily_manifest_scope(run_id: str) -> int:
@@ -2457,9 +2670,7 @@ def _reconcile_daily_manifest_scope(run_id: str) -> int:
             )
         """
         for table, source in (
-            ("ashare_trade_status", "tushare:ohlcv_inferred"),
             ("market_trade_status", "tushare:ohlcv_inferred"),
-            ("ashare_daily_bars", "tushare"),
             ("market_daily_bars", "tushare"),
         ):
             cursor = connection.execute(
@@ -2793,8 +3004,6 @@ def _sync_adj_factor_fast(
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Concurrent provider reads with one sequential, chunked database writer."""
-    if not full_refresh and _latest_raw_date(spec) is None:
-        full_refresh = True
     state = _item_state(run_id, spec.key)
     checkpoint = state.get("checkpoint") or {}
     legacy_resume = max(0, int(checkpoint.get("index") or 0))
@@ -2808,11 +3017,26 @@ def _sync_adj_factor_fast(
     api_calls = 0
     downloaded = 0
     committed = 0
-    chunk_rows = max(10_000, int(os.environ.get("LEAN_DATA_SYNC_CHUNK_ROWS", "100000")))
+    fetched_units = processed
+    chunk_rows = _sync_batch_rows("LEAN_DATA_SYNC_CHUNK_ROWS")
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
 
-    if not full_refresh:
-        latest = _latest_raw_date(spec)
+    existing_statuses = _work_status(run_id, spec.key)
+    resumed_symbol_work = any(
+        len(key) != 10 or key[4:5] != "-" or key[7:8] != "-"
+        for key in existing_statuses
+    )
+    date_mode = hasattr(adapter, "adjustment_factors_for_date") and not resumed_symbol_work
+    if date_mode:
+        if full_refresh or _latest_raw_date(spec) is None:
+            securities = _listed_securities()
+            first_date = min(
+                max(str(item.get("listed_date") or "1990-12-19"), minimum_start_date or "1990-12-19")
+                for item in securities
+            )
+            start_after = (date.fromisoformat(first_date) - timedelta(days=1)).isoformat()
+        else:
+            start_after = _latest_raw_date(spec) or "1990-12-18"
         with db() as connection:
             dates = connection.execute(
                 """
@@ -2820,7 +3044,7 @@ def _sync_adj_factor_fast(
                 where market='china' and is_open=1 and trade_date>? and trade_date<=?
                 order by trade_date
                 """,
-                (latest or "1990-01-01", end_date),
+                (start_after, end_date),
             ).fetchall()
         work = [(str(row["trade_date"]), index) for index, row in enumerate(dates, start=1)]
         _ensure_work_items(run_id, spec.key, work)
@@ -2837,7 +3061,6 @@ def _sync_adj_factor_fast(
         fetcher: Callable[[str], list[dict[str, Any]]] = fetch_date
     else:
         securities = _listed_securities()
-        existing_statuses = _work_status(run_id, spec.key)
         work = [
             (str(item["symbol"]), index)
             for index, item in enumerate(securities, start=1)
@@ -2878,30 +3101,52 @@ def _sync_adj_factor_fast(
 
     entries: list[tuple[str, list[dict[str, Any]]]] = []
     buffered_rows = 0
+    batch_units = _sync_batch_units("LEAN_DATA_SYNC_BATCH_UNITS", 16)
     failure_samples: list[dict[str, Any]] = []
 
     def flush() -> None:
         nonlocal entries, buffered_rows, inserted, updated, processed, committed
         if not entries:
             return
+        _item(
+            run_id,
+            spec.key,
+            metrics=_throughput_metrics(
+                started,
+                phase="load",
+                api_calls=api_calls,
+                downloaded=downloaded,
+                committed=committed,
+                processed_units=processed,
+                fetched_units=fetched_units,
+                total_units=total,
+                validated=downloaded,
+                endpoint_calls=endpoint_calls,
+                rate_units=processed - session_processed_base,
+            ),
+        )
         metadata_entries: list[dict[str, Any]] = []
         for work_key, values in entries:
             audit_rows = [_raw_row_for_symbol(spec, row, str(row.get("symbol") or work_key)) for row in values]
             validation = _validate_dataset_rows(spec, audit_rows)
-            request_start = listed_dates[work_key] if full_refresh else work_key
+            request_start = listed_dates[work_key] if not date_mode else work_key
             metadata_entries.append(
                 {
                     "work_key": work_key,
                     "scope_key": work_key,
                     "start": request_start,
-                    "end": end_date if full_refresh else work_key,
+                    "end": end_date if not date_mode else work_key,
                     "coverage_start": request_start,
-                    "coverage_end": end_date if full_refresh else work_key,
-                    "request": {"workKey": work_key, "startDate": request_start, "endDate": end_date},
+                    "coverage_end": end_date if not date_mode else work_key,
+                    "request": {
+                        "workKey": work_key,
+                        "startDate": request_start,
+                        "endDate": end_date if not date_mode else work_key,
+                    },
                     "rows": values,
                     "raw_rows": audit_rows,
                     "validation": validation,
-                    "write_watermark": full_refresh,
+                    "write_watermark": not date_mode,
                 }
             )
         estimated_bytes = sum(
@@ -2911,7 +3156,7 @@ def _sync_adj_factor_fast(
         ) * 3
         _assert_disk_capacity(estimated_bytes)
         add, change, written, counts = _flush_adj_factor_batch(spec, batch_id, entries)
-        if full_refresh:
+        if not date_mode:
             _persist_instrument_batch_metadata(
                 run_id=run_id,
                 spec=spec,
@@ -2962,26 +3207,50 @@ def _sync_adj_factor_fast(
         entries = []
         buffered_rows = 0
 
+    _item(
+        run_id,
+        spec.key,
+        metrics=_throughput_metrics(
+            started,
+            phase="fetch",
+            api_calls=api_calls,
+            downloaded=downloaded,
+            committed=committed,
+            processed_units=processed,
+            fetched_units=fetched_units,
+            total_units=total,
+            endpoint_calls=endpoint_calls,
+            rate_units=processed - session_processed_base,
+        ),
+    )
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="tushare-adj") as executor:
-        futures = {executor.submit(fetcher, key): key for key, _ in pending}
-        for future in as_completed(futures):
-            key = futures[future]
+        # Do not submit the whole market at once. Completed futures keep their
+        # response lists alive while a database flush is running and used to
+        # accumulate an entire dataset in RAM.
+        futures: dict[int, Any] = {}
+        submit_cursor = 0
+        read_ahead = min(concurrency, 16)
+        while submit_cursor < min(len(pending), read_ahead):
+            key, sequence = pending[submit_cursor]
+            futures[sequence] = executor.submit(fetcher, key)
+            submit_cursor += 1
+        for key, sequence in pending:
             if _cancelled(run_id, task_id):
-                for pending_future in futures:
+                for pending_future in futures.values():
                     pending_future.cancel()
                 break
+            future = futures.pop(sequence)
             try:
                 rows = future.result()
                 endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
                 api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
+                fetched_units += 1
                 entries.append((key, rows))
                 buffered_rows += len(rows)
-                if buffered_rows >= chunk_rows or len(entries) >= concurrency * 2:
-                    flush()
             except Exception as exc:  # noqa: BLE001
                 failed += 1
-                sample = _record_sync_failure(spec, key if full_refresh else None, key, end_date, exc)
+                sample = _record_sync_failure(spec, None if date_mode else key, key, end_date, exc)
                 if len(failure_samples) < 10:
                     failure_samples.append(sample)
                 _mark_work_items(run_id, spec.key, [key], status="failed", error=str(exc))
@@ -3007,6 +3276,14 @@ def _sync_adj_factor_fast(
                         rate_units=processed - session_processed_base,
                     ),
                 )
+            else:
+                if buffered_rows >= chunk_rows or len(entries) >= batch_units:
+                    flush()
+            finally:
+                if submit_cursor < len(pending):
+                    next_key, next_sequence = pending[submit_cursor]
+                    futures[next_sequence] = executor.submit(fetcher, next_key)
+                    submit_cursor += 1
         flush()
 
     _item(
@@ -3019,6 +3296,7 @@ def _sync_adj_factor_fast(
             downloaded=downloaded,
             committed=committed,
             processed_units=processed,
+            fetched_units=fetched_units,
             total_units=total,
             validated=downloaded,
             endpoint_calls=endpoint_calls,
@@ -3110,11 +3388,12 @@ def _sync_instrument_dataset_fast(
     api_calls = 0
     downloaded = 0
     committed = 0
+    fetched_units = processed
     validated = 0
     empty_units = 0
     timings = {"fetchWait": 0.0, "validate": 0.0, "mysqlWrite": 0.0, "metadata": 0.0}
-    chunk_rows = max(10_000, int(os.environ.get("LEAN_DATA_SYNC_CHUNK_ROWS", "250000")))
-    batch_units = max(8, min(64, int(os.environ.get("LEAN_DATA_SYNC_BATCH_UNITS", "32"))))
+    chunk_rows = _sync_batch_rows("LEAN_DATA_SYNC_CHUNK_ROWS")
+    batch_units = _sync_batch_units("LEAN_DATA_SYNC_BATCH_UNITS", 16)
     general_concurrency = int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))
     concurrency_key = {
         "suspend_d": "LEAN_SUSPEND_FETCH_CONCURRENCY",
@@ -3163,7 +3442,21 @@ def _sync_instrument_dataset_fast(
         len(key) != 10 or key[4:5] != "-" or key[7:8] != "-"
         for key in existing_statuses
     )
-    date_mode = bool(
+    date_mode_start_after: str | None = None
+    if (
+        date_fetch_name
+        and full_refresh
+        and not retry_failed_only
+        and not resumed_symbol_work
+        and active_scope_keys
+        and hasattr(adapter, str(date_fetch_name))
+    ):
+        first_date = min(
+            max(str(item.get("listed_date") or "1990-12-19"), minimum_start_date or "1990-12-19")
+            for item in active_securities
+        )
+        date_mode_start_after = (date.fromisoformat(first_date) - timedelta(days=1)).isoformat()
+    elif (
         date_fetch_name
         and not full_refresh
         and not retry_failed_only
@@ -3172,7 +3465,9 @@ def _sync_instrument_dataset_fast(
         and market_start_after
         and (not uncovered_active or uncovered_started_after_frontier)
         and hasattr(adapter, str(date_fetch_name))
-    )
+    ):
+        date_mode_start_after = market_start_after
+    date_mode = bool(date_mode_start_after)
     work: list[dict[str, Any]] = []
 
     if date_mode:
@@ -3183,7 +3478,7 @@ def _sync_instrument_dataset_fast(
                 where market='china' and is_open=1 and trade_date>? and trade_date<=?
                 order by trade_date
                 """,
-                (market_start_after, end_date),
+                (date_mode_start_after, end_date),
             ).fetchall()
         for sequence, row in enumerate(dates, start=1):
             trade_date = str(row["trade_date"])
@@ -3287,13 +3582,6 @@ def _sync_instrument_dataset_fast(
         last_date = max(str(row["trade_date"]) for row in rows)
         parameters = [*symbols, first_date, last_date]
         with db() as connection:
-            ashare_rows = connection.execute(
-                f"""
-                select symbol,trade_date,limit_up,limit_down from ashare_trade_status
-                where symbol in ({placeholders}) and trade_date>=? and trade_date<=?
-                """,
-                parameters,
-            ).fetchall()
             market_rows = connection.execute(
                 f"""
                 select symbol,trade_date,limit_up,limit_down from market_trade_status
@@ -3313,7 +3601,6 @@ def _sync_instrument_dataset_fast(
                 for item in items
             }
 
-        ashare = values(ashare_rows)
         market = values(market_rows)
 
         def same(left: tuple[float | None, float | None] | None, row: dict[str, Any]) -> bool:
@@ -3330,8 +3617,7 @@ def _sync_instrument_dataset_fast(
 
         return [
             row for row in rows
-            if not same(ashare.get((str(row["symbol"]), str(row["trade_date"]))), row)
-            or not same(market.get((str(row["symbol"]), str(row["trade_date"]))), row)
+            if not same(market.get((str(row["symbol"]), str(row["trade_date"]))), row)
         ]
 
     def flush() -> None:
@@ -3339,6 +3625,25 @@ def _sync_instrument_dataset_fast(
         nonlocal last_committed_date
         if not buffered:
             return
+        _item(
+            run_id,
+            spec.key,
+            metrics=_throughput_metrics(
+                started,
+                phase="load",
+                api_calls=api_calls,
+                downloaded=downloaded,
+                committed=committed,
+                processed_units=processed,
+                fetched_units=fetched_units,
+                total_units=total,
+                empty_units=empty_units,
+                validated=validated,
+                endpoint_calls=endpoint_calls,
+                timings=timings,
+                rate_units=processed - session_processed_base,
+            ),
+        )
         stage_started = time.perf_counter()
         metadata_entries: list[dict[str, Any]] = []
         all_rows: list[dict[str, Any]] = []
@@ -3434,11 +3739,27 @@ def _sync_instrument_dataset_fast(
         buffered = []
         buffered_rows = 0
 
+    _item(
+        run_id,
+        spec.key,
+        metrics=_throughput_metrics(
+            started,
+            phase="fetch",
+            api_calls=api_calls,
+            downloaded=downloaded,
+            committed=committed,
+            processed_units=processed,
+            fetched_units=fetched_units,
+            total_units=total,
+            endpoint_calls=endpoint_calls,
+            rate_units=processed - session_processed_base,
+        ),
+    )
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix=f"tushare-{spec.key}") as executor:
         pending: dict[int, Any] = {}
         submit_cursor = 0
         stop_submission = False
-        while submit_cursor < min(len(pending_work), concurrency * 2):
+        while submit_cursor < min(len(pending_work), concurrency, max(batch_units, 16)):
             entry = pending_work[submit_cursor]
             pending[int(entry["sequence"])] = executor.submit(fetch, entry)
             submit_cursor += 1
@@ -3501,6 +3822,7 @@ def _sync_instrument_dataset_fast(
                 endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
                 api_calls = sum(endpoint_calls.values())
                 downloaded += len(rows)
+                fetched_units += 1
                 buffered.append({**entry, "rows": rows})
                 buffered_rows += len(rows)
                 if len(buffered) >= batch_units or buffered_rows >= chunk_rows:
@@ -3927,8 +4249,10 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
             aggregate = connection.execute(
                 """
                 select count(*) as count, min(trade_date) as first_date, max(trade_date) as last_date
-                from ashare_daily_bars
+                from market_daily_bars
                 where source='tushare' and adjust='raw'
+                  and asset_class='equity' and market='china' and venue='china'
+                  and resolution='daily' and data_type='trade'
                 """
             ).fetchone()
         elif spec.key == "adj_factor":
@@ -3942,7 +4266,9 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
             aggregate = connection.execute(
                 """
                 select count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date
-                from ashare_trade_status where source='tushare:stk_limit'
+                from market_trade_status
+                where source='tushare:stk_limit' and asset_class='equity'
+                  and market='china' and venue='china'
                 """
             ).fetchone()
         elif spec.normalizer == "namechange":
@@ -4138,6 +4464,7 @@ def run_sync(
     sync_mode = str(run_record.get("mode") or "incremental")
     resume_base_mode = str((run_record.get("summary") or {}).get("resumeBaseMode") or "")
     full_refresh = sync_mode in {"initial_full", "full_rebuild", "screen_backfill"} or resume_base_mode in {"initial_full", "full_rebuild", "screen_backfill"}
+    reconcile_full_snapshot = sync_mode == "full_rebuild" or resume_base_mode == "full_rebuild"
     scoped_backfill = sync_mode in {"universe_backfill", "screen_backfill"} or resume_base_mode in {
         "universe_backfill",
         "screen_backfill",
@@ -4248,6 +4575,7 @@ def run_sync(
                         market_end_date,
                         task_id,
                         full_refresh=full_refresh,
+                        reconcile_full_snapshot=reconcile_full_snapshot,
                         minimum_start_date=minimum_start_date,
                     )
                 else:
@@ -4520,7 +4848,32 @@ def sync_run(run_id: str) -> dict[str, Any] | None:
         items = connection.execute("select * from data_sync_items where run_id=? order by dataset_key", (run_id,)).fetchall()
     result = row_to_dict(row)
     if result:
-        result["items"] = rows_to_dicts(items)
+        item_payloads = rows_to_dicts(items)
+        for item in item_payloads:
+            metrics = dict(item.get("metrics") or {})
+            if "writeRowsPerSecond" in metrics:
+                metrics["canonicalWriteRowsPerSecond"] = metrics["writeRowsPerSecond"]
+            if "queueDepth" in metrics:
+                metrics["loadQueueDepth"] = metrics["queueDepth"]
+            if "committedRows" in metrics:
+                metrics["spooledRows"] = metrics["committedRows"]
+            checkpoint = item.get("checkpoint") or {}
+            work_key = str(checkpoint.get("symbol") or "")
+            metrics["fetchStrategy"] = (
+                "market_date"
+                if len(work_key) == 10 and work_key[4:5] == "-" and work_key[7:8] == "-"
+                else "instrument"
+                if work_key
+                else "global"
+            )
+            try:
+                metrics.update(lineage_metrics(run_id, str(item["dataset_key"])))
+            except Exception:
+                # Older test schemas and partially applied deployments do not
+                # have the additive lineage table yet.
+                pass
+            item["metrics"] = metrics
+        result["items"] = item_payloads
     return result
 
 
@@ -4871,7 +5224,7 @@ def _materialize_daily_run_locked(run_id: str, *, lease_connection: Any | None =
             )["items"]
             pending.append((metadata, bars))
             pending_rows += len(bars)
-            if len(pending) >= 100 or pending_rows >= 500_000:
+            if len(pending) >= 10 or pending_rows >= MAX_SYNC_BATCH_ROWS:
                 flush_pending()
         except Exception as exc:  # noqa: BLE001 - derivatives are independently retryable
             flush_pending()
@@ -5091,7 +5444,14 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
         reset_items = [
             entry
             for entry in item.get("items") or []
-            if entry.get("status") == "failed"
+            if (
+                entry.get("status") == "failed"
+                and not (
+                    entry.get("dataset_key") == "daily"
+                    and entry.get("checkpoint")
+                    and int(entry.get("failed") or 0) == 0
+                )
+            )
             or (entry.get("status") == "partial" and not _checkpoint_complete(entry))
             or (entry.get("dataset_key") == "daily" and int(entry.get("failed") or 0) > 0)
         ]

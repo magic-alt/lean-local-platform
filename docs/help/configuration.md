@@ -54,14 +54,15 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 
 | 环境变量 | 默认/作用 |
 | --- | --- |
-| `LEAN_MYSQL_BUFFER_POOL_SIZE` | Compose 工作站默认 `1G` |
-| `LEAN_MYSQL_REDO_LOG_CAPACITY` | 默认 `256M` |
+| `LEAN_MYSQL_BUFFER_POOL_SIZE` | Compose 工作站默认 `4G` |
+| `LEAN_MYSQL_REDO_LOG_CAPACITY` | 默认 `1G` |
+| `LEAN_MYSQL_CPUS` / `LEAN_MYSQL_MEMORY` | 默认 4 CPU / 6 GiB |
+| `LEAN_MYSQL_LOCAL_INFILE` | 默认 `1`；仅 loader 连接启用本地 staging 批量装载 |
 | `LEAN_MYSQL_CONNECT_ATTEMPTS` | 短暂连接故障的有界重试，默认 5 |
 | `LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS` | 重试基础间隔，默认 0.5 秒 |
 | `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` | 单次按需 MySQL 写入估算上限，默认 50 GiB；不与含全量同步数据的实例总大小比较 |
 | `LEAN_OBJECT_STORE_MODE` | `filesystem`（Compose 默认）或 `database`；控制二进制对象有效载荷位置 |
 | `LEAN_FILE_OBJECT_STORE_DIR` | 文件对象根目录；Compose 默认 `/workspace/Data/object-store`，必须纳入 Data 备份 |
-| `LEAN_ASHARE_CANONICAL_WRITES` | 设为 `1` 后仅写入 `market_*`；Compose 默认启用，A 股兼容视图由受确认的维护流程创建 |
 
 一键更新不受 50 GiB 单次按需写入上限限制；所有写入仍服从磁盘安全线。Data 和 Monitoring 显示 MySQL 物理分配空间，不能与按需缓存占用、单表逻辑内容或有效载荷大小混为一谈。
 
@@ -72,14 +73,15 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 | `LEAN_TUSHARE_CALLS_PER_MINUTE` | TuShare 限速；5000 积分账户不超过 500/min |
 | `LEAN_TUSHARE_FETCH_CONCURRENCY` | 通用有界并发预取；同时控制股票主数据状态分片、指数历史窗口及指数/期货/期权市场目录分片 |
 | `LEAN_TUSHARE_TYPED_SOURCE_WRITES` | 默认 `1`；将已注册的低频 TuShare 响应同时写入契约生成的版本化来源表。仅排障时临时关闭，不影响高频 columnar 路由 |
+| `LEAN_TUSHARE_LINEAGE_ASYNC` | 默认 `1`；规范表提交后由独立 lineage worker 批量写版本来源表 |
 | `LEAN_DAILY_BASIC_FETCH_CONCURRENCY` | `daily_basic` 历史预取并发，默认 32；仍受全局 500/min 限速器约束 |
 | `LEAN_DIVIDEND_FETCH_CONCURRENCY` | `dividend` 首次历史预取并发，默认 32；增量改为按除权日拉取全市场 |
 | `LEAN_STK_LIMIT_FETCH_CONCURRENCY` | `stk_limit` 初始历史预取并发 |
 | `LEAN_SUSPEND_FETCH_CONCURRENCY` | `suspend_d` 初始历史预取并发 |
-| `LEAN_DATA_SYNC_BATCH_UNITS` | 通用状态数据每次聚合提交工作单元，默认 32 |
-| `LEAN_DATA_SYNC_CHUNK_ROWS` | SQL/归档分块行数 |
-| `LEAN_DAILY_SYNC_BATCH_UNITS` | `daily` 每次聚合股票数，默认 64 |
-| `LEAN_DAILY_SYNC_CHUNK_ROWS` | `daily` 单批行数上限，默认 500,000 |
+| `LEAN_DATA_SYNC_BATCH_UNITS` | 通用状态数据每次聚合提交工作单元，默认 16 |
+| `LEAN_DATA_SYNC_CHUNK_ROWS` | SQL/归档分块行数，默认 100,000 |
+| `LEAN_DAILY_SYNC_BATCH_UNITS` | `daily` 每次聚合交易日数，默认 16 |
+| `LEAN_DAILY_SYNC_CHUNK_ROWS` | `daily` 单批行数上限，默认 100,000 |
 | `LEAN_DAILY_INCREMENT_BATCH_DATES` | `daily` 全市场增量每次聚合提交的交易日数，默认 16 |
 | `LEAN_RAW_ARCHIVE_GZIP_LEVEL` | raw archive 压缩等级，默认 1；提高会节省少量空间但增加同步 CPU 时间 |
 
@@ -87,7 +89,7 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 
 ## 队列与 worker
 
-完整栈包含 default、data、data-demand、backtest worker 和 beat：
+完整栈包含 default、data、data-lineage、data-demand、backtest worker 和 beat。`data-lineage` 处理已经可靠归档的 TuShare 来源版本，不阻塞规范行情入库。
 
 - default：协调任务和一般后台作业；
 - data：一键同步；

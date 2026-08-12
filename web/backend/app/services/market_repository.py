@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 import uuid
 from datetime import datetime
 from typing import Any
 
-from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import bulk_db, database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .alerts import emit_alert
 from .source_gate import invalidate_source_certification
 
@@ -262,8 +264,18 @@ def upsert_market_daily_bars(
     connection_factory = bulk_db if bulk else db
     certification_revoked = False
     with connection_factory() as connection:
-        for chunk in _chunks(parameters):
-            connection.executemany(sql, chunk)
+        use_local_infile = (
+            bulk
+            and database_backend() == "mysql"
+            and os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower()
+            in {"1", "true", "yes", "on"}
+            and len(parameters) >= 1_000
+        )
+        if use_local_infile:
+            _load_market_daily_bars(connection, parameters)
+        else:
+            for chunk in _chunks(parameters):
+                connection.executemany(sql, chunk)
         certification_revoked = invalidate_source_certification(
             source,
             asset_class=asset_class,
@@ -355,8 +367,18 @@ def upsert_market_daily_bars_batch(
     connection_factory = bulk_db if bulk else db
     certification_revoked = False
     with connection_factory() as connection:
-        for chunk in _chunks(parameters):
-            connection.executemany(sql, chunk)
+        use_local_infile = (
+            bulk
+            and database_backend() == "mysql"
+            and os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower()
+            in {"1", "true", "yes", "on"}
+            and len(parameters) >= 1_000
+        )
+        if use_local_infile:
+            _load_market_daily_bars(connection, parameters)
+        else:
+            for chunk in _chunks(parameters):
+                connection.executemany(sql, chunk)
         certification_revoked = invalidate_source_certification(
             source,
             asset_class=asset_class,
@@ -372,6 +394,92 @@ def upsert_market_daily_bars_batch(
             venue=target_venue,
         )
     return {"count": len(parameters), "symbols": len(symbols)}
+
+
+def _mysql_tsv_value(value: Any) -> str:
+    if value is None:
+        return r"\N"
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+def _load_market_daily_bars(connection: Any, parameters: list[tuple[Any, ...]]) -> None:
+    """Load a validated daily batch through a session-local staging table."""
+    columns = (
+        "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
+        "resolution", "data_type", "open", "high", "low", "close", "settle", "volume",
+        "amount", "turnover_rate", "open_interest", "prev_close", "pct_change", "adjust",
+        "adj_factor", "source", "batch_id", "created_at",
+    )
+    connection.execute(
+        """
+        create temporary table tmp_market_daily_load (
+            instrument_id varchar(64) not null,
+            symbol varchar(32) not null,
+            asset_class varchar(32) not null,
+            market varchar(32) not null,
+            venue varchar(32) not null,
+            trade_date date not null,
+            resolution varchar(32) not null,
+            data_type varchar(32) not null,
+            open decimal(38,10), high decimal(38,10), low decimal(38,10), close decimal(38,10),
+            settle decimal(38,10), volume decimal(38,10), amount decimal(38,10),
+            turnover_rate decimal(38,10), open_interest decimal(38,10),
+            prev_close decimal(38,10), pct_change decimal(38,10),
+            adjust varchar(32) not null, adj_factor decimal(38,10),
+            source varchar(96) not null, batch_id varchar(64), created_at varchar(32) not null
+        ) engine=InnoDB
+        """
+    )
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n",
+            prefix="lean-daily-load-", suffix=".tsv", delete=False,
+        ) as handle:
+            path = handle.name
+            for values in parameters:
+                handle.write("\t".join(_mysql_tsv_value(value) for value in values))
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        quoted_columns = ",".join(f"`{column}`" for column in columns)
+        connection.execute(
+            f"""
+            load data local infile ? into table tmp_market_daily_load
+            character set utf8mb4
+            fields terminated by '\\t' escaped by '\\\\'
+            lines terminated by '\\n'
+            ({quoted_columns})
+            """,
+            (path,),
+        )
+        updates = ",".join(
+            f"`{column}`=values(`{column}`)"
+            for column in (
+                "open", "high", "low", "close", "settle", "volume", "amount",
+                "turnover_rate", "open_interest", "prev_close", "pct_change", "adj_factor",
+                "batch_id", "created_at",
+            )
+        )
+        connection.execute(
+            f"""
+            insert into market_daily_bars ({quoted_columns})
+            select {quoted_columns} from tmp_market_daily_load where 1=1
+            on duplicate key update {updates}
+            """
+        )
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
 
 
 def upsert_market_trade_status(

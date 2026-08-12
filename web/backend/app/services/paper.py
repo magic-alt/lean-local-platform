@@ -11,7 +11,7 @@ from ..domain.assets import asset_request
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.symbols import market_key, normalize_symbol, parse_date
 from ..repositories.backtest_repository import get_backtest, get_result
-from .ashare_repository import get_security, is_tradeable, reference_data_coverage
+from .ashare_repository import effective_trade_status, get_security, is_tradeable, reference_data_coverage
 from .ashare_multisource import quality_gate
 from .backtest_service import create_backtest_job, mark_backtest_queued
 from .data_coverage import ashare_coverage
@@ -1829,8 +1829,10 @@ def _ashare_bar(symbol: str, trade_date: str, source: str | None = None) -> dict
     with db() as connection:
         row = connection.execute(
             f"""
-            select * from ashare_daily_bars
-            where symbol = ? and trade_date = ? and adjust = 'raw'
+            select * from market_daily_bars
+            where symbol = ? and trade_date = ? and asset_class='equity'
+              and market='china' and venue='china' and resolution='daily'
+              and data_type='trade' and adjust = 'raw'
               {source_clause}
             order by source desc
             limit 1
@@ -1869,8 +1871,9 @@ def _latest_ashare_bars(symbol: str, trade_date: str, limit: int, source: str | 
     with db() as connection:
         rows = connection.execute(
             f"""
-            select * from ashare_daily_bars
-            where symbol = ? and trade_date <= ? and adjust = 'raw'
+            select * from market_daily_bars
+            where symbol = ? and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and trade_date <= ? and adjust = 'raw'
               {source_clause}
             order by trade_date desc
             limit ?
@@ -2269,18 +2272,7 @@ def _round_lot(quantity: float, lot_size: int = 100) -> int:
 
 
 def _status_for(symbol: str, trade_date: str) -> dict[str, Any] | None:
-    with db() as connection:
-        row = connection.execute(
-            "select * from ashare_trade_status where symbol = ? and trade_date = ?",
-            (symbol, trade_date),
-        ).fetchone()
-    status = row_to_dict(row)
-    if not status:
-        return None
-    for field in ("is_suspended", "is_limit_up", "is_limit_down", "can_buy", "can_sell", "is_st"):
-        if field in status:
-            status[field] = bool(status[field])
-    return status
+    return effective_trade_status(symbol, trade_date)
 
 
 def _portfolio_constraint_rejection(

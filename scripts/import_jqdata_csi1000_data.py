@@ -131,8 +131,9 @@ def _count_db_rows(symbol: str, start_date: str, end_date: str) -> dict[str, Any
                 count(*) as rows,
                 min(trade_date) as firstDate,
                 max(trade_date) as lastDate
-            from ashare_daily_bars
-            where symbol = ?
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and symbol = ?
               and source = 'jqdata'
               and adjust = 'raw'
               and trade_date between ? and ?

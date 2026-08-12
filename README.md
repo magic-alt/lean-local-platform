@@ -46,7 +46,7 @@ cp .env.example .env
 
 ```bash
 docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-demand-worker backtest-worker beat
+  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 ## 数据与运行目录

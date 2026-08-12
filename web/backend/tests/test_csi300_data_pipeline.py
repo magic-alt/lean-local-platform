@@ -151,7 +151,11 @@ def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend
             "select value from daily_basic_factor_values where symbol = '600519' and factor_name = 'pe_ttm'"
         ).fetchone()
         suspended_bar = connection.execute(
-            "select close, volume from ashare_daily_bars where symbol = '600519' and trade_date = '2024-01-03'"
+            """
+            select close,volume from market_daily_bars
+            where symbol='600519' and asset_class='equity' and market='china' and venue='china'
+              and trade_date='2024-01-03'
+            """
         ).fetchone()
     assert factor["value"] == 20.0
     assert suspended_bar is None
@@ -179,7 +183,7 @@ def test_csi300_pipeline_dry_run_does_not_write_database(tmp_path, monkeypatch):
     assert result["batchId"] == "dry-run"
     with db() as connection:
         batches = connection.execute("select count(*) as count from data_import_batches").fetchone()["count"]
-        bars = connection.execute("select count(*) as count from ashare_daily_bars").fetchone()["count"]
+        bars = connection.execute("select count(*) as count from market_daily_bars").fetchone()["count"]
         weights = connection.execute("select count(*) as count from index_weights").fetchone()["count"]
     assert batches == 0
     assert bars == 0
@@ -229,7 +233,7 @@ def test_csi300_pipeline_research_only_refresh_does_not_fetch_or_write_daily_bar
     assert result["coverage"]["factorValues"] == 2
     assert result["coverage"]["financialStatements"] == 1
     with db() as connection:
-        bars = connection.execute("select count(*) as count from ashare_daily_bars").fetchone()["count"]
+        bars = connection.execute("select count(*) as count from market_daily_bars").fetchone()["count"]
         facts = connection.execute("select count(*) as count from financial_facts").fetchone()["count"]
     assert bars == 0
     assert facts == 1

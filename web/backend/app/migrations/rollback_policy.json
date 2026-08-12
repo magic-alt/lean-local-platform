@@ -48,6 +48,7 @@
     "0044_qlib_research_imports": {"mode": "compensating", "action": "Stop Qlib imports, archive manifests and signal snapshots, and drop the additive tables only through a reviewed forward migration."},
     "0045_daily_basic_wide_storage": {"mode": "compensating", "action": "Stop daily_basic writers, archive the wide table, and remove the compatibility views and table only through a reviewed forward migration."},
     "0046_commercial_market_data_v2": {"mode": "compensating", "action": "Stop v2 market-data writers, retain all source observations and resolution evidence, and remove the additive v2 tables only in reverse dependency order through a reviewed forward migration."},
-    "0047_tushare_typed_source_tables": {"mode": "compensating", "action": "Stop TuShare ingestion, retain immutable raw archives and contract snapshots, and remove generated source tables only through a reviewed forward migration."}
+    "0047_tushare_typed_source_tables": {"mode": "compensating", "action": "Stop TuShare ingestion, retain immutable raw archives and contract snapshots, and remove generated source tables only through a reviewed forward migration."},
+    "0049_async_tushare_lineage": {"mode": "compensating", "action": "Stop lineage workers, drain or archive pending jobs, and remove the additive job table through a reviewed forward migration."}
   }
 }

@@ -4,6 +4,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from urllib.parse import urlparse
 
 import pytest
@@ -269,6 +270,8 @@ def test_mysql_tushare_source_revisions_have_one_current_row() -> None:
     from app.services.tushare_typed_source import persist_typed_source_rows
 
     init_db()
+    with db() as connection:
+        connection.execute("delete from src_tushare_stock_company where ts_code=?", ("000001.SZ",))
     original = {"ts_code": "000001.SZ", "com_name": "Original", "setup_date": "19910403"}
     assert persist_typed_source_rows("stock_company", [original], "mysql-batch-1")["inserted"] == 1
     assert persist_typed_source_rows(
@@ -298,3 +301,59 @@ def test_mysql_tushare_source_revisions_have_one_current_row() -> None:
         (2, 1, "Revised"),
     ]
     assert current_unique["count"] == 1
+
+
+def test_mysql_local_infile_loads_canonical_and_typed_daily_batches() -> None:
+    _assert_isolated_database()
+
+    from app.db import db, init_db
+    from app.services.market_repository import upsert_market_daily_bars_batch
+    from app.services.tushare_typed_source import persist_typed_source_rows
+
+    init_db()
+    with db() as connection:
+        connection.execute("delete from src_tushare_daily where ts_code=?", ("999999.SZ",))
+        connection.execute(
+            "delete from market_daily_bars where source=?",
+            ("mysql_local_infile_probe",),
+        )
+    rows = [
+        {
+            "symbol": "999999.SZ",
+            "ts_code": "999999.SZ",
+            "trade_date": (date(2023, 1, 1) + timedelta(days=index)).strftime("%Y%m%d"),
+            "open": 10 + index / 10_000,
+            "high": 11 + index / 10_000,
+            "low": 9 + index / 10_000,
+            "close": 10.5 + index / 10_000,
+            "pre_close": 10,
+            "change": 0.5,
+            "pct_chg": 5,
+            "vol": 1000 + index,
+            "amount": 10000 + index,
+            "volume": 1000 + index,
+            "pct_change": 5,
+        }
+        for index in range(1_000)
+    ]
+    canonical = upsert_market_daily_bars_batch(
+        rows,
+        source="mysql_local_infile_probe",
+        batch_id="mysql-local-infile-canonical",
+        bulk=True,
+    )
+    typed = persist_typed_source_rows("daily", rows, "mysql-local-infile-typed")
+
+    assert canonical == {"count": 1_000, "symbols": 1}
+    assert typed["inserted"] == 1_000
+    with db() as connection:
+        canonical_count = connection.execute(
+            "select count(*) as count from market_daily_bars where batch_id=?",
+            ("mysql-local-infile-canonical",),
+        ).fetchone()
+        typed_count = connection.execute(
+            "select count(*) as count from src_tushare_daily where `_batch_id`=?",
+            ("mysql-local-infile-typed",),
+        ).fetchone()
+    assert canonical_count["count"] == 1_000
+    assert typed_count["count"] == 1_000

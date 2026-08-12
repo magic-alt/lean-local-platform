@@ -6,18 +6,81 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 from typing import Any
 import uuid
 
-from ..db import bulk_db, json_dump, utc_now
+from ..db import bulk_db, database_backend, json_dump, utc_now
 from .tushare_contracts import SAFE_IDENTIFIER, contract_for
 
 
 LOOKUP_CHUNK_SIZE = 500
+MYSQL_LOOKUP_CHUNK_SIZE = 4_000
 
 
 def _chunks(values: list[str], size: int = LOOKUP_CHUNK_SIZE) -> list[list[str]]:
     return [values[index:index + size] for index in range(0, len(values), size)]
+
+
+def _mysql_tsv_value(value: Any) -> str:
+    if value is None:
+        return r"\N"
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+def _load_parameters(
+    connection: Any,
+    table: str,
+    quoted_columns: str,
+    parameters: list[tuple[Any, ...]],
+) -> None:
+    use_local_infile = (
+        database_backend() == "mysql"
+        and os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower()
+        in {"1", "true", "yes", "on"}
+        and len(parameters) >= 1_000
+    )
+    if not use_local_infile:
+        placeholders = ",".join("?" for _ in parameters[0])
+        connection.executemany(
+            f"insert into `{table}` ({quoted_columns}) values ({placeholders})",
+            parameters,
+        )
+        return
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n",
+            prefix=f"lean-{table}-", suffix=".tsv", delete=False,
+        ) as handle:
+            path = handle.name
+            for values in parameters:
+                handle.write("\t".join(_mysql_tsv_value(value) for value in values))
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        connection.execute(
+            f"""
+            load data local infile ? into table `{table}`
+            character set utf8mb4
+            fields terminated by '\\t' escaped by '\\\\'
+            lines terminated by '\\n'
+            ({quoted_columns})
+            """,
+            (path,),
+        )
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
 
 
 def _date_value(value: Any) -> str | None:
@@ -144,13 +207,18 @@ def persist_typed_source_rows(
     unchanged = len(rows) - len(prepared)
     now = utc_now()
     with bulk_db() as connection:
-        for natural_hashes in _chunks(list(prepared)):
+        lookup_chunk_size = MYSQL_LOOKUP_CHUNK_SIZE if database_backend() == "mysql" else LOOKUP_CHUNK_SIZE
+        for natural_hashes in _chunks(list(prepared), lookup_chunk_size):
             placeholders = ",".join("?" for _ in natural_hashes)
+            current_predicate = (
+                f"`_current_natural_key_hash` in ({placeholders})"
+                if database_backend() == "mysql"
+                else f"`_is_current`=1 and `_natural_key_hash` in ({placeholders})"
+            )
             result_rows = connection.execute(
                 f"""
                 select `_natural_key_hash`,`_revision_no`,`_payload_hash`
-                from `{table}`
-                where `_is_current`=1 and `_natural_key_hash` in ({placeholders})
+                from `{table}` where {current_predicate}
                 """,
                 tuple(natural_hashes),
             ).fetchall()
@@ -162,7 +230,6 @@ def persist_typed_source_rows(
         ]
         columns = metadata_columns + field_names
         quoted_columns = ",".join(f"`{name}`" for name in columns)
-        value_placeholders = ",".join("?" for _ in columns)
         parameters: list[tuple[Any, ...]] = []
         changed_hashes: list[str] = []
         for natural_hash, item in prepared.items():
@@ -204,8 +271,5 @@ def persist_typed_source_rows(
                 (now, *natural_hashes),
             )
         if parameters:
-            connection.executemany(
-                f"insert into `{table}` ({quoted_columns}) values ({value_placeholders})",
-                parameters,
-            )
+            _load_parameters(connection, table, quoted_columns, parameters)
     return {"scanned": len(rows), "inserted": inserted, "revised": revised, "unchanged": unchanged}

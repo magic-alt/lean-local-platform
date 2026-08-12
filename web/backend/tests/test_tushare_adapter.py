@@ -279,6 +279,8 @@ def test_stk_limit_increment_fetches_full_market_for_one_trade_date():
             "ts_code": "",
             "trade_date": "20260717",
             "fields": "ts_code,trade_date,up_limit,down_limit",
+            "limit": 5800,
+            "offset": 0,
         }
     ]
     assert [row["symbol"] for row in rows] == ["000001", "600000"]
@@ -516,7 +518,7 @@ def test_daily_basic_trade_date_fetch_normalizes_the_whole_market():
     rows = TushareAdapter(pro=pro).daily_basic_rows_for_date("2026-07-17")
 
     assert pro.calls[0]["trade_date"] == "20260717"
-    assert set(pro.calls[0]) == {"trade_date", "fields"}
+    assert set(pro.calls[0]) == {"trade_date", "fields", "limit", "offset"}
     assert rows == [
         {
             "symbol": "000001",
@@ -586,6 +588,8 @@ def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
             "ts_code": "",
             "trade_date": "20260717",
             "fields": "ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+            "limit": 6000,
+            "offset": 0,
         }
     ]
     assert daily[0]["symbol"] == "000001"
@@ -593,9 +597,38 @@ def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
     assert daily[0]["volume"] == 1200
     assert pro.dividend_calls[0]["ts_code"] == ""
     assert pro.dividend_calls[0]["ex_date"] == "20260717"
+    assert pro.dividend_calls[0]["limit"] == 5000
+    assert pro.dividend_calls[0]["offset"] == 0
     assert dividends[0]["symbol"] == "600000"
     assert dividends[0]["ex_date"] == "2026-07-17"
     assert dividends[0]["cash_dividend"] == 1.0
+
+
+def test_daily_trade_date_fetch_paginates_a_full_provider_page():
+    from app.services.tushare_adapter import TushareAdapter
+
+    class PagedPro:
+        def __init__(self):
+            self.offsets = []
+
+        def daily(self, **kwargs):
+            self.offsets.append(kwargs["offset"])
+            if kwargs["offset"] == 0:
+                return FakeFrame([
+                    {
+                        "ts_code": f"{index:06d}.SZ", "trade_date": "20260717",
+                        "open": 1, "high": 1, "low": 1, "close": 1,
+                        "pre_close": 1, "pct_chg": 0, "vol": 1, "amount": 1,
+                    }
+                    for index in range(6000)
+                ])
+            return FakeFrame([])
+
+    pro = PagedPro()
+    rows = TushareAdapter(pro=pro).daily_rows_for_date("2026-07-17")
+
+    assert len(rows) == 6000
+    assert pro.offsets == [0, 6000]
 
 
 def test_dividend_normalization_keeps_one_authoritative_action_per_ex_date():

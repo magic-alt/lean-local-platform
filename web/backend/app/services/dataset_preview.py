@@ -193,11 +193,12 @@ def _sql_preview(
             clauses.append("(market like ? or source like ?)")
             values.extend([f"%{keyword}%", f"%{keyword}%"])
     elif dataset == "daily":
-        table = "ashare_daily_bars"
+        table = "market_daily_bars"
         select = "symbol,trade_date,open,high,low,close,prev_close,pct_change,volume,amount,adjust,source"
         date_column = "trade_date"
         order_by = "trade_date desc"
-        clauses.append("adjust='raw'")
+        clauses.append("asset_class='equity' and market='china' and venue='china'")
+        clauses.append("resolution='daily' and data_type='trade' and adjust='raw'")
         if keyword:
             normalized = normalize_symbol(keyword, "china")
             if normalized.isdigit() and len(normalized) == 6:
@@ -234,20 +235,22 @@ def _sql_preview(
                 clauses.append("(symbol like ? or factor_name like ?)")
                 values.extend([f"%{keyword}%", f"%{keyword}%"])
     elif dataset == "suspend_d":
-        table = "ashare_trade_status"
+        table = "market_trade_status"
         select = "symbol,trade_date,is_suspended,can_buy,can_sell,source"
         date_column = "trade_date"
         order_by = "trade_date desc"
+        clauses.append("asset_class='equity' and market='china' and venue='china'")
         clauses.append("source='tushare:suspend_d'")
         if keyword:
             normalized = normalize_symbol(keyword, "china")
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
             values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     elif dataset == "stk_limit":
-        table = "ashare_trade_status"
+        table = "market_trade_status"
         select = "symbol,trade_date,limit_up,limit_down,can_buy,can_sell,is_st,source"
         date_column = "trade_date"
         order_by = "trade_date desc"
+        clauses.append("asset_class='equity' and market='china' and venue='china'")
         clauses.append("source='tushare:stk_limit'")
         if keyword:
             normalized = normalize_symbol(keyword, "china")

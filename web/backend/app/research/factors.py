@@ -228,8 +228,10 @@ def _closes(symbols: list[str], trade_date: str) -> dict[str, float]:
     with db() as connection:
         rows = connection.execute(
             f"""
-            select symbol, close from ashare_daily_bars
-            where trade_date = ? and adjust = 'raw' and symbol in ({placeholders})
+            select symbol, close from market_daily_bars
+            where trade_date = ? and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and adjust = 'raw'
+              and symbol in ({placeholders})
             order by source desc
             """,
             [trade_date, *symbols],
@@ -247,8 +249,10 @@ def _dates_for_analysis(start_date: str, end_date: str) -> list[str]:
     with db() as connection:
         rows = connection.execute(
             """
-            select distinct trade_date from ashare_daily_bars
-            where trade_date >= ? and trade_date <= ?
+            select distinct trade_date from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and adjust='raw'
+              and trade_date >= ? and trade_date <= ?
             order by trade_date asc
             """,
             (start_date, end_date),

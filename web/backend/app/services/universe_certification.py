@@ -39,16 +39,6 @@ def candidate_symbols(
         for row in connection.execute(
             """
             select symbol, count(distinct trade_date) as rows, avg(coalesce(amount, volume, 0)) as liquidity
-            from ashare_daily_bars
-            where source = ? and adjust = 'raw' and trade_date between ? and ?
-            group by symbol
-            """,
-            (source, start_date, end_date),
-        ).fetchall():
-            rows_by_symbol[row["symbol"]] = {"symbol": row["symbol"], "rows": int(row["rows"] or 0), "liquidity": float(row["liquidity"] or 0)}
-        for row in connection.execute(
-            """
-            select symbol, count(distinct trade_date) as rows, avg(coalesce(amount, volume, 0)) as liquidity
             from market_daily_bars
             where source = ? and asset_class = 'equity' and market = 'china'
               and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
@@ -57,9 +47,10 @@ def candidate_symbols(
             """,
             (source, start_date, end_date),
         ).fetchall():
-            item = rows_by_symbol.setdefault(row["symbol"], {"symbol": row["symbol"], "rows": 0, "liquidity": 0.0})
-            item["rows"] = max(int(item["rows"]), int(row["rows"] or 0))
-            item["liquidity"] = max(float(item["liquidity"]), float(row["liquidity"] or 0))
+            rows_by_symbol[row["symbol"]] = {
+                "symbol": row["symbol"], "rows": int(row["rows"] or 0),
+                "liquidity": float(row["liquidity"] or 0),
+            }
     ranked = sorted(rows_by_symbol.values(), key=lambda item: (item["rows"], item["liquidity"], item["symbol"]), reverse=True)
     return [item["symbol"] for item in ranked if item["symbol"] not in INDEX_SYMBOLS][: max(1, int(target_size))]
 

@@ -4,11 +4,17 @@
 
 ## Unreleased
 
+- Switch initial and incremental A-share market datasets to complete trade-date partitions with cap-aware TuShare pagination, load daily canonical and typed-source rows through MySQL `LOAD DATA` staging, move typed lineage persistence to a durable asynchronous worker, expose lineage backlog separately from canonical throughput, and raise the governed workstation MySQL profile to 4 CPU / 6 GiB for a measured 10x ingestion target.
+
+- Bound all TuShare bulk-sync read-ahead and write batches even when legacy environment values request 250k–500k rows, serialize raw archival with canonical loading to prevent transient multi-GiB copies, reduce derived daily materialization batches, batch typed-source lookups eight times more densely on MySQL, remove download-time A-share compatibility reads and dual writes in favor of canonical `market_*` tables only, skip destructive snapshot reconciliation during initial loads, and abort failed batch transactions without repeatedly rewriting a growing buffer so full-market `daily` downloads no longer OOM-kill or stall the data worker before a checkpoint commits.
+
+- Make one-click data updates publish `daily` activity before the first database batch commits, and show live dataset/overall completion, downloaded rows, download speed, write speed, and ETA in the Data page.
+
 - Add a versioned 139-dataset TuShare stock/index/futures/options contract snapshot, generated typed revision tables, provider-neutral commercial market-data v2 schema, columnar high-frequency boundary, public contract coverage API, contract-driven source writes, offline/live-sample validation, and confirmation-protected empty-MySQL preparation workflow.
 
 - Remove the superseded tracked `audit-output`, `level45-upgrade-output`, and `level5-upgrade-output` evidence bundles from the repository.
 
-- Add confirmation-protected MySQL storage maintenance tooling for duplicate-index validation, safe daily_basic EAV cleanup, object migration, retention, and A-share canonical-table cutover. Move new binary objects to the externally mounted Data directory with checksum-verified compatibility reads, make canonical A-share writes the Compose default, add a triple-confirmed no-backup direct market-data reset that preserves business/backtest metadata while invalidating derived releases and clearing only regenerable data, and provide a foreign-key-safe full backtest/artifact purge plus a content-free local MySQL schema report.
+- Add confirmation-protected MySQL storage maintenance tooling for duplicate-index validation, safe daily_basic EAV cleanup, object migration, and retention. Move new binary objects to the externally mounted Data directory with checksum verification, make canonical `market_*` tables the only A-share runtime storage path, remove compatibility-view/cutover commands, add a triple-confirmed no-backup direct market-data reset that preserves business/backtest metadata while invalidating derived releases and clearing only regenerable data, and provide a foreign-key-safe full backtest/artifact purge plus a content-free local MySQL schema report.
 
 - Parallelize independent TuShare stock-master, index-history and index/futures/options catalog partitions under the shared account rate limiter; batch all index daily symbols into one canonical MySQL write and bulk-upsert trade-calendar sessions. Normalize duplicate dividend proposal/implementation revisions to the canonical ex-date action before validation.
 

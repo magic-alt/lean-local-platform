@@ -124,8 +124,13 @@ export interface DataSyncItem {
     committedRows?: number;
     downloadRowsPerSecond?: number;
     writeRowsPerSecond?: number;
+    canonicalWriteRowsPerSecond?: number;
+    fetchStrategy?: "market_date" | "market_window" | "instrument" | "global";
     queueDepth?: number;
+    loadQueueDepth?: number;
+    spooledRows?: number;
     processedUnits?: number;
+    fetchedUnits?: number;
     totalUnits?: number;
     emptyUnits?: number;
     validatedRows?: number;
@@ -147,6 +152,10 @@ export interface DataSyncItem {
     databaseLimitEnforced?: boolean;
     onDemandDatabaseLimitBytes?: number;
     databaseSizeSource?: string;
+    lineageStatus?: "success" | "pending" | "failed";
+    lineagePendingBatches?: number;
+    lineagePendingRows?: number;
+    lineageFailedBatches?: number;
   } | null;
 }
 
@@ -162,6 +171,7 @@ export interface DataSyncRun {
   error?: string | null;
   created_at: string;
   started_at?: string | null;
+  heartbeat_at?: string | null;
   finished_at?: string | null;
   cancel_requested?: boolean | number;
   canonical_status?: string | null;

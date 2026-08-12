@@ -15,6 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, rows_to_dicts  # noqa: E402
+from app.services.ashare_repository import upsert_trade_status  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 from app.services.universe_certification import certified_symbols  # noqa: E402
 
@@ -44,8 +45,9 @@ def _coverage(symbols: list[str], start_date: str, end_date: str) -> dict[str, A
         rows = connection.execute(
             f"""
             select *
-            from ashare_trade_status
-            where symbol in ({placeholders}) and trade_date between ? and ?
+            from market_trade_status
+            where asset_class='equity' and market='china' and venue='china'
+              and symbol in ({placeholders}) and trade_date between ? and ?
             order by symbol, trade_date
             """,
             (*symbols, start_date, end_date),
@@ -87,15 +89,20 @@ def _coverage(symbols: list[str], start_date: str, end_date: str) -> dict[str, A
 
 def _infer_missing(symbols: list[str], source: str, start_date: str, end_date: str) -> dict[str, Any]:
     batch_id = str(uuid.uuid4())
-    inserted = 0
+    inferred_rows: list[dict[str, Any]] = []
     with db() as connection:
         for symbol in symbols:
             rows = connection.execute(
                 """
                 select symbol, trade_date, open, high, low, close
-                from ashare_daily_bars
-                where symbol = ? and source = ? and adjust = 'raw' and trade_date between ? and ?
-                  and trade_date not in (select trade_date from ashare_trade_status where symbol = ?)
+                from market_daily_bars
+                where asset_class='equity' and market='china' and venue='china'
+                  and resolution='daily' and data_type='trade'
+                  and symbol = ? and source = ? and adjust = 'raw' and trade_date between ? and ?
+                  and trade_date not in (
+                      select trade_date from market_trade_status
+                      where symbol=? and asset_class='equity' and market='china' and venue='china'
+                  )
                 order by trade_date
                 """,
                 (symbol, source, start_date, end_date, symbol),
@@ -104,33 +111,13 @@ def _infer_missing(symbols: list[str], source: str, start_date: str, end_date: s
                 close = float(row["close"] or 0)
                 limit_up = round(close * 1.1, 2) if close else None
                 limit_down = round(close * 0.9, 2) if close else None
-                connection.execute(
-                    """
-                    insert into ashare_trade_status
-                        (symbol, trade_date, is_suspended, limit_up, limit_down, is_limit_up,
-                         is_limit_down, is_one_word_limit_up, is_one_word_limit_down,
-                         can_buy, can_sell, is_st, source, batch_id)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        symbol,
-                        row["trade_date"],
-                        0,
-                        limit_up,
-                        limit_down,
-                        0,
-                        0,
-                        0,
-                        0,
-                        1,
-                        1,
-                        0,
-                        "ohlcv_inferred",
-                        batch_id,
-                    ),
-                )
-                inserted += 1
-    return {"batchId": batch_id, "inserted": inserted, "sourceTier": "inferred"}
+                inferred_rows.append({
+                    "symbol": symbol, "trade_date": row["trade_date"], "is_suspended": False,
+                    "limit_up": limit_up, "limit_down": limit_down, "can_buy": True,
+                    "can_sell": True, "is_st": False,
+                })
+    upsert_trade_status(inferred_rows, source="ohlcv_inferred", batch_id=batch_id, bulk=True)
+    return {"batchId": batch_id, "inserted": len(inferred_rows), "sourceTier": "inferred"}
 
 
 def main() -> int:

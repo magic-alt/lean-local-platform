@@ -249,7 +249,7 @@ def _database_objects(connection) -> set[str]:
 
 
 def check_database() -> dict[str, Any]:
-    expected_tables = ["instruments", "market_daily_bars", "ashare_daily_bars", "universe_membership", "index_membership_pit", "stored_objects"]
+    expected_tables = ["instruments", "market_daily_bars", "market_trade_status", "universe_membership", "index_membership_pit", "stored_objects"]
     fallback = {
         "missingTables": expected_tables,
         "counts": {},

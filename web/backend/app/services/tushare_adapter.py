@@ -184,6 +184,26 @@ class TushareAdapter:
             raise LeanWebError("tushare is not installed. Install web/backend requirements first.") from exc
         self.pro = RateLimitedProProxy(ts.pro_api(self.token))
 
+    @staticmethod
+    def _paged_records(endpoint: Any, *, page_size: int, **params: Any) -> list[dict[str, Any]]:
+        """Read a provider partition completely instead of accepting a capped page."""
+        records: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            try:
+                page = _records(endpoint(**params, limit=page_size, offset=offset))
+            except TypeError:
+                if offset:
+                    raise
+                return _records(endpoint(**params))
+            records.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+            if offset > page_size * 1_000:
+                raise LeanWebError("TuShare pagination exceeded the bounded partition limit.")
+        return records
+
     def trade_calendar(self, start_date: str, end_date: str, exchange: str = "SSE") -> list[dict[str, Any]]:
         frame = self.pro.trade_cal(
             exchange=exchange,
@@ -455,7 +475,9 @@ class TushareAdapter:
 
     def daily_basic_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
         compact_date = _compact_date(trade_date, "trade_date")
-        frame = self.pro.daily_basic(
+        frame = self._paged_records(
+            self.pro.daily_basic,
+            page_size=6_000,
             trade_date=compact_date,
             fields=(
                 "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,"
@@ -504,7 +526,9 @@ class TushareAdapter:
     def adjustment_factors_for_date(self, trade_date: str) -> list[dict[str, Any]]:
         """Fetch the full A-share market for a single incremental trade day."""
         day = _compact_date(trade_date, "trade_date")
-        frame = self.pro.adj_factor(
+        frame = self._paged_records(
+            self.pro.adj_factor,
+            page_size=6_000,
             ts_code="",
             trade_date=day,
             fields="ts_code,trade_date,adj_factor",
@@ -608,7 +632,9 @@ class TushareAdapter:
 
     def suspend_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
         """Fetch the authoritative market-wide suspension set for one date."""
-        frame = self.pro.suspend_d(
+        frame = self._paged_records(
+            self.pro.suspend_d,
+            page_size=5_000,
             trade_date=_compact_date(trade_date, "trade_date"),
             fields="ts_code,trade_date,suspend_timing,suspend_type",
         )
@@ -668,7 +694,9 @@ class TushareAdapter:
     def limit_prices_for_date(self, trade_date: str) -> list[dict[str, Any]]:
         """Fetch the full A-share price-limit set for one incremental day."""
         day = _compact_date(trade_date, "trade_date")
-        frame = self.pro.stk_limit(
+        frame = self._paged_records(
+            self.pro.stk_limit,
+            page_size=5_800,
             ts_code="",
             trade_date=day,
             fields="ts_code,trade_date,up_limit,down_limit",
@@ -730,7 +758,9 @@ class TushareAdapter:
     def dividend_rows_for_date(self, ex_date: str) -> list[dict[str, Any]]:
         """Fetch the full market's ex-dividend actions for one trade date."""
         compact_date = _compact_date(ex_date, "ex_date")
-        frame = self.pro.dividend(
+        frame = self._paged_records(
+            self.pro.dividend,
+            page_size=5_000,
             ts_code="",
             ann_date="",
             record_date="",
@@ -973,7 +1003,9 @@ class TushareAdapter:
     def daily_rows_for_date(self, trade_date: str) -> list[dict[str, Any]]:
         """Fetch raw daily bars for the full A-share market in one request."""
         compact_date = _compact_date(trade_date, "trade_date")
-        frame = self.pro.daily(
+        frame = self._paged_records(
+            self.pro.daily,
+            page_size=6_000,
             ts_code="",
             trade_date=compact_date,
             fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",

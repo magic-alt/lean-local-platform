@@ -44,6 +44,7 @@ from ..services.trading_calendar import next_trade_date
 from ..services import paper_accounts
 from ..services import paper_scheduler
 from ..services import data_sync
+from ..services import tushare_lineage
 from ..services import ml_data_preparation
 from ..services import ml_research
 from ..services import research_runs
@@ -733,6 +734,28 @@ def sync_all_data_task(task_id: str, run_id: str):
         )
         _record_task_metric("data_sync", "failed")
         raise
+
+
+@celery_app.task(
+    name="lean_web.persist_tushare_lineage",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(Exception,),
+    retry_backoff=5,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=8,
+)
+def persist_tushare_lineage_task(job_id: str):
+    return tushare_lineage.process_lineage_job(job_id)
+
+
+@celery_app.task(name="lean_web.recover_tushare_lineage")
+def recover_tushare_lineage_task():
+    job_ids = tushare_lineage.recover_lineage_jobs()
+    for job_id in job_ids:
+        persist_tushare_lineage_task.apply_async(args=[job_id], queue="data-lineage")
+    return {"queued": len(job_ids)}
 
 
 @celery_app.task(

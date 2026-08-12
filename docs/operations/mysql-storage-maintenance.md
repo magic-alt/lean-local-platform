@@ -2,7 +2,7 @@
 
 This runbook reduces MySQL allocation without silently deleting market data.
 All mutating commands require `--confirm`; run the matching read-only command
-first. Stop API/worker writes during `OPTIMIZE` and A-share cutover operations.
+first. Stop API/worker writes during `OPTIMIZE` operations.
 
 ## 1. Remove duplicate indexes
 
@@ -16,7 +16,7 @@ Run one daily sync, a representative A-share screen, and a standard backtest.
 Compare returned row counts and result hashes with the baseline. If any query
 regresses, restore the indexes with `restore-indexes --confirm`. Otherwise,
 after the observation period, run `drop-indexes --confirm`; schedule
-`optimize --tables factor_values,market_daily_bars,ashare_daily_bars,ashare_trade_status --confirm`
+`optimize --tables factor_values,market_daily_bars,market_trade_status --confirm`
 only when free disk can hold the largest target table plus 30%.
 
 ## 2. Retire covered legacy daily_basic EAV rows
@@ -62,23 +62,13 @@ web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
   prune-raw-records --retention-days 180 --limit 10000 --confirm
 ```
 
-## 4. A-share canonical-table cutover
+## 4. A-share canonical tables
 
-Deploy the release, set `LEAN_ASHARE_CANONICAL_WRITES=1` for API and workers,
-then pause writes and run:
-
-```bash
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py prepare-ashare --confirm
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py ashare-coverage
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py cutover-ashare --confirm
-```
-
-Cutover refuses to run if any A-share row lacks its same-source canonical
-market-table counterpart. It renames the old tables to `legacy_*` and creates
-read-compatible `ashare_*` views over `market_*`. Keep the legacy tables for
-14 days and validate a sync, screen, and backtest. Only then run
-`drop-ashare-legacy --confirm`; reverting consists of restoring the legacy
-tables/views while writes are paused.
+All writers, readers, screens, research jobs and maintenance commands use
+`market_daily_bars` and `market_trade_status` directly. There is no A-share
+compatibility-view mode or cutover command. Old `ashare_*` relations from an
+earlier deployment are not read or written; remove them only through a reviewed
+forward migration after verifying their canonical rows and a backup.
 
 ## 5. Direct rebuild of regenerable market data (no backup)
 
@@ -91,8 +81,7 @@ post-reset bulk download selection.
 
 The command first refuses to run if active task, sync, pipeline, or derived
 maintenance rows exist. It truncates MySQL base tables (returning their
-InnoDB table space), removes the physical duplicate A-share tables, creates
-read-compatible views, invalidates Parquet/Dataset Release certificates
+InnoDB table space), invalidates Parquet/Dataset Release certificates
 without deleting backtest references, clears the enabled ClickHouse mirror,
 and removes only `$LEAN_PARQUET_DIR` contents plus the external
 `provider-raw` object namespace. When provider-raw chunks were still stored
@@ -100,9 +89,8 @@ in MySQL, it also rebuilds the remaining `stored_object_chunks` table to
 return those deleted pages. It writes an audit JSON under
 `web/runtime/maintenance-audits/`.
 
-Before the window, deploy this release (Compose defaults
-`LEAN_ASHARE_CANONICAL_WRITES=1` and filesystem object storage), then enable
-the API write gate and stop all writers:
+Before the window, deploy this release with filesystem object storage, then
+enable the API write gate and stop all writers:
 
 ```bash
 export LEAN_MAINTENANCE_READ_ONLY=1

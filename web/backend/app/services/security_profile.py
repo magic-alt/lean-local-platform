@@ -26,17 +26,19 @@ def _coverage_row(
     table: str,
     symbol: str,
     date_column: str,
+    predicate: str = "",
 ) -> dict[str, Any] | None:
+    extra = f" and {predicate}" if predicate else ""
     aggregate = connection.execute(
         f"select count(*) as rows, min({date_column}) as first_date, max({date_column}) as last_date "
-        f"from {table} where symbol = ?",
+        f"from {table} where symbol = ?{extra}",
         (symbol,),
     ).fetchone()
     count = int(aggregate["rows"] or 0) if aggregate else 0
     if count <= 0:
         return None
     sources = connection.execute(
-        f"select distinct source from {table} where symbol = ? order by source",
+        f"select distinct source from {table} where symbol = ?{extra} order by source",
         (symbol,),
     ).fetchall()
     return {
@@ -81,14 +83,14 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
         coverage: list[dict[str, Any]] = []
         if selected_market == "china":
             specs = (
-                ("daily", "日线行情", "ashare_daily_bars", "trade_date"),
-                ("trade_status", "交易状态/涨跌停", "ashare_trade_status", "trade_date"),
-                ("adjustment_factors", "复权因子", "adjustment_factors", "trade_date"),
-                ("corporate_actions", "公司行动", "corporate_actions", "ex_date"),
-                ("factor_values", "每日指标/因子", "all_factor_values", "trade_date"),
-                ("financial_statements", "财务报表", "financial_statements", "report_date"),
+                ("daily", "日线行情", "market_daily_bars", "trade_date", "asset_class='equity' and market='china' and venue='china' and resolution='daily' and data_type='trade'"),
+                ("trade_status", "交易状态/涨跌停", "market_trade_status", "trade_date", "asset_class='equity' and market='china' and venue='china'"),
+                ("adjustment_factors", "复权因子", "adjustment_factors", "trade_date", ""),
+                ("corporate_actions", "公司行动", "corporate_actions", "ex_date", ""),
+                ("factor_values", "每日指标/因子", "all_factor_values", "trade_date", ""),
+                ("financial_statements", "财务报表", "financial_statements", "report_date", ""),
             )
-            for key, label, table, date_column in specs:
+            for key, label, table, date_column, predicate in specs:
                 item = _coverage_row(
                     connection,
                     key=key,
@@ -96,6 +98,7 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
                     table=table,
                     symbol=normalized,
                     date_column=date_column,
+                    predicate=predicate,
                 )
                 if item:
                     coverage.append(item)
@@ -126,7 +129,10 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
                 })
 
         latest_status = row_to_dict(connection.execute(
-            "select * from ashare_trade_status where symbol = ? order by trade_date desc limit 1",
+            """
+            select * from market_trade_status where symbol=? and asset_class='equity'
+              and market='china' and venue='china' order by trade_date desc,updated_at desc limit 1
+            """,
             (normalized,),
         ).fetchone()) if selected_market == "china" else None
         memberships = rows_to_dicts(connection.execute(
@@ -141,8 +147,9 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
             """
             select symbol,trade_date,open,high,low,close,prev_close,pct_change,
                    volume,amount,turnover_rate,adj_factor,source
-            from ashare_daily_bars
-            where symbol=? and adjust='raw'
+            from market_daily_bars
+            where symbol=? and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and adjust='raw'
             order by case when source='tushare' then 0 else 1 end, trade_date desc
             limit 1
             """,
@@ -157,8 +164,9 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
         ).fetchall()) if selected_market == "china" else []
         suspension_history = rows_to_dicts(connection.execute(
             """
-            select trade_date,is_suspended,can_buy,can_sell,source from ashare_trade_status
-            where symbol=? and source='tushare:suspend_d'
+            select trade_date,is_suspended,can_buy,can_sell,source from market_trade_status
+            where symbol=? and asset_class='equity' and market='china' and venue='china'
+              and source='tushare:suspend_d'
             order by trade_date desc limit 200
             """,
             (normalized,),
@@ -166,8 +174,9 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
         limit_history = rows_to_dicts(connection.execute(
             """
             select trade_date,limit_up,limit_down,can_buy,can_sell,is_st,source
-            from ashare_trade_status
-            where symbol=? and source='tushare:stk_limit'
+            from market_trade_status
+            where symbol=? and asset_class='equity' and market='china' and venue='china'
+              and source='tushare:stk_limit'
             order by trade_date desc limit 200
             """,
             (normalized,),

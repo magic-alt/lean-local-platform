@@ -69,7 +69,7 @@ docker compose up -d mysql redis
 Full app profile:
 
 ```bash
-docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
+docker compose --profile app up -d --build mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 Use `--build` after Dockerfile, dependency or frontend build-input changes. Ordinary restarts do not need it. For the workstation workflow, `scripts/start_web_single_instance.sh` is preferred because it serializes launchers and protects an active data sync from worker replacement.
@@ -201,13 +201,14 @@ High-throughput TuShare synchronization can be tuned with
 `LEAN_DATA_SYNC_CHUNK_ROWS`. Daily history additionally uses
 `LEAN_DAILY_SYNC_BATCH_UNITS`, `LEAN_DAILY_SYNC_CHUNK_ROWS`, and
 `LEAN_DAILY_INCREMENT_BATCH_DATES`; the defaults
-aggregate 64 instruments or 500,000 rows. Initial `stk_limit` and `suspend_d`
-history use concurrent instrument prefetch plus a sequential batch writer;
-later increments use one market-wide request per missing trade date.
-Initial `daily_basic` history uses 8,000-calendar-day per-symbol windows and a
-specialized chunked wide-table writer that persists each provider row once
-instead of expanding it into up to 15 indexed factor rows. Compatibility views
-keep legacy EAV batches readable while new synchronization uses the wide table.
+aggregate 16 market partitions or 100,000 rows. Initial and incremental
+`daily`, `adj_factor`, `daily_basic`, `stk_limit`, `suspend_d`, and `dividend`
+use complete market-wide date partitions. Provider pages are continued with
+`limit`/`offset` whenever a response reaches its documented cap.
+Validated daily batches enter MySQL through a loader-only `LOAD DATA LOCAL
+INFILE` staging table. Raw responses remain checksum-addressed on external
+storage, while the independent `data-lineage-worker` drains durable jobs into
+the versioned `src_tushare_*` tables without blocking canonical availability.
 Index daily history, and the index/futures/options basic catalogs, fan out their
 independent provider partitions under the same bounded concurrency and then use
 one canonical batch writer; normal incremental A-share datasets continue to use

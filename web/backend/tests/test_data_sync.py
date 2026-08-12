@@ -124,8 +124,265 @@ def test_throughput_uses_session_units_for_resume_rate_and_eta(monkeypatch):
     )
 
     assert metrics["sessionProcessedUnits"] == 50
+    assert metrics["fetchedUnits"] == 5_500
     assert metrics["unitsPerSecond"] == 5.0
     assert metrics["etaSeconds"] == 100.0
+
+
+def test_sync_batch_limits_cap_legacy_oversized_environment(monkeypatch):
+    from app.services import data_sync
+
+    monkeypatch.setenv("LEAN_DATA_SYNC_CHUNK_ROWS", "500000")
+    monkeypatch.setenv("LEAN_DAILY_SYNC_BATCH_UNITS", "64")
+
+    assert data_sync._sync_batch_rows("LEAN_DATA_SYNC_CHUNK_ROWS") == 100_000
+    assert data_sync._sync_batch_units("LEAN_DAILY_SYNC_BATCH_UNITS") == 16
+
+
+def test_daily_sync_flushes_legacy_large_configuration_in_bounded_batches(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    monkeypatch.setenv("LEAN_DAILY_SYNC_CHUNK_ROWS", "500000")
+    monkeypatch.setenv("LEAN_DAILY_SYNC_BATCH_UNITS", "64")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": f"{index:06d}", "listed_date": "2026-07-17"}
+            for index in range(1, 21)
+        ],
+    )
+    monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
+    monkeypatch.setattr(data_sync, "_archive_raw_batch", lambda *args, **kwargs: {})
+    batch_sizes = []
+
+    def fake_import(entries, **kwargs):
+        batch_sizes.append(len(entries))
+        return {
+            "rows": len(entries),
+            "changedRows": len(entries),
+            "insertedRows": len(entries),
+            "updatedRows": 0,
+            "batch_id": "batch",
+        }
+
+    monkeypatch.setattr(data_sync, "import_ashare_research_batch", fake_import)
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2026-07-17",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "volume": 1,
+                }
+            ]
+
+    assert data_sync._sync_daily(Adapter(), run["id"], run["id"], "2026-07-17") == (20, 20, 0, 0)
+    assert batch_sizes == [16, 4]
+
+
+def test_initial_full_daily_uses_full_market_trade_date_partitions(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-16", "status": "listed"}],
+    )
+    monkeypatch.setattr(data_sync, "_archive_raw_batch", lambda *args, **kwargs: {})
+    monkeypatch.setattr(data_sync, "_reconcile_daily_trade_date_batch", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        data_sync,
+        "import_ashare_research_batch",
+        lambda entries, **kwargs: {"batch_id": "batch", "updatedRows": 0},
+    )
+    with db() as connection:
+        connection.executemany(
+            "insert into trade_calendar(market,trade_date,is_open,source) values ('china',?,1,'test')",
+            [("2026-07-16",), ("2026-07-17",)],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def daily_rows_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [{
+                "symbol": "000001", "date": trade_date, "open": 1, "high": 1,
+                "low": 1, "close": 1, "volume": 1,
+            }]
+
+    adapter = Adapter()
+    assert data_sync._sync_daily(
+        adapter,
+        run["id"],
+        run["id"],
+        "2026-07-17",
+        full_refresh=True,
+        reconcile_full_snapshot=False,
+    ) == (2, 2, 0, 0)
+    assert adapter.calls == ["2026-07-16", "2026-07-17"]
+
+
+def test_daily_archive_enqueues_typed_lineage_when_async(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    monkeypatch.setenv("LEAN_TUSHARE_LINEAGE_ASYNC", "1")
+    captured = []
+    monkeypatch.setattr(
+        data_sync,
+        "enqueue_lineage_job",
+        lambda **kwargs: captured.append(kwargs) or {"jobId": "job", "status": "pending"},
+    )
+    monkeypatch.setattr(
+        data_sync,
+        "persist_typed_source_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("typed source must be asynchronous")),
+    )
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
+    result = data_sync._archive_raw_batch(
+        spec,
+        [{"ts_code": "000001.SZ", "trade_date": "20260717", "close": 10}],
+        "run-async",
+    )
+
+    assert result["typedSource"] == {"jobId": "job", "status": "pending"}
+    assert captured[0]["dataset_key"] == "daily"
+    assert captured[0]["row_count"] == 1
+
+
+def test_daily_batch_write_failure_is_not_retried_as_symbol_failure(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"], mode="full_rebuild")
+    monkeypatch.setenv("LEAN_DAILY_SYNC_BATCH_UNITS", "2")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": f"{index:06d}", "listed_date": "2026-07-17"}
+            for index in range(1, 6)
+        ],
+    )
+    monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
+    monkeypatch.setattr(data_sync, "_archive_raw_batch", lambda *args, **kwargs: {})
+    writes = []
+
+    def fail_batch(entries, **kwargs):
+        writes.append([entry["symbol"] for entry in entries])
+        raise RuntimeError("canonical batch failed")
+
+    monkeypatch.setattr(data_sync, "import_ashare_research_batch", fail_batch)
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2026-07-17",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "volume": 1,
+                }
+            ]
+
+    with pytest.raises(RuntimeError, match="canonical batch failed"):
+        data_sync._sync_daily(
+            Adapter(), run["id"], run["id"], "2026-07-17", full_refresh=True
+        )
+
+    assert writes == [["000001", "000002"]]
+    with db() as connection:
+        statuses = connection.execute(
+            "select distinct status from data_sync_work_items where run_id=? and dataset_key='daily'",
+            (run["id"],),
+        ).fetchall()
+    assert {row["status"] for row in statuses} == {"pending"}
+
+
+def test_daily_resume_uses_committed_work_when_item_checkpoint_was_reset(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    securities = [
+        {"symbol": f"{index:06d}", "listed_date": "2026-07-17"}
+        for index in range(1, 6)
+    ]
+    monkeypatch.setattr(data_sync, "_listed_securities", lambda: securities)
+    monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
+    monkeypatch.setattr(data_sync, "_archive_raw_batch", lambda *args, **kwargs: {})
+    data_sync._ensure_work_items(
+        run["id"],
+        "daily",
+        [(item["symbol"], index) for index, item in enumerate(securities, start=1)],
+    )
+    with db() as connection:
+        connection.execute(
+            """
+            update data_sync_work_items set status='committed',committed_at=?
+            where run_id=? and dataset_key='daily' and sequence_no<=3
+            """,
+            (utc_now(), run["id"]),
+        )
+        connection.execute(
+            """
+            update data_sync_items
+            set processed=0,inserted=0,updated=0,failed=0,checkpoint_json=null
+            where run_id=? and dataset_key='daily'
+            """,
+            (run["id"],),
+        )
+    calls = []
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            calls.append(symbol)
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2026-07-17",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "volume": 1,
+                }
+            ]
+
+    monkeypatch.setattr(
+        data_sync,
+        "import_ashare_research_batch",
+        lambda entries, **kwargs: {
+            "rows": len(entries),
+            "changedRows": len(entries),
+            "insertedRows": len(entries),
+            "updatedRows": 0,
+            "batch_id": "batch",
+        },
+    )
+
+    assert data_sync._sync_daily(
+        Adapter(), run["id"], run["id"], "2026-07-17", full_refresh=True
+    ) == (5, 2, 0, 0)
+    assert calls == ["000004", "000005"]
 
 
 def test_suspend_resume_targets_only_open_failed_instruments(tmp_path, monkeypatch):
@@ -186,7 +443,7 @@ def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_pa
 
     from app.db import db
     from app.services.ashare_repository import upsert_daily_bars
-    from app.services.data import _reconcile_ashare_daily_snapshot
+    from app.services.data import _reconcile_market_daily_snapshot
 
     rows = [
         {
@@ -202,7 +459,7 @@ def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_pa
     ]
     upsert_daily_bars(rows, source="tushare", batch_id="old", adjust="raw", bulk=True)
 
-    deleted = _reconcile_ashare_daily_snapshot(
+    deleted = _reconcile_market_daily_snapshot(
         [
             {
                 "symbol": "600519",
@@ -214,15 +471,58 @@ def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_pa
     )
 
     with db() as connection:
-        ashare = connection.execute(
-            "select trade_date from ashare_daily_bars where symbol='600519' and source='tushare'"
-        ).fetchall()
         market = connection.execute(
             "select trade_date from market_daily_bars where symbol='600519' and source='tushare'"
         ).fetchall()
-    assert deleted == 2
-    assert [row["trade_date"] for row in ashare] == ["2026-07-22"]
+    assert deleted == 1
     assert [row["trade_date"] for row in market] == ["2026-07-22"]
+
+
+def test_mysql_daily_change_detection_reads_only_canonical_table(monkeypatch):
+    from app.services import data
+
+    statements = []
+
+    class Result:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, sql, parameters=()):
+            statements.append(sql)
+            return Result()
+
+    class Context:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(data, "db", Context)
+    changed = data._mysql_changed_daily_keys(
+        [
+            {
+                "symbol": "000001",
+                "trade_date": "2026-07-17",
+                "open": 10,
+                "high": 11,
+                "low": 9,
+                "close": 10.5,
+                "volume": 1000,
+                "amount": 10000,
+                "turnover_rate": 1,
+                "prev_close": 10,
+                "pct_change": 5,
+                "adj_factor": 1,
+            }
+        ]
+    )
+
+    assert changed == {("000001", "2026-07-17")}
+    assert len(statements) == 2
+    assert all("market_daily_bars" in statement for statement in statements)
+    assert all("ashare_daily_bars" not in statement for statement in statements)
 
 
 def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch):
@@ -268,14 +568,10 @@ def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch)
     deleted = data_sync._reconcile_daily_manifest_scope(run["id"])
 
     with db() as connection:
-        ashare_count = connection.execute(
-            "select count(*) as count from ashare_daily_bars where symbol='000300' and source='tushare'"
-        ).fetchone()["count"]
         market_count = connection.execute(
             "select count(*) as count from market_daily_bars where symbol='000300' and source='tushare'"
         ).fetchone()["count"]
-    assert deleted == 2
-    assert ashare_count == 0
+    assert deleted == 1
     assert market_count == 0
 
 
@@ -783,6 +1079,14 @@ def test_daily_bulk_sync_uses_authoritative_absence_without_nested_suspend_calls
     )
     monkeypatch.setattr(data_sync, "_latest_bars_by_symbol", lambda: {})
     imported = []
+    progress_updates = []
+    original_item = data_sync._item
+
+    def capture_item(run_id, dataset, **fields):
+        progress_updates.append(fields)
+        return original_item(run_id, dataset, **fields)
+
+    monkeypatch.setattr(data_sync, "_item", capture_item)
 
     def fake_import(entries, **kwargs):
         imported.append({"entries": entries, **kwargs})
@@ -797,6 +1101,11 @@ def test_daily_bulk_sync_uses_authoritative_absence_without_nested_suspend_calls
     assert data_sync._sync_daily(Adapter(), run["id"], run["id"], "2026-07-17") == (1, 1, 0, 0)
     assert imported[0]["entries"][0]["symbol"] == "000001"
     assert imported[0]["sync_run_id"] == run["id"]
+    assert progress_updates[0]["metrics"]["phase"] == "fetch"
+    assert progress_updates[0]["metrics"]["fetchedUnits"] == 0
+    assert progress_updates[0]["metrics"]["totalUnits"] == 1
+    assert progress_updates[-1]["metrics"]["phase"] == "load"
+    assert progress_updates[-1]["metrics"]["fetchedUnits"] == 1
 
 
 def test_daily_bulk_sync_validates_real_adapter_date_shape(tmp_path, monkeypatch):
@@ -838,6 +1147,7 @@ def test_daily_bulk_sync_validates_real_adapter_date_shape(tmp_path, monkeypatch
         Adapter(), run["id"], run["id"], "2026-07-17", full_refresh=True
     ) == (1, 1, 0, 0)
     assert imported[0]["entries"][0]["rows"][0]["date"] == "2026-07-17"
+    assert imported[0]["reconcile_full_snapshot"] is True
     with db() as connection:
         manifest = connection.execute(
             "select * from provider_ingestion_manifests where run_id=? and dataset_key='daily'",
@@ -855,6 +1165,64 @@ def test_daily_bulk_sync_validates_real_adapter_date_shape(tmp_path, monkeypatch
     assert manifest["response_rows"] == 1
     assert raw is None
     assert archive["row_count"] == 1
+
+
+def test_initial_full_daily_skips_snapshot_deletes(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    assert run["mode"] == "initial_full"
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [{"symbol": "000001", "listed_date": "2026-07-17"}],
+    )
+    monkeypatch.setattr(data_sync, "_archive_raw_batch", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        data_sync,
+        "_reconcile_daily_manifest_scope",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("initial full sync must not delete canonical snapshots")
+        ),
+    )
+    imported = []
+
+    def fake_import(entries, **kwargs):
+        imported.append({"entries": entries, **kwargs})
+        return {
+            "rows": 1,
+            "changedRows": 1,
+            "insertedRows": 1,
+            "updatedRows": 0,
+            "batch_id": "batch",
+        }
+
+    monkeypatch.setattr(data_sync, "import_ashare_research_batch", fake_import)
+
+    class Adapter:
+        def daily_rows(self, symbol, start, end, **kwargs):
+            return [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2026-07-17",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "volume": 1,
+                }
+            ]
+
+    assert data_sync._sync_daily(
+        Adapter(),
+        run["id"],
+        run["id"],
+        "2026-07-17",
+        full_refresh=True,
+        reconcile_full_snapshot=False,
+    ) == (1, 1, 0, 0)
+    assert imported[0]["reconcile_full_snapshot"] is False
 
 
 def test_empty_instrument_result_advances_coverage_watermark(tmp_path, monkeypatch):
@@ -1235,7 +1603,6 @@ def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_
             "from data_sync_work_items where run_id=? and dataset_key='stk_limit'",
             (run["id"],),
         ).fetchone()
-        ashare = connection.execute("select count(*) as count from ashare_trade_status").fetchone()
         market = connection.execute("select count(*) as count from market_trade_status").fetchone()
         manifests = connection.execute(
             "select count(*) as count from provider_ingestion_manifests where run_id=? and dataset_key='stk_limit'",
@@ -1246,7 +1613,7 @@ def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_
         ).fetchone()
     assert work["count"] == 2
     assert work["min_status"] == work["max_status"] == "committed"
-    assert ashare["count"] == market["count"] == 2
+    assert market["count"] == 2
     assert manifests["count"] == 2
     assert raw["count"] == 0
 
@@ -1965,19 +2332,28 @@ def test_index_daily_normalizer_batches_all_benchmark_symbols(monkeypatch):
 
 def test_daily_catalog_coverage_uses_normalized_table(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
-    from app.db import db, utc_now
+    from app.db import db
     from app.services import data_sync
+    from app.services.ashare_repository import upsert_daily_bars
 
     data_sync.ensure_catalog()
-    with db() as connection:
-        connection.execute(
-            """
-            insert into ashare_daily_bars
-                (symbol,trade_date,open,high,low,close,volume,adj_factor,adjust,source,batch_id,created_at)
-            values ('000001','2026-07-17',10,11,9,10.5,1000,1,'raw','tushare','batch',?)
-            """,
-            (utc_now(),),
-        )
+    upsert_daily_bars(
+        [
+            {
+                "symbol": "000001",
+                "trade_date": "2026-07-17",
+                "open": 10,
+                "high": 11,
+                "low": 9,
+                "close": 10.5,
+                "volume": 1000,
+                "adj_factor": 1,
+            }
+        ],
+        source="tushare",
+        batch_id="batch",
+        adjust="raw",
+    )
     spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "daily")
     data_sync._set_catalog_coverage(spec)
     with db() as connection:

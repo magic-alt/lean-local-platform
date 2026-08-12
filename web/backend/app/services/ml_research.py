@@ -210,11 +210,17 @@ def _load_panel(start_date: str, end_date: str) -> tuple[pl.DataFrame, pl.DataFr
                     and i.taxonomy='SW2021' and i.level_no=1 and i.in_date<=b.trade_date
                     and (i.out_date is null or i.out_date>=b.trade_date)
                     order by i.in_date desc limit 1) industry_code
-        from ashare_daily_bars b
+        from market_daily_bars b
         join securities s on s.symbol=b.symbol
         left join adjustment_factors a on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-        left join ashare_trade_status t on t.symbol=b.symbol and t.trade_date=b.trade_date
-        where b.adjust='raw' and b.trade_date between ? and ?
+        left join (
+            select symbol,trade_date,max(is_suspended) is_suspended
+            from market_trade_status where asset_class='equity' and market='china' and venue='china'
+            group by symbol,trade_date
+        ) t on t.symbol=b.symbol and t.trade_date=b.trade_date
+        where b.asset_class='equity' and b.market='china' and b.venue='china'
+          and b.resolution='daily' and b.data_type='trade'
+          and b.adjust='raw' and b.trade_date between ? and ?
           and exists (select 1 from universe_membership u where u.universe_code='CSI300' and u.symbol=b.symbol
               and u.start_date<=? and (u.end_date is null or u.end_date>=?))
         """,

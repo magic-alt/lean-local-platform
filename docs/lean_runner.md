@@ -70,7 +70,7 @@ Host path resolution uses `LEAN_HOST_PLATFORM_DIR` and `LEAN_HOST_DATA_DIR` when
 When `ashareRules=true`, `write_ashare_execution_artifacts()` writes:
 
 - `ashare_execution.py`: fee model, slippage model, T+1, lot rounding, buy/sell blocking helper.
-- `ashare_trade_status.json`: per-symbol/per-date status from `ashare_trade_status`.
+- `ashare_trade_status.json`: per-symbol/per-date status from canonical `market_trade_status`.
 
 The generated strategy template imports `AShareExecutionHelper` and calls it instead of raw `set_holdings()` for A-share execution. Production backtests always execute a versioned project snapshot; the standalone Docker demo is not a runner fallback.
 

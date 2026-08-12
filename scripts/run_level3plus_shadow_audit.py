@@ -67,8 +67,9 @@ def _trade_reference_summary(symbols: list[str], start_date: str, end_date: str)
                    sum(case when is_st = 1 then 1 else 0 end) as st_rows,
                    sum(case when is_suspended = 1 then 1 else 0 end) as suspended_rows,
                    sum(case when is_limit_up = 1 or is_limit_down = 1 then 1 else 0 end) as limit_rows
-            from ashare_trade_status
-            where symbol in ({placeholders}) and trade_date between ? and ?
+            from market_trade_status
+            where asset_class='equity' and market='china' and venue='china'
+              and symbol in ({placeholders}) and trade_date between ? and ?
             group by symbol
             """,
             (*symbols, start_date, end_date),

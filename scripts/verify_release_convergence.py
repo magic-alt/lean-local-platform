@@ -25,6 +25,7 @@ SERVICES = (
     "api",
     "worker",
     "data-worker",
+    "data-lineage-worker",
     "data-demand-worker",
     "backtest-worker",
     "ml-worker",

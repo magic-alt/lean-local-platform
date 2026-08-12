@@ -35,8 +35,9 @@ def symbol_coverage(
                sum(case when is_limit_down = 1 then 1 else 0 end) as limit_down_rows,
                min(trade_date) as start_date,
                max(trade_date) as end_date
-        from ashare_trade_status
-        where symbol = ? and trade_date between ? and ?
+        from market_trade_status
+        where symbol = ? and asset_class='equity' and market='china' and venue='china'
+          and trade_date between ? and ?
         """,
         (symbol, start_date, end_date),
     )

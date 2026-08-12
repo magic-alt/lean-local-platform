@@ -79,6 +79,8 @@ celery_app.conf.update(
         "lean_web.fetch_data_batch": {"queue": "data-demand"},
         "lean_web.download_on_demand_dataset": {"queue": "data-demand"},
         "lean_web.sync_all_data": {"queue": "data-bulk"},
+        "lean_web.persist_tushare_lineage": {"queue": "data-lineage"},
+        "lean_web.recover_tushare_lineage": {"queue": "default"},
         "lean_web.prepare_ml_data": {"queue": "data-bulk"},
         "lean_web.run_ml_research": {"queue": "ml"},
         "lean_web.run_research_analysis": {"queue": "default"},
@@ -113,6 +115,10 @@ celery_app.conf.update(
         "recover-orphaned-data-sync": {
             "task": "lean_web.recover_data_sync",
             "schedule": 60.0,
+        },
+        "recover-tushare-lineage": {
+            "task": "lean_web.recover_tushare_lineage",
+            "schedule": 30.0,
         },
         "backup-mysql-daily": {
             "task": "lean_web.backup_mysql",

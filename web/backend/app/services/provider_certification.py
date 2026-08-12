@@ -44,8 +44,9 @@ def _source_coverage(provider: str, start_date: str | None = None, end_date: str
                    count(distinct symbol) as symbols,
                    min(trade_date) as first_date,
                    max(trade_date) as last_date
-            from ashare_daily_bars
-            where {" and ".join(clauses)}
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and {" and ".join(clauses)}
             """,
             params,
         ).fetchone()

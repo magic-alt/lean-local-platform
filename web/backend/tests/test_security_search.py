@@ -116,19 +116,23 @@ def test_security_profile_separates_master_source_from_identifiers_and_reports_c
     with db() as connection:
         connection.execute(
             """
-            insert into ashare_daily_bars
-                (symbol, trade_date, open, high, low, close, prev_close, pct_change,
-                 volume, adjust, source, batch_id, created_at)
-            values ('000001','2026-07-18',10,11,9,10.5,10,5,1000,'raw','tushare','test',?)
+            insert into market_daily_bars
+                (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
+                 open,high,low,close,prev_close,pct_change,volume,adjust,source,batch_id,created_at)
+            values ('profile-000001','000001','equity','china','china','2026-07-18','daily','trade',
+                    10,11,9,10.5,10,5,1000,'raw','tushare','test',?)
             """,
             (now,),
         )
         connection.execute(
             """
-            insert into ashare_trade_status
-                (symbol,trade_date,is_suspended,limit_up,limit_down,can_buy,can_sell,source,batch_id)
-            values ('000001','2026-07-18',0,11.55,9.45,1,1,'tushare:stk_limit','test')
+            insert into market_trade_status
+                (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
+                 is_suspended,limit_up,limit_down,can_buy,can_sell,source,batch_id,updated_at)
+            values ('profile-000001','000001','equity','china','china','2026-07-18',1,
+                    0,11.55,9.45,1,1,'tushare:stk_limit','test',?)
             """
+            ,(now,)
         )
         connection.execute(
             """

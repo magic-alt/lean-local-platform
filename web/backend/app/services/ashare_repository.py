@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -21,9 +20,24 @@ WRITE_BATCH_SIZE = 5_000
 LOOKUP_BATCH_SIZE = 400
 
 
-def _canonical_market_writes_enabled() -> bool:
-    """Keep dual writes until the operator installs the compatibility views."""
-    return os.environ.get("LEAN_ASHARE_CANONICAL_WRITES", "0").lower() in {"1", "true", "yes", "on"}
+def _trade_status_priority_sql(column: str = "source") -> str:
+    """Rank canonical evidence without relying on a compatibility view."""
+    return f"""
+        case
+            when lower({column}) like '%suspend%' or lower({column}) like '%daily_absence%' then 120
+            when lower({column}) like '%official%' then 110
+            when lower({column}) like '%inferred%' or lower({column}) like '%ohlcv%' then 10
+            when lower({column}) like '%tushare%' or lower({column}) like '%jqdata%'
+              or lower({column}) like '%rqdata%' or lower({column}) like '%ifind%'
+              or lower({column}) like '%choice%' or lower({column}) like '%wind%'
+              or lower({column}) like '%stk_limit%' then 100
+            when lower({column}) like '%manual%' then 90
+            when lower({column}) like '%adata%' or lower({column}) like '%baostock%'
+              or lower({column}) like '%akshare%' or lower({column}) like '%sina%'
+              or lower({column}) like '%eastmoney%' then 70
+            else 50
+        end
+    """
 
 
 def _chunks(values: list[Any], size: int) -> list[list[Any]]:
@@ -484,71 +498,7 @@ def upsert_daily_bars(
     *,
     bulk: bool = False,
 ) -> None:
-    if _canonical_market_writes_enabled():
-        if bulk:
-            upsert_market_daily_bars_batch(
-                rows, asset_class="equity", market="china", venue="china", source=source,
-                batch_id=batch_id, resolution="daily", data_type="trade", adjust=adjust, bulk=True,
-            )
-        else:
-            grouped_rows: dict[str, list[dict[str, Any]]] = {}
-            for row in rows:
-                grouped_rows.setdefault(str(row["symbol"]), []).append(row)
-            for symbol, symbol_rows in grouped_rows.items():
-                upsert_market_daily_bars(
-                    symbol_rows, symbol=symbol, asset_class="equity", market="china", venue="china",
-                    source=source, batch_id=batch_id, resolution="daily", data_type="trade", adjust=adjust,
-                )
-        return
-    now = utc_now()
-    sql = """
-        insert into ashare_daily_bars
-            (symbol, trade_date, open, high, low, close, volume, amount, turnover_rate,
-             prev_close, pct_change, adj_factor, adjust, source, batch_id, created_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict(symbol, trade_date, adjust, source) do update set
-            open = excluded.open,
-            high = excluded.high,
-            low = excluded.low,
-            close = excluded.close,
-            volume = excluded.volume,
-            amount = excluded.amount,
-            turnover_rate = excluded.turnover_rate,
-            prev_close = excluded.prev_close,
-            pct_change = excluded.pct_change,
-            adj_factor = excluded.adj_factor,
-            batch_id = excluded.batch_id,
-            created_at = excluded.created_at
-    """
-    parameters = [
-        (
-            row["symbol"],
-            row["trade_date"],
-            row["open"],
-            row["high"],
-            row["low"],
-            row["close"],
-            row["volume"],
-            row.get("amount"),
-            row.get("turnover_rate"),
-            row.get("prev_close"),
-            row.get("pct_change"),
-            row.get("adj_factor"),
-            adjust,
-            source,
-            batch_id,
-            now,
-        )
-        for row in rows
-    ]
-    connection_factory = bulk_db if bulk else db
-    with connection_factory() as connection:
-        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
-            connection.executemany(sql, chunk)
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        grouped.setdefault(row["symbol"], []).append(row)
-    if bulk and len(grouped) > 1:
+    if bulk:
         upsert_market_daily_bars_batch(
             rows,
             asset_class="equity",
@@ -562,6 +512,9 @@ def upsert_daily_bars(
             bulk=True,
         )
     else:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["symbol"]), []).append(row)
         for symbol, symbol_rows in grouped.items():
             upsert_market_daily_bars(
                 symbol_rows,
@@ -578,23 +531,6 @@ def upsert_daily_bars(
             )
 
 
-def _trade_status_source_priority(source: str) -> int:
-    value = str(source or "").lower()
-    if "suspend" in value or "daily_absence" in value:
-        return 120
-    if "official" in value:
-        return 110
-    if "inferred" in value or "ohlcv" in value:
-        return 10
-    if any(token in value for token in ("tushare", "jqdata", "rqdata", "ifind", "choice", "wind", "stk_limit")):
-        return 100
-    if "manual" in value:
-        return 90
-    if any(token in value for token in ("adata", "baostock", "akshare", "sina", "eastmoney")) and "inferred" not in value:
-        return 70
-    return 50
-
-
 def upsert_trade_status(
     rows: list[dict[str, Any]],
     source: str,
@@ -602,99 +538,15 @@ def upsert_trade_status(
     *,
     bulk: bool = False,
 ) -> None:
-    if _canonical_market_writes_enabled():
-        upsert_market_trade_status_batch(
-            rows, asset_class="equity", market="china", venue="china", source=source,
-            batch_id=batch_id, bulk=bulk,
-        )
-        return
-    persisted_rows: list[dict[str, Any]] = []
-    source_priority = _trade_status_source_priority(source)
-    connection_factory = bulk_db if bulk else db
-    with connection_factory() as connection:
-        existing_sources: dict[tuple[str, str], str] = {}
-        # Priority 120 is reserved for explicit full-day suspension evidence.
-        # Nothing ranks above it, so those writes need no read-before-write
-        # query. Lower-priority sources retain the guard.
-        if source_priority < 120:
-            keys = sorted({(str(row["symbol"]), str(row["trade_date"])) for row in rows})
-            for key_chunk in _chunks(keys, LOOKUP_BATCH_SIZE):
-                placeholders = ",".join("(?,?)" for _ in key_chunk)
-                values = [value for key in key_chunk for value in key]
-                existing = connection.execute(
-                    f"""
-                    select symbol, trade_date, source
-                    from ashare_trade_status
-                    where (symbol,trade_date) in ({placeholders})
-                    """,
-                    values,
-                ).fetchall()
-                existing_sources.update(
-                    {
-                        (str(item["symbol"]), str(item["trade_date"])): str(item["source"] or "")
-                        for item in existing
-                    }
-                )
-
-        for row in rows:
-            existing_key = (str(row["symbol"]), str(row["trade_date"]))
-            if (
-                existing_key in existing_sources
-                and _trade_status_source_priority(existing_sources[existing_key]) > source_priority
-            ):
-                continue
-            persisted_rows.append(row)
-
-        sql = """
-            insert into ashare_trade_status
-                (symbol, trade_date, is_suspended, limit_up, limit_down, is_limit_up, is_limit_down,
-                 is_one_word_limit_up, is_one_word_limit_down, can_buy, can_sell, is_st, source, batch_id)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            on conflict(symbol, trade_date) do update set
-                is_suspended = excluded.is_suspended,
-                limit_up = excluded.limit_up,
-                limit_down = excluded.limit_down,
-                is_limit_up = excluded.is_limit_up,
-                is_limit_down = excluded.is_limit_down,
-                is_one_word_limit_up = excluded.is_one_word_limit_up,
-                is_one_word_limit_down = excluded.is_one_word_limit_down,
-                can_buy = excluded.can_buy,
-                can_sell = excluded.can_sell,
-                is_st = excluded.is_st,
-                source = excluded.source,
-                batch_id = excluded.batch_id
-        """
-        parameters = [
-            (
-                row["symbol"],
-                row["trade_date"],
-                _bool(row.get("is_suspended")),
-                row.get("limit_up"),
-                row.get("limit_down"),
-                _bool(row.get("is_limit_up")),
-                _bool(row.get("is_limit_down")),
-                _bool(row.get("is_one_word_limit_up")),
-                _bool(row.get("is_one_word_limit_down")),
-                _bool(row.get("can_buy", True)),
-                _bool(row.get("can_sell", True)),
-                _bool(row.get("is_st")),
-                source,
-                batch_id,
-            )
-            for row in persisted_rows
-        ]
-        for chunk in _chunks(parameters, WRITE_BATCH_SIZE):
-            connection.executemany(sql, chunk)
-    if persisted_rows:
-        upsert_market_trade_status_batch(
-            persisted_rows,
-            asset_class="equity",
-            market="china",
-            venue="china",
-            source=source,
-            batch_id=batch_id,
-            bulk=bulk,
-        )
+    upsert_market_trade_status_batch(
+        rows,
+        asset_class="equity",
+        market="china",
+        venue="china",
+        source=source,
+        batch_id=batch_id,
+        bulk=bulk,
+    )
 
 
 def import_trade_status(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
@@ -1039,8 +891,10 @@ def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[st
     with db() as connection:
         rows = connection.execute(
             f"""
-            select * from ashare_trade_status
-            where trade_date = ? and symbol in ({placeholders})
+            select * from market_trade_status
+            where asset_class='equity' and market='china' and venue='china'
+              and trade_date = ? and symbol in ({placeholders})
+            order by symbol,{_trade_status_priority_sql()} desc,updated_at desc
             """,
             [as_of_date, *symbols],
         ).fetchall()
@@ -1060,8 +914,30 @@ def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[st
         for field in bool_fields:
             if field in item:
                 item[field] = bool(item[field])
-        result[row["symbol"]] = item
+        result.setdefault(row["symbol"], item)
     return result
+
+
+def effective_trade_status(symbol: str, trade_date: str) -> dict[str, Any] | None:
+    with db() as connection:
+        row = connection.execute(
+            f"""
+            select * from market_trade_status
+            where symbol = ? and trade_date = ? and asset_class='equity'
+              and market='china' and venue='china'
+            order by {_trade_status_priority_sql()} desc,updated_at desc limit 1
+            """,
+            (symbol, trade_date),
+        ).fetchone()
+    status = row_to_dict(row)
+    if status:
+        for field in (
+            "is_tradeable", "is_suspended", "can_buy", "can_sell", "is_limit_up",
+            "is_limit_down", "is_one_word_limit_up", "is_one_word_limit_down", "is_st",
+        ):
+            if field in status:
+                status[field] = bool(status[field])
+    return status
 
 
 def is_tradeable(symbol: str, trade_date: str, side: str) -> tuple[bool, str]:
@@ -1074,12 +950,7 @@ def is_tradeable(symbol: str, trade_date: str, side: str) -> tuple[bool, str]:
         return False, "delisted"
     if str(security.get("status") or "").lower() not in {"listed", "normal"} and not security.get("delisted_date"):
         return False, "not_active"
-    with db() as connection:
-        row = connection.execute(
-            "select * from ashare_trade_status where symbol = ? and trade_date = ?",
-            (symbol, trade_date),
-        ).fetchone()
-    status = row_to_dict(row)
+    status = effective_trade_status(symbol, trade_date)
     if not status:
         return False, "trade_status_missing"
     if status.get("is_suspended"):
@@ -1100,8 +971,10 @@ def latest_batch_for_symbol(symbol: str, source: str | None = None) -> dict[str,
         row = connection.execute(
             f"""
             select b.* from data_import_batches b
-            join ashare_daily_bars d on d.batch_id = b.id
+            join market_daily_bars d on d.batch_id = b.id
             where d.symbol = ?
+              and d.asset_class='equity' and d.market='china' and d.venue='china'
+              and d.resolution='daily' and d.data_type='trade'
               {source_clause}
               and b.status in ('success', 'failed')
             order by b.started_at desc
@@ -1116,30 +989,20 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw", source
     source_clause = "and source = ?" if source else ""
     source_params: list[Any] = [source] if source else []
     with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(*) as raw_count,
-                   count(distinct trade_date) as count,
-                   min(trade_date) as first_date,
-                   max(trade_date) as last_date
-            from ashare_daily_bars
-            where symbol = ? and adjust = ? and trade_date >= ? and trade_date <= ?
-              {source_clause}
-            """,
-            (symbol, adjust, start, end, *source_params),
-        ).fetchone()
         status_row = connection.execute(
             """
-            select count(distinct trade_date) as count from ashare_trade_status
-            where symbol = ? and trade_date >= ? and trade_date <= ?
+            select count(distinct trade_date) as count from market_trade_status
+            where symbol = ? and asset_class='equity' and market='china' and venue='china'
+              and trade_date >= ? and trade_date <= ?
             """,
             (symbol, start, end),
         ).fetchone()
         market_row = connection.execute(
             f"""
-            select count(distinct trade_date) as count, min(trade_date) as first_date, max(trade_date) as last_date
+            select count(*) as raw_count,count(distinct trade_date) as count,
+                   min(trade_date) as first_date,max(trade_date) as last_date
             from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = 'china'
+            where symbol = ? and asset_class = 'equity' and market = 'china' and venue='china'
               and resolution = 'daily' and data_type = 'trade' and adjust = ?
               and trade_date >= ? and trade_date <= ?
               {source_clause}
@@ -1147,10 +1010,10 @@ def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw", source
             (symbol, adjust, start, end, *source_params),
         ).fetchone()
     return {
-        "bar_count": row["count"] if row else 0,
-        "bar_raw_count": row["raw_count"] if row else 0,
-        "first_date": row["first_date"] if row else None,
-        "last_date": row["last_date"] if row else None,
+        "bar_count": market_row["count"] if market_row else 0,
+        "bar_raw_count": market_row["raw_count"] if market_row else 0,
+        "first_date": market_row["first_date"] if market_row else None,
+        "last_date": market_row["last_date"] if market_row else None,
         "status_count": status_row["count"] if status_row else 0,
         "market_bar_count": market_row["count"] if market_row else 0,
         "market_first_date": market_row["first_date"] if market_row else None,
@@ -1171,13 +1034,8 @@ def _execution_coverage_dates(
         bar_rows = connection.execute(
             f"""
             select trade_date
-            from ashare_daily_bars
-            where symbol = ? and adjust = ? and trade_date >= ? and trade_date <= ?
-              {source_clause}
-            union
-            select trade_date
             from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = 'china'
+            where symbol = ? and asset_class = 'equity' and market = 'china' and venue='china'
               and resolution = 'daily' and data_type = 'trade' and adjust = ?
               and trade_date >= ? and trade_date <= ?
               {source_clause}
@@ -1188,29 +1046,17 @@ def _execution_coverage_dates(
                 start,
                 end,
                 *source_params,
-                symbol,
-                adjust,
-                start,
-                end,
-                *source_params,
             ),
         ).fetchall()
         status_rows = connection.execute(
             """
             select trade_date, max(is_suspended) as is_suspended
-            from (
-                select trade_date, is_suspended
-                from ashare_trade_status
-                where symbol = ? and trade_date >= ? and trade_date <= ?
-                union all
-                select trade_date, is_suspended
-                from market_trade_status
-                where symbol = ? and asset_class = 'equity' and market = 'china'
-                  and trade_date >= ? and trade_date <= ?
-            ) effective_status
+            from market_trade_status
+            where symbol = ? and asset_class='equity' and market='china' and venue='china'
+              and trade_date >= ? and trade_date <= ?
             group by trade_date
             """,
-            (symbol, start, end, symbol, start, end),
+            (symbol, start, end),
         ).fetchall()
     return (
         {str(row["trade_date"]) for row in bar_rows},
@@ -1221,16 +1067,19 @@ def _execution_coverage_dates(
 def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
     with db() as connection:
         rows = connection.execute(
-            """
-            select * from ashare_trade_status
-            where symbol = ? and trade_date >= ? and trade_date <= ?
-            order by trade_date asc
+            f"""
+            select * from market_trade_status
+            where symbol = ? and asset_class='equity' and market='china' and venue='china'
+              and trade_date >= ? and trade_date <= ?
+            order by trade_date asc,{_trade_status_priority_sql()} desc,updated_at desc
             """,
             (symbol, start, end),
         ).fetchall()
-    return {
-        symbol: {
-            row["trade_date"]: {
+    status_by_date: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        status_by_date.setdefault(
+            row["trade_date"],
+            {
                 "is_suspended": bool(row["is_suspended"]),
                 "limit_up": row["limit_up"],
                 "limit_down": row["limit_down"],
@@ -1241,10 +1090,9 @@ def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
                 "can_buy": bool(row["can_buy"]),
                 "can_sell": bool(row["can_sell"]),
                 "is_st": bool(row["is_st"]),
-            }
-            for row in rows
-        }
-    }
+            },
+        )
+    return {symbol: status_by_date}
 
 
 def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
@@ -1275,7 +1123,8 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
                    sum(case when is_st = 1 then 1 else 0 end) as st_days,
                    min(trade_date) as start_date,
                    max(trade_date) as end_date
-            from ashare_trade_status
+            from market_trade_status
+            where asset_class='equity' and market='china' and venue='china'
             """
         ).fetchone()
         actions = connection.execute(

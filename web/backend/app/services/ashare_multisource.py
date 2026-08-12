@@ -42,8 +42,9 @@ def _query_rows(symbol: str, start_date: str | None, end_date: str | None, adjus
         rows = connection.execute(
             f"""
             select symbol, trade_date, open, high, low, close, volume, amount, source
-            from ashare_daily_bars
-            where {" and ".join(predicates)}
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and {" and ".join(predicates)}
             order by trade_date asc, source asc
             """,
             params,

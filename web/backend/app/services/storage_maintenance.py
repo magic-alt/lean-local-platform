@@ -20,8 +20,6 @@ from . import db_object_store
 REDUNDANT_INDEXES: tuple[tuple[str, str], ...] = (
     ("factor_values", "idx_factor_values_symbol_date"),
     ("market_daily_bars", "idx_market_daily_instrument_date"),
-    ("ashare_daily_bars", "idx_ashare_daily_symbol_date"),
-    ("ashare_trade_status", "idx_ashare_status_symbol_date"),
 )
 
 DAILY_BASIC_COLUMNS = (
@@ -84,13 +82,6 @@ MARKET_RESET_TABLES: tuple[str, ...] = (
     "instrument_identifiers",
     "instruments",
     "securities",
-)
-
-ASHARE_COMPATIBILITY_RELATIONS = (
-    "ashare_daily_bars",
-    "ashare_trade_status",
-    "legacy_ashare_daily_bars",
-    "legacy_ashare_trade_status",
 )
 
 PRESERVED_TABLE_GROUPS = {
@@ -269,12 +260,10 @@ def market_reset_plan() -> dict[str, Any]:
     """Return the exact destructive scope without changing database state."""
     types = _relation_types()
     reset_tables = tuple(table for table in MARKET_RESET_TABLES if types.get(table) == "BASE TABLE")
-    ashare_relations = tuple(name for name in ASHARE_COMPATIBILITY_RELATIONS if name in types)
     active_work, stale_work = _maintenance_work_state(types)
     return {
         "resetTables": list(reset_tables),
         "resetRowEstimates": _relation_row_estimates(reset_tables, types),
-        "ashareRelations": {name: types[name] for name in ashare_relations},
         "activeWork": active_work,
         "staleStatusRecords": stale_work,
         "preservedTableGroups": {key: list(value) for key, value in PRESERVED_TABLE_GROUPS.items()},
@@ -493,41 +482,6 @@ def write_mysql_schema_report(output: Path) -> dict[str, Any]:
     return {"output": str(destination), "relations": len(types), "baseTables": len(base_tables)}
 
 
-def _drop_relation(connection: Any, relation: str, relation_type: str | None) -> None:
-    if relation_type == "VIEW":
-        connection.execute(f"drop view `{relation}`")
-    elif relation_type == "BASE TABLE":
-        connection.execute(f"drop table `{relation}`")
-
-
-def _create_ashare_compatibility_views(connection: Any) -> None:
-    connection.execute(
-        """
-        create view ashare_daily_bars as
-        select symbol,trade_date,open,high,low,close,volume,amount,turnover_rate,
-               prev_close,pct_change,adj_factor,adjust,source,batch_id,created_at
-        from market_daily_bars
-        where asset_class='equity' and market='china' and venue='china'
-          and resolution='daily' and data_type='trade'
-        """
-    )
-    connection.execute(
-        f"""
-        create view ashare_trade_status as
-        select symbol,trade_date,is_suspended,limit_up,limit_down,is_limit_up,is_limit_down,
-               is_one_word_limit_up,is_one_word_limit_down,can_buy,can_sell,is_st,source,batch_id
-        from (
-            select m.*, row_number() over (
-                partition by m.symbol,m.trade_date
-                order by {_status_priority_sql()} desc,m.updated_at desc,m.source desc
-            ) as source_rank
-            from market_trade_status m
-            where m.asset_class='equity' and m.market='china' and m.venue='china'
-        ) selected where source_rank=1
-        """
-    )
-
-
 def _invalidate_derived_catalogues(connection: Any, types: dict[str, str], timestamp: str) -> dict[str, int]:
     invalidated: dict[str, int] = {}
     if types.get("parquet_datasets") == "BASE TABLE":
@@ -556,15 +510,9 @@ def _invalidate_derived_catalogues(connection: Any, types: dict[str, str], times
         )
         invalidated["parquet_datasets"] = int(cursor.rowcount or 0)
     if types.get("dataset_releases") == "BASE TABLE":
-        cursor = connection.execute(
-            """
-            update dataset_releases
-            set status='revoked',revoked_at=?,revoke_reason='direct_market_reset'
-            where status <> 'revoked'
-            """,
-            (timestamp,),
-        )
-        invalidated["dataset_releases"] = int(cursor.rowcount or 0)
+        from .dataset_releases import revoke_all_for_direct_market_reset
+
+        invalidated["dataset_releases"] = revoke_all_for_direct_market_reset(connection, timestamp)
     if types.get("reproducibility_certificates") == "BASE TABLE":
         cursor = connection.execute(
             "update reproducibility_certificates set status='invalidated' where status <> 'invalidated'"
@@ -588,8 +536,7 @@ def direct_market_reset() -> dict[str, Any]:
 
     This function is intentionally only reachable through the CLI's three
     explicit acknowledgements.  It releases InnoDB space using TRUNCATE for
-    base tables, replaces duplicate A-share tables with compatibility views,
-    invalidates derived catalogues rather than violating their backtest FKs,
+    base tables, invalidates derived catalogues rather than violating their backtest FKs,
     and clears only the provider-raw external object namespace.
     """
     _require_mysql()
@@ -617,11 +564,8 @@ def direct_market_reset() -> dict[str, Any]:
     reset_tables = [table for table in MARKET_RESET_TABLES if types.get(table) == "BASE TABLE"]
     with db() as connection:
         invalidated = _invalidate_derived_catalogues(connection, types, timestamp)
-        for relation in ASHARE_COMPATIBILITY_RELATIONS:
-            _drop_relation(connection, relation, types.get(relation))
         for table in reset_tables:
             connection.execute(f"truncate table `{table}`")
-        _create_ashare_compatibility_views(connection)
 
     deleted_objects = 0
     for object_id in raw_object_ids:
@@ -643,8 +587,6 @@ def direct_market_reset() -> dict[str, Any]:
         "status": "complete",
         "completedAt": datetime.now(timezone.utc).isoformat(),
         "truncatedTables": reset_tables,
-        "droppedAshareRelations": plan["ashareRelations"],
-        "createdViews": ["ashare_daily_bars", "ashare_trade_status"],
         "invalidated": invalidated,
         "providerRawObjectsDeleted": deleted_objects,
         "compactedObjectTables": compacted_object_tables,
@@ -869,110 +811,3 @@ def prune_expired_provider_raw_records(*, retention_days: int = 180, limit: int 
                 sorted(records),
             )
     return {"deleted": len(records), "scanned": len(rows), "cutoff": cutoff}
-
-
-ASHARE_STATUS_COLUMNS = (
-    "is_limit_up",
-    "is_limit_down",
-    "is_one_word_limit_up",
-    "is_one_word_limit_down",
-    "is_st",
-)
-
-
-def prepare_ashare_canonical_storage() -> dict[str, int]:
-    """Add and backfill A-share-only status facts in the canonical table."""
-    _require_mysql()
-    with db() as connection:
-        existing = {
-            str(row["column_name"])
-            for row in connection.execute(
-                """
-                select column_name as column_name from information_schema.columns
-                where table_schema=database() and table_name='market_trade_status'
-                """
-            ).fetchall()
-        }
-        for column in ASHARE_STATUS_COLUMNS:
-            if column not in existing:
-                connection.execute(f"alter table market_trade_status add column `{column}` int not null default 0")
-        cursor = connection.execute(
-            """
-            update market_trade_status m join ashare_trade_status a
-              on a.symbol=m.symbol and a.trade_date=m.trade_date and a.source=m.source
-            set m.is_limit_up=a.is_limit_up,
-                m.is_limit_down=a.is_limit_down,
-                m.is_one_word_limit_up=a.is_one_word_limit_up,
-                m.is_one_word_limit_down=a.is_one_word_limit_down,
-                m.is_st=a.is_st
-            where m.asset_class='equity' and m.market='china'
-            """
-        )
-    return {"backfilled": int(cursor.rowcount or 0), "addedColumns": len(set(ASHARE_STATUS_COLUMNS) - existing)}
-
-
-def ashare_canonical_coverage() -> dict[str, int]:
-    """Count A-share rows that lack their same-source canonical counterpart."""
-    _require_mysql()
-    with db() as connection:
-        daily = connection.execute(
-            """
-            select count(*) as total,
-                   sum(case when m.instrument_id is null then 1 else 0 end) as missing
-            from ashare_daily_bars a left join market_daily_bars m
-              on m.symbol=a.symbol and m.trade_date=a.trade_date and m.adjust=a.adjust and m.source=a.source
-             and m.asset_class='equity' and m.market='china' and m.resolution='daily' and m.data_type='trade'
-            """
-        ).fetchone()
-        status = connection.execute(
-            """
-            select count(*) as total,
-                   sum(case when m.instrument_id is null then 1 else 0 end) as missing
-            from ashare_trade_status a left join market_trade_status m
-              on m.symbol=a.symbol and m.trade_date=a.trade_date and m.source=a.source
-             and m.asset_class='equity' and m.market='china'
-            """
-        ).fetchone()
-    return {
-        "dailyRows": int(daily["total"] or 0),
-        "dailyMissing": int(daily["missing"] or 0),
-        "statusRows": int(status["total"] or 0),
-        "statusMissing": int(status["missing"] or 0),
-    }
-
-
-def _status_priority_sql() -> str:
-    return """case
-        when lower(source) like '%suspend%' or lower(source) like '%daily_absence%' then 120
-        when lower(source) like '%official%' then 110
-        when lower(source) like '%inferred%' or lower(source) like '%ohlcv%' then 10
-        when lower(source) regexp 'tushare|jqdata|rqdata|ifind|choice|wind|stk_limit' then 100
-        when lower(source) like '%manual%' then 90
-        when (lower(source) regexp 'adata|baostock|akshare|sina|eastmoney') then 70
-        else 50 end"""
-
-
-def cutover_ashare_compatibility_views() -> None:
-    """Rename duplicate A-share tables and replace them with read-compatible views."""
-    _require_mysql()
-    coverage = ashare_canonical_coverage()
-    if coverage["dailyMissing"] or coverage["statusMissing"]:
-        raise RuntimeError(f"ashare_canonical_coverage_incomplete:{coverage}")
-    with db() as connection:
-        legacy = connection.execute(
-            """
-            select table_name from information_schema.tables
-            where table_schema=database() and table_name in ('legacy_ashare_daily_bars','legacy_ashare_trade_status')
-            """
-        ).fetchall()
-        if legacy:
-            raise RuntimeError("ashare_legacy_tables_already_exist")
-        connection.execute("rename table ashare_daily_bars to legacy_ashare_daily_bars, ashare_trade_status to legacy_ashare_trade_status")
-        _create_ashare_compatibility_views(connection)
-
-
-def drop_ashare_legacy_tables() -> None:
-    _require_mysql()
-    with db() as connection:
-        connection.execute("drop table if exists legacy_ashare_daily_bars")
-        connection.execute("drop table if exists legacy_ashare_trade_status")

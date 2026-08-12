@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, row_to_dict  # noqa: E402
-from app.services.data import _reconcile_ashare_daily_snapshot  # noqa: E402
+from app.services.data import _reconcile_market_daily_snapshot  # noqa: E402
 from app.services.data_sync import _reconcile_daily_manifest_scope  # noqa: E402
 from app.services.db_object_store import read_bytes  # noqa: E402
 
@@ -79,8 +79,10 @@ def _inventory(run_id: str) -> dict[str, Any]:
             select p.scope_key,p.response_rows,count(a.trade_date) as canonical_rows,
                    count(a.trade_date)-p.response_rows as delta
             from provider_ingestion_manifests p
-            left join ashare_daily_bars a
+            left join market_daily_bars a
               on a.symbol=p.scope_key and a.source='tushare' and a.adjust='raw'
+             and a.asset_class='equity' and a.market='china' and a.venue='china'
+             and a.resolution='daily' and a.data_type='trade'
             where p.run_id=? and p.provider='tushare' and p.dataset_key='daily' and p.status='success'
             group by p.scope_key,p.response_rows
             having count(a.trade_date)<>p.response_rows
@@ -109,7 +111,6 @@ def _inventory(run_id: str) -> dict[str, Any]:
         canonical = connection.execute(
             """
             select
-              (select count(*) from ashare_daily_bars where source='tushare' and adjust='raw') as ashare_rows,
               (select count(*) from market_daily_bars where source='tushare' and adjust='raw'
                  and asset_class='equity' and market='china' and venue='china'
                  and resolution='daily' and data_type='trade') as market_rows
@@ -186,7 +187,7 @@ def reconcile(run_id: str, *, apply: bool) -> dict[str, Any]:
         )
         normalized[symbol] = [{"trade_date": trade_date} for trade_date in sorted(authoritative_dates[symbol])]
 
-    removed_snapshot_rows = _reconcile_ashare_daily_snapshot(entries, normalized)
+    removed_snapshot_rows = _reconcile_market_daily_snapshot(entries, normalized)
     removed_orphan_rows = _reconcile_daily_manifest_scope(run_id)
     after = _inventory(run_id)
     if after["mismatches"] or after["orphanSymbols"]:

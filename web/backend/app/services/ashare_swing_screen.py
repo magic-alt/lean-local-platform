@@ -142,8 +142,10 @@ def _daily_counts(trade_date: str) -> dict[str, int]:
     with db() as connection:
         bars = connection.execute(
             """
-            select count(distinct symbol) n from ashare_daily_bars
-            where trade_date=? and adjust='raw' and source='tushare'
+            select count(distinct symbol) n from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+              and trade_date=? and adjust='raw' and source='tushare'
             """,
             (trade_date,),
         ).fetchone()
@@ -162,7 +164,8 @@ def _daily_counts(trade_date: str) -> dict[str, int]:
             (trade_date,),
         ).fetchone()
         statuses = connection.execute(
-            "select count(distinct symbol) n from ashare_trade_status where trade_date=?",
+            """select count(distinct symbol) n from market_trade_status
+               where asset_class='equity' and market='china' and venue='china' and trade_date=?""",
             (trade_date,),
         ).fetchone()
     return {
@@ -247,8 +250,10 @@ def preview(scope: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]
                 history_rows = connection.execute(
                     f"""
                     select symbol,count(*) n,min(trade_date) first_date
-                    from ashare_daily_bars
-                    where symbol in ({placeholders}) and trade_date<=?
+                    from market_daily_bars
+                    where asset_class='equity' and market='china' and venue='china'
+                      and resolution='daily' and data_type='trade'
+                      and symbol in ({placeholders}) and trade_date<=?
                       and adjust='raw' and source='tushare'
                     group by symbol having count(*)>=?
                     """,
@@ -553,7 +558,9 @@ def _spot_bars(symbols: list[str], trade_date: str) -> dict[str, dict[str, Any]]
             rows = connection.execute(
                 f"""
                 select symbol,trade_date,open,high,low,close,volume,amount
-                from ashare_daily_bars where symbol in ({placeholders}) and trade_date=?
+                from market_daily_bars where asset_class='equity' and market='china' and venue='china'
+                  and resolution='daily' and data_type='trade'
+                  and symbol in ({placeholders}) and trade_date=?
                   and adjust='raw' and source='tushare'
                 """,
                 [*chunk, trade_date],
@@ -572,10 +579,12 @@ def _history(symbols: list[str], trade_date: str, rules: ScreenRules) -> dict[st
                 f"""
                 select b.symbol,b.trade_date,b.open,b.high,b.low,b.close,b.volume,
                        coalesce(b.amount,0) amount,a.adj_factor verified_adj_factor
-                from ashare_daily_bars b
+                from market_daily_bars b
                 left join adjustment_factors a
                   on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-                where b.symbol in ({placeholders}) and b.trade_date between ? and ?
+                where b.asset_class='equity' and b.market='china' and b.venue='china'
+                  and b.resolution='daily' and b.data_type='trade'
+                  and b.symbol in ({placeholders}) and b.trade_date between ? and ?
                   and b.adjust='raw' and b.source='tushare'
                 order by b.symbol,b.trade_date
                 """,

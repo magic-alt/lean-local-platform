@@ -104,15 +104,6 @@ def test_adata_and_baostock_provider_imports_write_canonical_tables(tmp_path, mo
         assert asset["research_tables"]["daily_bars"] == 2
 
     with db_module.db() as connection:
-        rows = connection.execute(
-            """
-            select source, count(*) as rows
-            from ashare_daily_bars
-            where symbol = '600519'
-            group by source
-            order by source
-            """
-        ).fetchall()
         market_rows = connection.execute(
             """
             select source, count(*) as rows
@@ -123,5 +114,4 @@ def test_adata_and_baostock_provider_imports_write_canonical_tables(tmp_path, mo
             """
         ).fetchall()
 
-    assert [(row["source"], row["rows"]) for row in rows] == [("adata", 2), ("baostock", 2)]
     assert [(row["source"], row["rows"]) for row in market_rows] == [("adata", 2), ("baostock", 2)]

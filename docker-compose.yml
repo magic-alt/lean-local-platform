@@ -36,8 +36,9 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-1G}
-      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-256M}
+      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-4G}
+      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-1G}
+      - --local-infile=1
       - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
       - --binlog-row-image=MINIMAL
       - --log-bin-trust-function-creators=1
@@ -53,8 +54,8 @@ services:
       retries: 12
       start_period: 30s
     stop_grace_period: 2m
-    cpus: "${LEAN_MYSQL_CPUS:-2.0}"
-    mem_limit: ${LEAN_MYSQL_MEMORY:-3g}
+    cpus: "${LEAN_MYSQL_CPUS:-4.0}"
+    mem_limit: ${LEAN_MYSQL_MEMORY:-6g}
 
   mysql-integration:
     profiles: ["test"]
@@ -69,6 +70,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
       - --innodb-buffer-pool-size=256M
+      - --local-infile=1
       - --max-connections=50
     tmpfs:
       - /var/lib/mysql:size=1g,mode=0700
@@ -187,7 +189,6 @@ services:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
-      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
@@ -284,6 +285,8 @@ services:
         condition: service_started
       data-worker:
         condition: service_started
+      data-lineage-worker:
+        condition: service_started
       data-demand-worker:
         condition: service_started
       backtest-worker:
@@ -309,9 +312,10 @@ services:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
-      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
+      LEAN_MYSQL_LOCAL_INFILE: ${LEAN_MYSQL_LOCAL_INFILE:-1}
+      LEAN_TUSHARE_LINEAGE_ASYNC: ${LEAN_TUSHARE_LINEAGE_ASYNC:-1}
       LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: lean_mlflow
       LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
       LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
@@ -319,10 +323,10 @@ services:
       LEAN_DIVIDEND_FETCH_CONCURRENCY: ${LEAN_DIVIDEND_FETCH_CONCURRENCY:-32}
       LEAN_STK_LIMIT_FETCH_CONCURRENCY: ${LEAN_STK_LIMIT_FETCH_CONCURRENCY:-16}
       LEAN_SUSPEND_FETCH_CONCURRENCY: ${LEAN_SUSPEND_FETCH_CONCURRENCY:-16}
-      LEAN_DATA_SYNC_BATCH_UNITS: ${LEAN_DATA_SYNC_BATCH_UNITS:-32}
-      LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-250000}
-      LEAN_DAILY_SYNC_BATCH_UNITS: ${LEAN_DAILY_SYNC_BATCH_UNITS:-64}
-      LEAN_DAILY_SYNC_CHUNK_ROWS: ${LEAN_DAILY_SYNC_CHUNK_ROWS:-500000}
+      LEAN_DATA_SYNC_BATCH_UNITS: ${LEAN_DATA_SYNC_BATCH_UNITS:-16}
+      LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-100000}
+      LEAN_DAILY_SYNC_BATCH_UNITS: ${LEAN_DAILY_SYNC_BATCH_UNITS:-16}
+      LEAN_DAILY_SYNC_CHUNK_ROWS: ${LEAN_DAILY_SYNC_CHUNK_ROWS:-100000}
       LEAN_DAILY_INCREMENT_BATCH_DATES: ${LEAN_DAILY_INCREMENT_BATCH_DATES:-16}
       LEAN_RAW_ARCHIVE_GZIP_LEVEL: ${LEAN_RAW_ARCHIVE_GZIP_LEVEL:-1}
       LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
@@ -425,6 +429,17 @@ services:
     cpus: "${LEAN_DATA_WORKER_CPUS:-2.0}"
     mem_limit: ${LEAN_DATA_WORKER_MEMORY:-6g}
 
+  data-lineage-worker:
+    extends:
+      service: worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-lineage --hostname=data-lineage@%h
+    environment:
+      LEAN_RELEASE_ROLE: data-lineage-worker
+      LEAN_REQUIRE_LOADER_DATABASE: "1"
+      LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB: ${LEAN_LINEAGE_WORKER_MAX_MEMORY_PER_CHILD_KB:-1572864}
+    cpus: "${LEAN_LINEAGE_WORKER_CPUS:-1.0}"
+    mem_limit: ${LEAN_LINEAGE_WORKER_MEMORY:-2g}
+
   data-demand-worker:
     extends:
       service: worker
@@ -495,7 +510,6 @@ services:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
-      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
@@ -545,7 +559,6 @@ services:
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
-      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
       LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}
@@ -591,10 +604,11 @@ services:
     build:
       context: .
       dockerfile: web/backend/Dockerfile
-    command: python -m pytest -q -m integration_mysql
+    command: python -m pytest -q tests/test_mysql_integration_lane.py
     environment:
       RUN_MYSQL_INTEGRATION: "1"
       LEAN_DATABASE_URL: mysql+pymysql://lean_integration:integration-only@mysql-integration:3306/lean_integration
+      LEAN_MYSQL_LOCAL_INFILE: "1"
       LEAN_API_AUTH_REQUIRED: "0"
       LEAN_DATA_DIR: /tmp/lean-integration-data
       LEAN_PARQUET_DIR: /tmp/lean-integration-parquet

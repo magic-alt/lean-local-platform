@@ -14,8 +14,8 @@ BACKEND = ROOT / "web" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.db import db, init_db, json_dump, row_to_dict, utc_now  # noqa: E402
-from app.services.ashare_repository import assert_benchmark_ready, reference_data_coverage  # noqa: E402
+from app.db import db, init_db, json_dump, utc_now  # noqa: E402
+from app.services.ashare_repository import assert_benchmark_ready, reference_data_coverage, upsert_trade_status  # noqa: E402
 from app.services.paper import _replay_dates, create_session, create_signal, list_orders, run_replay  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 
@@ -55,8 +55,10 @@ def _find_fallback_symbol(
         row = connection.execute(
             """
             select symbol
-            from ashare_daily_bars
-            where trade_date = ? and source = ? and symbol != ?
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+              and trade_date = ? and source = ? and symbol != ?
             order by symbol asc
             limit 1
             """,
@@ -73,8 +75,10 @@ def _find_fallback_symbol(
             exists = connection.execute(
                 """
                 select 1
-                from ashare_daily_bars
-                where symbol = ? and source = ? and trade_date = ?
+                from market_daily_bars
+                where asset_class='equity' and market='china' and venue='china'
+                  and resolution='daily' and data_type='trade'
+                  and symbol = ? and source = ? and trade_date = ?
                 limit 1
                 """,
                 (candidate, source, trade_date),
@@ -89,9 +93,12 @@ def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | 
         row = connection.execute(
             """
             select s.symbol, s.trade_date
-            from ashare_trade_status s
-            join ashare_daily_bars b on b.symbol = s.symbol and b.trade_date = s.trade_date and b.source = ?
-            where s.trade_date between ? and ? and s.is_st = 1 and s.can_buy = 1
+            from market_trade_status s
+            join market_daily_bars b on b.symbol=s.symbol and b.trade_date=s.trade_date and b.source=?
+              and b.asset_class='equity' and b.market='china' and b.venue='china'
+              and b.resolution='daily' and b.data_type='trade'
+            where s.asset_class='equity' and s.market='china' and s.venue='china'
+              and s.trade_date between ? and ? and s.is_st = 1 and s.can_buy = 1
             order by s.trade_date asc, s.symbol asc
             limit 1
             """,
@@ -101,9 +108,12 @@ def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | 
             row = connection.execute(
                 """
                 select s.symbol, s.trade_date
-                from ashare_trade_status s
-                join ashare_daily_bars b on b.symbol = s.symbol and b.trade_date = s.trade_date and b.source = ?
-                where s.is_st = 1 and s.can_buy = 1
+                from market_trade_status s
+                join market_daily_bars b on b.symbol=s.symbol and b.trade_date=s.trade_date and b.source=?
+                  and b.asset_class='equity' and b.market='china' and b.venue='china'
+                  and b.resolution='daily' and b.data_type='trade'
+                where s.asset_class='equity' and s.market='china' and s.venue='china'
+                  and s.is_st = 1 and s.can_buy = 1
                 order by s.trade_date desc, s.symbol asc
                 limit 1
                 """,
@@ -114,8 +124,10 @@ def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | 
         signal = connection.execute(
             """
             select max(trade_date) as trade_date
-            from ashare_daily_bars
-            where symbol = ? and source = ? and trade_date < ?
+            from market_daily_bars
+            where asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade'
+              and symbol = ? and source = ? and trade_date < ?
             """,
             (row["symbol"], source, row["trade_date"]),
         ).fetchone()
@@ -167,7 +179,7 @@ def _run_single_reason(
     signal_symbol = primary
     target = 0.3
     cleanup_report_id: str | None = None
-    restore_status: dict[str, Any] | None = None
+    acceptance_status_source: str | None = None
     if reason == "blacklisted":
         params["blacklist"] = primary
     elif reason == "observe_only":
@@ -184,34 +196,15 @@ def _run_single_reason(
         params["watchlist"] = ",".join([primary, secondary])
     elif reason == "st_blocked":
         signal_symbol = primary
-        with db() as connection:
-            restore_status = row_to_dict(
-                connection.execute(
-                    "select * from ashare_trade_status where symbol = ? and trade_date = ?",
-                    (signal_symbol, execution_date),
-                ).fetchone()
-            )
-            if restore_status:
-                connection.execute(
-                    """
-                    update ashare_trade_status
-                    set is_st = 1, is_suspended = 0, can_buy = 1, can_sell = 1, source = ?, batch_id = ?
-                    where symbol = ? and trade_date = ?
-                    """,
-                    (source, "paper-acceptance-st", signal_symbol, execution_date),
-                )
-            else:
-                restore_status = {"_inserted": True}
-                connection.execute(
-                    """
-                    insert into ashare_trade_status
-                        (symbol, trade_date, is_suspended, limit_up, limit_down,
-                         is_limit_up, is_limit_down, is_one_word_limit_up, is_one_word_limit_down,
-                         can_buy, can_sell, is_st, source, batch_id)
-                    values (?, ?, 0, null, null, 0, 0, 0, 0, 1, 1, 1, ?, ?)
-                    """,
-                    (signal_symbol, execution_date, source, "paper-acceptance-st"),
-                )
+        acceptance_status_source = "official:paper-acceptance-st"
+        upsert_trade_status(
+            [{
+                "symbol": signal_symbol, "trade_date": execution_date,
+                "is_suspended": False, "can_buy": True, "can_sell": True, "is_st": True,
+            }],
+            source=acceptance_status_source,
+            batch_id="paper-acceptance-st",
+        )
     elif reason == "qa_failed":
         cleanup_report_id = f"qa-paper-acceptance-{uuid.uuid4()}"
         with db() as connection:
@@ -254,39 +247,16 @@ def _run_single_reason(
         if cleanup_report_id:
             with db() as connection:
                 connection.execute("delete from data_quality_reports where id = ?", (cleanup_report_id,))
-        if restore_status is not None:
+        if acceptance_status_source:
             with db() as connection:
-                if restore_status.get("_inserted"):
-                    connection.execute(
-                        "delete from ashare_trade_status where symbol = ? and trade_date = ?",
-                        (signal_symbol, execution_date),
-                    )
-                else:
-                    connection.execute(
-                        """
-                        update ashare_trade_status
-                        set is_suspended = ?, limit_up = ?, limit_down = ?,
-                            is_limit_up = ?, is_limit_down = ?, is_one_word_limit_up = ?, is_one_word_limit_down = ?,
-                            can_buy = ?, can_sell = ?, is_st = ?, source = ?, batch_id = ?
-                        where symbol = ? and trade_date = ?
-                        """,
-                        (
-                            restore_status.get("is_suspended"),
-                            restore_status.get("limit_up"),
-                            restore_status.get("limit_down"),
-                            restore_status.get("is_limit_up"),
-                            restore_status.get("is_limit_down"),
-                            restore_status.get("is_one_word_limit_up"),
-                            restore_status.get("is_one_word_limit_down"),
-                            restore_status.get("can_buy"),
-                            restore_status.get("can_sell"),
-                            restore_status.get("is_st"),
-                            restore_status.get("source"),
-                            restore_status.get("batch_id"),
-                            signal_symbol,
-                            execution_date,
-                        ),
-                    )
+                connection.execute(
+                    """
+                    delete from market_trade_status
+                    where symbol=? and trade_date=? and asset_class='equity'
+                      and market='china' and venue='china' and source=?
+                    """,
+                    (signal_symbol, execution_date, acceptance_status_source),
+                )
     orders = list_orders(session["id"])
     rejects = [order for order in orders if order.get("status") == "rejected"]
     reasons = [str(order.get("reason") or "") for order in rejects]

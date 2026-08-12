@@ -264,7 +264,13 @@ def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_sta
     import app.db as db_module
 
     with db_module.db() as connection:
-        connection.execute("delete from ashare_trade_status where symbol = ? and trade_date = ?", ("600519", "2024-01-03"))
+            connection.execute(
+                """
+                delete from market_trade_status where symbol = ? and trade_date = ?
+                  and asset_class='equity' and market='china' and venue='china'
+                """,
+                ("600519", "2024-01-03"),
+            )
     assert match_daily_orders(missing_status["id"], "2024-01-03", auto_signal=False)["orders"][0]["reason"] == "trade_status_missing"
 
 

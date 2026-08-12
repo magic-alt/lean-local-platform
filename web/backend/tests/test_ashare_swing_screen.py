@@ -140,11 +140,12 @@ def _seed_screen_data(db_module):
             )
             connection.execute(
                 """
-                insert into ashare_trade_status
-                    (symbol,trade_date,can_buy,can_sell,source,batch_id)
-                values (?,'2026-07-31',1,1,'tushare:stk_limit','unit')
+                insert into market_trade_status
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
+                     can_buy,can_sell,source,batch_id,updated_at)
+                values (?,?,'equity','china','china','2026-07-31',1,1,1,'tushare:stk_limit','unit',?)
                 """,
-                (symbol,),
+                (f"inst-{symbol}",symbol,now),
             )
             connection.executemany(
                 """
@@ -175,7 +176,7 @@ def _seed_screen_data(db_module):
                 close = float(frame["close_qfq"].iloc[row_index])
                 bars.append(
                     (
-                        symbol,
+                        f"inst-{symbol}",symbol,
                         trade_date,
                         close,
                         float(frame["high_qfq"].iloc[row_index]),
@@ -191,9 +192,10 @@ def _seed_screen_data(db_module):
                 factors.append((symbol, trade_date, 1.0, "tushare", "unit"))
             connection.executemany(
                 """
-                insert into ashare_daily_bars
-                    (symbol,trade_date,open,high,low,close,volume,amount,source,batch_id,created_at)
-                values (?,?,?,?,?,?,?,?,?,?,?)
+                insert into market_daily_bars
+                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
+                     open,high,low,close,volume,amount,adjust,source,batch_id,created_at)
+                values (?,?,'equity','china','china',?,'daily','trade',?,?,?,?,?,?,'raw',?,?,?)
                 """,
                 bars,
             )

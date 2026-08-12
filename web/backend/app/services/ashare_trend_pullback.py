@@ -158,10 +158,12 @@ def _market_inputs(
                     f"""
                     select b.symbol,b.trade_date,b.amount,
                            coalesce(a.adj_factor,b.adj_factor,1.0) adj_factor
-                    from ashare_daily_bars b
+                    from market_daily_bars b
                     left join adjustment_factors a
                       on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-                    where b.symbol in ({placeholders}) and b.adjust='raw'
+                    where b.asset_class='equity' and b.market='china' and b.venue='china'
+                      and b.resolution='daily' and b.data_type='trade'
+                      and b.symbol in ({placeholders}) and b.adjust='raw'
                       and b.trade_date between ? and ? {source_clause}
                     order by b.symbol,b.trade_date,b.source
                     """,

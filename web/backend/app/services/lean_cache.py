@@ -298,16 +298,6 @@ def _query_full_ashare_rows(symbol: str, *, source: str, adjust: str) -> list[di
                 """,
                 (symbol_key_value, adjust or "raw", source),
             ).fetchall()
-        if not rows:
-            rows = connection.execute(
-                """
-                select trade_date, open, high, low, close, volume, adj_factor, batch_id
-                from ashare_daily_bars
-                where symbol = ? and adjust = ? and source = ?
-                order by trade_date asc
-                """,
-                (symbol_key_value, adjust or "raw", source),
-            ).fetchall()
     return rows_to_dicts(rows)
 
 

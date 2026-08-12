@@ -215,7 +215,9 @@ def _next_trade_date(after_date: str) -> str:
         row = connection.execute(
             """
             select min(trade_date) as trade_date
-            from (select distinct trade_date from ashare_daily_bars where trade_date > ?) as trade_dates
+            from (select distinct trade_date from market_daily_bars
+                  where asset_class='equity' and market='china' and venue='china'
+                    and resolution='daily' and data_type='trade' and trade_date > ?) as trade_dates
             """,
             (after_date,),
         ).fetchone()
@@ -228,7 +230,9 @@ def _previous_trade_date(before_date: str) -> str:
         row = connection.execute(
             """
             select max(trade_date) as trade_date
-            from (select distinct trade_date from ashare_daily_bars where trade_date < ?) as trade_dates
+            from (select distinct trade_date from market_daily_bars
+                  where asset_class='equity' and market='china' and venue='china'
+                    and resolution='daily' and data_type='trade' and trade_date < ?) as trade_dates
             """,
             (before_date,),
         ).fetchone()
@@ -255,8 +259,10 @@ def _first_trade_date(year: int, month: int) -> str:
         row = connection.execute(
             """
             select min(trade_date) as trade_date
-            from (select distinct trade_date from ashare_daily_bars
-                  where trade_date between ? and ?) as trade_dates
+            from (select distinct trade_date from market_daily_bars
+                  where asset_class='equity' and market='china' and venue='china'
+                    and resolution='daily' and data_type='trade'
+                    and trade_date between ? and ?) as trade_dates
             """,
             (start.isoformat(), end.isoformat()),
         ).fetchone()

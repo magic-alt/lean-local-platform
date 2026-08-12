@@ -790,7 +790,6 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
     market_instrument_ids = [instrument_id("equity", "china", symbol, "china") for symbol in symbols]
     first_date = min(str(row["trade_date"]) for row in rows)
     last_date = max(str(row["trade_date"]) for row in rows)
-    placeholders = ",".join("?" for _ in symbols)
     encoded_fields = ",".join(
         f"coalesce(cast(round({field}*10000) as char),'~')" for field in fields
     )
@@ -801,19 +800,9 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
         + encoded_fields
         + "))) as checksum"
     )
-    parameters = [*symbols, first_date, last_date]
+    placeholders = ",".join("?" for _ in market_instrument_ids)
     market_parameters = [*market_instrument_ids, first_date, last_date]
     with db() as connection:
-        ashare_rows = connection.execute(
-            f"""
-            select symbol,count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date,{checksum}
-            from ashare_daily_bars
-            where source='tushare' and adjust='raw' and symbol in ({placeholders})
-              and trade_date>=? and trade_date<=?
-            group by symbol
-            """,
-            parameters,
-        ).fetchall()
         market_rows = connection.execute(
             f"""
             select min(symbol) as symbol,count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date,{checksum}
@@ -833,12 +822,11 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
             str(row["last_date"] or "")[:10], int(row["checksum"] or 0),
         )
 
-    ashare = {str(row["symbol"]): comparable(row) for row in ashare_rows}
     market = {str(row["symbol"]): comparable(row) for row in market_rows}
     changed_symbols = {
         symbol
         for symbol, item in incoming.items()
-        if comparable(item) != ashare.get(symbol) or comparable(item) != market.get(symbol)
+        if comparable(item) != market.get(symbol)
     }
     if not changed_symbols:
         return set()
@@ -847,7 +835,6 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
     # thousands of unchanged bars. Read only those symbols and return only
     # the corrected/missing dates, instead of rewriting the complete history.
     changed_placeholders = ",".join("?" for _ in changed_symbols)
-    parameters = [*sorted(changed_symbols), first_date, last_date]
     changed_market_parameters = [
         *(instrument_id("equity", "china", symbol, "china") for symbol in sorted(changed_symbols)),
         first_date,
@@ -855,15 +842,6 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
     ]
     columns = "symbol,trade_date," + ",".join(fields)
     with db() as connection:
-        ashare_exact = connection.execute(
-            f"""
-            select {columns} from ashare_daily_bars
-            where source='tushare' and adjust='raw'
-              and symbol in ({changed_placeholders})
-              and trade_date>=? and trade_date<=?
-            """,
-            parameters,
-        ).fetchall()
         market_exact = connection.execute(
             f"""
             select {columns} from market_daily_bars
@@ -874,10 +852,6 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
             """,
             changed_market_parameters,
         ).fetchall()
-    ashare_values = {
-        (str(row["symbol"]), str(row["trade_date"])): dict(row)
-        for row in ashare_exact
-    }
     market_values = {
         (str(row["symbol"]), str(row["trade_date"])): dict(row)
         for row in market_exact
@@ -887,11 +861,7 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
         for row in rows
         if str(row["symbol"]) in changed_symbols
         and (
-            (str(row["symbol"]), str(row["trade_date"])) not in ashare_values
-            or (str(row["symbol"]), str(row["trade_date"])) not in market_values
-            or not _daily_values_match(
-                ashare_values[(str(row["symbol"]), str(row["trade_date"]))], row
-            )
+            (str(row["symbol"]), str(row["trade_date"])) not in market_values
             or not _daily_values_match(
                 market_values[(str(row["symbol"]), str(row["trade_date"]))], row
             )
@@ -947,7 +917,7 @@ def import_ashare_research_batch(
         all_rows = [row for rows in normalized_by_symbol.values() for row in rows]
         if not all_rows:
             reconciled_rows = (
-                _reconcile_ashare_daily_snapshot(entries, normalized_by_symbol)
+                _reconcile_market_daily_snapshot(entries, normalized_by_symbol)
                 if reconcile_full_snapshot
                 else 0
             )
@@ -1009,19 +979,11 @@ def import_ashare_research_batch(
         else:
             placeholders = ",".join("?" for _ in symbols)
             with db() as connection:
-                existing_rows = connection.execute(
+                market_rows = connection.execute(
                     f"""
                     select symbol,trade_date,open,high,low,close,volume,amount,turnover_rate,
                            prev_close,pct_change,adj_factor
-                    from ashare_daily_bars
-                    where source='tushare' and adjust='raw' and symbol in ({placeholders})
-                      and trade_date>=? and trade_date<=?
-                    """,
-                    [*symbols, calendar_start, calendar_end],
-                ).fetchall()
-                market_rows = connection.execute(
-                    f"""
-                    select symbol,trade_date from market_daily_bars
+                    from market_daily_bars
                     where source='tushare' and adjust='raw' and asset_class='equity'
                       and market='china' and venue='china' and resolution='daily'
                       and data_type='trade' and symbol in ({placeholders})
@@ -1029,17 +991,22 @@ def import_ashare_research_batch(
                     """,
                     [*symbols, calendar_start, calendar_end],
                 ).fetchall()
-            existing = {(str(row["symbol"]), str(row["trade_date"])): dict(row) for row in existing_rows}
-            market_keys = {(str(row["symbol"]), str(row["trade_date"])) for row in market_rows}
+            market_values = {
+                (str(row["symbol"]), str(row["trade_date"])): dict(row)
+                for row in market_rows
+            }
             changed_rows = [
                 row
                 for row in all_rows
-                if (row["symbol"], row["trade_date"]) not in existing
-                or (row["symbol"], row["trade_date"]) not in market_keys
-                or not _daily_values_match(existing[(row["symbol"], row["trade_date"])], row)
+                if (row["symbol"], row["trade_date"]) not in market_values
+                or not _daily_values_match(
+                    market_values[(row["symbol"], row["trade_date"])], row
+                )
             ]
             inserted_rows = sum(
-                1 for row in changed_rows if (row["symbol"], row["trade_date"]) not in existing
+                1
+                for row in changed_rows
+                if (row["symbol"], row["trade_date"]) not in market_values
             )
         if changed_rows:
             upsert_daily_bars(changed_rows, source="tushare", batch_id=batch_id, adjust="raw", bulk=True)
@@ -1066,7 +1033,7 @@ def import_ashare_research_batch(
             )
 
         reconciled_rows = (
-            _reconcile_ashare_daily_snapshot(entries, normalized_by_symbol)
+            _reconcile_market_daily_snapshot(entries, normalized_by_symbol)
             if reconcile_full_snapshot
             else 0
         )
@@ -1108,7 +1075,7 @@ def import_ashare_research_batch(
         raise
 
 
-def _reconcile_ashare_daily_snapshot(
+def _reconcile_market_daily_snapshot(
     entries: list[dict[str, Any]],
     normalized_by_symbol: dict[str, list[dict[str, Any]]],
 ) -> int:
@@ -1172,9 +1139,7 @@ def _reconcile_ashare_daily_snapshot(
             )
         """
         for table, source in (
-            ("ashare_trade_status", "tushare:ohlcv_inferred"),
             ("market_trade_status", "tushare:ohlcv_inferred"),
-            ("ashare_daily_bars", "tushare"),
             ("market_daily_bars", "tushare"),
         ):
             cursor = connection.execute(

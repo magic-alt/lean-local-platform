@@ -13,7 +13,6 @@ This is a read-only structure snapshot of the local `lean_market` database. Row 
 | `alert_events` | base table | 199 |
 | `all_factor_values` | view | — |
 | `api_idempotency_keys` | base table | 183 |
-| `ashare_daily_bars` | view | — |
 | `ashare_tech_agent_profiles` | base table | 0 |
 | `ashare_tech_agent_runs` | base table | 5 |
 | `ashare_tech_agent_stages` | base table | 6 |
@@ -23,7 +22,6 @@ This is a read-only structure snapshot of the local `lean_market` database. Row 
 | `ashare_tech_prompt_templates` | base table | 0 |
 | `ashare_tech_reports` | base table | 11 |
 | `ashare_tech_watchlist_items` | base table | 26 |
-| `ashare_trade_status` | view | — |
 | `asset_capabilities` | base table | 8 |
 | `backtest_results` | base table | 0 |
 | `backtest_runs` | base table | 0 |
@@ -266,27 +264,6 @@ Indexes:
 - `idempotency_key` (unique): `idempotency_key`, `method`, `request_path_sha256`
 - `idx_api_idempotency_status_updated` (non-unique): `status`, `updated_at`
 - `PRIMARY` (unique): `id`
-
-## `ashare_daily_bars`
-
-| Column | Type | Null | Key | Default | Extra |
-| --- | --- | --- | --- | --- | --- |
-| `symbol` | `varchar(96)` | NO |  |  |  |
-| `trade_date` | `varchar(32)` | NO |  |  |  |
-| `open` | `double` | YES |  |  |  |
-| `high` | `double` | YES |  |  |  |
-| `low` | `double` | YES |  |  |  |
-| `close` | `double` | YES |  |  |  |
-| `volume` | `double` | YES |  |  |  |
-| `amount` | `double` | YES |  |  |  |
-| `turnover_rate` | `double` | YES |  |  |  |
-| `prev_close` | `double` | YES |  |  |  |
-| `pct_change` | `double` | YES |  |  |  |
-| `adj_factor` | `double` | YES |  |  |  |
-| `adjust` | `varchar(96)` | NO |  | raw |  |
-| `source` | `varchar(96)` | NO |  |  |  |
-| `batch_id` | `varchar(64)` | YES |  |  |  |
-| `created_at` | `varchar(32)` | NO |  |  |  |
 
 ## `ashare_tech_agent_profiles`
 
@@ -533,25 +510,6 @@ Indexes:
 Indexes:
 - `idx_ashare_tech_watchlist_group` (non-unique): `group_key`, `enabled`, `code`
 - `PRIMARY` (unique): `code`
-
-## `ashare_trade_status`
-
-| Column | Type | Null | Key | Default | Extra |
-| --- | --- | --- | --- | --- | --- |
-| `symbol` | `varchar(96)` | NO |  |  |  |
-| `trade_date` | `varchar(32)` | NO |  |  |  |
-| `is_suspended` | `int` | NO |  | 0 |  |
-| `limit_up` | `double` | YES |  |  |  |
-| `limit_down` | `double` | YES |  |  |  |
-| `is_limit_up` | `int` | NO |  | 0 |  |
-| `is_limit_down` | `int` | NO |  | 0 |  |
-| `is_one_word_limit_up` | `int` | NO |  | 0 |  |
-| `is_one_word_limit_down` | `int` | NO |  | 0 |  |
-| `can_buy` | `int` | NO |  | 1 |  |
-| `can_sell` | `int` | NO |  | 1 |  |
-| `is_st` | `int` | NO |  | 0 |  |
-| `source` | `varchar(96)` | NO |  |  |  |
-| `batch_id` | `varchar(64)` | YES |  |  |  |
 
 ## `asset_capabilities`
 

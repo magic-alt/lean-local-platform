@@ -27,7 +27,7 @@ echo "Rolling API"
 docker compose up -d --no-deps --force-recreate api
 
 echo "Rolling workers"
-for service in worker data-worker data-demand-worker backtest-worker ml-worker; do
+for service in worker data-worker data-lineage-worker data-demand-worker backtest-worker ml-worker; do
   docker compose up -d --no-deps --force-recreate "${service}"
 done
 

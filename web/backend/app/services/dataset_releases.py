@@ -153,6 +153,19 @@ def revoke_scope(
     return int(getattr(cursor, "rowcount", 0) or 0)
 
 
+def revoke_all_for_direct_market_reset(connection: Any, timestamp: str) -> int:
+    """Keep maintenance revocation writes inside the declared table owner."""
+    cursor = connection.execute(
+        """
+        update dataset_releases
+        set status='revoked',revoked_at=?,revoke_reason='direct_market_reset'
+        where status <> 'revoked'
+        """,
+        (timestamp,),
+    )
+    return int(getattr(cursor, "rowcount", 0) or 0)
+
+
 def list_releases(*, status: str | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
     clauses: list[str] = []
     values: list[Any] = []

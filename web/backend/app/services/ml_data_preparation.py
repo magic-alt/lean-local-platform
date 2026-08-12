@@ -148,7 +148,8 @@ def preparation_preview(start_date: str, end_date: str) -> dict[str, Any]:
             counts[key] = int(connection.execute(sql, params).fetchone()["n"] or 0)
         bars = connection.execute(
             """select count(*) n,count(distinct symbol) symbols,min(trade_date) first_date,max(trade_date) last_date
-               from ashare_daily_bars where adjust='raw' and trade_date between ? and ?""",
+               from market_daily_bars where asset_class='equity' and market='china' and venue='china'
+               and resolution='daily' and data_type='trade' and adjust='raw' and trade_date between ? and ?""",
             (start_date, end_date),
         ).fetchone()
         counts["dailyBars"] = int(bars["n"] or 0)
@@ -158,7 +159,9 @@ def preparation_preview(start_date: str, end_date: str) -> dict[str, Any]:
             (start_date, end_date),
         ).fetchone()["n"] or 0)
         counts["tradeStatus"] = int(connection.execute(
-            "select count(*) n from ashare_trade_status where trade_date between ? and ?",
+            """select count(*) n from market_trade_status
+               where asset_class='equity' and market='china' and venue='china'
+                 and trade_date between ? and ?""",
             (start_date, end_date),
         ).fetchone()["n"] or 0)
     member = dict(member_row) if member_row else {}

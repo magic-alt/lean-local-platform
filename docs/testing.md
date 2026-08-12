@@ -282,7 +282,7 @@ web/backend/.venv/bin/python scripts/check_supply_chain.py \
 
 ### 4. A-Share T+1 and Limit Test
 
-- Data: A-share symbol with `ashare_trade_status` including suspended, limit-up, limit-down dates.
+- Data: A-share symbol with canonical `market_trade_status` rows including suspended, limit-up, and limit-down dates.
 - Period: includes the blocked dates.
 - Cash: 100000 CNY.
 - Rule: strategy attempts buy/sell around blocked dates.

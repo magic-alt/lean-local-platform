@@ -83,9 +83,10 @@ def _latest_local_csi300_bar_date() -> str | None:
         row = connection.execute(
             """
             select max(d.trade_date) as trade_date
-            from ashare_daily_bars d
+            from market_daily_bars d
             join universe_membership u on u.symbol = d.symbol and u.universe_code = ?
-            where d.adjust = 'raw'
+            where d.asset_class='equity' and d.market='china' and d.venue='china'
+              and d.resolution='daily' and d.data_type='trade' and d.adjust = 'raw'
             """,
             (CSI300_UNIVERSE,),
         ).fetchone()
@@ -102,8 +103,9 @@ def _previous_close(symbol: str, before_date: str, rows: list[dict[str, Any]]) -
     with db() as connection:
         row = connection.execute(
             """
-            select close from ashare_daily_bars
-            where symbol = ? and trade_date < ? and adjust = 'raw'
+            select close from market_daily_bars
+            where symbol = ? and asset_class='equity' and market='china' and venue='china'
+              and resolution='daily' and data_type='trade' and trade_date < ? and adjust = 'raw'
             order by trade_date desc
             limit 1
             """,

@@ -18,12 +18,12 @@ from app.services import storage_maintenance  # noqa: E402
 from app.services import commercial_market_schema  # noqa: E402
 
 
-MUTATING_ACTIONS = {"hide-indexes", "restore-indexes", "drop-indexes", "optimize", "delete-equivalent-eav", "migrate-objects", "prune-artifacts", "prune-raw-records", "prepare-ashare", "cutover-ashare", "drop-ashare-legacy", "direct-market-reset", "purge-backtests", "prepare-commercial-v2"}
+MUTATING_ACTIONS = {"hide-indexes", "restore-indexes", "drop-indexes", "optimize", "delete-equivalent-eav", "migrate-objects", "prune-artifacts", "prune-raw-records", "direct-market-reset", "purge-backtests", "prepare-commercial-v2"}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("report", "index-status", "eav-audit", "ashare-coverage", "market-reset-plan", "backtest-purge-plan", "schema-report", "commercial-v2-status", "commercial-v2-plan", *sorted(MUTATING_ACTIONS)))
+    parser.add_argument("action", choices=("report", "index-status", "eav-audit", "market-reset-plan", "backtest-purge-plan", "schema-report", "commercial-v2-status", "commercial-v2-plan", *sorted(MUTATING_ACTIONS)))
     parser.add_argument("--confirm", action="store_true", help="Required for every mutating action.")
     parser.add_argument("--batch-size", type=int, default=10_000)
     parser.add_argument("--max-batches", type=int)
@@ -46,8 +46,6 @@ def main() -> int:
         result = storage_maintenance.redundant_index_status()
     elif args.action == "eav-audit":
         result = storage_maintenance.daily_basic_eav_audit()
-    elif args.action == "ashare-coverage":
-        result = storage_maintenance.ashare_canonical_coverage()
     elif args.action == "market-reset-plan":
         result = storage_maintenance.market_reset_plan()
     elif args.action == "backtest-purge-plan":
@@ -70,14 +68,6 @@ def main() -> int:
         result = storage_maintenance.delete_equivalent_daily_basic_eav(batch_size=args.batch_size, max_batches=args.max_batches)
     elif args.action == "migrate-objects":
         result = storage_maintenance.migrate_objects(limit=args.limit, namespace=args.namespace)
-    elif args.action == "prepare-ashare":
-        result = storage_maintenance.prepare_ashare_canonical_storage()
-    elif args.action == "cutover-ashare":
-        storage_maintenance.cutover_ashare_compatibility_views()
-        result = {"cutover": "complete"}
-    elif args.action == "drop-ashare-legacy":
-        storage_maintenance.drop_ashare_legacy_tables()
-        result = {"legacyTables": "dropped"}
     elif args.action == "direct-market-reset":
         result = storage_maintenance.direct_market_reset()
     elif args.action == "purge-backtests":

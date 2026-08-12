@@ -1634,16 +1634,33 @@ export function DataPage() {
     const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled"]);
     const completed = items.filter((item) => terminal.has(item.status)).length;
     const active = items.find((item) => ["checking", "running"].includes(item.status));
+    const activeTotal = Number(active?.metrics?.totalUnits ?? active?.checkpoint?.total ?? 0);
+    const activeProcessed = Number(active?.metrics?.processedUnits ?? active?.checkpoint?.index ?? 0);
+    const activeFetched = Number(active?.metrics?.fetchedUnits ?? activeProcessed);
+    const activeFraction = activeTotal > 0 ? Math.min(1, activeProcessed / activeTotal) : 0;
     return {
       active,
       completed,
       total: items.length,
-      percent: items.length ? Math.round((completed / items.length) * 100) : 0,
+      activeTotal,
+      activeProcessed,
+      activeFetched,
+      activePercent: activeTotal > 0 ? Math.min(100, Math.round((activeProcessed / activeTotal) * 100)) : 0,
+      downloadPercent: activeTotal > 0 ? Math.min(100, Math.round((activeFetched / activeTotal) * 100)) : 0,
+      percent: items.length ? Math.min(100, Math.round(((completed + activeFraction) / items.length) * 100)) : 0,
       denied: catalogRows.filter((item) => item.permission_status === "denied").length,
       retryable: catalogRows.filter((item) => item.permission_status === "retryable").length,
       onDemand: catalogRows.filter((item) => item.sync_policy === "on_demand").length,
     };
   }, [catalogRows, currentSync?.items]);
+
+  const syncPhaseLabel = syncProgress.active?.status === "checking"
+    ? "正在检查"
+    : ({
+        fetch: "正在下载",
+        load: "正在写入 MySQL",
+        validate: "正在校验",
+      } as Record<string, string>)[syncProgress.active?.metrics?.phase || ""] || "正在更新";
 
   function permissionReason(item: typeof catalogRows[number]) {
     if (item.sync_policy === "on_demand") return "按需获取，不参与一键更新";
@@ -1961,14 +1978,15 @@ export function DataPage() {
                 )}
                 <strong>
                   {syncProgress.active
-                    ? `${syncProgress.active.status === "checking" ? "正在检查" : "正在更新"}：${syncProgress.active.dataset_key}`
+                    ? `${syncPhaseLabel}：${syncProgress.active.dataset_key}`
                     : currentSync.status === "queued"
                       ? "等待数据 worker 接收任务"
                       : `已处理 ${syncProgress.completed}/${syncProgress.total} 个数据集`}
                 </strong>
-                {Boolean(syncProgress.active?.checkpoint?.symbol) && syncProgress.active && (
+                {syncProgress.activeTotal > 0 && syncProgress.active && (
                   <span>
-                    {String(syncProgress.active.checkpoint?.symbol)} · {String(syncProgress.active.checkpoint?.index ?? "-")}/{String(syncProgress.active.checkpoint?.total ?? "-")}
+                    完成 {syncProgress.activeProcessed.toLocaleString()}/{syncProgress.activeTotal.toLocaleString()} 个工作单元
+                    {syncProgress.active.checkpoint?.symbol ? ` · 当前 ${String(syncProgress.active.checkpoint.symbol)}` : ""}
                   </span>
                 )}
                 {syncProgress.active?.metrics?.phase && <Tag color="processing">{syncProgress.active.metrics.phase}</Tag>}
@@ -1991,11 +2009,27 @@ export function DataPage() {
                 {syncProgress.active?.metrics?.downloadedRows !== undefined && (
                   <span>下载 {syncProgress.active.metrics.downloadedRows.toLocaleString()} rows</span>
                 )}
+                {syncProgress.active?.metrics?.downloadRowsPerSecond !== undefined && (
+                  <span>
+                    下载速度 {syncProgress.active.metrics.downloadRowsPerSecond >= 100
+                      ? Math.round(syncProgress.active.metrics.downloadRowsPerSecond).toLocaleString()
+                      : syncProgress.active.metrics.downloadRowsPerSecond.toFixed(1)} rows/s
+                  </span>
+                )}
                 {syncProgress.active?.metrics?.committedRows !== undefined && (
                   <span>入库 {syncProgress.active.metrics.committedRows.toLocaleString()} rows</span>
                 )}
                 {syncProgress.active?.metrics?.writeRowsPerSecond !== undefined && (
-                  <span>写入 {Math.round(syncProgress.active.metrics.writeRowsPerSecond).toLocaleString()} rows/s</span>
+                  <span>MySQL 规范表 {Math.round(syncProgress.active.metrics.writeRowsPerSecond).toLocaleString()} rows/s</span>
+                )}
+                {syncProgress.active?.metrics?.lineageStatus && (
+                  <span>
+                    来源归档 {syncProgress.active.metrics.lineageStatus === "success"
+                      ? "完成"
+                      : syncProgress.active.metrics.lineageStatus === "failed"
+                        ? `失败 ${syncProgress.active.metrics.lineageFailedBatches || 0} 批`
+                        : `排队 ${syncProgress.active.metrics.lineagePendingBatches || 0} 批 · ${(syncProgress.active.metrics.lineagePendingRows || 0).toLocaleString()} rows`}
+                  </span>
                 )}
                 {syncProgress.active?.metrics?.unitsPerSecond !== undefined && (
                   <span>处理 {syncProgress.active.metrics.unitsPerSecond.toFixed(1)} 个工作单元/s</span>
@@ -2029,8 +2063,23 @@ export function DataPage() {
                     MySQL 物理占用 {(syncProgress.active.metrics.databaseBytes / 1024 / 1024 / 1024).toFixed(1)} GiB · 一键更新不限额
                   </span>
                 )}
+                {currentSync.heartbeat_at && <span>最近上报 {formatDateTime(currentSync.heartbeat_at)}</span>}
               </Space>
-              <Progress percent={syncProgress.percent} size="small" status={currentSync.status === "failed" ? "exception" : "active"} />
+              {syncProgress.active && syncProgress.activeTotal > 0 && (
+                <div>
+                  <div className="data-catalog-meta">
+                    当前数据集下载进度 · {syncProgress.activeFetched.toLocaleString()}/{syncProgress.activeTotal.toLocaleString()} 个工作单元
+                  </div>
+                  <Progress percent={syncProgress.downloadPercent} size="small" status="active" />
+                  {syncProgress.activeProcessed < syncProgress.activeFetched && (
+                    <div className="data-catalog-meta">其中已完成校验与入库 {syncProgress.activePercent}%</div>
+                  )}
+                </div>
+              )}
+              <div>
+                <div className="data-catalog-meta">总体完成度 · {syncProgress.completed}/{syncProgress.total} 个数据集</div>
+                <Progress percent={syncProgress.percent} size="small" status={currentSync.status === "failed" ? "exception" : "active"} />
+              </div>
             </Space>
           </Card>
         )}
