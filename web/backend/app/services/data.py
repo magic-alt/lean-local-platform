@@ -769,6 +769,51 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
         "prev_close", "pct_change", "adj_factor",
     )
 
+    symbols = sorted({str(row["symbol"]) for row in rows})
+    first_date = min(str(row["trade_date"]) for row in rows)
+    last_date = max(str(row["trade_date"]) for row in rows)
+    columns = "symbol,trade_date," + ",".join(fields)
+
+    def changed_from_exact_rows(
+        market_rows: list[Any],
+        eligible_symbols: set[str] | None = None,
+    ) -> set[tuple[str, str]]:
+        market_values = {
+            (str(row["symbol"]), str(row["trade_date"])): dict(row)
+            for row in market_rows
+        }
+        return {
+            (str(row["symbol"]), str(row["trade_date"]))
+            for row in rows
+            if (eligible_symbols is None or str(row["symbol"]) in eligible_symbols)
+            and (
+                (str(row["symbol"]), str(row["trade_date"])) not in market_values
+                or not _daily_values_match(
+                    market_values[(str(row["symbol"]), str(row["trade_date"]))], row
+                )
+            )
+        }
+
+    # Full-market date batches are bounded to at most 100k incoming rows and a
+    # few dozen sessions. Reading that contiguous source/date slice once is
+    # substantially cheaper than planning thousands of sparse instrument-id
+    # ranges, especially when most dates have not been loaded yet. Keep the
+    # sparse fingerprint path below for small universes and long histories.
+    incoming_dates = {str(row["trade_date"]) for row in rows}
+    if len(symbols) >= 500 and len(incoming_dates) <= 32:
+        with db() as connection:
+            market_exact = connection.execute(
+                f"""
+                select {columns} from market_daily_bars
+                    force index (idx_market_daily_source_date_symbol)
+                where source='tushare' and adjust='raw' and asset_class='equity'
+                  and market='china' and venue='china' and resolution='daily'
+                  and data_type='trade' and trade_date>=? and trade_date<=?
+                """,
+                (first_date, last_date),
+            ).fetchall()
+        return changed_from_exact_rows(list(market_exact))
+
     def token(value: Any) -> str:
         if value is None:
             return "~"
@@ -786,10 +831,7 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
         item["last_date"] = max(item["last_date"] or trade_date, trade_date)
         item["checksum"] ^= zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF
 
-    symbols = sorted(incoming)
     market_instrument_ids = [instrument_id("equity", "china", symbol, "china") for symbol in symbols]
-    first_date = min(str(row["trade_date"]) for row in rows)
-    last_date = max(str(row["trade_date"]) for row in rows)
     encoded_fields = ",".join(
         f"coalesce(cast(round({field}*10000) as char),'~')" for field in fields
     )
@@ -840,7 +882,6 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
         first_date,
         last_date,
     ]
-    columns = "symbol,trade_date," + ",".join(fields)
     with db() as connection:
         market_exact = connection.execute(
             f"""
@@ -852,21 +893,7 @@ def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]
             """,
             changed_market_parameters,
         ).fetchall()
-    market_values = {
-        (str(row["symbol"]), str(row["trade_date"])): dict(row)
-        for row in market_exact
-    }
-    return {
-        (str(row["symbol"]), str(row["trade_date"]))
-        for row in rows
-        if str(row["symbol"]) in changed_symbols
-        and (
-            (str(row["symbol"]), str(row["trade_date"])) not in market_values
-            or not _daily_values_match(
-                market_values[(str(row["symbol"]), str(row["trade_date"]))], row
-            )
-        )
-    }
+    return changed_from_exact_rows(list(market_exact), changed_symbols)
 
 
 def import_ashare_research_batch(

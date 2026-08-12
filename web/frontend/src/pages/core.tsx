@@ -1654,6 +1654,7 @@ export function DataPage() {
     : ({
         fetch: "正在下载",
         load: "正在写入 MySQL",
+        reconcile: "正在核对 MySQL 快照",
         validate: "正在校验",
       } as Record<string, string>)[syncProgress.active?.metrics?.phase || ""] || "正在更新";
   const activeSyncMetrics = syncProgress.active?.metrics;

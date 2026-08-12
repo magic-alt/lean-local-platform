@@ -783,6 +783,15 @@ class TushareAdapter:
         end = _compact_date(end_date, "end_date")
         rows: list[dict[str, Any]] = []
         for item in _records(frame):
+            # TuShare's historical dividend feed contains a small number of
+            # vendor/legacy identifiers such as ``T00018.SZ``. They are not
+            # A-share exchange symbols and cannot be represented by the
+            # canonical six-digit corporate-actions schema. Ignore them at
+            # the provider boundary so one malformed row cannot abort an
+            # otherwise valid market-date batch.
+            symbol = from_tushare_code(item.get("ts_code") or fallback_symbol)
+            if len(symbol) != 6 or not symbol.isdigit():
+                continue
             ex_date_raw = _first_non_blank(item.get("ex_date"), item.get("div_listdate"), item.get("record_date"), item.get("ann_date"))
             if not ex_date_raw:
                 continue
@@ -796,7 +805,7 @@ class TushareAdapter:
                 stock_dividend = bonus + conversion if bonus or conversion else None
             rows.append(
                 {
-                    "symbol": from_tushare_code(item.get("ts_code") or fallback_symbol),
+                    "symbol": symbol,
                     "ex_date": _iso_date(compact_ex_date),
                     "action_type": "dividend",
                     "cash_dividend": _finite_float(item.get("cash_div_tax") or item.get("cash_div"), multiplier=0.1),

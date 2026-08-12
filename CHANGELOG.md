@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Speed up full-rebuild daily ingestion with source/date/symbol indexes on canonical bars and trade status, a bounded contiguous date-slice comparison for market-wide batches, an explicit reconciliation phase, and a live heartbeat while large MySQL batches are being reconciled.
+
+- Ignore non-A-share legacy identifiers such as `T00018.SZ` in TuShare's historical dividend feed so a malformed provider row cannot abort a valid market-date batch.
+
 - Reduce and contain workstation-wide MySQL OOM failures during one-click data updates by replacing large readiness `count(*)` scans with metadata estimates, warning when Docker has less than 16 GiB, pausing the run on MySQL connection loss, preserving resumable checkpoints, and showing live API-quota waits with rolling one-minute throughput and ETA.
 
 - Record the successful signed Feishu robot webhook verification, distinguish `FEISHU_WEBHOOK_SECRET` from relay bearer authentication, and keep the persisted LEAN delivery and 24-hour observation gate explicitly open.

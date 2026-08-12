@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ from .tushare_lineage import async_lineage_enabled, enqueue_lineage_job, lineage
 
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 # Provider responses are Python dictionaries and are duplicated temporarily by
@@ -2234,10 +2236,31 @@ def _sync_daily_by_trade_date(
             reconcile_full_snapshot=False,
         )
         if reconcile_full_snapshot:
+            _item(
+                run_id,
+                spec.key,
+                metrics=_throughput_metrics(
+                    started,
+                    phase="reconcile",
+                    api_calls=api_calls,
+                    downloaded=downloaded,
+                    committed=committed,
+                    queue_depth=0,
+                    processed_units=processed,
+                    fetched_units=fetched_units,
+                    total_units=total,
+                    empty_units=empty_units,
+                    validated=validated,
+                    endpoint_calls=endpoint_calls,
+                    timings=timings,
+                    rate_units=processed - session_processed_base,
+                ),
+            )
             _reconcile_daily_trade_date_batch(
                 first_date,
                 last_date,
                 [row for entry in buffered for row in entry["rows"]],
+                run_id=run_id,
             )
         timings["canonicalCompareWrite"] += (time.perf_counter() - stage_started) * 1000
         row_counts = {str(entry["work_key"]): len(entry["rows"]) for entry in buffered}
@@ -2699,6 +2722,9 @@ def _reconcile_daily_trade_date_batch(
     start_date: str,
     end_date: str,
     rows: list[dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    heartbeat_interval_seconds: float = 10.0,
 ) -> int:
     """Reconcile an authoritative full-rebuild date slice after it is loaded."""
     keys = sorted(
@@ -2709,38 +2735,69 @@ def _reconcile_daily_trade_date_batch(
         }
     )
     deleted = 0
-    with bulk_db() as connection:
-        connection.execute(
-            """
-            create temporary table if not exists tmp_daily_date_keys (
-                symbol varchar(32) not null,
-                trade_date varchar(10) not null,
-                primary key(symbol,trade_date)
-            )
-            """
+    heartbeat_stop = threading.Event()
+    heartbeat_thread: threading.Thread | None = None
+
+    def heartbeat() -> None:
+        interval = max(0.1, float(heartbeat_interval_seconds))
+        while not heartbeat_stop.wait(interval):
+            try:
+                with db() as connection:
+                    connection.execute(
+                        """
+                        update data_sync_runs set heartbeat_at=?
+                        where id=? and status in ('queued','running','cancelling')
+                        """,
+                        (utc_now(), run_id),
+                    )
+            except Exception:  # noqa: BLE001 - progress reporting must not abort canonical writes.
+                logger.warning("Daily reconciliation heartbeat failed for run %s", run_id, exc_info=True)
+
+    if run_id:
+        heartbeat_thread = threading.Thread(
+            target=heartbeat,
+            name=f"daily-reconcile-heartbeat-{run_id[:8]}",
+            daemon=True,
         )
-        connection.execute("delete from tmp_daily_date_keys")
-        if keys:
-            connection.executemany(
-                "insert into tmp_daily_date_keys(symbol,trade_date) values (?,?)",
-                keys,
+        heartbeat_thread.start()
+
+    try:
+        with bulk_db() as connection:
+            connection.execute(
+                """
+                create temporary table if not exists tmp_daily_date_keys (
+                    symbol varchar(32) not null,
+                    trade_date varchar(10) not null,
+                    primary key(symbol,trade_date)
+                )
+                """
             )
-        for table, source in (
-            ("market_trade_status", "tushare:ohlcv_inferred"),
-            ("market_daily_bars", "tushare"),
-        ):
-            cursor = connection.execute(
-                f"""
-                delete from {table}
-                where source=? and trade_date>=? and trade_date<=?
-                  and not exists (
-                      select 1 from tmp_daily_date_keys k
-                      where k.symbol={table}.symbol and k.trade_date={table}.trade_date
-                  )
-                """,
-                (source, start_date, end_date),
-            )
-            deleted += max(0, int(cursor.rowcount or 0))
+            connection.execute("delete from tmp_daily_date_keys")
+            if keys:
+                connection.executemany(
+                    "insert into tmp_daily_date_keys(symbol,trade_date) values (?,?)",
+                    keys,
+                )
+            for table, source in (
+                ("market_trade_status", "tushare:ohlcv_inferred"),
+                ("market_daily_bars", "tushare"),
+            ):
+                cursor = connection.execute(
+                    f"""
+                    delete from {table}
+                    where source=? and trade_date>=? and trade_date<=?
+                      and not exists (
+                          select 1 from tmp_daily_date_keys k
+                          where k.symbol={table}.symbol and k.trade_date={table}.trade_date
+                      )
+                    """,
+                    (source, start_date, end_date),
+                )
+                deleted += max(0, int(cursor.rowcount or 0))
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread:
+            heartbeat_thread.join(timeout=1.0)
     return deleted
 
 

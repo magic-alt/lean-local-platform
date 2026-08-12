@@ -582,6 +582,14 @@ def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
             return FakeFrame(
                 [
                     {
+                        "ts_code": "T00018.SZ",
+                        "end_date": "20001231",
+                        "ann_date": "20010201",
+                        "ex_date": "20260717",
+                        "cash_div_tax": 2.0,
+                        "div_proc": "实施",
+                    },
+                    {
                         "ts_code": "600000.SH",
                         "end_date": "20251231",
                         "ann_date": "20260320",
@@ -617,6 +625,7 @@ def test_daily_and_dividend_trade_date_fetches_normalize_the_whole_market():
     assert dividends[0]["symbol"] == "600000"
     assert dividends[0]["ex_date"] == "2026-07-17"
     assert dividends[0]["cash_dividend"] == 1.0
+    assert len(dividends) == 1
 
 
 def test_daily_trade_date_fetch_paginates_a_full_provider_page():

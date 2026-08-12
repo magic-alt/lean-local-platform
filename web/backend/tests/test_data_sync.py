@@ -1,5 +1,7 @@
+from contextlib import contextmanager
 from dataclasses import replace
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -692,6 +694,54 @@ def test_mysql_daily_change_detection_reads_only_canonical_table(monkeypatch):
     assert len(statements) == 2
     assert all("market_daily_bars" in statement for statement in statements)
     assert all("ashare_daily_bars" not in statement for statement in statements)
+
+
+def test_mysql_market_date_change_detection_uses_bounded_source_date_scan(monkeypatch):
+    from app.services import data
+
+    statements = []
+
+    class Result:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, sql, parameters=()):
+            statements.append(sql)
+            return Result()
+
+    class Context:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *args):
+            return False
+
+    rows = [
+        {
+            "symbol": f"{index:06d}",
+            "trade_date": "2026-07-17",
+            "open": 10,
+            "high": 11,
+            "low": 9,
+            "close": 10.5,
+            "volume": 1000,
+            "amount": 10000,
+            "turnover_rate": 1,
+            "prev_close": 10,
+            "pct_change": 5,
+            "adj_factor": 1,
+        }
+        for index in range(1, 501)
+    ]
+    monkeypatch.setattr(data, "db", Context)
+
+    changed = data._mysql_changed_daily_keys(rows)
+
+    assert len(changed) == 500
+    assert len(statements) == 1
+    assert "force index (idx_market_daily_source_date_symbol)" in statements[0]
+    assert "instrument_id in" not in statements[0]
 
 
 def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch):
@@ -3007,6 +3057,48 @@ def test_sync_item_progress_updates_run_heartbeat(tmp_path, monkeypatch):
         processed=1,
         checkpoint={"index": 1, "symbol": "000001", "total": 2},
     )
+    with db() as connection:
+        heartbeat = connection.execute(
+            "select heartbeat_at from data_sync_runs where id=?",
+            (run["id"],),
+        ).fetchone()
+    assert heartbeat["heartbeat_at"]
+
+
+def test_daily_reconciliation_keeps_run_heartbeat_alive(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"], mode="full_rebuild")
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set status='running',heartbeat_at=null where id=?",
+            (run["id"],),
+        )
+
+    class SlowBulkConnection:
+        def execute(self, sql, parameters=None):
+            if "delete from market_trade_status" in sql:
+                time.sleep(0.25)
+            return SimpleNamespace(rowcount=0)
+
+        def executemany(self, sql, parameters):
+            return SimpleNamespace(rowcount=0)
+
+    @contextmanager
+    def slow_bulk_db():
+        yield SlowBulkConnection()
+
+    monkeypatch.setattr(data_sync, "bulk_db", slow_bulk_db)
+    data_sync._reconcile_daily_trade_date_batch(
+        "2026-07-16",
+        "2026-07-17",
+        [{"symbol": "000001", "date": "2026-07-17"}],
+        run_id=run["id"],
+        heartbeat_interval_seconds=0.1,
+    )
+
     with db() as connection:
         heartbeat = connection.execute(
             "select heartbeat_at from data_sync_runs where id=?",

@@ -63,6 +63,7 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "0041_p0_terminal_trust_and_release_identity" in revisions
     assert "0042_p1_notification_capacity_controls" in revisions
     assert "0043_p1_lineage_query_index" in revisions
+    assert "0050_daily_reconciliation_indexes" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(
@@ -93,6 +94,12 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         lineage_index = connection.execute(
             "select name from sqlite_master where type = 'index' and name = 'idx_market_daily_lineage'"
         ).fetchone()
+        daily_reconcile_index = connection.execute(
+            "select name from sqlite_master where type = 'index' and name = 'idx_market_daily_source_date_symbol'"
+        ).fetchone()
+        status_reconcile_index = connection.execute(
+            "select name from sqlite_master where type = 'index' and name = 'idx_market_status_source_date_symbol'"
+        ).fetchone()
     assert {"mode", "source_backtest_id", "last_processed_date", "pipeline_version"} <= paper_columns
     assert walkforward_table is not None
     assert intent_table is not None
@@ -103,6 +110,8 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "terminal_at" in delivery_columns
     assert "terminal_at" in outbox_columns
     assert lineage_index is not None
+    assert daily_reconcile_index is not None
+    assert status_reconcile_index is not None
     assert index_row is not None
 
 
