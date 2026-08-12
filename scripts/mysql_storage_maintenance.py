@@ -15,14 +15,15 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.services import storage_maintenance  # noqa: E402
+from app.services import commercial_market_schema  # noqa: E402
 
 
-MUTATING_ACTIONS = {"hide-indexes", "restore-indexes", "drop-indexes", "optimize", "delete-equivalent-eav", "migrate-objects", "prune-artifacts", "prune-raw-records", "prepare-ashare", "cutover-ashare", "drop-ashare-legacy", "direct-market-reset", "purge-backtests"}
+MUTATING_ACTIONS = {"hide-indexes", "restore-indexes", "drop-indexes", "optimize", "delete-equivalent-eav", "migrate-objects", "prune-artifacts", "prune-raw-records", "prepare-ashare", "cutover-ashare", "drop-ashare-legacy", "direct-market-reset", "purge-backtests", "prepare-commercial-v2"}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("report", "index-status", "eav-audit", "ashare-coverage", "market-reset-plan", "backtest-purge-plan", "schema-report", *sorted(MUTATING_ACTIONS)))
+    parser.add_argument("action", choices=("report", "index-status", "eav-audit", "ashare-coverage", "market-reset-plan", "backtest-purge-plan", "schema-report", "commercial-v2-status", "commercial-v2-plan", *sorted(MUTATING_ACTIONS)))
     parser.add_argument("--confirm", action="store_true", help="Required for every mutating action.")
     parser.add_argument("--batch-size", type=int, default=10_000)
     parser.add_argument("--max-batches", type=int)
@@ -53,6 +54,10 @@ def main() -> int:
         result = storage_maintenance.backtest_purge_plan()
     elif args.action == "schema-report":
         result = storage_maintenance.write_mysql_schema_report((ROOT / args.output).resolve())
+    elif args.action == "commercial-v2-status":
+        result = commercial_market_schema.commercial_schema_status()
+    elif args.action == "commercial-v2-plan":
+        result = commercial_market_schema.commercial_rebuild_plan()
     elif args.action == "hide-indexes":
         result = storage_maintenance.set_redundant_indexes_visible(visible=False)
     elif args.action == "restore-indexes":
@@ -77,6 +82,8 @@ def main() -> int:
         result = storage_maintenance.direct_market_reset()
     elif args.action == "purge-backtests":
         result = storage_maintenance.purge_backtests()
+    elif args.action == "prepare-commercial-v2":
+        result = commercial_market_schema.prepare_commercial_schema()
     elif args.action == "prune-raw-records":
         result = storage_maintenance.prune_expired_provider_raw_records(retention_days=args.retention_days, limit=args.limit)
     else:

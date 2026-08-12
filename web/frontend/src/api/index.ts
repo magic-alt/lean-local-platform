@@ -4,6 +4,7 @@ import type {
   DataAsset,
   DataProvider,
   DataSyncCatalog,
+  DataContractCatalog,
   DataSyncRun,
   DerivedLayerWatermarks,
   OnDemandStorageTarget,
@@ -253,6 +254,13 @@ export const api = {
   },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
+  dataContracts: (params?: { assetClass?: string; status?: string; includeFields?: boolean }) => {
+    const query = new URLSearchParams();
+    if (params?.assetClass) query.set("assetClass", params.assetClass);
+    if (params?.status) query.set("status", params.status);
+    if (params?.includeFields) query.set("includeFields", "true");
+    return request<DataContractCatalog>(`/api/data/contracts?${query.toString()}`);
+  },
   datasetPreview: (dataset: string, params?: {
     keyword?: string;
     startDate?: string;

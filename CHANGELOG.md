@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add a versioned 139-dataset TuShare stock/index/futures/options contract snapshot, generated typed revision tables, provider-neutral commercial market-data v2 schema, columnar high-frequency boundary, public contract coverage API, contract-driven source writes, offline/live-sample validation, and confirmation-protected empty-MySQL preparation workflow.
+
+- Remove the superseded tracked `audit-output`, `level45-upgrade-output`, and `level5-upgrade-output` evidence bundles from the repository.
+
 - Add confirmation-protected MySQL storage maintenance tooling for duplicate-index validation, safe daily_basic EAV cleanup, object migration, retention, and A-share canonical-table cutover. Move new binary objects to the externally mounted Data directory with checksum-verified compatibility reads, make canonical A-share writes the Compose default, add a triple-confirmed no-backup direct market-data reset that preserves business/backtest metadata while invalidating derived releases and clearing only regenerable data, and provide a foreign-key-safe full backtest/artifact purge plus a content-free local MySQL schema report.
 
 - Parallelize independent TuShare stock-master, index-history and index/futures/options catalog partitions under the shared account rate limiter; batch all index daily symbols into one canonical MySQL write and bulk-upsert trade-calendar sessions. Normalize duplicate dividend proposal/implementation revisions to the canonical ex-date action before validation.

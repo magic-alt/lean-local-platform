@@ -218,7 +218,14 @@ TuShare Pro
   -> update optional ClickHouse mirror / derived cache work
 ```
 
-The 10 one-click datasets are listed in [data_pipeline.md](data_pipeline.md). Other catalog entries are on-demand. Canonical data is not duplicated as per-row JSON; non-canonical responses use content-addressed gzip batch archives.
+The 10 one-click datasets are listed in [data_pipeline.md](data_pipeline.md). The
+versioned TuShare contract catalog separately covers 139 documented stock,
+index, futures and options datasets; registration and current account
+permission are reported independently from structural coverage. Provider-typed
+revision tables preserve source evidence before provider-neutral canonical
+selection. Minute/Tick facts belong in ClickHouse/Parquet, with only their
+contracts, partitions, hashes and watermarks in MySQL. See
+[tushare-commercial-schema.md](operations/tushare-commercial-schema.md).
 
 ## Storage Ownership
 

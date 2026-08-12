@@ -54,6 +54,14 @@ def test_mysql_migrations_schema_indexes_and_unique_transaction() -> None:
         assert {"PRIMARY", "idx_paper_walkforward_session_date"} <= {
             str(next(iter(row.values()))) for row in index_rows
         }
+        source_table_count = connection.execute(
+            """
+            select count(*) as count from information_schema.tables
+            where table_schema=database() and table_type='BASE TABLE'
+              and table_name like 'src_tushare_%'
+            """
+        ).fetchone()
+        assert source_table_count["count"] == 139
         connection.execute(
             """
             create table if not exists mysql_integration_unique_probe (
@@ -252,3 +260,41 @@ def test_mysql_concurrent_cycle_creation_is_idempotent() -> None:
             (deployment_id,),
         ).fetchone()
     assert count["count"] == 1
+
+
+def test_mysql_tushare_source_revisions_have_one_current_row() -> None:
+    _assert_isolated_database()
+
+    from app.db import db, init_db
+    from app.services.tushare_typed_source import persist_typed_source_rows
+
+    init_db()
+    original = {"ts_code": "000001.SZ", "com_name": "Original", "setup_date": "19910403"}
+    assert persist_typed_source_rows("stock_company", [original], "mysql-batch-1")["inserted"] == 1
+    assert persist_typed_source_rows(
+        "stock_company", [{**original, "com_name": "Revised"}], "mysql-batch-2"
+    )["revised"] == 1
+
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select `_revision_no`,`_is_current`,`com_name`
+            from `src_tushare_stock_company`
+            where `ts_code`='000001.SZ'
+            order by `_revision_no`
+            """
+        ).fetchall()
+        current_unique = connection.execute(
+            """
+            select count(*) as count from information_schema.statistics
+            where table_schema=database()
+              and table_name='src_tushare_stock_company'
+              and non_unique=0
+              and column_name='_current_natural_key_hash'
+            """
+        ).fetchone()
+    assert [(row["_revision_no"], row["_is_current"], row["com_name"]) for row in rows] == [
+        (1, 0, "Original"),
+        (2, 1, "Revised"),
+    ]
+    assert current_unique["count"] == 1

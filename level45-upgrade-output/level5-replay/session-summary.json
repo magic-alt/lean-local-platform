@@ -1,9 +1,0 @@
-{
-  "status": "FAIL",
-  "tradeDays": 0,
-  "filledOrders": 0,
-  "rejectedOrders": 0,
-  "distinctRejectReasonCodes": 0,
-  "sixPhaseRecoveryCertified": false,
-  "reason": "A new compliant 21-day same-session real LEAN replay was not completed."
-}

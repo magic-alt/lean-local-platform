@@ -63,6 +63,7 @@ from ..services import data_sync_commands
 from ..services import data_gateway
 from ..services.asset_capabilities import capability_payload
 from ..services.dataset_releases import list_releases
+from ..services.tushare_contracts import list_public_contracts
 from ..tasks.worker import (
     download_on_demand_dataset_task,
     fetch_data_batch_task,
@@ -304,6 +305,23 @@ def data_provider_availability(provider: str | None = None):
 @router.get("/data/catalog")
 def data_catalog():
     return data_sync.catalog_payload()
+
+
+@router.get("/data/contracts")
+def data_contracts(
+    assetClass: str | None = None,
+    status: str | None = None,
+    includeFields: bool = False,
+):
+    if assetClass and assetClass not in {"equity", "index", "future", "option"}:
+        raise HTTPException(status_code=400, detail="assetClass must be equity, index, future, or option.")
+    if status and status not in {"active", "retired"}:
+        raise HTTPException(status_code=400, detail="status must be active or retired.")
+    return list_public_contracts(
+        asset_class=assetClass,
+        status=status,
+        include_fields=includeFields,
+    )
 
 
 @router.get("/data/dataset-preview/{dataset}")

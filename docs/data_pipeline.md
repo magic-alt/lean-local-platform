@@ -1,6 +1,6 @@
 # Data Pipeline
 
-Last reviewed: 2026-07-21.
+Last reviewed: 2026-08-12.
 
 MySQL is the runtime source of truth for market/reference data and synchronization state. LEAN files, Parquet and ClickHouse are generated or mirrored layers and must remain rebuildable. SQLite is used only by isolated tests.
 
@@ -16,6 +16,14 @@ Provider / CSV
 ```
 
 Key canonical domains include instruments and identifiers, A-share/reference tables, daily bars, trade status, adjustment factors, trading calendars, PIT memberships, futures/options contracts and import/quality metadata.
+
+The one-click registry is not the provider contract boundary. The checked-in
+TuShare contract snapshot contains 139 documented stock/index/futures/options
+datasets and exposes structural coverage through `GET /api/data/contracts`.
+Typed source revisions retain provider-native fields and hashes; selected facts
+then project into provider-neutral v2 tables. See the
+[commercial schema runbook](operations/tushare-commercial-schema.md) for exact
+coverage, high-frequency placement and empty-database preparation.
 
 ## One-Click Build and Incremental Update
 

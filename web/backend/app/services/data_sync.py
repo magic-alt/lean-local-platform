@@ -37,7 +37,9 @@ from .db_object_store import put_bytes
 from .market_repository import upsert_market_daily_bars_batch
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
+from .tushare_contracts import contract_for, contract_public_item, coverage_report, sync_contract_catalog
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
+from .tushare_typed_source import persist_typed_source_rows
 
 
 T = TypeVar("T")
@@ -227,7 +229,7 @@ def _permission_error(exc: Exception) -> tuple[str, str]:
 
 
 def _catalog_metadata(spec: DatasetSpec) -> dict[str, Any]:
-    return {
+    result = {
         "apiName": spec.api_name,
         "keyFields": list(spec.key_fields),
         "dateField": spec.date_field,
@@ -242,9 +244,24 @@ def _catalog_metadata(spec: DatasetSpec) -> dict[str, Any]:
         "retainRaw": spec.retain_raw,
         "catalogDateField": spec.catalog_date_field,
     }
+    contract = contract_for(spec.key) or contract_for(spec.api_name)
+    if contract:
+        public_contract = contract_public_item(contract)
+        result.update(
+            {
+                "contractVersion": public_contract["contractVersion"],
+                "storageTier": public_contract["storageTier"],
+                "canonicalStatus": "wired" if spec.normalizer else public_contract["storageTier"],
+                "fieldCoverage": public_contract["fieldCoverage"],
+                "sourceTable": public_contract["sourceTable"],
+                "documentationUrl": public_contract["documentationUrl"],
+            }
+        )
+    return result
 
 
 def ensure_catalog() -> None:
+    sync_contract_catalog()
     with db() as connection:
         for spec in DATASET_REGISTRY:
             connection.execute(
@@ -350,6 +367,7 @@ def catalog_payload() -> dict[str, Any]:
         # UI forget that the initial library was already built.
         "hasCompletedInitialSync": bool(completed_initial_sync),
         "recommendedMode": "incremental" if completed_initial_sync else "initial_full",
+        "contractCoverage": coverage_report(DATASET_REGISTRY),
     }
 
 
@@ -1205,6 +1223,7 @@ def _archive_raw_batch(
                 utc_now(),
             ),
         )
+    typed_source = persist_typed_source_rows(spec.key, rows, run_id)
     return {
         "id": archive_id,
         "objectId": object_id,
@@ -1213,6 +1232,7 @@ def _archive_raw_batch(
         "archiveSha256": archive_sha256,
         "uncompressedSize": len(payload),
         "compressedSize": len(compressed),
+        "typedSource": typed_source,
     }
 
 

@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **272** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **274** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -70,6 +70,7 @@
 | `GET` | `/api/data-assets` | Data Assets | `status` (query)<br>`includeSuperseded` (query)<br>`limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `GET` | `/api/data/capabilities` | Data Capabilities | - | `200` - |
 | `GET` | `/api/data/catalog` | Data Catalog | - | `200` - |
+| `GET` | `/api/data/contracts` | Data Contracts | `assetClass` (query)<br>`status` (query)<br>`includeFields` (query) | `200` - |
 | `GET` | `/api/data/coverage/ashare` | Data Coverage Ashare | `symbols` (query, required)<br>`benchmark` (query)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
 | `GET` | `/api/data/coverage/benchmark/{symbol}` | Data Coverage Benchmark | `symbol` (path, required)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
 | `GET` | `/api/data/coverage/symbol/{symbol}` | Data Coverage Symbol | `symbol` (path, required)<br>`source` (query)<br>`startDate` (query)<br>`endDate` (query) | `200` - |
@@ -348,6 +349,7 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
+| `POST` | `/api/research/imports/qlib` | Import Qlib Run | body `QlibImportRequest` | `200` - |
 | `GET` | `/api/research/runs` | List Runs | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
 | `POST` | `/api/research/runs` | Create Run | body `ResearchRunRequest` | `200` - |
 | `POST` | `/api/research/runs/preview` | Preview Run | body `ResearchRunRequest` | `200` - |

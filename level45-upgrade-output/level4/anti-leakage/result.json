@@ -1,7 +1,0 @@
-{
-  "implementation": "evaluate_experiment_leakage",
-  "decisionSemantics": ["ALLOW", "DENY"],
-  "focusedTestStatus": "PASS",
-  "productionLikeCertification": "FAIL",
-  "reason": "No certified production dataset and no independent full audit rerun."
-}

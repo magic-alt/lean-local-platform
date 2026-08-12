@@ -71,6 +71,7 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 | --- | --- |
 | `LEAN_TUSHARE_CALLS_PER_MINUTE` | TuShare 限速；5000 积分账户不超过 500/min |
 | `LEAN_TUSHARE_FETCH_CONCURRENCY` | 通用有界并发预取；同时控制股票主数据状态分片、指数历史窗口及指数/期货/期权市场目录分片 |
+| `LEAN_TUSHARE_TYPED_SOURCE_WRITES` | 默认 `1`；将已注册的低频 TuShare 响应同时写入契约生成的版本化来源表。仅排障时临时关闭，不影响高频 columnar 路由 |
 | `LEAN_DAILY_BASIC_FETCH_CONCURRENCY` | `daily_basic` 历史预取并发，默认 32；仍受全局 500/min 限速器约束 |
 | `LEAN_DIVIDEND_FETCH_CONCURRENCY` | `dividend` 首次历史预取并发，默认 32；增量改为按除权日拉取全市场 |
 | `LEAN_STK_LIMIT_FETCH_CONCURRENCY` | `stk_limit` 初始历史预取并发 |

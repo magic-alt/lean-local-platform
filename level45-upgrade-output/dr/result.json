@@ -1,8 +1,0 @@
-{
-  "status": "NOT_CERTIFIED",
-  "productionScaleRestoreExecuted": false,
-  "encryptedOffVolumeCopyVerified": false,
-  "rpoMeasured": false,
-  "rtoMeasured": false,
-  "releaseImpact": "RELEASE_BLOCKED"
-}

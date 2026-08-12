@@ -1,8 +1,0 @@
-{
-  "status": "ok",
-  "applied": 22,
-  "pending": 0,
-  "checksumMismatches": [],
-  "latestApplied": "0022_paper_order_pipeline_v2.sql",
-  "capturedBeforeBusinessCodeChanges": true
-}

@@ -56,6 +56,54 @@ export interface DataSyncCatalogItem {
   capabilityReason?: string | null;
 }
 
+export interface DataContractField {
+  name: string;
+  providerName: string;
+  providerType: string;
+  type: "string" | "date" | "datetime" | "integer" | "decimal" | "boolean";
+  nullable: boolean;
+  description: string;
+}
+
+export interface DataContract {
+  datasetKey: string;
+  apiName: string;
+  assetClass: "equity" | "index" | "future" | "option";
+  title: string;
+  status: "active" | "retired";
+  documentationUrl: string;
+  contractVersion: string;
+  storageTier: "canonical" | "typed_source" | "columnar";
+  sourceTable: string;
+  deliveryMethod: "pro_api" | "sdk" | "file" | string;
+  naturalKey: string[];
+  fieldCoverage: { documented: number; typed: number; complete: boolean };
+  fields?: DataContractField[];
+}
+
+export interface DataContractCatalog {
+  provider: string;
+  contractVersion: string;
+  asOfDate: string;
+  documented: number;
+  active: number;
+  retired: number;
+  contractComplete: number;
+  runtimeWired: number;
+  runtimeCoveragePercent: number;
+  byAssetClass: Record<string, {
+    documented: number;
+    active: number;
+    retired: number;
+    contractComplete: number;
+    runtimeWired: number;
+  }>;
+  storageTiers: Record<string, number>;
+  documentationUrl: string;
+  items: DataContract[];
+  count: number;
+}
+
 export interface DataSyncItem {
   id: string;
   run_id: string;
@@ -184,6 +232,7 @@ export interface DataSyncCatalog {
   latestRun?: DataSyncRun | null;
   hasCompletedInitialSync: boolean;
   recommendedMode: "initial_full" | "incremental";
+  contractCoverage?: Omit<DataContractCatalog, "items" | "count">;
 }
 
 export interface SecurityProfileIdentifier {
