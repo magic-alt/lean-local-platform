@@ -4,9 +4,13 @@
 
 ## Unreleased
 
+- Record the successful signed Feishu robot webhook verification, distinguish `FEISHU_WEBHOOK_SECRET` from relay bearer authentication, and keep the persisted LEAN delivery and 24-hour observation gate explicitly open.
+
 - Switch initial and incremental A-share market datasets to complete trade-date partitions with cap-aware TuShare pagination, load daily canonical and typed-source rows through MySQL `LOAD DATA` staging, move typed lineage persistence to a durable asynchronous worker, expose lineage backlog separately from canonical throughput, and raise the governed workstation MySQL profile to 4 CPU / 6 GiB for a measured 10x ingestion target.
 
 - Bound all TuShare bulk-sync read-ahead and write batches even when legacy environment values request 250k–500k rows, serialize raw archival with canonical loading to prevent transient multi-GiB copies, reduce derived daily materialization batches, batch typed-source lookups eight times more densely on MySQL, remove download-time A-share compatibility reads and dual writes in favor of canonical `market_*` tables only, skip destructive snapshot reconciliation during initial loads, and abort failed batch transactions without repeatedly rewriting a growing buffer so full-market `daily` downloads no longer OOM-kill or stall the data worker before a checkpoint commits.
+
+- Simplify Project deletion to one confirmation and non-cascading archival: remove the project from the Projects page while preserving completed backtests, reports, tasks, research, experiments, Paper references, and immutable Walk-Forward lineage; retain source only while an active dependency still needs it.
 
 - Make one-click data updates publish `daily` activity before the first database batch commits, and show live dataset/overall completion, downloaded rows, download speed, write speed, and ETA in the Data page.
 

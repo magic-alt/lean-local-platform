@@ -110,7 +110,9 @@ def get_project(project_id: str) -> dict[str, Any]:
 
 def list_projects() -> list[dict[str, Any]]:
     with db() as connection:
-        rows = connection.execute("select * from projects order by updated_at desc").fetchall()
+        rows = connection.execute(
+            "select * from projects where archived_at is null order by updated_at desc"
+        ).fetchall()
         counts = connection.execute(
             """
             select project_id, count(*) as run_count, max(created_at) as latest_run_at
@@ -346,79 +348,40 @@ def _remove_path(path: str | None) -> None:
 
 def delete_project(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
-    deleted = {"runs": 0, "tasks": 0, "reports": 0, "project": project_id}
+    if project.get("archived_at"):
+        return {
+            "project": project_id,
+            "archived": True,
+            "historyPreserved": True,
+            "sourceRemoved": not _project_root(project).exists(),
+        }
     with db() as connection:
-        paper_deployment = connection.execute(
-            "select id,paper_account_id from paper_strategy_deployments where project_id=? limit 1",
-            (project_id,),
-        ).fetchone()
-        if paper_deployment:
-            raise ValueError(
-                "Project is frozen by a Paper deployment and cannot be deleted "
-                f"(deploymentId={paper_deployment['id']}, paperAccountId={paper_deployment['paper_account_id']})."
-            )
-        walk_forward = connection.execute(
+        dependencies = connection.execute(
             """
-            select wf_window.walk_forward_run_id,wf_window.batch_id
-            from walk_forward_windows wf_window
-            where wf_window.project_id=?
-            order by wf_window.created_at limit 1
+            select
+                (select count(*) from backtest_runs
+                 where project_id=? and status in ('created','queued','checking','running')) as active_runs,
+                (select count(*) from tasks
+                 where project_id=? and status in ('created','queued','running')) as active_tasks,
+                (select count(*) from paper_strategy_deployments
+                 where project_id=? and status!='disabled') as paper_deployments
             """,
-            (project_id,),
+            (project_id, project_id, project_id),
         ).fetchone()
-        if walk_forward:
-            raise ValueError(
-                "Project is immutable Walk-Forward lineage; preserve it while certified evidence exists "
-                f"(batchId={walk_forward['batch_id']}, walkForwardRunId={walk_forward['walk_forward_run_id']})."
-            )
-        active_runs = connection.execute(
-            "select count(*) as count from backtest_runs where project_id = ? and status in ('created','queued','checking','running')",
-            (project_id,),
-        ).fetchone()
-        active_tasks = connection.execute(
-            "select count(*) as count from tasks where project_id = ? and status in ('created','queued','running')",
-            (project_id,),
-        ).fetchone()
-        if int(active_runs["count"] or 0) or int(active_tasks["count"] or 0):
-            raise ValueError("Cancel active project runs and tasks before deleting the project.")
-        runs = connection.execute("select * from backtest_runs where project_id = ?", (project_id,)).fetchall()
-        run_ids = [row["id"] for row in runs]
-        for row in runs:
-            _remove_path(Path(row["results_dir"]).parent.as_posix() if row["results_dir"] else None)
-            deleted["runs"] += 1
-        if run_ids:
-            placeholders = ",".join("?" for _ in run_ids)
-            reports = connection.execute(f"select * from reports where run_id in ({placeholders})", run_ids).fetchall()
-            for row in reports:
-                _remove_path(row["report_path"])
-                deleted["reports"] += 1
-            connection.execute(f"delete from reports where run_id in ({placeholders})", run_ids)
-            connection.execute(f"delete from experiments where run_id in ({placeholders})", run_ids)
-            connection.execute(f"delete from backtest_results where job_id in ({placeholders})", run_ids)
-            connection.execute(f"delete from backtest_runs where id in ({placeholders})", run_ids)
-
-        tasks = connection.execute("select * from tasks where project_id = ?", (project_id,)).fetchall()
-        for row in tasks:
-            _remove_path(row["log_path"])
-            deleted["tasks"] += 1
-        connection.execute("delete from tasks where project_id = ?", (project_id,))
-        batch_rows = connection.execute(
-            "select distinct batch_id from experiment_batch_items where project_id = ?",
-            (project_id,),
-        ).fetchall()
-        for batch_row in batch_rows:
-            batch_id = batch_row["batch_id"]
-            connection.execute(
-                "delete from experiment_batch_attempts where item_id in (select id from experiment_batch_items where batch_id = ?)",
-                (batch_id,),
-            )
-            connection.execute("delete from experiment_batch_items where batch_id = ?", (batch_id,))
-            connection.execute("delete from experiment_batches where id = ?", (batch_id,))
-        connection.execute("delete from research_sessions where project_id = ?", (project_id,))
-        connection.execute("delete from research_workspaces where project_id = ?", (project_id,))
-        connection.execute("delete from projects where id = ?", (project_id,))
-    _remove_path(str(_project_root(project)))
-    return deleted
+        keep_source = any(int(dependencies[key] or 0) for key in dependencies.keys())
+        now = utc_now()
+        connection.execute(
+            "update projects set archived_at=?,updated_at=? where id=?",
+            (now, now, project_id),
+        )
+    if not keep_source:
+        _remove_path(str(_project_root(project)))
+    return {
+        "project": project_id,
+        "archived": True,
+        "historyPreserved": True,
+        "sourceRemoved": not keep_source,
+    }
 
 
 def file_tree(project_id: str) -> list[dict[str, Any]]:

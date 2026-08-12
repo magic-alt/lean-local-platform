@@ -25,11 +25,11 @@ def _init(tmp_path, monkeypatch):
     return db_module
 
 
-def test_walk_forward_freezes_lineage_and_blocks_parent_deletion(tmp_path, monkeypatch):
-    _init(tmp_path, monkeypatch)
+def test_walk_forward_freezes_lineage_when_parent_project_is_archived(tmp_path, monkeypatch):
+    db_module = _init(tmp_path, monkeypatch)
     from app.services import experiment_batches
     from app.services.history_resources import delete_experiment_batch
-    from app.services.projects import create_project, delete_project
+    from app.services.projects import create_project, delete_project, list_projects
 
     project = create_project("immutable-wf", template_key="ema_cross", market="china")
     batch = experiment_batches.create_batch(
@@ -59,8 +59,23 @@ def test_walk_forward_freezes_lineage_and_blocks_parent_deletion(tmp_path, monke
 
     with pytest.raises(ValueError, match="immutable selection and OOS evidence"):
         delete_experiment_batch(batch["id"])
-    with pytest.raises(ValueError, match="immutable Walk-Forward lineage"):
-        delete_project(project["id"])
+    deleted = delete_project(project["id"])
+    assert deleted == {
+        "project": project["id"],
+        "archived": True,
+        "historyPreserved": True,
+        "sourceRemoved": True,
+    }
+    assert list_projects() == []
+    with db_module.db() as connection:
+        archived = connection.execute(
+            "select archived_at from projects where id=?", (project["id"],)
+        ).fetchone()
+        lineage = connection.execute(
+            "select lineage_status from walk_forward_runs where id=?", (evidence["id"],)
+        ).fetchone()
+    assert archived["archived_at"]
+    assert lineage["lineage_status"] == "complete"
 
 
 def test_completed_walk_forward_issues_immutable_certificate(tmp_path, monkeypatch):

@@ -6,12 +6,17 @@
 
 | 顺序 | Issue | 当前状态 | 下一任务 | 完成定义 |
 | ---: | --- | --- | --- | --- |
-| 1 | ACT-P1-007 | OPEN_EXTERNAL_CHANNEL_AND_24H | 将 placeholder webhook 替换为获批真实外部端点；发送唯一 probe；观察 delivery/DLQ/requeue 24h | 有 persisted external 2xx；attempts有界；无重试风暴；health可从 degraded 恢复 |
+| 1 | ACT-P1-007 | EXTERNAL_ENDPOINT_VERIFIED_24H_PENDING | 飞书签名端点已于 2026-08-13 返回 `code=0`；接通 LEAN 中转并观察 delivery/DLQ/requeue 24h | 有 persisted external 2xx；attempts有界；无重试风暴；health可从 degraded 恢复 |
 | 2 | ACT-P1-008 | OPEN_24H_CAPACITY_OBSERVATION | 保持当前串行 backtest 默认与 Compose limits，采集 24h per-container/headroom/queue | 无 OOM/抖动；memory/CPU/queue低于阈值；归因字段完整 |
 | 3 | ACT-P1-002 | OPEN_OBSERVATION_PENDING | 连续 7 日观察 0043 后 recertification/checkpoint/single-active | 无新 MySQL 2013/OOM/orphan chain；断点恢复成功；同 scope 单 active |
 | 4 | ACT-P2-002 | OPEN_BROWSER_NOT_VERIFIED | 在可用 actual Browser 执行四视口主旅程和 Cursor 日志验收 | console/network无阻断；earlier/follow/terminal-stop正确；keyboard/a11y可用 |
 
-通知端点当前为 placeholder `quant.example.com`，不得在替换为真实获批地址前 requeue 历史 dead letters。7 日和 24 小时门禁必须由真实时间跨度证据完成，不以单点快照补签。
+通知端点已从 placeholder 替换为真实飞书 V2 机器人地址，使用
+`FEISHU_WEBHOOK_SECRET` 的签名请求已成功投递测试消息；详见
+[2026-08-13 验证记录](external-webhook-verification-2026-08-13.md)。该单点验证尚未产生
+LEAN `alert_deliveries` 持久化成功记录，也未覆盖 24 小时 attempts、DLQ/requeue 和
+health recovery，因此不得关闭 ACT-P1-007 或 requeue 历史 dead letters。7 日和
+24 小时门禁必须由真实时间跨度证据完成，不以单点快照补签。
 
 ## 第四次复审已完成
 

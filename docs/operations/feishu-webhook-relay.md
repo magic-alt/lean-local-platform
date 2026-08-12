@@ -10,6 +10,19 @@ LEAN -> Pipedream/Make 公网 HTTPS Trigger -> 飞书 V2 自定义机器人
 中转端只有在飞书返回成功后才应向 LEAN 返回 HTTP 2xx；否则外部 webhook
 认证只能证明中转端收到了请求，不能证明飞书投递成功。
 
+## 当前验证状态（2026-08-13）
+
+实际飞书 V2 机器人端点已完成签名验证并成功接收测试消息：未签名请求按预期返回
+`code=19021`，使用 `FEISHU_WEBHOOK_SECRET` 生成时间戳签名后返回
+`StatusCode=0`、`code=0` 和 `msg=success`。这证明机器人地址、签名密钥和飞书终端
+投递可用；验证过程未把 webhook URL、签名密钥或签名值写入仓库和审计文档。
+
+本次是飞书终端单点验证，不等于 LEAN 通用 JSON 经中转、写入
+`alert_deliveries` 并持续观察 24 小时的正式认证。因此 `ACT-P1-007` 当前为
+`EXTERNAL_ENDPOINT_VERIFIED_24H_PENDING`，仍需按本文“最终认证”完成持久化投递与
+观察窗口。详细记录见
+[飞书 Webhook 验证记录](../audit/external-webhook-verification-2026-08-13.md)。
+
 ## 飞书准备
 
 1. 在目标飞书群的群机器人设置中添加“自定义机器人”。
@@ -17,6 +30,10 @@ LEAN -> Pipedream/Make 公网 HTTPS Trigger -> 飞书 V2 自定义机器人
    `https://open.feishu.cn/open-apis/bot/v2/hook/...`。
 3. 推荐启用签名校验并保存签名 secret。不要把 webhook URL 或 secret
    写进仓库、工作流代码或执行日志。
+
+飞书机器人签名凭据必须命名为 `FEISHU_WEBHOOK_SECRET`。它不是
+`LEAN_ALERT_WEBHOOK_BEARER_TOKEN`：后者只用于 LEAN 调用 Pipedream/Make 入口时的
+Bearer 认证，不能替代飞书 HMAC 签名密钥。
 
 ## Pipedream（推荐）
 

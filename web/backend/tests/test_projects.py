@@ -144,6 +144,82 @@ def test_api_clone_project_with_files(tmp_path, monkeypatch):
     assert "self.fast = self.ema" not in changed_source
 
 
+def test_delete_project_archives_source_and_preserves_completed_history(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    from app.main import app
+
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "stale-project", "language": "Python", "templateKey": "ema_cross"},
+    ).json()
+    project_root = Path(project["project_path"])
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into tasks
+                (id,kind,status,title,project_id,parameters_json,log_path,created_at,finished_at)
+            values ('task-history','backtest','success','history',?,'{}',?,'2026-08-01','2026-08-01')
+            """,
+            (project["id"], str(tmp_path / "history.log")),
+        )
+        connection.execute(
+            """
+            insert into backtest_runs
+                (id,task_id,project_id,symbol,parameters_json,status,docker_image,results_dir,created_at,finished_at)
+            values ('run-history','task-history',?,'AAPL','{}','success','lean:test',?,'2026-08-01','2026-08-01')
+            """,
+            (project["id"], str(tmp_path / "runs" / "run-history" / "results")),
+        )
+
+    response = client.delete(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["details"] == {
+        "project": project["id"],
+        "archived": True,
+        "historyPreserved": True,
+        "sourceRemoved": True,
+    }
+    assert client.get("/api/projects", params={"paged": "false"}).json() == []
+    assert not project_root.exists()
+    with db_module.db() as connection:
+        archived = connection.execute(
+            "select archived_at from projects where id=?", (project["id"],)
+        ).fetchone()
+        assert archived["archived_at"]
+        assert connection.execute("select count(*) as count from tasks where id='task-history'").fetchone()["count"] == 1
+        assert connection.execute("select count(*) as count from backtest_runs where id='run-history'").fetchone()["count"] == 1
+
+
+def test_delete_project_with_active_reference_hides_project_without_removing_source(tmp_path, monkeypatch):
+    db_module = configure_temp_db(tmp_path, monkeypatch)
+    from app.main import app
+
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "referenced-project", "language": "Python", "templateKey": "ema_cross"},
+    ).json()
+    project_root = Path(project["project_path"])
+    with db_module.db() as connection:
+        connection.execute(
+            """
+            insert into tasks
+                (id,kind,status,title,project_id,parameters_json,log_path,created_at)
+            values ('task-active','backtest','running','active',?,'{}',?,'2026-08-01')
+            """,
+            (project["id"], str(tmp_path / "active.log")),
+        )
+
+    response = client.delete(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["details"]["sourceRemoved"] is False
+    assert client.get("/api/projects", params={"paged": "false"}).json() == []
+    assert project_root.exists()
+
+
 def test_consolidate_automatic_copies_preserves_run_and_task_history(tmp_path, monkeypatch):
     db_module = configure_temp_db(tmp_path, monkeypatch)
     import app.services.projects as projects

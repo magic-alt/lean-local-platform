@@ -1270,27 +1270,22 @@ export function ProjectsPage() {
   }
 
   function deleteProject(project: Project) {
-    let confirmation = "";
     Modal.confirm({
-      title: `Delete ${project.name}?`,
-      content: <div>
-        <Alert
-          type="error"
-          showIcon
-          message="This is a cascading delete"
-          description={`The project, ${project.run_count ?? 0} backtests, related reports, tasks, optimizations, research sessions and managed runtime files will be removed.`}
-          style={{ marginBottom: 12 }}
-        />
-        <p>Type the project name to confirm:</p>
-        <Input placeholder={project.name} onChange={(event) => { confirmation = event.target.value; }} />
-      </div>,
-      okText: "Delete project and history",
+      title: `删除项目“${project.display_name || project.name}”？`,
+      content: "项目将从项目页移除；回测、报告、任务、研究、实验及 Paper 谱系会保留。没有活动引用时，可编辑源码目录会同时清理。",
+      okText: "删除项目",
+      cancelText: "取消",
       okButtonProps: { danger: true },
       onOk: async () => {
-        if (confirmation !== project.name) throw new Error("Project name does not match.");
-        await api.deleteProject(project.id);
-        message.success("Project deleted");
-        await projects.reload();
+        try {
+          await api.deleteProject(project.id);
+          if (selectedProjectId === project.id) setSelectedProjectId(undefined);
+          message.success("项目已删除，历史记录已保留");
+          await projects.reload();
+        } catch (error) {
+          message.error((error as Error).message);
+          throw error;
+        }
       }
     });
   }

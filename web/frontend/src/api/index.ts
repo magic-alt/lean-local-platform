@@ -180,7 +180,10 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   deleteProject: (id: string) =>
-    request<{ deleted: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    request<{ deleted: boolean; details: { project: string; archived: boolean; historyPreserved: boolean; sourceRemoved: boolean } }>(
+      `/api/projects/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    ),
   projectFiles: (id: string) => request<ProjectFile[]>(`/api/projects/${encodeURIComponent(id)}/files`),
   readProjectFile: (id: string, path: string) =>
     request<{ path: string; content: string }>(
