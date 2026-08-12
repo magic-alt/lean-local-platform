@@ -129,6 +129,175 @@ def test_throughput_uses_session_units_for_resume_rate_and_eta(monkeypatch):
     assert metrics["etaSeconds"] == 100.0
 
 
+def test_rolling_throughput_uses_recent_window(monkeypatch):
+    from app.services import data_sync
+
+    times = iter([100.0, 130.0, 170.0])
+    monkeypatch.setattr(data_sync.time, "time", lambda: next(times))
+    first = data_sync._rolling_throughput_metrics(
+        {
+            "downloadedRows": 100,
+            "committedRows": 80,
+            "sessionProcessedUnits": 10,
+            "apiCalls": 10,
+            "downloadRowsPerSecond": 100.0,
+            "writeRowsPerSecond": 80.0,
+            "unitsPerSecond": 10.0,
+            "apiCallsPerMinute": 500.0,
+            "processedUnits": 10,
+            "totalUnits": 100,
+        },
+        None,
+    )
+    second = data_sync._rolling_throughput_metrics(
+        {**first, "downloadedRows": 400, "committedRows": 320, "sessionProcessedUnits": 40, "processedUnits": 40, "apiCalls": 40},
+        first,
+    )
+    third = data_sync._rolling_throughput_metrics(
+        {**second, "downloadedRows": 600, "committedRows": 480, "sessionProcessedUnits": 60, "processedUnits": 60, "apiCalls": 60},
+        second,
+    )
+
+    assert third["rateWindowSeconds"] == 40.0
+    assert third["rollingDownloadRowsPerSecond"] == 5.0
+    assert third["rollingWriteRowsPerSecond"] == 4.0
+    assert third["rollingUnitsPerSecond"] == 0.5
+    assert third["rollingEtaSeconds"] == 80.0
+
+
+def test_rolling_throughput_reports_zero_after_stall(monkeypatch):
+    from app.services import data_sync
+
+    times = iter([100.0, 170.0])
+    monkeypatch.setattr(data_sync.time, "time", lambda: next(times))
+    first = data_sync._rolling_throughput_metrics(
+        {
+            "downloadedRows": 100,
+            "committedRows": 80,
+            "sessionProcessedUnits": 10,
+            "apiCalls": 10,
+            "downloadRowsPerSecond": 100.0,
+            "writeRowsPerSecond": 80.0,
+            "unitsPerSecond": 10.0,
+            "apiCallsPerMinute": 500.0,
+            "processedUnits": 10,
+            "totalUnits": 100,
+        },
+        None,
+    )
+    stalled = data_sync._rolling_throughput_metrics(first, first)
+
+    assert stalled["rollingDownloadRowsPerSecond"] == 0.0
+    assert stalled["rollingWriteRowsPerSecond"] == 0.0
+    assert stalled["rollingUnitsPerSecond"] == 0.0
+    assert stalled["rollingEtaSeconds"] is None
+
+
+def test_mysql_2013_pauses_sync_before_next_dataset(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["stock_basic", "trade_cal"])
+    with db() as connection:
+        connection.execute(
+            "update provider_dataset_catalog set permission_status='available' "
+            "where dataset_key in ('stock_basic','trade_cal')"
+        )
+    monkeypatch.setattr(data_sync, "probe_permissions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(data_sync, "_permission_summary", lambda keys: {})
+    monkeypatch.setattr(data_sync, "_latest_open_trade_date", lambda end_date: end_date)
+    calls = []
+
+    def lose_mysql(*args, **kwargs):
+        calls.append("stock_basic")
+        error = RuntimeError(2013, "Lost connection to MySQL server during query")
+        raise error
+
+    monkeypatch.setattr(data_sync, "_sync_stock_basic", lose_mysql)
+    monkeypatch.setattr(
+        data_sync,
+        "_sync_calendar",
+        lambda *args, **kwargs: calls.append("trade_cal") or (0, 0, 0),
+    )
+
+    result = data_sync.run_sync(run["id"], adapter=SimpleNamespace(pro=SimpleNamespace()))
+    stored = data_sync.sync_run(run["id"])
+
+    assert result["status"] == "paused"
+    assert result["infrastructureFailure"]["code"] == "MYSQL_CONNECTION_LOST"
+    assert calls == ["stock_basic"]
+    assert stored["status"] == "paused"
+    assert next(item for item in stored["items"] if item["dataset_key"] == "stock_basic")["failed"] == 0
+    assert {item["dataset_key"]: item["status"] for item in stored["items"]} == {
+        "stock_basic": "paused",
+        "trade_cal": "queued",
+    }
+    resumed = data_sync.prepare_resume(run["id"])
+    assert resumed["status"] == "queued"
+    resumed_items = {item["dataset_key"]: item for item in resumed["items"]}
+    assert resumed_items["stock_basic"]["status"] == "queued"
+    assert resumed_items["stock_basic"]["failed"] == 0
+
+
+def test_paused_daily_resume_preserves_committed_checkpoint(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, json_dump
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    checkpoint = {"index": 112, "total": 8_702, "lastCommittedWorkKey": "19910529"}
+    with db() as connection:
+        connection.execute("update data_sync_runs set status='paused' where id=?", (run["id"],))
+        connection.execute(
+            "update data_sync_items set status='paused',failed=0,checkpoint_json=? "
+            "where run_id=? and dataset_key='daily'",
+            (json_dump(checkpoint), run["id"]),
+        )
+
+    resumed = data_sync.prepare_resume(run["id"])
+    daily = next(item for item in resumed["items"] if item["dataset_key"] == "daily")
+
+    assert daily["status"] == "queued"
+    assert daily["checkpoint"] == checkpoint
+    assert daily["failed"] == 0
+
+
+def test_cancelled_legacy_mysql_2013_run_preserves_daily_and_adj_factor_checkpoints(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, json_dump
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily", "adj_factor"])
+    daily_checkpoint = {"index": 592, "total": 8_702, "symbol": "1993-04-16"}
+    adj_checkpoint = {"index": 1_488, "total": 8_702, "symbol": "1996-11-07"}
+    with db() as connection:
+        connection.execute("update data_sync_runs set status='cancelled' where id=?", (run["id"],))
+        connection.execute(
+            "update data_sync_items set status='failed',failed=1,error=?,checkpoint_json=? "
+            "where run_id=? and dataset_key='daily'",
+            (
+                "(2013, 'Lost connection to MySQL server during query')",
+                json_dump(daily_checkpoint),
+                run["id"],
+            ),
+        )
+        connection.execute(
+            "update data_sync_items set status='cancelled',failed=0,checkpoint_json=? "
+            "where run_id=? and dataset_key='adj_factor'",
+            (json_dump(adj_checkpoint), run["id"]),
+        )
+
+    resumed = data_sync.prepare_resume(run["id"])
+    items = {entry["dataset_key"]: entry for entry in resumed["items"]}
+
+    assert items["daily"]["status"] == "queued"
+    assert items["daily"]["checkpoint"] == daily_checkpoint
+    assert items["daily"]["failed"] == 0
+    assert items["adj_factor"]["status"] == "queued"
+    assert items["adj_factor"]["checkpoint"] == adj_checkpoint
+
+
 def test_sync_batch_limits_cap_legacy_oversized_environment(monkeypatch):
     from app.services import data_sync
 
@@ -2714,6 +2883,27 @@ def test_partial_data_sync_never_marks_outer_task_success(monkeypatch):
     assert result["status"] == "partial"
     assert updates[-1]["status"] == "failed"
     assert updates[-1]["error"] == "One or more datasets require retry."
+
+
+def test_mysql_infrastructure_pause_marks_task_retryable_and_alerts(monkeypatch):
+    from app.tasks import worker
+
+    updates = []
+    alerts = []
+    monkeypatch.setattr(worker, "get_task", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(worker, "update_task", lambda task_id, **values: updates.append(values))
+    monkeypatch.setattr(worker, "append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, "_record_task_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.data_sync, "run_sync", lambda run_id, task_id: {"status": "paused"})
+    monkeypatch.setattr(worker, "_emit_operational_alert", lambda event_type, **kwargs: alerts.append((event_type, kwargs)))
+
+    result = worker.sync_all_data_task.run("task-1", "run-1")
+
+    assert result["status"] == "paused"
+    assert updates[-1]["status"] == "failed"
+    assert "paused" in updates[-1]["error"]
+    assert alerts[0][0] == "data_sync_paused"
+    assert alerts[0][1]["details"]["retryable"] is True
 
 
 def test_failed_data_sync_emits_critical_operational_alert(monkeypatch):

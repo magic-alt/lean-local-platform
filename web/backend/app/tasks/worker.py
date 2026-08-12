@@ -714,9 +714,26 @@ def sync_all_data_task(task_id: str, run_id: str):
             if run_status == "success"
             else "failed"
         )
-        error = "One or more datasets require retry." if run_status == "partial" else None
+        error = (
+            "MySQL became unavailable; synchronization paused at its durable checkpoint."
+            if run_status == "paused"
+            else "One or more datasets require retry."
+            if run_status == "partial"
+            else None
+        )
         update_task(task_id, status=status, artifacts_json=[], error=error, finished_at=utc_now())
         append_log(task_id, f"Data synchronization finished: {run_status}.")
+        if run_status == "paused":
+            _emit_operational_alert(
+                "data_sync_paused",
+                severity="critical",
+                title="Governed data synchronization paused",
+                message=error or "MySQL became unavailable.",
+                source="data_sync",
+                related_id=run_id,
+                details={"runId": run_id, "taskId": task_id, "retryable": True},
+                dedupe_key=f"data_sync_paused:{run_id}",
+            )
         _record_task_metric("data_sync", run_status)
         return result
     except Exception as exc:

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Reduce and contain workstation-wide MySQL OOM failures during one-click data updates by replacing large readiness `count(*)` scans with metadata estimates, warning when Docker has less than 16 GiB, pausing the run on MySQL connection loss, preserving resumable checkpoints, and showing live API-quota waits with rolling one-minute throughput and ETA.
+
 - Record the successful signed Feishu robot webhook verification, distinguish `FEISHU_WEBHOOK_SECRET` from relay bearer authentication, and keep the persisted LEAN delivery and 24-hour observation gate explicitly open.
 
 - Switch initial and incremental A-share market datasets to complete trade-date partitions with cap-aware TuShare pagination, load daily canonical and typed-source rows through MySQL `LOAD DATA` staging, move typed lineage persistence to a durable asynchronous worker, expose lineage backlog separately from canonical throughput, and raise the governed workstation MySQL profile to 4 CPU / 6 GiB for a measured 10x ingestion target.

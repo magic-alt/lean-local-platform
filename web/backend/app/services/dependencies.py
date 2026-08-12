@@ -248,6 +248,32 @@ def _database_objects(connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
+def _database_table_counts(connection, tables: list[str]) -> tuple[dict[str, int], str]:
+    """Return cheap readiness counts without scanning large MySQL tables."""
+    if not tables:
+        return {}, "none"
+    if database_backend() != "mysql":
+        return {
+            table: int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"])
+            for table in tables
+        }, "exact"
+    placeholders = ",".join("?" for _ in tables)
+    rows = connection.execute(
+        f"""
+        select table_name as readiness_table_name,
+               coalesce(table_rows,0) as readiness_table_rows
+        from information_schema.tables
+        where table_schema=database() and table_name in ({placeholders})
+        """,
+        tables,
+    ).fetchall()
+    estimates = {
+        str(row["readiness_table_name"]): int(row["readiness_table_rows"] or 0)
+        for row in rows
+    }
+    return {table: estimates.get(table, 0) for table in tables}, "information_schema_estimate"
+
+
 def check_database() -> dict[str, Any]:
     expected_tables = ["instruments", "market_daily_bars", "market_trade_status", "universe_membership", "index_membership_pit", "stored_objects"]
     fallback = {
@@ -272,10 +298,10 @@ def check_database() -> dict[str, Any]:
         with db() as connection:
             tables = _database_objects(connection)
             missing = [table for table in expected_tables if table not in tables]
-            counts: dict[str, int] = {}
-            for table in expected_tables:
-                if table in tables:
-                    counts[table] = int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"])
+            counts, count_source = _database_table_counts(
+                connection,
+                [table for table in expected_tables if table in tables],
+            )
             csi300_count = 0
             if "universe_membership" in tables:
                 csi300_count = int(
@@ -319,6 +345,7 @@ def check_database() -> dict[str, Any]:
             **descriptor,
             "missingTables": missing,
             "counts": counts,
+            "countSource": count_source,
             "csi300MembershipRows": csi300_count,
             "orphanProviderRawArchives": orphan_archives,
             "quarantinedProviderRawArchiveIssues": quarantined_archive_issues,

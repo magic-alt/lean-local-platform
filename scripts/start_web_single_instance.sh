@@ -401,6 +401,18 @@ check_dependencies() {
   fi
 }
 
+check_docker_memory_budget() {
+  if [[ "${START_COMPOSE_SERVICES}" != "1" ]]; then
+    return 0
+  fi
+  local total_bytes=""
+  local minimum_gib="${LEAN_DOCKER_MIN_MEMORY_GB:-16}"
+  total_bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)"
+  if [[ "${total_bytes}" =~ ^[0-9]+$ ]] && ((total_bytes < minimum_gib * 1024 * 1024 * 1024)); then
+    log "警告：Docker 当前内存不足 ${minimum_gib} GiB（约 $((total_bytes / 1024 / 1024 / 1024)) GiB）。首次全量同步可能触发 MySQL OOM；请提高 Docker Desktop Memory/Swap 后再开始。"
+  fi
+}
+
 bound_docker_build_cache() {
   if [[ "${START_COMPOSE_SERVICES}" != "1" || "${COMPOSE_BUILD}" != "1" || "${PRUNE_BUILD_CACHE}" != "1" ]]; then
     return 0
@@ -559,6 +571,7 @@ main() {
   cleanup_previous_instances
   resolve_ports
   check_dependencies
+  check_docker_memory_budget
   if [[ "${START_COMPOSE_SERVICES}" == "1" ]]; then
     if data_sync_is_active; then
       ACTIVE_DATA_SYNC=1

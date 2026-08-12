@@ -325,6 +325,21 @@ def test_rate_limited_proxy_counts_actual_endpoint_invocations():
     assert proxy.call_counts() == {"hk_basic": 1}
 
 
+def test_rate_limiter_reports_shared_window_wait_state():
+    from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
+
+    limiter = TushareRateLimiter(calls_per_minute=1)
+    limiter._redis = None
+    proxy = RateLimitedProProxy(type("Pro", (), {"daily": lambda self: "ok"})(), limiter=limiter)
+
+    assert proxy.daily() == "ok"
+    status = proxy.quota_status()
+
+    assert status["apiCallsInWindow"] == 1
+    assert status["apiQuotaWaiting"] is True
+    assert status["apiQuotaRetryAfterSeconds"] > 0
+
+
 def test_tushare_rejects_qfq_hfq_to_avoid_adjustment_mixing():
     from app.core.errors import LeanWebError
     from app.services.tushare_adapter import TushareAdapter

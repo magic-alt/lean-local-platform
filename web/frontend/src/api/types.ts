@@ -124,6 +124,16 @@ export interface DataSyncItem {
     committedRows?: number;
     downloadRowsPerSecond?: number;
     writeRowsPerSecond?: number;
+    rollingDownloadRowsPerSecond?: number;
+    rollingWriteRowsPerSecond?: number;
+    rollingUnitsPerSecond?: number;
+    rollingApiCallsPerMinute?: number;
+    rollingEtaSeconds?: number | null;
+    rateWindowSeconds?: number;
+    apiCallsInWindow?: number;
+    apiQuotaWaiting?: boolean;
+    apiQuotaRetryAfterSeconds?: number;
+    apiQuotaNextAllowedAt?: string | null;
     canonicalWriteRowsPerSecond?: number;
     fetchStrategy?: "market_date" | "market_window" | "instrument" | "global";
     queueDepth?: number;

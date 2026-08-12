@@ -23,7 +23,7 @@ from ..core.config import (
     PARQUET_DIR,
     RUNTIME_DIR,
 )
-from ..db import bulk_db, database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import DatabaseUnavailableError, bulk_db, database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..research.factors import upsert_daily_basic_factor_values
 from .ashare_repository import (
     import_security_master,
@@ -38,7 +38,7 @@ from .market_repository import upsert_market_daily_bars_batch
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
 from .tushare_contracts import contract_for, contract_public_item, coverage_report, sync_contract_catalog
-from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE
+from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE, global_tushare_quota_status
 from .tushare_typed_source import persist_typed_source_rows
 from .tushare_lineage import async_lineage_enabled, enqueue_lineage_job, lineage_metrics
 
@@ -553,6 +553,32 @@ def _call_with_retry(call: Callable[[], T], *, attempts: int = 3) -> T:
                 raise
             time.sleep(float(attempt))
     raise RuntimeError("unreachable")
+
+
+def _mysql_infrastructure_failure(exc: BaseException) -> bool:
+    """Identify connection loss that should pause, not skip, a bulk run."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, DatabaseUnavailableError):
+            return True
+        try:
+            if int(current.args[0]) in {1040, 2003, 2006, 2013}:
+                return True
+        except (IndexError, TypeError, ValueError):
+            pass
+        message = str(current).lower()
+        if "lost connection to mysql server" in message or "mysql server has gone away" in message:
+            return True
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
 
 
 def probe_permissions(
@@ -1424,18 +1450,78 @@ def audit_existing_data() -> dict[str, int]:
     return {"detected": detected}
 
 
+def _rolling_throughput_metrics(
+    metrics: dict[str, Any],
+    previous: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result = dict(metrics)
+    now = time.time()
+    counters = [
+        int(result.get("downloadedRows") or 0),
+        int(result.get("committedRows") or 0),
+        int(result.get("sessionProcessedUnits") or 0),
+        int(result.get("apiCalls") or 0),
+    ]
+    samples = list((previous or {}).get("_rateSamples") or [])
+    if samples and any(int(samples[-1][index + 1]) > value for index, value in enumerate(counters)):
+        samples = []
+    sample = [now, *counters]
+    if samples and now - float(samples[-1][0]) < 0.5:
+        samples[-1] = sample
+    else:
+        samples.append(sample)
+    cutoff = now - 60.0
+    recent = [entry for entry in samples if float(entry[0]) > cutoff]
+    if len(recent) >= 2:
+        samples = recent
+    else:
+        older = [entry for entry in samples if float(entry[0]) <= cutoff]
+        samples = ([older[-1]] if older else []) + recent
+        samples = samples or [sample]
+    samples = samples[-121:]
+    baseline = samples[0]
+    span = max(0.001, now - float(baseline[0]))
+    if len(samples) == 1:
+        rolling_download = float(result.get("downloadRowsPerSecond") or 0.0)
+        rolling_write = float(result.get("writeRowsPerSecond") or 0.0)
+        rolling_units = float(result.get("unitsPerSecond") or 0.0)
+        rolling_api = float(result.get("apiCallsPerMinute") or 0.0)
+    else:
+        rolling_download = max(0, counters[0] - int(baseline[1])) / span
+        rolling_write = max(0, counters[1] - int(baseline[2])) / span
+        rolling_units = max(0, counters[2] - int(baseline[3])) / span
+        rolling_api = max(0, counters[3] - int(baseline[4])) * 60.0 / span
+    remaining = max(0, int(result.get("totalUnits") or 0) - int(result.get("processedUnits") or 0))
+    result.update(
+        {
+            "rollingDownloadRowsPerSecond": round(rolling_download, 2),
+            "rollingWriteRowsPerSecond": round(rolling_write, 2),
+            "rollingUnitsPerSecond": round(rolling_units, 3),
+            "rollingApiCallsPerMinute": round(min(DEFAULT_CALLS_PER_MINUTE, rolling_api), 2),
+            "rollingEtaSeconds": round(remaining / rolling_units, 1) if rolling_units > 0 else None,
+            "rateWindowSeconds": round(min(60.0, span), 1),
+            "_rateSamples": samples,
+        }
+    )
+    return result
+
+
 def _item(run_id: str, dataset: str, **fields: Any) -> None:
     checkpoint = fields.pop("checkpoint", None)
     metrics = fields.pop("metrics", None)
-    if metrics is not None:
-        fields["metrics_json"] = json_dump(metrics)
-    if checkpoint is not None:
+    existing: dict[str, Any] = {}
+    if checkpoint is not None or metrics is not None:
         with db() as connection:
             existing_row = connection.execute(
                 "select * from data_sync_items where run_id=? and dataset_key=?",
                 (run_id, dataset),
             ).fetchone()
         existing = row_to_dict(existing_row) or {}
+    if metrics is not None:
+        fields["metrics_json"] = json_dump(
+            _rolling_throughput_metrics(dict(metrics), dict(existing.get("metrics") or {}))
+        )
+    if checkpoint is not None:
         previous_checkpoint = existing.get("checkpoint") or {}
         previous_index = int(previous_checkpoint.get("index") or 0)
         next_index = int(checkpoint.get("index") or 0)
@@ -4523,6 +4609,7 @@ def run_sync(
             for row in item_records
             if row["status"] == "partial" and _checkpoint_complete(row)
         }
+        infrastructure_failure: dict[str, Any] | None = None
         for spec in DATASET_REGISTRY:
             if spec.key not in selected_keys:
                 continue
@@ -4653,6 +4740,28 @@ def run_sync(
                 _set_catalog_coverage(spec)
                 summaries[spec.key] = {"processed": processed, "inserted": inserted, "updated": updated, "failed": failed}
             except Exception as exc:  # noqa: BLE001
+                if _mysql_infrastructure_failure(exc):
+                    infrastructure_failure = {
+                        "code": "MYSQL_CONNECTION_LOST",
+                        "dataset": spec.key,
+                        "message": str(exc),
+                        "retryable": True,
+                    }
+                    _item(
+                        run_id,
+                        spec.key,
+                        status="paused",
+                        failed=0,
+                        canonical_status="partial",
+                        error=json_dump(infrastructure_failure),
+                        finished_at=utc_now(),
+                    )
+                    summaries[spec.key] = {
+                        "error": str(exc),
+                        "paused": True,
+                        "retryable": True,
+                    }
+                    break
                 _item(
                     run_id,
                     spec.key,
@@ -4663,6 +4772,38 @@ def run_sync(
                     finished_at=utc_now(),
                 )
                 summaries[spec.key] = {"error": str(exc)}
+        if infrastructure_failure is not None:
+            summary = {
+                "status": "paused",
+                "permissions": permissions,
+                "audit": audit,
+                "datasets": summaries,
+                "endDate": end_date,
+                "marketDataEndDate": market_end_date,
+                "cancelled": False,
+                "mode": sync_mode,
+                "resumeBaseMode": resume_base_mode or None,
+                "infrastructureFailure": infrastructure_failure,
+            }
+            with db() as connection:
+                parameters = (
+                    json_dump(summary),
+                    "MySQL connection lost; synchronization paused at the durable checkpoint.",
+                    json_dump({"status": "blocked", "reason": "mysql_connection_lost"}),
+                    utc_now(),
+                    run_id,
+                )
+                task_guard = " and task_id=?" if task_id else ""
+                if task_id:
+                    parameters = (*parameters, task_id)
+                connection.execute(
+                    f"""update data_sync_runs
+                        set status='paused',summary_json=?,error=?,canonical_status='partial',
+                            derived_status_json=?,finished_at=?
+                        where id=?{task_guard}""",
+                    parameters,
+                )
+            return summary
         cancelled = _cancelled(run_id, task_id)
         completion_evidence = _sync_completion_evidence(run_id, selected_keys)
         degraded = (
@@ -4851,6 +4992,7 @@ def sync_run(run_id: str) -> dict[str, Any] | None:
         item_payloads = rows_to_dicts(items)
         for item in item_payloads:
             metrics = dict(item.get("metrics") or {})
+            metrics.pop("_rateSamples", None)
             if "writeRowsPerSecond" in metrics:
                 metrics["canonicalWriteRowsPerSecond"] = metrics["writeRowsPerSecond"]
             if "queueDepth" in metrics:
@@ -4872,6 +5014,15 @@ def sync_run(run_id: str) -> dict[str, Any] | None:
                 # Older test schemas and partially applied deployments do not
                 # have the additive lineage table yet.
                 pass
+            if (
+                database_backend() == "mysql"
+                and item.get("status") in {"checking", "running"}
+                and "apiCalls" in metrics
+            ):
+                try:
+                    metrics.update(global_tushare_quota_status())
+                except Exception:
+                    pass
             item["metrics"] = metrics
         result["items"] = item_payloads
     return result
@@ -5406,8 +5557,8 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
         if entry.get("checkpoint")
         and not _checkpoint_complete(entry)
     ]
-    if item["status"] not in {"failed", "cancelled", "partial"} and not incomplete_items:
-        raise ValueError("Only failed or cancelled data updates can be resumed.")
+    if item["status"] not in {"failed", "cancelled", "partial", "paused"} and not incomplete_items:
+        raise ValueError("Only failed, cancelled, partial, or paused data updates can be resumed.")
     summary = dict(item.get("summary") or {})
     summary["resumeBaseMode"] = summary.get("resumeBaseMode") or item.get("mode") or "incremental"
     refresh_completed_catalogs = summary["resumeBaseMode"] == "incremental"
@@ -5432,11 +5583,21 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
             """,
             (run_id,),
         )
+        connection.execute(
+            """
+            update data_sync_items
+            set status='queued', failed=0, error=null,
+                started_at=null, finished_at=null
+            where run_id=? and status='paused'
+            """,
+            (run_id,),
+        )
         for entry in incomplete_items:
             connection.execute(
                 """
                 update data_sync_items
-                set status='queued', error=null, finished_at=null
+                set status='queued', failed=0, error=null,
+                    started_at=null, finished_at=null
                 where run_id=? and dataset_key=?
                 """,
                 (run_id, entry["dataset_key"]),
@@ -5449,11 +5610,21 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
                 and not (
                     entry.get("dataset_key") == "daily"
                     and entry.get("checkpoint")
-                    and int(entry.get("failed") or 0) == 0
+                    and (
+                        int(entry.get("failed") or 0) == 0
+                        or _mysql_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
+                    )
                 )
             )
             or (entry.get("status") == "partial" and not _checkpoint_complete(entry))
-            or (entry.get("dataset_key") == "daily" and int(entry.get("failed") or 0) > 0)
+            or (
+                entry.get("dataset_key") == "daily"
+                and int(entry.get("failed") or 0) > 0
+                and not (
+                    entry.get("checkpoint")
+                    and _mysql_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
+                )
+            )
         ]
         for entry in reset_items:
             if entry.get("dataset_key") == "adj_factor":

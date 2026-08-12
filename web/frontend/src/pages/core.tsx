@@ -1626,7 +1626,7 @@ export function DataPage() {
     : oneClickCatalogRows;
   const syncProgress = useMemo(() => {
     const items = currentSync?.items ?? [];
-    const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled"]);
+    const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled", "paused"]);
     const completed = items.filter((item) => terminal.has(item.status)).length;
     const active = items.find((item) => ["checking", "running"].includes(item.status));
     const activeTotal = Number(active?.metrics?.totalUnits ?? active?.checkpoint?.total ?? 0);
@@ -1656,6 +1656,11 @@ export function DataPage() {
         load: "正在写入 MySQL",
         validate: "正在校验",
       } as Record<string, string>)[syncProgress.active?.metrics?.phase || ""] || "正在更新";
+  const activeSyncMetrics = syncProgress.active?.metrics;
+  const rollingDownloadRate = activeSyncMetrics?.rollingDownloadRowsPerSecond ?? activeSyncMetrics?.downloadRowsPerSecond;
+  const rollingWriteRate = activeSyncMetrics?.rollingWriteRowsPerSecond ?? activeSyncMetrics?.writeRowsPerSecond;
+  const rollingUnitRate = activeSyncMetrics?.rollingUnitsPerSecond ?? activeSyncMetrics?.unitsPerSecond;
+  const rollingEtaSeconds = activeSyncMetrics?.rollingEtaSeconds ?? activeSyncMetrics?.etaSeconds;
 
   function permissionReason(item: typeof catalogRows[number]) {
     if (item.sync_policy === "on_demand") return "按需获取，不参与一键更新";
@@ -1682,8 +1687,9 @@ export function DataPage() {
     if (!item.syncItem?.error) return permissionReason(item);
     if (item.syncItem.status === "skipped") return permissionReason(item);
     try {
-      const parsed = JSON.parse(item.syncItem.error) as { failed?: number };
+      const parsed = JSON.parse(item.syncItem.error) as { failed?: number; code?: string };
       if (parsed.failed) return `${parsed.failed} 个标的失败，悬停查看详情`;
+      if (parsed.code === "MYSQL_CONNECTION_LOST") return "MySQL 连接中断；同步已在持久化断点暂停";
     } catch {
       // Provider errors are shown verbatim in the tooltip below.
     }
@@ -1897,7 +1903,7 @@ export function DataPage() {
           <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); derivedWatermarks.reload(); if (currentSync) api.dataSyncRun(currentSync.id).then(setSyncRun); }}>刷新</Button>
           {activeSync
             ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
-            : currentSync && ["failed", "cancelled", "partial"].includes(currentSync.status)
+            : currentSync && ["failed", "cancelled", "partial", "paused"].includes(currentSync.status)
               ? <>
                   <Button type="primary" loading={syncActionLoading} onClick={() => startFullSync("incremental")}>开始新一轮增量</Button>
                   <Tooltip title="保留已完成工作，仅重试失败项并追补新交易日">
@@ -2004,18 +2010,18 @@ export function DataPage() {
                 {syncProgress.active?.metrics?.downloadedRows !== undefined && (
                   <span>下载 {syncProgress.active.metrics.downloadedRows.toLocaleString()} rows</span>
                 )}
-                {syncProgress.active?.metrics?.downloadRowsPerSecond !== undefined && (
+                {rollingDownloadRate !== undefined && (
                   <span>
-                    下载速度 {syncProgress.active.metrics.downloadRowsPerSecond >= 100
-                      ? Math.round(syncProgress.active.metrics.downloadRowsPerSecond).toLocaleString()
-                      : syncProgress.active.metrics.downloadRowsPerSecond.toFixed(1)} rows/s
+                    近一分钟下载速度 {Number(rollingDownloadRate) >= 100
+                      ? Math.round(Number(rollingDownloadRate)).toLocaleString()
+                      : Number(rollingDownloadRate).toFixed(1)} rows/s
                   </span>
                 )}
                 {syncProgress.active?.metrics?.committedRows !== undefined && (
                   <span>入库 {syncProgress.active.metrics.committedRows.toLocaleString()} rows</span>
                 )}
-                {syncProgress.active?.metrics?.writeRowsPerSecond !== undefined && (
-                  <span>MySQL 规范表 {Math.round(syncProgress.active.metrics.writeRowsPerSecond).toLocaleString()} rows/s</span>
+                {rollingWriteRate !== undefined && (
+                  <span>近一分钟 MySQL 规范表 {Math.round(Number(rollingWriteRate)).toLocaleString()} rows/s</span>
                 )}
                 {syncProgress.active?.metrics?.lineageStatus && (
                   <span>
@@ -2026,8 +2032,16 @@ export function DataPage() {
                         : `排队 ${syncProgress.active.metrics.lineagePendingBatches || 0} 批 · ${(syncProgress.active.metrics.lineagePendingRows || 0).toLocaleString()} rows`}
                   </span>
                 )}
-                {syncProgress.active?.metrics?.unitsPerSecond !== undefined && (
-                  <span>处理 {syncProgress.active.metrics.unitsPerSecond.toFixed(1)} 个工作单元/s</span>
+                {rollingUnitRate !== undefined && (
+                  <span>近一分钟处理 {Number(rollingUnitRate).toFixed(1)} 个工作单元/s</span>
+                )}
+                {syncProgress.active?.metrics?.apiQuotaWaiting && (
+                  <Tag color="warning">
+                    正在等待 API 配额
+                    {syncProgress.active.metrics.apiQuotaRetryAfterSeconds
+                      ? ` · 约 ${Math.ceil(syncProgress.active.metrics.apiQuotaRetryAfterSeconds)} 秒`
+                      : ""}
+                  </Tag>
                 )}
                 {syncProgress.active?.metrics?.emptyUnits !== undefined && (
                   <span>空结果 {syncProgress.active.metrics.emptyUnits.toLocaleString()} 个</span>
@@ -2038,11 +2052,11 @@ export function DataPage() {
                 {Boolean(syncProgress.active?.metrics?.quarantinedRows) && (
                   <span>隔离 {syncProgress.active?.metrics?.quarantinedRows?.toLocaleString()} rows</span>
                 )}
-                {syncProgress.active?.metrics?.etaSeconds !== undefined && syncProgress.active.metrics.etaSeconds !== null && (
+                {rollingEtaSeconds !== undefined && rollingEtaSeconds !== null && (
                   <span>
-                    ETA {syncProgress.active.metrics.etaSeconds >= 60
-                      ? `${Math.ceil(syncProgress.active.metrics.etaSeconds / 60)} 分钟`
-                      : `${Math.ceil(syncProgress.active.metrics.etaSeconds)} 秒`}
+                    ETA {Number(rollingEtaSeconds) >= 60
+                      ? `${Math.ceil(Number(rollingEtaSeconds) / 60)} 分钟`
+                      : `${Math.ceil(Number(rollingEtaSeconds))} 秒`}
                   </span>
                 )}
                 {syncProgress.active?.metrics?.diskFreeBytes !== undefined && (
@@ -2078,7 +2092,7 @@ export function DataPage() {
             </Space>
           </Card>
         )}
-        {currentSync?.error && <Alert type="error" showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
+        {currentSync?.error && <Alert type={currentSync.status === "paused" ? "warning" : "error"} showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
         {catalogRows.length > 0 && (
           <>
             <div className="data-catalog-visibility">

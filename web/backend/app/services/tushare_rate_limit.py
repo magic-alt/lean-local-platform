@@ -39,6 +39,18 @@ local wait = window
 if oldest[2] then wait = math.max(1, tonumber(oldest[2]) + window - now) end
 return {0, wait, count}
 """
+    _STATUS_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
+local count = redis.call('ZCARD', key)
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+local wait = 0
+if count >= limit and oldest[2] then wait = math.max(1, tonumber(oldest[2]) + window - now) end
+return {count, wait}
+"""
 
     def __init__(self, *, calls_per_minute: int = DEFAULT_CALLS_PER_MINUTE) -> None:
         self.calls_per_minute = max(1, calls_per_minute)
@@ -93,6 +105,45 @@ return {0, wait, count}
                 return
             time.sleep(min(wait, 1.0))
 
+    def status(self) -> dict[str, Any]:
+        """Expose the shared rolling-window state without consuming a call."""
+        now_ms = int(time.time() * 1000)
+        count = 0
+        wait_ms = 0
+        if self._redis is not None:
+            try:
+                count, wait_ms = self._redis.eval(
+                    self._STATUS_LUA,
+                    1,
+                    "lean:tushare:rate:global",
+                    now_ms,
+                    60_000,
+                    self.calls_per_minute,
+                )
+                count = int(count)
+                wait_ms = int(wait_ms)
+            except Exception:
+                self._redis = None
+        if self._redis is None:
+            now = time.monotonic()
+            with self._lock:
+                while self._local and self._local[0] <= now - 60.0:
+                    self._local.popleft()
+                count = len(self._local)
+                if count >= self.calls_per_minute and self._local:
+                    wait_ms = max(1, int((self._local[0] + 60.0 - now) * 1000))
+        waiting = count >= self.calls_per_minute and wait_ms > 0
+        return {
+            "apiCallsInWindow": count,
+            "apiQuotaWaiting": waiting,
+            "apiQuotaRetryAfterSeconds": round(wait_ms / 1000.0, 1) if waiting else 0.0,
+            "apiQuotaNextAllowedAt": (
+                datetime.fromtimestamp((now_ms + wait_ms) / 1000.0, timezone.utc).isoformat()
+                if waiting
+                else None
+            ),
+        }
+
     def acquire_endpoint(self, endpoint: str, *, calls: int, period_seconds: int, wait: bool) -> None:
         key = f"lean:tushare:rate:endpoint:{endpoint}"
         while True:
@@ -145,6 +196,10 @@ def global_tushare_limiter() -> TushareRateLimiter:
         return _GLOBAL_LIMITER
 
 
+def global_tushare_quota_status() -> dict[str, Any]:
+    return global_tushare_limiter().status()
+
+
 class RateLimitedProProxy:
     """Proxy SDK methods so nested adapter calls also share the global quota."""
 
@@ -162,6 +217,9 @@ class RateLimitedProProxy:
     def call_count(self) -> int:
         with self._count_lock:
             return sum(self._call_counts.values())
+
+    def quota_status(self) -> dict[str, Any]:
+        return self._limiter.status()
 
     def __getattr__(self, name: str) -> Any:
         value = getattr(self._target, name)

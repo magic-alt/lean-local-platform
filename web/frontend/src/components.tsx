@@ -22,6 +22,7 @@ export function StatusTag({ status }: { status: string }) {
     unknown: "default",
     failed: "error",
     interrupted: "warning",
+    paused: "warning",
     cancelled: "warning"
   };
   return <Tag data-testid={`status-tag-${status}`} color={colors[status] ?? "default"}>{status}</Tag>;

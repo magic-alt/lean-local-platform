@@ -1,6 +1,27 @@
 from app.services import dependencies
 
 
+def test_mysql_readiness_counts_use_information_schema_estimates(monkeypatch):
+    statements = []
+
+    class Connection:
+        def execute(self, sql, parameters=None):
+            statements.append((" ".join(sql.split()), parameters))
+            return self
+
+        def fetchall(self):
+            return [{"readiness_table_name": "market_daily_bars", "readiness_table_rows": 4_000_000}]
+
+    monkeypatch.setattr(dependencies, "database_backend", lambda: "mysql")
+
+    counts, source = dependencies._database_table_counts(Connection(), ["market_daily_bars"])
+
+    assert counts == {"market_daily_bars": 4_000_000}
+    assert source == "information_schema_estimate"
+    assert "count(*)" not in statements[0][0].lower()
+    assert "table_name as readiness_table_name" in statements[0][0].lower()
+
+
 def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeypatch):
     monkeypatch.setattr(dependencies, "BACKTEST_EXECUTION_DELEGATED", True)
     monkeypatch.setattr(
