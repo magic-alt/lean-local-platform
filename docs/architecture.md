@@ -223,7 +223,7 @@ The 10 one-click datasets are listed in [data_pipeline.md](data_pipeline.md). Ot
 ## Storage Ownership
 
 - MySQL: authoritative runtime metadata, canonical data, PIT membership, task state, reports and binary archives.
-- `stored_objects` / `stored_object_chunks`: durable artifact and cache archive inside MySQL.
+- `stored_objects`: durable object catalog; payloads are either compatibility MySQL chunks or checksum-verified files under the externally backed `LEAN_DATA_DIR/object-store` root.
 - `web/runtime`: local execution/debug cache; safe to prune only after verifying required objects are archived.
 - `Data/`: LEAN-readable cache generated or restored from authoritative data.
 - Parquet/DuckDB: rebuildable analytical layer.

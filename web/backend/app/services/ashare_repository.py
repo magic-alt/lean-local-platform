@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -11,12 +12,18 @@ from .market_repository import (
     instrument_id,
     upsert_instrument,
     upsert_market_daily_bars,
+    upsert_market_daily_bars_batch,
     upsert_market_trade_status_batch,
 )
 
 
 WRITE_BATCH_SIZE = 5_000
 LOOKUP_BATCH_SIZE = 400
+
+
+def _canonical_market_writes_enabled() -> bool:
+    """Keep dual writes until the operator installs the compatibility views."""
+    return os.environ.get("LEAN_ASHARE_CANONICAL_WRITES", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def _chunks(values: list[Any], size: int) -> list[list[Any]]:
@@ -477,6 +484,22 @@ def upsert_daily_bars(
     *,
     bulk: bool = False,
 ) -> None:
+    if _canonical_market_writes_enabled():
+        if bulk:
+            upsert_market_daily_bars_batch(
+                rows, asset_class="equity", market="china", venue="china", source=source,
+                batch_id=batch_id, resolution="daily", data_type="trade", adjust=adjust, bulk=True,
+            )
+        else:
+            grouped_rows: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                grouped_rows.setdefault(str(row["symbol"]), []).append(row)
+            for symbol, symbol_rows in grouped_rows.items():
+                upsert_market_daily_bars(
+                    symbol_rows, symbol=symbol, asset_class="equity", market="china", venue="china",
+                    source=source, batch_id=batch_id, resolution="daily", data_type="trade", adjust=adjust,
+                )
+        return
     now = utc_now()
     sql = """
         insert into ashare_daily_bars
@@ -526,8 +549,6 @@ def upsert_daily_bars(
     for row in rows:
         grouped.setdefault(row["symbol"], []).append(row)
     if bulk and len(grouped) > 1:
-        from .market_repository import upsert_market_daily_bars_batch
-
         upsert_market_daily_bars_batch(
             rows,
             asset_class="equity",
@@ -581,6 +602,12 @@ def upsert_trade_status(
     *,
     bulk: bool = False,
 ) -> None:
+    if _canonical_market_writes_enabled():
+        upsert_market_trade_status_batch(
+            rows, asset_class="equity", market="china", venue="china", source=source,
+            batch_id=batch_id, bulk=bulk,
+        )
+        return
     persisted_rows: list[dict[str, Any]] = []
     source_priority = _trade_status_source_priority(source)
     connection_factory = bulk_db if bulk else db

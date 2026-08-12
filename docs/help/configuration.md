@@ -41,6 +41,7 @@ Settings 更新只接受白名单字段，未知键会被忽略。它不会保�
 | `LEAN_RESEARCH_IMAGE` | 默认 Research 镜像，必须以 digest 固定 |
 | `LEAN_ALLOWED_RESEARCH_IMAGES` | 额外允许的 Research 镜像 |
 | `LEAN_API_AUTH_REQUIRED` | API Bearer Token 门禁；正式运行默认开启 |
+| `LEAN_MAINTENANCE_READ_ONLY` | 设为 `1` 时拒绝所有 `/api/` 写请求（健康检查除外）；用于直接市场数据重建窗口 |
 | `LEAN_API_TOKEN` | API Token；启动脚本默认生成到 `web/runtime/secrets/api_token` |
 | `LEAN_API_TOKEN_FILE` | API Token 文件；用于 Docker/主机重启后恢复认证，默认 `web/runtime/secrets/api_token` |
 | `BACKTEST_MAX_CONCURRENT_JOBS` | 数据库调度租约上限 |
@@ -58,6 +59,9 @@ Provider、LLM 和外部服务凭据必须同时提供给需要它们的 API/wor
 | `LEAN_MYSQL_CONNECT_ATTEMPTS` | 短暂连接故障的有界重试，默认 5 |
 | `LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS` | 重试基础间隔，默认 0.5 秒 |
 | `LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` | 单次按需 MySQL 写入估算上限，默认 50 GiB；不与含全量同步数据的实例总大小比较 |
+| `LEAN_OBJECT_STORE_MODE` | `filesystem`（Compose 默认）或 `database`；控制二进制对象有效载荷位置 |
+| `LEAN_FILE_OBJECT_STORE_DIR` | 文件对象根目录；Compose 默认 `/workspace/Data/object-store`，必须纳入 Data 备份 |
+| `LEAN_ASHARE_CANONICAL_WRITES` | 设为 `1` 后仅写入 `market_*`；Compose 默认启用，A 股兼容视图由受确认的维护流程创建 |
 
 一键更新不受 50 GiB 单次按需写入上限限制；所有写入仍服从磁盘安全线。Data 和 Monitoring 显示 MySQL 物理分配空间，不能与按需缓存占用、单表逻辑内容或有效载荷大小混为一谈。
 

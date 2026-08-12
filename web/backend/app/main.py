@@ -11,7 +11,7 @@ import secrets
 import uuid
 
 from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, level3plus, maintenance, object_store, observability, optimization, paper_accounts, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
-from .core.config import API_AUTH_REQUIRED, API_TOKEN, FRONTEND_DIST
+from .core.config import API_AUTH_REQUIRED, API_TOKEN, FRONTEND_DIST, MAINTENANCE_READ_ONLY
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .core.request_context import reset_request_context, set_request_context
 from .db import DatabaseUnavailableError, init_db
@@ -43,6 +43,7 @@ app.add_middleware(
 )
 logger = logging.getLogger(__name__)
 _BROWSER_SESSION_COOKIE = "lean_local_session"
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _browser_session_token() -> str:
@@ -83,6 +84,8 @@ async def idempotency_middleware(request: Request, call_next):
         digest=digest,
         trace_id=getattr(request.state, "trace_id", None),
     )
+
+
     if record.state == "conflict":
         return JSONResponse(
             status_code=409,
@@ -142,6 +145,30 @@ async def idempotency_middleware(request: Request, call_next):
         headers=headers,
         background=response.background,
     )
+
+
+@app.middleware("http")
+async def maintenance_read_only_middleware(request: Request, call_next):
+    """Fail closed for writes while an operator rebuilds market data.
+
+    This intentionally does not allow route-level exceptions: queued work and
+    ad-hoc writes would otherwise race the destructive maintenance command.
+    """
+    if (
+        MAINTENANCE_READ_ONLY
+        and request.method in _MUTATING_METHODS
+        and request.url.path.startswith("/api/")
+        and not request.url.path.startswith("/api/health")
+    ):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "The API is read-only during scheduled database maintenance.",
+                "error_code": "MAINTENANCE_READ_ONLY",
+            },
+            headers={"Retry-After": "60"},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

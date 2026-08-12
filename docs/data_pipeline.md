@@ -70,7 +70,7 @@ Every provider batch is checked in stages:
 `provider_raw_records` is a lightweight key/date/hash index. It does not store a complete JSON document for every canonical row.
 
 - Losslessly represented canonical datasets retain standard-table rows plus request, key and payload hashes.
-- Responses that cannot be mapped losslessly are serialized once per batch, gzip-compressed, content-addressed and cataloged by `provider_raw_archives` in the MySQL object store.
+- Responses that cannot be mapped losslessly are serialized once per batch, gzip-compressed, content-addressed and cataloged by `provider_raw_archives`. Payloads can use MySQL chunks for compatibility or the checksum-verified external object-store root.
 - This removes the former third copy of large payloads while preserving source/batch auditability.
 
 Historical row JSON can be cleaned with:

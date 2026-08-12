@@ -178,12 +178,16 @@ services:
       LEAN_RELEASE_ROLE: api
       REDIS_URL: redis://redis:6379/0
       LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
+      LEAN_MAINTENANCE_READ_ONLY: ${LEAN_MAINTENANCE_READ_ONLY:-0}
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
       LEAN_API_TOKEN_FILE: /run/secrets/lean_api_token
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_RUNNER_URL: http://lean-runner:8010
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
@@ -261,7 +265,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
@@ -303,6 +307,9 @@ services:
       LEAN_RELEASE_ROLE: default-worker
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
       LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: lean_mlflow
@@ -392,7 +399,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     tmpfs:
@@ -442,7 +449,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
       - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
@@ -486,6 +493,9 @@ services:
       <<: *release-environment
       LEAN_RELEASE_ROLE: lean-runner
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
@@ -497,7 +507,7 @@ services:
       LEAN_DOCKER_READ_ONLY: "1"
     volumes:
       - .:/workspace:ro
-      - ${LEAN_DATA_DIR:-../Data}:/workspace/Data:ro
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     secrets:
       - lean_runner_token
@@ -533,6 +543,9 @@ services:
       LEAN_RELEASE_ROLE: beat
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_ASHARE_CANONICAL_WRITES: ${LEAN_ASHARE_CANONICAL_WRITES:-1}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
       LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}

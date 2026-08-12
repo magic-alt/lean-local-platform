@@ -106,6 +106,22 @@ def enabled() -> bool:
     return CLICKHOUSE_ENABLED and clickhouse_connect is not None
 
 
+def clear_market_bars() -> dict[str, Any]:
+    """Remove the disposable ClickHouse market mirror during a full rebuild.
+
+    The canonical MySQL reset calls this before it clears source tables so an
+    enabled mirror cannot continue serving stale quotes.  A disabled mirror is
+    reported rather than contacted.
+    """
+    if not CLICKHOUSE_ENABLED:
+        return {"enabled": False, "cleared": False, "reason": "disabled"}
+    if clickhouse_connect is None:
+        raise RuntimeError("clickhouse_enabled_but_clickhouse_connect_is_not_installed")
+    client = _client()
+    client.command(f"TRUNCATE TABLE IF EXISTS {_table()}")
+    return {"enabled": True, "cleared": True, "table": _table()}
+
+
 def _client(database: str | None = None, *, timeout: int = 5):
     if clickhouse_connect is None:
         raise RuntimeError("clickhouse-connect is not installed.")

@@ -826,6 +826,11 @@ def init_db() -> None:
                 can_sell integer not null default 1,
                 limit_up real,
                 limit_down real,
+                is_limit_up integer not null default 0,
+                is_limit_down integer not null default 0,
+                is_one_word_limit_up integer not null default 0,
+                is_one_word_limit_down integer not null default 0,
+                is_st integer not null default 0,
                 status text,
                 reason text,
                 source text not null,
@@ -1892,8 +1897,6 @@ def init_db() -> None:
                 on instruments(asset_class, market, status, listed_date, delisted_date);
             create index if not exists idx_market_daily_symbol_date
                 on market_daily_bars(asset_class, market, symbol, trade_date);
-            create index if not exists idx_market_daily_instrument_date
-                on market_daily_bars(instrument_id, trade_date);
             create index if not exists idx_market_status_symbol_date
                 on market_trade_status(asset_class, market, symbol, trade_date);
             create index if not exists idx_market_intraday_symbol_time
@@ -1908,10 +1911,6 @@ def init_db() -> None:
                 on data_quality_reports(report_type, asset_class, market, symbol, created_at desc);
             create index if not exists idx_securities_market_status
                 on securities(market, status);
-            create index if not exists idx_ashare_daily_symbol_date
-                on ashare_daily_bars(symbol, trade_date);
-            create index if not exists idx_ashare_status_symbol_date
-                on ashare_trade_status(symbol, trade_date);
             create index if not exists idx_corporate_actions_symbol_date
                 on corporate_actions(symbol, ex_date);
             create index if not exists idx_universe_asof
@@ -1946,8 +1945,6 @@ def init_db() -> None:
                 on financial_facts(symbol, field_name, effective_date, announce_date, report_date);
             create index if not exists idx_factor_values_name_date
                 on factor_values(factor_name, trade_date, symbol);
-            create index if not exists idx_factor_values_symbol_date
-                on factor_values(symbol, trade_date);
             create index if not exists idx_daily_basic_values_date_symbol
                 on daily_basic_values(trade_date, symbol);
             create index if not exists idx_factor_evaluations_created_at
@@ -2023,6 +2020,11 @@ def init_db() -> None:
         _add_column(connection, "backtest_results", "performance_json", "text")
         _add_column(connection, "backtest_results", "raw_result_object_id", "text")
         _add_column(connection, "backtest_results", "summary_object_id", "text")
+        _add_column(connection, "market_trade_status", "is_limit_up", "integer not null default 0")
+        _add_column(connection, "market_trade_status", "is_limit_down", "integer not null default 0")
+        _add_column(connection, "market_trade_status", "is_one_word_limit_up", "integer not null default 0")
+        _add_column(connection, "market_trade_status", "is_one_word_limit_down", "integer not null default 0")
+        _add_column(connection, "market_trade_status", "is_st", "integer not null default 0")
         _add_column(connection, "data_assets", "lean_object_id", "text")
         _add_column(connection, "data_assets", "factor_object_id", "text")
         _add_column(connection, "object_store_items", "stored_object_id", "text")

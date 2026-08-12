@@ -47,6 +47,13 @@ UPLOADS_DIR = RUNTIME_DIR / "uploads"
 PROJECTS_DIR = RUNTIME_DIR / "projects"
 RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
+# Database chunks remain the compatibility default.  Deployments can opt into
+# the filesystem backend (normally the externally mounted Data directory)
+# without changing callers of ``db_object_store``.
+OBJECT_STORE_MODE = os.environ.get("LEAN_OBJECT_STORE_MODE", "database").strip().lower()
+FILE_OBJECT_STORE_DIR = Path(
+    os.environ.get("LEAN_FILE_OBJECT_STORE_DIR", DATA_DIR / "object-store")
+).expanduser()
 REPORTS_DIR = RUNTIME_DIR / "reports"
 PARQUET_DIR = Path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "parquet")).expanduser()
 HOST_PARQUET_DIR = Path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).expanduser().resolve()
@@ -109,6 +116,9 @@ JOB_TIMEOUT_SECONDS = int(os.environ.get("BACKTEST_JOB_TIMEOUT_SECONDS", "7200")
 MAX_CONCURRENT_JOBS = int(os.environ.get("BACKTEST_MAX_CONCURRENT_JOBS", "1"))
 LOG_LEVEL = os.environ.get("LEAN_WEB_LOG_LEVEL", "INFO")
 API_AUTH_REQUIRED = os.environ.get("LEAN_API_AUTH_REQUIRED", "1").lower() not in {"0", "false", "no", "off"}
+# A maintenance window can fail closed for all state-changing API calls while
+# the database is rebuilt.  Health and read-only endpoints remain available.
+MAINTENANCE_READ_ONLY = os.environ.get("LEAN_MAINTENANCE_READ_ONLY", "0").lower() in {"1", "true", "yes", "on"}
 API_TOKEN_FILE = Path(
     os.environ.get("LEAN_API_TOKEN_FILE", RUNTIME_DIR / "secrets" / "api_token")
 ).expanduser()

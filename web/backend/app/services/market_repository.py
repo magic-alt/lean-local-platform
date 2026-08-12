@@ -453,6 +453,11 @@ def upsert_market_trade_status_batch(
                 can_sell,
                 optional_float(row.get("limit_up") or row.get("limitUp")),
                 optional_float(row.get("limit_down") or row.get("limitDown")),
+                bool_int(row.get("is_limit_up", row.get("isLimitUp", False))),
+                bool_int(row.get("is_limit_down", row.get("isLimitDown", False))),
+                bool_int(row.get("is_one_word_limit_up", row.get("isOneWordLimitUp", False))),
+                bool_int(row.get("is_one_word_limit_down", row.get("isOneWordLimitDown", False))),
+                bool_int(row.get("is_st", row.get("isSt", False))),
                 row.get("status"),
                 row.get("reason"),
                 source,
@@ -463,8 +468,9 @@ def upsert_market_trade_status_batch(
     sql = """
         insert into market_trade_status
             (instrument_id, symbol, asset_class, market, venue, trade_date, is_tradeable, is_suspended,
-             can_buy, can_sell, limit_up, limit_down, status, reason, source, batch_id, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             can_buy, can_sell, limit_up, limit_down, is_limit_up, is_limit_down,
+             is_one_word_limit_up, is_one_word_limit_down, is_st, status, reason, source, batch_id, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(instrument_id, trade_date, source) do update set
             is_tradeable = excluded.is_tradeable,
             is_suspended = excluded.is_suspended,
@@ -472,6 +478,11 @@ def upsert_market_trade_status_batch(
             can_sell = excluded.can_sell,
             limit_up = excluded.limit_up,
             limit_down = excluded.limit_down,
+            is_limit_up = excluded.is_limit_up,
+            is_limit_down = excluded.is_limit_down,
+            is_one_word_limit_up = excluded.is_one_word_limit_up,
+            is_one_word_limit_down = excluded.is_one_word_limit_down,
+            is_st = excluded.is_st,
             status = excluded.status,
             reason = excluded.reason,
             batch_id = excluded.batch_id,

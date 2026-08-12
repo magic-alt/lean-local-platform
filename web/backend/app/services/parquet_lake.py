@@ -338,7 +338,9 @@ def _market_source_lineage(
                     from provider_raw_archives a
                     join stored_objects o on o.id=a.object_id
                     where a.run_id=? and a.provider=? and a.dataset_key='daily'
-                      and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                      and (o.storage_mode='filesystem' or exists (
+                          select 1 from stored_object_chunks c where c.object_id=o.id
+                      ))
                     """,
                     (governed_run["id"], PRIMARY_DATA_SOURCE),
                 ).fetchone()
@@ -486,7 +488,9 @@ def _market_source_lineage(
                 from provider_raw_archives a
                 join stored_objects o on o.id=a.object_id
                 where a.provider=? and a.dataset_key='daily' and a.run_id in ({placeholders})
-                  and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                  and (o.storage_mode='filesystem' or exists (
+                      select 1 from stored_object_chunks c where c.object_id=o.id
+                  ))
                 """,
                 [PRIMARY_DATA_SOURCE, *sorted(sync_run_ids)],
             ).fetchall()
@@ -536,7 +540,9 @@ def _market_source_lineage(
                     select count(*) as count from provider_raw_archives a
                     join stored_objects o on o.id=a.object_id
                     where a.run_id=? and a.dataset_key='daily'
-                      and exists (select 1 from stored_object_chunks c where c.object_id=o.id)
+                      and (o.storage_mode='filesystem' or exists (
+                          select 1 from stored_object_chunks c where c.object_id=o.id
+                      ))
                     """,
                     (candidate_run_id,),
                 ).fetchone()

@@ -101,7 +101,9 @@ def _latest_archive(dataset: str) -> tuple[list[dict[str, Any]], str | None]:
             from provider_raw_archives a
             join stored_objects o on o.id = a.object_id
             where a.provider='tushare' and a.dataset_key=?
-              and exists (select 1 from stored_object_chunks c where c.object_id = o.id)
+              and (o.storage_mode='filesystem' or exists (
+                  select 1 from stored_object_chunks c where c.object_id = o.id
+              ))
             order by a.created_at desc limit 1
             """,
             (dataset,),
