@@ -51,6 +51,6 @@
         weights = {symbol: weight / invested_weight for symbol, weight in capped_weights.items()}
         for asset_symbol in self.risk_symbols:
             target = weights.get(asset_symbol, 0.0)
-            self.ashare_execution.target_percent(asset_symbol, target) if self.ashare_execution else self.set_holdings(asset_symbol, target)
+            self.ashare_execution.target_percent_moo(asset_symbol, target, "risk_parity_rebalance") if self.ashare_execution else self.set_holdings(asset_symbol, target)
         self.last_rebalance = today
         self.plot("RiskParity", "Assets", len(weights))

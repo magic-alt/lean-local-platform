@@ -2933,27 +2933,35 @@ def list_orders(account_id: str, **filters: Any) -> dict[str, Any]:
         clauses.append("intent.trade_date<=?")
         params.append(filters["end_date"])
     status_filter = filters.get("status")
+    if status_filter:
+        clauses.append("transition.to_state=?")
+        params.append(str(status_filter))
     where = " and ".join(clauses)
-    sql = f"""
-        select intent.*,
-               (select transition.to_state from paper_order_transitions transition
-                where transition.intent_id=intent.id order by transition.sequence desc limit 1) as status,
-               (select fill.quantity from paper_order_fills fill
-                where fill.intent_id=intent.id order by fill.created_at desc limit 1) as filled_quantity,
-               (select fill.price from paper_order_fills fill
-                where fill.intent_id=intent.id order by fill.created_at desc limit 1) as average_fill_price,
-               (select fill.fee+fill.tax from paper_order_fills fill
-                where fill.intent_id=intent.id order by fill.created_at desc limit 1) as fees,
-               (select decision.rule_code from paper_constraint_decisions decision
-                where decision.intent_id=intent.id) as reject_reason
-        from paper_order_intents intent where {where}
+    joins = """
+        from paper_order_intents intent
+        left join paper_order_transitions transition
+          on transition.intent_id=intent.id
+         and transition.sequence=(select max(sequence) from paper_order_transitions where intent_id=intent.id)
+        left join paper_order_fills fill
+          on fill.intent_id=intent.id
+         and fill.created_at=(select max(created_at) from paper_order_fills where intent_id=intent.id)
+        left join paper_constraint_decisions decision on decision.intent_id=intent.id
     """
     with db() as connection:
-        rows = rows_to_dicts(connection.execute(f"{sql} order by intent.created_at desc", tuple(params)).fetchall())
-    if status_filter:
-        rows = [item for item in rows if item.get("status") == status_filter]
-    total = len(rows)
-    return _paged(rows[offset : offset + limit], total=total, limit=limit, offset=offset)
+        total = connection.execute(
+            f"select count(*) as count {joins} where {where}", tuple(params)
+        ).fetchone()
+        rows = connection.execute(
+            f"""
+            select intent.*,transition.to_state as status,fill.quantity as filled_quantity,
+                   fill.price as average_fill_price,fill.fee+fill.tax as fees,
+                   decision.rule_code as reject_reason
+            {joins} where {where}
+            order by intent.created_at desc limit ? offset ?
+            """,
+            tuple(params + [limit, offset]),
+        ).fetchall()
+    return _paged(rows_to_dicts(rows), total=int(total["count"] or 0), limit=limit, offset=offset)
 
 
 def list_trades(account_id: str, **filters: Any) -> dict[str, Any]:

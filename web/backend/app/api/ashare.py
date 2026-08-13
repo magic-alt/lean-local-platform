@@ -151,7 +151,12 @@ def import_securities(request: SecurityMasterImport):
             }
             for item in request.records
         ]
-        return import_security_master(records, source=request.source, universe_code=request.universeCode)
+        return import_security_master(
+            records,
+            source=request.source,
+            universe_code=request.universeCode,
+            bulk=True,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -307,7 +307,17 @@ def rebuild_ashare_lean_cache_from_db(
     if not rows:
         raise LeanPlatformError(f"No canonical A-share rows found for {symbol} source={source} adjust={adjust or 'raw'}.")
     metadata = write_lean_daily_zip(symbol, _rows_for_lean(rows), source, overwrite=True, market=market)
-    factor_rows = _query_adjustment_rows(symbol, source=source) or rows
+    # ``raw`` is the default A-share execution contract.  LEAN factor files
+    # otherwise turn raw bars into a forward-adjusted/total-return series,
+    # while index benchmarks remain price indices.  Emit an identity factor
+    # file for raw runs so both the portfolio and benchmark use price-return
+    # semantics.  Adjusted research must request qfq/hfq explicitly.
+    adjustment = (adjust or "raw").strip().lower()
+    factor_rows = (
+        [{"trade_date": row["trade_date"], "adj_factor": 1.0} for row in rows]
+        if adjustment in {"", "raw", "none"}
+        else (_query_adjustment_rows(symbol, source=source) or rows)
+    )
     factor_metadata = data_paths.write_equity_factor_file(
         symbol,
         factor_rows,
@@ -325,6 +335,7 @@ def rebuild_ashare_lean_cache_from_db(
         "symbol": normalize_symbol(symbol, market),
         "source": source,
         "adjust": adjust or "raw",
+        "return_basis": "price_return" if adjustment in {"", "raw", "none"} else "adjusted_return",
         "batch_id": batch_id,
     }
     lean_object = _archive_data_file(zip_path, metadata=object_metadata, content_type="application/zip")

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .common import dispatch_task, paged_items
 from ..core.config import DEFAULT_DOCKER_IMAGE
 from ..core.errors import NotFoundError
+from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.results import extract_chart_data, infer_holdings_from_orders
 from ..domain.data_scope import DataScope
 from ..repositories.backtest_repository import get_backtest
@@ -16,6 +17,7 @@ from ..services.backtest_service import (
     cancel_backtest,
     create_failed_backtest_job,
     create_backtest_job,
+    count_query_backtests,
     enrich_strategy_backtest_request,
     fail_backtest_queue,
     mark_backtest_queued,
@@ -135,8 +137,7 @@ def backtests(
     offset: int = Query(default=0, ge=0),
     paged: bool = True,
 ):
-    items = query_backtests(
-        {
+    filters = {
             "name": name,
             "status": status,
             "project_id": projectId,
@@ -144,9 +145,15 @@ def backtests(
             "market": market,
             "from_date": fromDate,
             "to_date": toDate,
-        }
-    )
-    return paged_items(items, limit=limit, offset=offset, paged=paged)
+    }
+    if not paged:
+        return query_backtests({**filters, "limit": limit, "offset": offset})
+    return {
+        "items": query_backtests({**filters, "limit": limit, "offset": offset}),
+        "count": count_query_backtests(filters),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("")
@@ -155,7 +162,7 @@ def create_backtest(request: BacktestRequest):
     try:
         payload = _shared_scope_payload(request)
         run = create_backtest_job(payload)
-    except Exception as exc:
+    except LeanPlatformError as exc:
         payload = request.model_dump()
         run = create_failed_backtest_job(payload, str(exc))
         return detail(run["id"])

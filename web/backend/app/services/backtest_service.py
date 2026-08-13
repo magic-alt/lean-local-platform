@@ -12,7 +12,7 @@ from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.docker import validate_lean_docker_image
 from ..lean_engine.ids import new_run_id
-from ..repositories.backtest_repository import get_backtest, list_backtests, update_backtest
+from ..repositories.backtest_repository import count_backtests, get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
 from .projects import get_project
 from .backtest_preflight import prepare_backtest_request
@@ -418,3 +418,7 @@ def backtest_status(job_id: str) -> dict[str, Any]:
 
 def query_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     return list_backtests(filters)
+
+
+def count_query_backtests(filters: dict[str, Any] | None = None) -> int:
+    return count_backtests(filters)

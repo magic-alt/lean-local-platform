@@ -53,6 +53,6 @@
         target_weight = 1.0 / len(winners)
         for asset_symbol in self.selection_symbols:
             target = target_weight if asset_symbol in winners else 0.0
-            self.ashare_execution.target_percent(asset_symbol, target) if self.ashare_execution else self.set_holdings(asset_symbol, target)
+            self.ashare_execution.target_percent_moo(asset_symbol, target, "turning_point_rebalance") if self.ashare_execution else self.set_holdings(asset_symbol, target)
         self.last_rebalance = today
         self.plot("TurningPoint", "BestScore", scores[0][0])

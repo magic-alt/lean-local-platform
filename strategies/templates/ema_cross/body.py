@@ -9,8 +9,8 @@
             return
         invested = self.portfolio[self.symbol].invested
         if self.fast.current.value > self.slow.current.value and not invested:
-            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent_moo(self.symbol, 1, "ema_cross_buy") if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.fast.current.value < self.slow.current.value and invested:
-            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+            self.ashare_execution.exit_moo(self.symbol, "ema_cross_sell") if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("EMA", "Fast", self.fast.current.value)
         self.plot("EMA", "Slow", self.slow.current.value)

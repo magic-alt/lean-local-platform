@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ from ..services.result_service import persist_result
 from ..services.lean_cache import ensure_ashare_lean_cache, ensure_lean_results_analyzer_reference_data
 from ..services.run_fingerprint import build_run_fingerprint
 from ..services.reproducibility import issue_certificate
-from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease
+from ..services.scheduler import acquire_scheduler_lease, release_scheduler_lease, renew_scheduler_lease
 from ..services.settings import get_settings
 from ..services.source_gate import DEFAULT_PRODUCTION_SOURCE
 from ..services.tasks import append_log, create_task, get_task, update_task
@@ -583,7 +584,7 @@ def run_research_batch_item_task(batch_id: str, item_id: str):
 
 
 @celery_app.task(name="lean_web.fetch_data_batch")
-def fetch_data_batch_task(task_id: str):
+def fetch_data_batch_task(task_id: str, api_key: str | None = None):
     task = get_task(task_id)
     parameters = task["parameters"]
     symbols = parameters.get("symbols") or []
@@ -598,7 +599,6 @@ def fetch_data_batch_task(task_id: str):
     start_date = parameters.get("startDate") or None
     end_date = parameters.get("endDate") or None
     adjust = parameters.get("adjust") or ""
-    api_key = parameters.get("apiKey") or None
     update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
     results = []
     failures = []
@@ -652,7 +652,7 @@ def fetch_data_batch_task(task_id: str):
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def download_on_demand_dataset_task(task_id: str):
+def download_on_demand_dataset_task(task_id: str, api_parameters: dict[str, Any] | None = None):
     task = get_task(task_id)
     parameters = task["parameters"]
     update_task(task_id, status="running", started_at=utc_now(), finished_at=None, error=None)
@@ -670,7 +670,7 @@ def download_on_demand_dataset_task(task_id: str):
             start_date=str(parameters.get("startDate") or "") or None,
             end_date=str(parameters.get("endDate") or "") or None,
             symbol=str(parameters.get("symbol") or "") or None,
-            parameters=dict(parameters.get("apiParameters") or {}),
+            parameters=dict(api_parameters or {}),
         )
         append_log(
             task_id,
@@ -1267,7 +1267,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
         resource="backtest",
         holder_id=run_id,
         limit=max_concurrent,
-        ttl_seconds=timeout_seconds + 600,
+        # A short lease bounds crash fallout.  A small daemon renews it while
+        # the synchronous LEAN invocation is healthy.
+        ttl_seconds=min(timeout_seconds + 600, 900),
         metadata={"task_id": task_id, "run_id": run_id},
     )
     if lease is None:
@@ -1275,6 +1277,24 @@ def run_backtest_task(self, task_id: str, run_id: str):
         update_task(task_id, status="queued", error=None)
         update_backtest(run_id, status="queued", error=None, error_message=None)
         raise self.retry(countdown=5)
+
+    lease_renewal_stop = threading.Event()
+
+    def renew_lease() -> None:
+        while not lease_renewal_stop.wait(60):
+            try:
+                if not renew_scheduler_lease(lease.get("id"), ttl_seconds=900):
+                    logger.warning("Backtest scheduler lease %s could not be renewed", lease.get("id"))
+                    return
+            except Exception:
+                logger.exception("Unable to renew backtest scheduler lease %s", lease.get("id"))
+
+    lease_renewal_thread = threading.Thread(
+        target=renew_lease,
+        name=f"backtest-lease-{run_id}",
+        daemon=True,
+    )
+    lease_renewal_thread.start()
 
     append_log(task_id, f"Task {task_id} started.")
     update_task(task_id, status="running", started_at=utc_now(), error=None)
@@ -1544,6 +1564,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
         _record_backtest_metric("failed")
         raise
     finally:
+        lease_renewal_stop.set()
+        lease_renewal_thread.join(timeout=1)
         release_scheduler_lease(lease.get("id"))
         try:
             from ..services.experiment_batches import reconcile_backtest

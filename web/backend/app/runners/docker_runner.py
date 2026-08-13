@@ -123,6 +123,25 @@ class DockerRunner:
 
     @classmethod
     def stop_container(cls, container_name: str, output_callback: Callable[[str], None] | None = None) -> None:
+        runner_url = os.environ.get("LEAN_RUNNER_URL", "").strip().rstrip("/")
+        if runner_url:
+            token = cls._runner_token()
+            if not token:
+                raise LeanPlatformError("restricted_runner_not_configured")
+            run_id = container_name.removeprefix("lean-")
+            request = urllib.request.Request(
+                runner_url + f"/v1/jobs/{run_id}/stop",
+                headers={"Authorization": f"Bearer {token}"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+            except Exception as exc:
+                raise LeanPlatformError(f"restricted_runner_stop_failed:{exc}") from exc
+            if output_callback:
+                output_callback(f"restricted runner stop {container_name}: {body.get('status', 'requested')}")
+            return
         docker = cls.docker_path()
         completed = subprocess.run(
             [docker, "stop", container_name],

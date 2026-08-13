@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import os
+import shutil
 from typing import Callable
 
 from fastapi import Request, Response
@@ -50,6 +52,28 @@ BACKTEST_STATUS = _metric(
     ["status"],
 )
 DATA_ASSETS_TOTAL = _metric(Gauge, "lean_data_assets_total", "Number of imported data assets indexed in the runtime database.")
+CELERY_QUEUE_DEPTH = _metric(
+    Gauge,
+    "lean_celery_queue_depth",
+    "Pending Celery messages by queue.",
+    ["queue"],
+)
+MYSQL_CONNECTIONS = _metric(
+    Gauge,
+    "lean_mysql_connections",
+    "Current MySQL connection count when the runtime database is MySQL.",
+)
+REDIS_MEMORY_BYTES = _metric(
+    Gauge,
+    "lean_redis_memory_bytes",
+    "Redis memory currently used by the broker/backend.",
+)
+FILESYSTEM_FREE_BYTES = _metric(
+    Gauge,
+    "lean_filesystem_free_bytes",
+    "Free capacity on critical local storage roots.",
+    ["path"],
+)
 
 
 async def metrics_middleware(request: Request, call_next: Callable) -> Response:
@@ -89,10 +113,40 @@ def refresh_runtime_metrics() -> None:
                 BACKTEST_STATUS.labels(row["status"]).set(row["count"])
             row = connection.execute("select count(*) as count from data_assets").fetchone()
             DATA_ASSETS_TOTAL.set(row["count"] if row else 0)
+            try:
+                mysql_row = connection.execute("show status like 'Threads_connected'").fetchone()
+                if mysql_row and MYSQL_CONNECTIONS is not None:
+                    MYSQL_CONNECTIONS.set(float(mysql_row[1]))
+            except Exception:
+                pass
         finally:
             connection.close()
     except Exception:
+        pass
+    if FILESYSTEM_FREE_BYTES is not None:
+        from ..core.config import DATA_DIR, RUNTIME_DIR
+
+        for path in dict.fromkeys(
+            str(item) for item in (os.environ.get("LEAN_DATA_DIR") or DATA_DIR, os.environ.get("LEAN_RUNTIME_DIR") or RUNTIME_DIR)
+        ):
+            try:
+                FILESYSTEM_FREE_BYTES.labels(path).set(shutil.disk_usage(path).free)
+            except OSError:
+                continue
+    if CELERY_QUEUE_DEPTH is None and REDIS_MEMORY_BYTES is None:
         return
+    try:
+        from redis import Redis
+        from ..core.config import REDIS_URL
+
+        client = Redis.from_url(REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5)
+        if CELERY_QUEUE_DEPTH is not None:
+            for queue in ("default", "backtest", "data-demand", "data-bulk", "data-lineage", "ml"):
+                CELERY_QUEUE_DEPTH.labels(queue).set(client.llen(queue))
+        if REDIS_MEMORY_BYTES is not None:
+            REDIS_MEMORY_BYTES.set(float((client.info("memory") or {}).get("used_memory") or 0))
+    except Exception:
+        pass
 
 
 def metrics_response() -> Response:

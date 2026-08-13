@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Remediate the 2026-08-14 full-stack audit P0/P1 findings: make CSV uploads
+  path-safe, preserve known delistings, align raw A-share backtests and price
+  index benchmarks, require authenticated durable Redis and bounded MySQL
+  defaults, add cancellable delegated LEAN runs and crash reconciliation,
+  make run IDs collision-safe, fail closed on missing PIT membership, use
+  next-open A-share template execution, remove task-stored provider secrets,
+  batch and page hot database lists, and expose queue, broker, database and
+  disk metrics while accurately stating the current local DR guarantee.
+
 - Repair local Data Preview and route stability after the Parquet cutover: reconcile missing MySQL control-plane tables plus drifted security-identifier and financial-audit columns without restoring retired quote tables, keep optional SQL enrichment failures from breaking local Preview, replace full-lake preview counts with bounded DuckDB paging and memory/concurrency limits, expose truthful partition coverage, load complete local stock/index charts in one bounded request, and add real-browser regression coverage for Preview plus Data/Backtest/Research navigation.
 
 - Make the repository `data/` lake the sole market-time-series authority: read the existing bronze/silver/gold Parquet hierarchy directly with DuckDB, write incremental date partitions atomically with retained revisions, keep only control metadata in MySQL, retire MySQL/database/local query modes and SQL-to-Parquet export routes, and preserve Qlib as an untouched downstream cache/engine.

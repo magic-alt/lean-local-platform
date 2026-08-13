@@ -18,8 +18,8 @@
             return
         invested = self.portfolio[self.symbol].invested
         if float(bar.close) > previous_high and not invested:
-            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent_moo(self.symbol, 1, "donchian_breakout_buy") if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif float(bar.close) < previous_low and invested:
-            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+            self.ashare_execution.exit_moo(self.symbol, "donchian_breakout_sell") if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("Donchian", "Upper", previous_high)
         self.plot("Donchian", "Lower", previous_low)

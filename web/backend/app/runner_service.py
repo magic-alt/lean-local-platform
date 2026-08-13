@@ -297,6 +297,12 @@ def _research_session_id(value: str) -> str:
     return value
 
 
+def _run_id(value: str) -> str:
+    if not value or len(value) > 48 or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
+        raise HTTPException(status_code=400, detail="runner_run_id_invalid")
+    return value
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "networkPolicy": LEAN_DOCKER_NETWORK}
@@ -394,6 +400,39 @@ def delete_research(
     normalized = _research_session_id(session_id)
     remove_research_container(research_container_name(normalized))
     return {"removed": True, "sessionId": normalized}
+
+
+@app.post("/v1/jobs/{run_id}/stop")
+def stop_job(
+    run_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Stop a delegated LEAN container from the only service with Docker access."""
+    _authenticate(authorization)
+    normalized = _run_id(run_id)
+    container_name = f"lean-{normalized}"[:60]
+    try:
+        DockerRunner.stop_container(container_name)
+    except LeanPlatformError as exc:
+        # Docker reports a non-existent container after a normal completion.
+        # The caller is cancelling, so report that state without claiming a
+        # successful stop of an unknown runner job.
+        with db() as connection:
+            known = connection.execute(
+                "select status from restricted_runner_jobs where run_id=?", (normalized,)
+            ).fetchone()
+        if known is None:
+            raise HTTPException(status_code=404, detail="runner_job_not_found") from exc
+    with db() as connection:
+        connection.execute(
+            """
+            update restricted_runner_jobs
+            set status='cancelled',error=coalesce(error,'cancel_requested'),finished_at=coalesce(finished_at,?)
+            where run_id=? and status='running'
+            """,
+            (utc_now(), normalized),
+        )
+    return {"runId": normalized, "containerName": container_name, "status": "stop_requested"}
 
 
 @app.post("/v1/jobs/run")

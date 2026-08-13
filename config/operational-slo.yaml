@@ -64,14 +64,16 @@ slos:
     target: 100%
 
 dr:
-  rpoMinutes: 15
+  # Current local implementation is one daily logical backup.  The former
+  # 15-minute encrypted/off-site claim remains a target, not an achieved SLO.
+  rpoMinutes: 1440
   rtoMinutes: 240
   fullBackupCadenceHours: 24
-  incrementalOrBinlogCadenceMinutes: 15
-  retentionDays: 30
+  incrementalOrBinlogCadenceMinutes: null
+  retentionDays: 7
   restoreDrillCadenceDays: 90
-  encryptionRequired: true
-  independentStorageRequired: true
+  encryptionRequired: false
+  independentStorageRequired: false
   certificationStatus: NOT_YET_PROVEN_AT_PRODUCTION_SCALE
 
 resourceBudgets:

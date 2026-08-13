@@ -83,6 +83,11 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
     if clauses:
         sql += " where " + " and ".join(clauses)
     sql += " order by created_at desc"
+    limit = filters.get("limit")
+    offset = filters.get("offset")
+    if limit is not None:
+        sql += " limit ? offset ?"
+        values.extend([max(1, int(limit)), max(0, int(offset or 0))])
     with db() as connection:
         rows = connection.execute(sql, values).fetchall()
     items = rows_to_dicts(rows)
@@ -102,6 +107,30 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
             if key in validation
         }
     return items
+
+
+def count_backtests(filters: dict[str, Any] | None = None) -> int:
+    filters = filters or {}
+    clauses: list[str] = []
+    values: list[Any] = []
+    for key, column, value in (
+        ("name", "name like ?", f"%{str(filters['name']).strip()}%" if filters.get("name") else None),
+        ("status", "status = ?", normalize_status(str(filters["status"])) if filters.get("status") else None),
+        ("project_id", "project_id = ?", filters.get("project_id")),
+        ("symbol", "symbol = ?", str(filters["symbol"]).upper() if filters.get("symbol") else None),
+        ("market", "venue = ?", str(filters["market"]).lower() if filters.get("market") else None),
+        ("from_date", "created_at >= ?", filters.get("from_date")),
+        ("to_date", "created_at <= ?", filters.get("to_date")),
+    ):
+        if value is not None:
+            clauses.append(column)
+            values.append(value)
+    sql = "select count(*) as count from backtest_runs"
+    if clauses:
+        sql += " where " + " and ".join(clauses)
+    with db() as connection:
+        row = connection.execute(sql, values).fetchone()
+    return int(row["count"] if row else 0)
 
 
 def get_backtest(job_id: str) -> dict[str, Any] | None:

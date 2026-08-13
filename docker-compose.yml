@@ -14,10 +14,24 @@ services:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:
       - "127.0.0.1:${LEAN_REDIS_PORT:-6379}:6379"
+    environment:
+      LEAN_REDIS_PASSWORD: ${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}
     volumes:
       - redis-data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - ${LEAN_REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$LEAN_REDIS_PASSWORD\" ping"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -29,26 +43,29 @@ services:
     image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: lean-root
+      MYSQL_ROOT_PASSWORD: ${LEAN_MYSQL_ROOT_PASSWORD:?LEAN_MYSQL_ROOT_PASSWORD must be set}
       MYSQL_DATABASE: lean_market
-      MYSQL_USER: lean
-      MYSQL_PASSWORD: lean
+      MYSQL_USER: ${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}
+      MYSQL_PASSWORD: ${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}
+      LEAN_MYSQL_USER: ${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}
+      LEAN_MYSQL_PASSWORD: ${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-4G}
+      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-1G}
       - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-1G}
       - --local-infile=1
       - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
       - --binlog-row-image=MINIMAL
       - --log-bin-trust-function-creators=1
       - --max-allowed-packet=256M
+      - --max-connections=${LEAN_MYSQL_MAX_CONNECTIONS:-150}
     ports:
       - "127.0.0.1:${LEAN_MYSQL_PORT:-3306}:3306"
     volumes:
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ulean", "-plean"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$$LEAN_MYSQL_USER\" -p\"$$LEAN_MYSQL_PASSWORD\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -88,7 +105,7 @@ services:
     command:
       - sh
       - -c
-      - mysql -hmysql -uroot -plean-root -e "set global log_bin_trust_function_creators=1; create database if not exists lean_mlflow character set utf8mb4 collate utf8mb4_0900_ai_ci; grant all privileges on lean_mlflow.* to 'lean'@'%'; flush privileges;"
+      - mysql -hmysql -uroot -p${LEAN_MYSQL_ROOT_PASSWORD:?LEAN_MYSQL_ROOT_PASSWORD must be set} -e "set global log_bin_trust_function_creators=1; create database if not exists lean_mlflow character set utf8mb4 collate utf8mb4_0900_ai_ci; grant all privileges on lean_mlflow.* to '${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}'@'%'; flush privileges;"
     depends_on:
       mysql:
         condition: service_healthy
@@ -99,7 +116,7 @@ services:
     build:
       context: .
       dockerfile: web/backend/Dockerfile.ml
-    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri mysql+pymysql://lean:lean@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
+    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
     ports:
       - "127.0.0.1:${LEAN_MLFLOW_PORT:-5000}:5000"
     volumes:
@@ -179,7 +196,7 @@ services:
     environment:
       <<: *release-environment
       LEAN_RELEASE_ROLE: api
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
       LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
       LEAN_MAINTENANCE_READ_ONLY: ${LEAN_MAINTENANCE_READ_ONLY:-0}
       LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
@@ -187,7 +204,7 @@ services:
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_RUNNER_URL: http://lean-runner:8010
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
-      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
@@ -324,8 +341,8 @@ services:
     environment:
       <<: *release-environment
       LEAN_RELEASE_ROLE: default-worker
-      REDIS_URL: redis://redis:6379/0
-      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
+      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
@@ -523,7 +540,7 @@ services:
     environment:
       <<: *release-environment
       LEAN_RELEASE_ROLE: lean-runner
-      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
@@ -571,8 +588,8 @@ services:
     environment:
       <<: *release-environment
       LEAN_RELEASE_ROLE: beat
-      REDIS_URL: redis://redis:6379/0
-      LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
+      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
+      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
