@@ -56,7 +56,7 @@ def test_source_gate_rejects_research_source_by_default(tmp_path, monkeypatch):
     client = TestClient(app)
     rejected = client.get(
         "/api/data/query",
-        params={"symbol": "600519", "assetClass": "equity", "market": "china", "source": "database", "providerSource": "test"},
+        params={"symbol": "600519", "assetClass": "equity", "market": "china", "source": "parquet", "providerSource": "test"},
     )
     assert rejected.status_code == 400
     allowed = client.get(
@@ -65,7 +65,7 @@ def test_source_gate_rejects_research_source_by_default(tmp_path, monkeypatch):
             "symbol": "600519",
             "assetClass": "equity",
             "market": "china",
-            "source": "database",
+            "source": "parquet",
             "providerSource": "test",
             "allowResearchSource": True,
         },

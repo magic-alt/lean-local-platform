@@ -50,8 +50,8 @@ def seed_factor_dataset():
 
 def test_daily_basic_bulk_writer_expands_normalized_provider_rows(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
-    from app.db import db
     from app.research import factors
+    from app.services import market_lake
 
     symbol_calls = 0
     date_calls = 0
@@ -92,15 +92,13 @@ def test_daily_basic_bulk_writer_expands_normalized_provider_rows(tmp_path, monk
     assert written == 2
     assert symbol_calls == 2
     assert date_calls == 2
-    with db() as connection:
-        rows = connection.execute(
-            "select symbol,trade_date,factor_name,value,batch_id "
-            "from daily_basic_factor_values order by symbol,factor_name"
-        ).fetchall()
-    assert [tuple(row) for row in rows] == [
-        ("000001", "2024-01-02", "pb", 0.7, "daily-basic-fast"),
-        ("000001", "2024-01-02", "pe_ttm", 8.5, "daily-basic-fast"),
-        ("600000", "2024-01-02", "pe_ttm", 6.2, "daily-basic-fast"),
+    rows = market_lake.query_rows(
+        kind="daily_basic", data_type="metric", source="tushare:daily_basic",
+        columns="symbol,trade_date,pb,pe_ttm,batch_id", order_by="symbol",
+    )
+    assert rows == [
+        {"symbol": "000001", "trade_date": "2024-01-02", "pb": 0.7, "pe_ttm": 8.5, "batch_id": "daily-basic-fast"},
+        {"symbol": "600000", "trade_date": "2024-01-02", "pb": None, "pe_ttm": 6.2, "batch_id": "daily-basic-fast"},
     ]
 
 

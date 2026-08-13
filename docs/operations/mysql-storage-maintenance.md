@@ -1,25 +1,22 @@
 # MySQL Storage Maintenance
 
-This runbook reduces MySQL allocation without silently deleting market data.
-All mutating commands require `--confirm`; run the matching read-only command
-first. Stop API/worker writes during `OPTIMIZE` operations.
+MySQL maintenance now applies only to the control plane. Stock bars, intraday bars, trade status, adjustment factors and daily-basic facts live in `data/` Parquet and must never be recreated or reset through MySQL maintenance commands.
 
-## 1. Remove duplicate indexes
+All mutating commands require `--confirm`; run the corresponding read-only report first and stop affected API/worker writes during table rebuilds.
+
+## Schema and allocation reports
 
 ```bash
 web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py report
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py index-status
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py hide-indexes --confirm
+web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
+  schema-report --output web/runtime/audit/mysql-schema-current.md
 ```
 
-Run one daily sync, a representative A-share screen, and a standard backtest.
-Compare returned row counts and result hashes with the baseline. If any query
-regresses, restore the indexes with `restore-indexes --confirm`. Otherwise,
-after the observation period, run `drop-indexes --confirm`; schedule
-`optimize --tables factor_values,market_daily_bars,market_trade_status --confirm`
-only when free disk can hold the largest target table plus 30%.
+MySQL allocation represents control-plane state and object metadata, not the size of the market-data lake. Check `LEAN_MARKET_DATA_DIR` separately for stock-data capacity.
 
-## 2. Retire covered legacy daily_basic EAV rows
+## Legacy daily-basic EAV cleanup
+
+Old `factor_values` rows from `tushare:daily_basic` may be removed only when the same value exists in canonical daily-basic Parquet:
 
 ```bash
 web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py eav-audit
@@ -27,117 +24,37 @@ web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
   delete-equivalent-eav --batch-size 10000 --confirm
 ```
 
-Only records whose same-source wide-column value is present and equal are
-deleted. Uncovered, unknown, null-wide, and mismatched values remain readable
-through the compatibility view. Repeat `eav-audit`, then rebuild
-`factor_values` in a maintenance window if physical space must be returned.
+Uncovered, unknown, null and mismatched EAV values remain. This is a compatibility cleanup, not a market-data write path.
 
-## 3. Move binary objects outside MySQL
+## Object migration and retention
 
-Compose defaults new objects to filesystem mode under
-`$LEAN_DATA_DIR/object-store`; this directory must be backed up with `Data/`.
-Migrate old chunk-backed objects in restart-safe batches:
+New objects default to filesystem mode under `$LEAN_DATA_DIR/object-store`; back up that directory with the full lower-case `data/` lake.
 
 ```bash
 web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
   migrate-objects --limit 1000 --confirm
-```
 
-Each object is copied atomically, checked by SHA-256, marked `filesystem`, and
-only then has its MySQL chunks removed. `provider-raw`, PIT evidence, and
-reproducibility certificates are retained. Only `backtest-results`,
-`lean-data-files`, and `pipeline-artifacts` older than 180 days are eligible
-for removal:
-
-```bash
 web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
   prune-artifacts --retention-days 180 --confirm
-```
 
-After migration, online raw-record keys older than 180 days can be pruned only
-when an archive for their original batch remains checksum-readable:
-
-```bash
 web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
   prune-raw-records --retention-days 180 --limit 10000 --confirm
 ```
 
-## 4. A-share canonical tables
+Objects are copied atomically and SHA-256 checked before chunk removal. Provider raw evidence is pruned only when its archived object remains readable.
 
-All writers, readers, screens, research jobs and maintenance commands use
-`market_daily_bars` and `market_trade_status` directly. There is no A-share
-compatibility-view mode or cutover command. Old `ashare_*` relations from an
-earlier deployment are not read or written; remove them only through a reviewed
-forward migration after verifying their canonical rows and a backup.
+## Index and table maintenance
 
-## 5. Direct rebuild of regenerable market data (no backup)
-
-This is the intentionally destructive option for a full redownload. It does
-not touch projects, settings, backtest rows, Paper records, task history, or
-strategy metadata. It does clear all shared provider/canonical market data
-(including non-A-share data), financial facts, raw dedupe records and their
-provider-raw objects. Financial data is deliberately **not** added to the
-post-reset bulk download selection.
-
-The command first refuses to run if active task, sync, pipeline, or derived
-maintenance rows exist. It truncates MySQL base tables (returning their
-InnoDB table space), invalidates Parquet/Dataset Release certificates
-without deleting backtest references, clears the enabled ClickHouse mirror,
-and removes only `$LEAN_PARQUET_DIR` contents plus the external
-`provider-raw` object namespace. When provider-raw chunks were still stored
-in MySQL, it also rebuilds the remaining `stored_object_chunks` table to
-return those deleted pages. It writes an audit JSON under
-`web/runtime/maintenance-audits/`.
-
-Before the window, deploy this release with filesystem object storage, then
-enable the API write gate and stop all writers:
+Only indexes returned by `index-status` and explicitly allowlisted tables may be changed:
 
 ```bash
-export LEAN_MAINTENANCE_READ_ONLY=1
-docker compose up -d api
-docker compose stop worker data-worker data-demand-worker backtest-worker beat lean-runner
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py market-reset-plan
+web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py index-status
+web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py optimize \
+  --tables factor_values --confirm
 ```
 
-`market-reset-plan` reports approximate InnoDB row counts and the preserved
-table groups without scanning large fact tables. The live reset requires all
-three acknowledgement flags because this installation explicitly chose no
-backup and no shadow-table rollback:
+The former direct market reset and market-reset plan commands are removed. To redownload stock data, use the Data workflow and a reviewed Parquet partition/revision procedure; do not delete the entire `data/` root and do not touch Qlib-owned directories.
 
-```bash
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
-  direct-market-reset --confirm --no-backup --direct-reset
-```
+## Backup boundary
 
-After the command succeeds, restart writers with the same
-`LEAN_MAINTENANCE_READ_ONLY=1` setting, then create a **selected** A-share
-download with the `postResetBulkDatasets` list reported by `market-reset-plan`
-(it deliberately omits `dividend` and all financial datasets). Validate
-source/date/row coverage, then remove the gate and restart API/workers
-normally. Do not use the Data page's old “full rebuild” button to reclaim
-existing `.ibd` files: it refreshes data but does not perform this controlled
-physical-table reset.
-
-## 6. Purge all backtests and MySQL-resident generated artifacts
-
-For an intentionally clean execution history, inspect the scope and then run:
-
-```bash
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py backtest-purge-plan
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py purge-backtests --confirm
-```
-
-This deletes backtest/result/task rows, experiment and Walk-forward output,
-optimization and Qlib intermediates, generated dataset-version snapshots, and
-the `backtest-results`, `lean-data-files`, `pipeline-artifacts`,
-`reproducibility-certificates`, and current Qlib `object-store` namespaces.
-It preserves projects, settings, strategy versions, Paper records, provider
-state, and `universe-pit` evidence. The command is foreign-key aware and
-rebuilds the residual object tables after deletion.
-
-Generate a current, content-free local schema reference with exact row counts:
-
-```bash
-web/backend/.venv/bin/python scripts/mysql_storage_maintenance.py \
-  schema-report --output docs/operations/mysql-schema-current.md
-```
+Before control-plane maintenance, create and verify a MySQL logical backup. Separately back up `data/` including Bronze revisions, Silver, Gold, registry and quality. A MySQL dump cannot restore stock prices, and a Parquet backup cannot restore accounts, tasks or audit state.

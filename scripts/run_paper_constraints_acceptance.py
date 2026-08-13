@@ -15,6 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, json_dump, utc_now  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.ashare_repository import assert_benchmark_ready, reference_data_coverage, upsert_trade_status  # noqa: E402
 from app.services.paper import _replay_dates, create_session, create_signal, list_orders, run_replay  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
@@ -51,19 +52,12 @@ def _find_fallback_symbol(
     *,
     fallback: list[str] | None = None,
 ) -> str | None:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select symbol
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-              and trade_date = ? and source = ? and symbol != ?
-            order by symbol asc
-            limit 1
-            """,
-            (trade_date, source, exclude_symbol),
-        ).fetchone()
+    rows = market_lake.query_rows(
+        kind="bars", asset_class="equity", market="china", venue="china", source=source,
+        columns="symbol", predicates=("trade_date=?", "symbol<>?"),
+        parameters=(trade_date, exclude_symbol), order_by="symbol", limit=1,
+    )
+    row = rows[0] if rows else None
     if row and row["symbol"]:
         return str(row["symbol"]).zfill(6)[-6:]
     candidates = fallback or ["600519", "000001", "300750"]
@@ -71,66 +65,46 @@ def _find_fallback_symbol(
         candidate = str(candidate).strip().zfill(6)[-6:]
         if not candidate or candidate == exclude_symbol:
             continue
-        with db() as connection:
-            exists = connection.execute(
-                """
-                select 1
-                from market_daily_bars
-                where asset_class='equity' and market='china' and venue='china'
-                  and resolution='daily' and data_type='trade'
-                  and symbol = ? and source = ? and trade_date = ?
-                limit 1
-                """,
-                (candidate, source, trade_date),
-            ).fetchone()
+        exists = market_lake.query_rows(
+            kind="bars", asset_class="equity", market="china", venue="china", source=source,
+            columns="1 as found", predicates=("symbol=?", "trade_date=?"),
+            parameters=(candidate, trade_date), limit=1,
+        )
         if exists:
             return candidate
     return None
 
 
 def _first_st_case(start: str, end: str, source: str) -> tuple[str, str, str] | None:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select s.symbol, s.trade_date
-            from market_trade_status s
-            join market_daily_bars b on b.symbol=s.symbol and b.trade_date=s.trade_date and b.source=?
-              and b.asset_class='equity' and b.market='china' and b.venue='china'
-              and b.resolution='daily' and b.data_type='trade'
-            where s.asset_class='equity' and s.market='china' and s.venue='china'
-              and s.trade_date between ? and ? and s.is_st = 1 and s.can_buy = 1
-            order by s.trade_date asc, s.symbol asc
-            limit 1
-            """,
-            (source, start, end),
-        ).fetchone()
-        if row is None:
-            row = connection.execute(
-                """
-                select s.symbol, s.trade_date
-                from market_trade_status s
-                join market_daily_bars b on b.symbol=s.symbol and b.trade_date=s.trade_date and b.source=?
-                  and b.asset_class='equity' and b.market='china' and b.venue='china'
-                  and b.resolution='daily' and b.data_type='trade'
-                where s.asset_class='equity' and s.market='china' and s.venue='china'
-                  and s.is_st = 1 and s.can_buy = 1
-                order by s.trade_date desc, s.symbol asc
-                limit 1
-                """,
-                (source,),
-            ).fetchone()
-        if row is None:
-            return None
-        signal = connection.execute(
-            """
-            select max(trade_date) as trade_date
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-              and symbol = ? and source = ? and trade_date < ?
-            """,
-            (row["symbol"], source, row["trade_date"]),
-        ).fetchone()
+    statuses = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="symbol,trade_date", predicates=("is_st=1", "can_buy=1", "trade_date between ? and ?"),
+        parameters=(start, end), order_by="trade_date,symbol", limit=500,
+    )
+    if not statuses:
+        statuses = market_lake.query_matching(
+            kind="trade_status", asset_class="equity", market="china", venue="china",
+            columns="symbol,trade_date", predicates=("is_st=1", "can_buy=1"),
+            order_by="trade_date desc,symbol", limit=500,
+        )
+    row = next(
+        (
+            item for item in statuses
+            if market_lake.query_rows(
+                kind="bars", asset_class="equity", market="china", venue="china", source=source,
+                columns="1 as found", predicates=("symbol=?", "trade_date=?"),
+                parameters=(item["symbol"], item["trade_date"]), limit=1,
+            )
+        ),
+        None,
+    )
+    if row is None:
+        return None
+    signal = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source=source,
+        columns="max(trade_date) as trade_date", predicates=("symbol=?", "trade_date<?"),
+        parameters=(row["symbol"], row["trade_date"]),
+    )
     if not signal or not signal["trade_date"]:
         return None
     return row["symbol"], signal["trade_date"], row["trade_date"]
@@ -248,15 +222,11 @@ def _run_single_reason(
             with db() as connection:
                 connection.execute("delete from data_quality_reports where id = ?", (cleanup_report_id,))
         if acceptance_status_source:
-            with db() as connection:
-                connection.execute(
-                    """
-                    delete from market_trade_status
-                    where symbol=? and trade_date=? and asset_class='equity'
-                      and market='china' and venue='china' and source=?
-                    """,
-                    (signal_symbol, execution_date, acceptance_status_source),
-                )
+            market_lake.delete_snapshot_absences(
+                kind="trade_status", scopes=[(signal_symbol, execution_date, execution_date)],
+                authoritative_keys=set(), asset_class="equity", market="china", venue="china",
+                data_type="status", source=acceptance_status_source,
+            )
     orders = list_orders(session["id"])
     rejects = [order for order in orders if order.get("status") == "rejected"]
     reasons = [str(order.get("reason") or "") for order in rejects]

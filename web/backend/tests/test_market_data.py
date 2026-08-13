@@ -44,66 +44,21 @@ def test_batch_daily_writer_reuses_existing_instrument_id(tmp_path, monkeypatch)
         bulk=True,
     )
 
-    with db_module.db() as connection:
-        row = connection.execute(
-            "select instrument_id from market_daily_bars where symbol='000001'"
-        ).fetchone()
-    assert result == {"count": 1, "symbols": 1}
+    from app.services import market_lake
+    row = market_lake.query_rows(kind="bars", source="tushare", columns="instrument_id", limit=1)[0]
+    assert result["count"] == 1
+    assert result["symbols"] == 1
     assert row["instrument_id"] == existing_id
 
 
-def test_query_database_bars_reads_local_market_daily_table(tmp_path, monkeypatch):
-    db_module = configure_temp_db(tmp_path, monkeypatch)
-    with db_module.db() as connection:
-        connection.execute(
-            """
-            insert into instruments
-                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-000001",
-                "000001",
-                "000001",
-                "平安银行",
-                "equity",
-                "china",
-                "SZ",
-                "china",
-                "active",
-                "{}",
-                "unit",
-                "now",
-                "now",
-            ),
-        )
-        connection.execute(
-            """
-            insert into market_daily_bars
-                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-000001",
-                "000001",
-                "equity",
-                "china",
-                "china",
-                "2026-07-03",
-                "daily",
-                "trade",
-                10.29,
-                10.40,
-                10.18,
-                10.29,
-                86332664,
-                100000,
-                "raw",
-                "akshare",
-                "batch-1",
-                "now",
-            ),
-        )
+def test_query_database_bars_reads_local_parquet_lake(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import market_lake
+    market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": "2026-07-03", "open": 10.29, "high": 10.40,
+          "low": 10.18, "close": 10.29, "volume": 86332664, "amount": 100000}],
+        kind="bars", source="akshare",
+    )
 
     from app.services.market_data import query_database_bars
 
@@ -117,7 +72,7 @@ def test_query_database_bars_reads_local_market_daily_table(tmp_path, monkeypatc
     )
 
     assert result["enabled"] is True
-    assert result["source"] == "database"
+    assert result["source"] == "parquet"
     assert result["count"] == 1
     assert result["items"][0] == {
         "timestamp": "2026-07-03",
@@ -131,57 +86,13 @@ def test_query_database_bars_reads_local_market_daily_table(tmp_path, monkeypatc
 
 
 def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
-    db_module = configure_temp_db(tmp_path, monkeypatch)
-    with db_module.db() as connection:
-        connection.execute(
-            """
-            insert into instruments
-                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-600519",
-                "600519",
-                "600519",
-                "贵州茅台",
-                "equity",
-                "china",
-                "SH",
-                "china",
-                "active",
-                "{}",
-                "unit",
-                "now",
-                "now",
-            ),
-        )
-        connection.execute(
-            """
-            insert into market_daily_bars
-                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-600519",
-                "600519",
-                "equity",
-                "china",
-                "china",
-                "2026-07-03",
-                "daily",
-                "trade",
-                1450.0,
-                1470.0,
-                1440.0,
-                1460.0,
-                1000,
-                100000,
-                "raw",
-                "akshare",
-                "batch-1",
-                "now",
-            ),
-        )
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import market_lake
+    market_lake.upsert_rows(
+        [{"symbol": "600519", "trade_date": "2026-07-03", "open": 1450, "high": 1470,
+          "low": 1440, "close": 1460, "volume": 1000, "amount": 100000}],
+        kind="bars", source="akshare",
+    )
 
     from app.main import app
 
@@ -189,7 +100,7 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
     response = client.get(
         "/api/data/query",
         params={
-            "source": "database",
+            "source": "parquet",
             "assetClass": "equity",
             "symbol": "SH600519",
             "market": "china",
@@ -203,64 +114,20 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source"] == "database"
+    assert payload["source"] == "parquet"
     assert payload["count"] == 1
     assert payload["items"][0]["timestamp"] == "2026-07-03"
     assert payload["items"][0]["close"] == 1460.0
 
 
 def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch):
-    db_module = configure_temp_db(tmp_path, monkeypatch)
-    with db_module.db() as connection:
-        connection.execute(
-            """
-            insert into instruments
-                (instrument_id, symbol, normalized_symbol, name, asset_class, market, exchange, venue, status, metadata_json, source, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-600519",
-                "600519",
-                "600519",
-                "贵州茅台",
-                "equity",
-                "china",
-                "SH",
-                "china",
-                "active",
-                "{}",
-                "unit",
-                "now",
-                "now",
-            ),
-        )
-        connection.execute(
-            """
-            insert into market_daily_bars
-                (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type, open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "inst-600519",
-                "600519",
-                "equity",
-                "china",
-                "china",
-                "2026-06-03",
-                "daily",
-                "trade",
-                1450.0,
-                1470.0,
-                1440.0,
-                1460.0,
-                1000,
-                100000,
-                "raw",
-                "akshare",
-                "batch-1",
-                "now",
-            ),
-        )
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import market_lake
+    market_lake.upsert_rows(
+        [{"symbol": "600519", "trade_date": "2026-06-03", "open": 1450, "high": 1470,
+          "low": 1440, "close": 1460, "volume": 1000, "amount": 100000}],
+        kind="bars", source="akshare",
+    )
 
     from app.main import app
 
@@ -268,7 +135,7 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
     blocked = client.get(
         "/api/data/query",
         params={
-            "source": "database",
+            "source": "parquet",
             "assetClass": "equity",
             "symbol": "SH600519",
             "market": "china",
@@ -283,7 +150,7 @@ def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch)
     response = client.get(
         "/api/data/query",
         params={
-            "source": "database",
+            "source": "parquet",
             "assetClass": "equity",
             "symbol": "SH600519",
             "market": "china",

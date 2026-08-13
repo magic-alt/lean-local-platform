@@ -6,6 +6,7 @@ from typing import Any
 from ..db import db, row_to_dict, rows_to_dicts
 from ..lean_engine.symbols import market_key, normalize_symbol
 from .security_search import MARKET_LABELS
+from . import market_lake
 
 
 def _json_list(value: Any) -> list[str]:
@@ -83,11 +84,8 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
         coverage: list[dict[str, Any]] = []
         if selected_market == "china":
             specs = (
-                ("daily", "日线行情", "market_daily_bars", "trade_date", "asset_class='equity' and market='china' and venue='china' and resolution='daily' and data_type='trade'"),
-                ("trade_status", "交易状态/涨跌停", "market_trade_status", "trade_date", "asset_class='equity' and market='china' and venue='china'"),
-                ("adjustment_factors", "复权因子", "adjustment_factors", "trade_date", ""),
                 ("corporate_actions", "公司行动", "corporate_actions", "ex_date", ""),
-                ("factor_values", "每日指标/因子", "all_factor_values", "trade_date", ""),
+                ("factor_values", "每日指标/因子", "factor_values", "trade_date", ""),
                 ("financial_statements", "财务报表", "financial_statements", "report_date", ""),
             )
             for key, label, table, date_column, predicate in specs:
@@ -102,39 +100,6 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
                 )
                 if item:
                     coverage.append(item)
-        else:
-            aggregate = connection.execute(
-                """
-                select count(*) as rows, min(trade_date) as first_date, max(trade_date) as last_date
-                from market_daily_bars
-                where symbol = ? and market = ? and asset_class = 'equity'
-                """,
-                (normalized, selected_market),
-            ).fetchone()
-            if aggregate and int(aggregate["rows"] or 0) > 0:
-                sources = connection.execute(
-                    """
-                    select distinct source from market_daily_bars
-                    where symbol = ? and market = ? and asset_class = 'equity' order by source
-                    """,
-                    (normalized, selected_market),
-                ).fetchall()
-                coverage.append({
-                    "key": "daily",
-                    "label": "日线行情",
-                    "rows": int(aggregate["rows"] or 0),
-                    "firstDate": aggregate["first_date"],
-                    "lastDate": aggregate["last_date"],
-                    "sources": [str(row["source"]) for row in sources if row["source"]],
-                })
-
-        latest_status = row_to_dict(connection.execute(
-            """
-            select * from market_trade_status where symbol=? and asset_class='equity'
-              and market='china' and venue='china' order by trade_date desc,updated_at desc limit 1
-            """,
-            (normalized,),
-        ).fetchone()) if selected_market == "china" else None
         memberships = rows_to_dicts(connection.execute(
             """
             select universe_code, start_date, end_date, weight, source
@@ -143,44 +108,35 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
             """,
             (normalized,),
         ).fetchall()) if selected_market == "china" else []
-        quote_row = row_to_dict(connection.execute(
-            """
-            select symbol,trade_date,open,high,low,close,prev_close,pct_change,
-                   volume,amount,turnover_rate,adj_factor,source
-            from market_daily_bars
-            where symbol=? and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and adjust='raw'
-            order by case when source='tushare' then 0 else 1 end, trade_date desc
-            limit 1
-            """,
-            (normalized,),
-        ).fetchone()) if selected_market == "china" else None
-        adjustment_history = rows_to_dicts(connection.execute(
-            """
-            select trade_date,adj_factor,source from adjustment_factors
-            where symbol=? order by trade_date desc, source desc limit 200
-            """,
-            (normalized,),
-        ).fetchall()) if selected_market == "china" else []
-        suspension_history = rows_to_dicts(connection.execute(
-            """
-            select trade_date,is_suspended,can_buy,can_sell,source from market_trade_status
-            where symbol=? and asset_class='equity' and market='china' and venue='china'
-              and source='tushare:suspend_d'
-            order by trade_date desc limit 200
-            """,
-            (normalized,),
-        ).fetchall()) if selected_market == "china" else []
-        limit_history = rows_to_dicts(connection.execute(
-            """
-            select trade_date,limit_up,limit_down,can_buy,can_sell,is_st,source
-            from market_trade_status
-            where symbol=? and asset_class='equity' and market='china' and venue='china'
-              and source='tushare:stk_limit'
-            order by trade_date desc limit 200
-            """,
-            (normalized,),
-        ).fetchall()) if selected_market == "china" else []
+    bars = market_lake.query_matching(
+        kind="bars", asset_class="equity", market=selected_market,
+        resolution="daily", data_type="trade", adjust="raw",
+        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,source asc",
+    )
+    status_rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market=selected_market,
+        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,updated_at desc",
+    ) if selected_market == "china" else []
+    adjustments = market_lake.query_matching(
+        kind="adjustment_factor", predicates=("symbol=?",), parameters=(normalized,),
+        order_by="trade_date desc,source desc", limit=200,
+    ) if selected_market == "china" else []
+    for key, label, items in (
+        ("daily", "日线行情", bars),
+        ("trade_status", "交易状态/涨跌停", status_rows),
+        ("adjustment_factors", "复权因子", adjustments),
+    ):
+        if items:
+            dates = sorted(str(item["trade_date"])[:10] for item in items)
+            coverage.append({"key": key, "label": label, "rows": len(items),
+                             "firstDate": dates[0], "lastDate": dates[-1],
+                             "sources": sorted({str(item["source"]) for item in items if item.get("source")})})
+    latest_status = status_rows[0] if status_rows else None
+    tushare_bars = [item for item in bars if item.get("source") == "tushare"]
+    quote_row = (tushare_bars or bars)[0] if bars else None
+    adjustment_history = adjustments
+    suspension_history = [item for item in status_rows if item.get("source") == "tushare:suspend_d"][:200]
+    limit_history = [item for item in status_rows if item.get("source") == "tushare:stk_limit"][:200]
 
     listed_dates = [value for value in (security.get("listed_date"), instrument.get("listed_date")) if value]
     name = security.get("name") or instrument.get("name") or normalized

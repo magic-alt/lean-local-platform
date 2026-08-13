@@ -5,6 +5,7 @@ from typing import Any
 
 from ..db import db, json_dump, rows_to_dicts, utc_now
 from .source_gate import DATA_SOURCE_PRIORITY
+from . import market_lake
 
 
 DEFAULT_SOURCES = list(DATA_SOURCE_PRIORITY)
@@ -30,26 +31,20 @@ def _bounded_mismatches(items: list[dict[str, Any]], limit: int = 200) -> list[d
 
 def _query_rows(symbol: str, start_date: str | None, end_date: str | None, adjust: str, sources: list[str]) -> list[dict[str, Any]]:
     placeholders = ", ".join("?" for _ in sources)
-    predicates = ["symbol = ?", "adjust = ?", f"source in ({placeholders})"]
-    params: list[Any] = [symbol, adjust, *sources]
+    predicates = ["symbol = ?", f"source in ({placeholders})"]
+    params: list[Any] = [symbol, *sources]
     if start_date:
         predicates.append("trade_date >= ?")
         params.append(start_date)
     if end_date:
         predicates.append("trade_date <= ?")
         params.append(end_date)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol, trade_date, open, high, low, close, volume, amount, source
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and {" and ".join(predicates)}
-            order by trade_date asc, source asc
-            """,
-            params,
-        ).fetchall()
-    return rows_to_dicts(rows)
+    return market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust=adjust,
+        columns="symbol,trade_date,open,high,low,close,volume,amount,source",
+        predicates=predicates, parameters=params, order_by="trade_date asc,source asc",
+    )
 
 
 def _coverage(rows_by_source: dict[str, dict[str, dict[str, Any]]], all_dates: set[str]) -> dict[str, dict[str, Any]]:

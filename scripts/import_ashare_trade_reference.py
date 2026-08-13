@@ -14,7 +14,8 @@ BACKEND = ROOT / "web" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.db import db, init_db, rows_to_dicts  # noqa: E402
+from app.db import init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.ashare_repository import upsert_trade_status  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE  # noqa: E402
 from app.services.universe_certification import certified_symbols  # noqa: E402
@@ -41,19 +42,13 @@ def _coverage(symbols: list[str], start_date: str, end_date: str) -> dict[str, A
     if not symbols:
         return {"symbols": [], "summary": {}}
     placeholders = ", ".join("?" for _ in symbols)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select *
-            from market_trade_status
-            where asset_class='equity' and market='china' and venue='china'
-              and symbol in ({placeholders}) and trade_date between ? and ?
-            order by symbol, trade_date
-            """,
-            (*symbols, start_date, end_date),
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="*", predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+        parameters=[*symbols, start_date, end_date], order_by="symbol,trade_date",
+    )
     by_symbol: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in symbols}
-    for row in rows_to_dicts(rows):
+    for row in rows:
         by_symbol.setdefault(row["symbol"], []).append(row)
     items = []
     for symbol, records in sorted(by_symbol.items()):
@@ -90,32 +85,32 @@ def _coverage(symbols: list[str], start_date: str, end_date: str) -> dict[str, A
 def _infer_missing(symbols: list[str], source: str, start_date: str, end_date: str) -> dict[str, Any]:
     batch_id = str(uuid.uuid4())
     inferred_rows: list[dict[str, Any]] = []
-    with db() as connection:
-        for symbol in symbols:
-            rows = connection.execute(
-                """
-                select symbol, trade_date, open, high, low, close
-                from market_daily_bars
-                where asset_class='equity' and market='china' and venue='china'
-                  and resolution='daily' and data_type='trade'
-                  and symbol = ? and source = ? and adjust = 'raw' and trade_date between ? and ?
-                  and trade_date not in (
-                      select trade_date from market_trade_status
-                      where symbol=? and asset_class='equity' and market='china' and venue='china'
-                  )
-                order by trade_date
-                """,
-                (symbol, source, start_date, end_date, symbol),
-            ).fetchall()
-            for row in rows:
-                close = float(row["close"] or 0)
-                limit_up = round(close * 1.1, 2) if close else None
-                limit_down = round(close * 0.9, 2) if close else None
-                inferred_rows.append({
-                    "symbol": symbol, "trade_date": row["trade_date"], "is_suspended": False,
-                    "limit_up": limit_up, "limit_down": limit_down, "can_buy": True,
-                    "can_sell": True, "is_st": False,
-                })
+    covered = {
+        (str(row["symbol"]), str(row["trade_date"]))
+        for row in market_lake.query_matching(
+            kind="trade_status", asset_class="equity", market="china", venue="china",
+            columns="symbol,trade_date", predicates=(f"symbol in ({','.join('?' for _ in symbols)})",),
+            parameters=symbols,
+        )
+    }
+    for symbol in symbols:
+        rows = market_lake.query_rows(
+            kind="bars", asset_class="equity", market="china", venue="china", source=source,
+            columns="symbol,trade_date,open,high,low,close",
+            predicates=("symbol=?", "trade_date between ? and ?"),
+            parameters=(symbol, start_date, end_date), order_by="trade_date",
+        )
+        for row in rows:
+            if (symbol, str(row["trade_date"])) in covered:
+                continue
+            close = float(row["close"] or 0)
+            limit_up = round(close * 1.1, 2) if close else None
+            limit_down = round(close * 0.9, 2) if close else None
+            inferred_rows.append({
+                "symbol": symbol, "trade_date": row["trade_date"], "is_suspended": False,
+                "limit_up": limit_up, "limit_down": limit_down, "can_buy": True,
+                "can_sell": True, "is_st": False,
+            })
     upsert_trade_status(inferred_rows, source="ohlcv_inferred", batch_id=batch_id, bulk=True)
     return {"batchId": batch_id, "inserted": len(inferred_rows), "sourceTier": "inferred"}
 

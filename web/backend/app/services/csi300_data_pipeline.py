@@ -22,6 +22,7 @@ from .ashare_repository import (
     upsert_universe_membership,
 )
 from .data import import_ashare_research_data
+from . import market_lake
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
 
@@ -80,17 +81,18 @@ def _window_start_for_calendar(end_date: str, days: int = 30) -> str:
 
 def _latest_local_csi300_bar_date() -> str | None:
     with db() as connection:
-        row = connection.execute(
-            """
-            select max(d.trade_date) as trade_date
-            from market_daily_bars d
-            join universe_membership u on u.symbol = d.symbol and u.universe_code = ?
-            where d.asset_class='equity' and d.market='china' and d.venue='china'
-              and d.resolution='daily' and d.data_type='trade' and d.adjust = 'raw'
-            """,
+        members = connection.execute(
+            "select distinct symbol from universe_membership where universe_code=?",
             (CSI300_UNIVERSE,),
-        ).fetchone()
-    return row["trade_date"] if row and row["trade_date"] else None
+        ).fetchall()
+    symbols = [str(row["symbol"]) for row in members]
+    if not symbols:
+        return None
+    rows = market_lake.query_rows(
+        kind="bars", source="tushare", columns="max(trade_date) trade_date",
+        predicates=(f"symbol in ({','.join('?' for _ in symbols)})",), parameters=symbols,
+    )
+    return str(rows[0]["trade_date"]) if rows and rows[0].get("trade_date") else None
 
 
 def _previous_close(symbol: str, before_date: str, rows: list[dict[str, Any]]) -> float | None:
@@ -100,18 +102,13 @@ def _previous_close(symbol: str, before_date: str, rows: list[dict[str, Any]]) -
     )
     if current_rows:
         return float(current_rows[-1]["close"])
-    with db() as connection:
-        row = connection.execute(
-            """
-            select close from market_daily_bars
-            where symbol = ? and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and trade_date < ? and adjust = 'raw'
-            order by trade_date desc
-            limit 1
-            """,
-            (symbol, before_date),
-        ).fetchone()
-    return float(row["close"]) if row and row["close"] is not None else None
+    stored = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", columns="close,trade_date",
+        predicates=("symbol=?", "trade_date<?"), parameters=(symbol, before_date),
+        order_by="trade_date desc", limit=1,
+    )
+    return float(stored[0]["close"]) if stored and stored[0].get("close") is not None else None
 
 
 def _suspend_trade_dates(suspend_rows: list[dict[str, Any]], trade_dates: list[str], start_date: str, end_date: str) -> set[str]:

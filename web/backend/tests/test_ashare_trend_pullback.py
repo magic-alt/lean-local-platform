@@ -20,6 +20,7 @@ def _configure(tmp_path, monkeypatch):
 
 
 def _seed(db_module):
+    from app.services import market_lake
     dates = []
     current = date(2016, 1, 4)
     while len(dates) < 40:
@@ -45,23 +46,16 @@ def _seed(db_module):
             values ('i1','000001','801010','Agriculture','SW2021',1,'2010-01-01',null,'unit','hash','2016-01-01')
             """
         )
-        connection.executemany(
-            """
-            insert into market_daily_bars
-                (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
-                 open,high,low,close,volume,amount,adj_factor,adjust,source,batch_id,created_at)
-            values ('inst-000001','000001','equity','china','china',?,'daily','trade',
-                    10,11,9,10,1000000,60000000,1,'raw','unit','batch','2016-01-01')
-            """,
-            [(value,) for value in dates],
-        )
-        connection.executemany(
-            """
-            insert into adjustment_factors(symbol,trade_date,adj_factor,source,batch_id)
-            values ('000001',?,1,'tushare','batch')
-            """,
-            [(value,) for value in dates],
-        )
+    market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": value, "open": 10, "high": 11, "low": 9,
+          "close": 10, "volume": 1_000_000, "amount": 60_000_000, "adj_factor": 1}
+         for value in dates],
+        kind="bars", source="unit",
+    )
+    market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": value, "adj_factor": 1} for value in dates],
+        kind="adjustment_factor", data_type="factor", source="tushare",
+    )
     return dates
 
 

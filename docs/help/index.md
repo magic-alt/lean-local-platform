@@ -1,6 +1,6 @@
 # LEAN Local 文档中心
 
-LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理的 QuantConnect LEAN 工作台。Web、FastAPI、Celery、MySQL 与 Docker LEAN 构成正式运行链路；MySQL 是运行事实库，LEAN 文件、Parquet、DuckDB 和 ClickHouse 是可重建或可选的派生层。
+LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理的 QuantConnect LEAN 工作台。Web、FastAPI、Celery、MySQL 与 Docker LEAN 构成正式运行链路；`data/` Parquet 是股票行情事实层，MySQL 是控制平面，LEAN 与 ClickHouse 是可重建消费层，DuckDB 直接查询 Parquet。
 
 > 建议第一次使用时按“数据 → 项目 → 回测 → 报告”的顺序完成最小闭环，再进入批量实验、Optimization、Research 和 Paper。
 

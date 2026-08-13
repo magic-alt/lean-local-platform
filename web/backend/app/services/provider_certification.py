@@ -17,6 +17,7 @@ from .source_gate import (
     jqdata_entitlement,
     source_role,
 )
+from . import market_lake
 
 
 _PROVIDER_REQUIREMENTS = provider_requirements()
@@ -29,28 +30,24 @@ def _utc_date(days: int) -> str:
 
 
 def _source_coverage(provider: str, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
-    clauses = ["source = ?"]
-    params: list[Any] = [provider]
+    clauses: list[str] = []
+    params: list[Any] = []
     if start_date:
         clauses.append("trade_date >= ?")
         params.append(start_date)
     if end_date:
         clauses.append("trade_date <= ?")
         params.append(end_date)
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(*) as rows,
-                   count(distinct symbol) as symbols,
-                   min(trade_date) as first_date,
-                   max(trade_date) as last_date
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and {" and ".join(clauses)}
-            """,
-            params,
-        ).fetchone()
-    item = row_to_dict(row) or {}
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", source=provider,
+        columns="symbol,trade_date", predicates=clauses, parameters=params,
+    )
+    dates = sorted(str(row["trade_date"])[:10] for row in rows)
+    item = {
+        "rows": len(rows), "symbols": len({str(row["symbol"]) for row in rows}),
+        "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None,
+    }
     return {
         "rows": int(item.get("rows") or 0),
         "symbols": int(item.get("symbols") or 0),

@@ -50,6 +50,8 @@
     "0046_commercial_market_data_v2": {"mode": "compensating", "action": "Stop v2 market-data writers, retain all source observations and resolution evidence, and remove the additive v2 tables only in reverse dependency order through a reviewed forward migration."},
     "0047_tushare_typed_source_tables": {"mode": "compensating", "action": "Stop TuShare ingestion, retain immutable raw archives and contract snapshots, and remove generated source tables only through a reviewed forward migration."},
     "0048_project_archival": {"mode": "compensating", "action": "Restore archived project source directories if required, clear projects.archived_at, and remove the additive column and index through a reviewed forward migration."},
-    "0049_async_tushare_lineage": {"mode": "compensating", "action": "Stop lineage workers, drain or archive pending jobs, and remove the additive job table through a reviewed forward migration."}
+    "0049_async_tushare_lineage": {"mode": "compensating", "action": "Stop lineage workers, drain or archive pending jobs, and remove the additive job table through a reviewed forward migration."},
+    "0050_daily_reconciliation_indexes": {"mode": "compensating", "action": "No action on Parquet-authoritative installations; retain or drop the obsolete market-table indexes only with their legacy tables."},
+    "0051_market_lake_authority": {"mode": "irreversible", "action": "Restore the retired SQL quote tables only from a reviewed pre-cutover backup; preserve market_lake_cutovers evidence."}
   }
 }

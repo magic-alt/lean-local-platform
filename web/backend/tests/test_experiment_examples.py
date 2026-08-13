@@ -206,17 +206,15 @@ def test_ashare_screening_injects_only_pit_fundamentals_and_matching_benchmark(t
                 ("600519", "roe", "2022-12-31", "2023-04-20", "2023-04-20", 0.30, "ratio"),
             ],
         )
-        connection.executemany(
-            """
-            insert into factor_values
-                (symbol,trade_date,factor_name,value,source,batch_id,created_at)
-            values (?,?,?,?,'unit','batch','2026-01-01')
-            """,
+        from app.services import market_lake
+
+        market_lake.upsert_rows(
             [
-                ("000001", "2020-05-29", "pe_ttm", 12.0),
-                ("000001", "2020-06-30", "pe_ttm", 13.0),
-                ("000001", "2020-07-31", "pe_ttm", 14.0),
+                {"symbol": "000001", "trade_date": "2020-05-29", "pe_ttm": 12.0},
+                {"symbol": "000001", "trade_date": "2020-06-30", "pe_ttm": 13.0},
+                {"symbol": "000001", "trade_date": "2020-07-31", "pe_ttm": 14.0},
             ],
+            kind="daily_basic", data_type="metric", source="tushare:daily_basic",
         )
 
     from app.services import experiment_batches

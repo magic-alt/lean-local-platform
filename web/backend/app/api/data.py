@@ -32,8 +32,8 @@ from ..services.data import (
 )
 from ..services.data_provider_manager import DATA_PROVIDER_MANAGER
 from ..services.data_coverage import ashare_coverage, benchmark_coverage, symbol_coverage
-from ..services.market_data import mirror_rows, query_bars, query_database_bars
-from ..services.parquet_lake import export_market_daily_bars, list_datasets, parquet_consistency_report, query_duckdb_bars, rebuild_all_market_parquet
+from ..services.market_data import mirror_rows, query_bars
+from ..services.parquet_lake import list_datasets, parquet_consistency_report, query_duckdb_bars
 from ..services.ashare_multisource import (
     compare_ashare_daily_sources,
     compare_ashare_daily_sources_batch,
@@ -110,34 +110,6 @@ class BatchDataFetchRequest(BaseModel):
     endDate: str | None = None
     adjust: str = ""
     overwrite: bool = False
-
-
-class ParquetExportRequest(BaseModel):
-    assetClass: str = "equity"
-    market: str = "china"
-    venue: str | None = "china"
-    resolution: str = "daily"
-    dataType: str = "trade"
-    adjust: str = "raw"
-    providerSource: str = PRIMARY_DATA_SOURCE
-    allowResearchSource: bool = False
-    startDate: str | None = None
-    endDate: str | None = None
-
-
-class ParquetRebuildRequest(BaseModel):
-    assetClass: str | None = None
-    market: str | None = None
-    venue: str | None = None
-    resolution: str | None = None
-    dataType: str | None = None
-    adjust: str | None = None
-    sources: list[str] | None = None
-    includeResearchSources: bool = False
-    startDate: str | None = None
-    endDate: str | None = None
-    continueOnError: bool = True
-    persistReport: bool = True
 
 
 @router.post("/data/resolve")
@@ -458,7 +430,7 @@ def query_data(
     market: str | None = None,
     resolution: str = "daily",
     dataType: str = "trade",
-    source: str = "clickhouse",
+    source: str = "parquet",
     providerSource: str | None = None,
     providerMode: str = "strict",
     allowResearchSource: bool = False,
@@ -472,6 +444,12 @@ def query_data(
         query_market = market.strip().lower() if market else None
         query_venue = venue.strip().lower() if venue else None
         query_source = source.strip().lower()
+        if query_source in {"mysql", "database", "local"}:
+            raise ValueError(
+                "MySQL market-data queries were removed; use source=parquet, duckdb, or clickhouse."
+            )
+        if query_source not in {"parquet", "duckdb", "clickhouse"}:
+            raise ValueError("source must be parquet, duckdb, or clickhouse")
         provider_input = (providerSource or "").strip().lower()
         auto_provider = provider_input in {"", "auto"}
         strict_provider = providerMode.strip().lower() != "auto" and not auto_provider
@@ -533,8 +511,7 @@ def query_data(
                     limit=limit,
                     allow_research_source=allowResearchSource,
                 )
-            query = query_database_bars if query_source in {"mysql", "database", "local"} else query_bars
-            return query(
+            clickhouse_payload = query_bars(
                 asset_class=asset_class,
                 symbol=resolved_symbol,
                 market=query_market,
@@ -546,6 +523,20 @@ def query_data(
                 end_date=endDate,
                 limit=limit,
             )
+            if clickhouse_payload.get("count"):
+                clickhouse_payload["requestedEngine"] = "clickhouse"
+                clickhouse_payload["effectiveEngine"] = "clickhouse"
+                return clickhouse_payload
+            fallback = query_duckdb_bars(
+                asset_class=asset_class, symbol=resolved_symbol, market=market, venue=venue,
+                resolution=resolution, data_type=dataType, provider_source=selected_source,
+                adjust=adjust or "raw", start_date=startDate, end_date=endDate, limit=limit,
+                allow_research_source=allowResearchSource,
+            )
+            fallback["requestedEngine"] = "clickhouse"
+            fallback["effectiveEngine"] = "parquet"
+            fallback["fallbackReason"] = clickhouse_payload.get("error") or "clickhouse_empty"
+            return fallback
 
         attempts = []
         payload: dict[str, Any] | None = None
@@ -580,25 +571,6 @@ def query_data(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/data/parquet/export")
-def export_parquet_data(request: ParquetExportRequest):
-    try:
-        provider_source = require_source_allowed(request.providerSource, allow_research_source=request.allowResearchSource)
-        return export_market_daily_bars(
-            asset_class=request.assetClass,
-            market=request.market,
-            venue=request.venue,
-            resolution=request.resolution,
-            data_type=request.dataType,
-            adjust=request.adjust,
-            source=provider_source,
-            start_date=request.startDate,
-            end_date=request.endDate,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.get("/data/parquet/datasets", response_model=PageEnvelope)
 def parquet_datasets(limit: int = 100, offset: int = 0):
     bounded_limit = max(1, min(int(limit), 200))
@@ -610,28 +582,6 @@ def parquet_datasets(limit: int = 100, offset: int = 0):
         "limit": bounded_limit,
         "offset": bounded_offset,
     }
-
-
-@router.post("/data/parquet/rebuild")
-def rebuild_parquet_data(request: ParquetRebuildRequest):
-    try:
-        sources = [require_source_allowed(source, allow_research_source=request.includeResearchSources) for source in request.sources] if request.sources else None
-        return rebuild_all_market_parquet(
-            asset_class=request.assetClass,
-            market=request.market,
-            venue=request.venue,
-            resolution=request.resolution,
-            data_type=request.dataType,
-            adjust=request.adjust,
-            sources=sources,
-            include_research_sources=request.includeResearchSources,
-            start_date=request.startDate,
-            end_date=request.endDate,
-            continue_on_error=request.continueOnError,
-            persist_report=request.persistReport,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/data/parquet/consistency")

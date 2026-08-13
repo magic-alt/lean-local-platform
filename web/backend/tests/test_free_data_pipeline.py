@@ -103,15 +103,13 @@ def test_adata_and_baostock_provider_imports_write_canonical_tables(tmp_path, mo
         assert asset["provider"] == provider
         assert asset["research_tables"]["daily_bars"] == 2
 
-    with db_module.db() as connection:
-        market_rows = connection.execute(
-            """
-            select source, count(*) as rows
-            from market_daily_bars
-            where symbol = '600519' and asset_class = 'equity' and market = 'china'
-            group by source
-            order by source
-            """
-        ).fetchall()
+    from app.services import market_lake
 
-    assert [(row["source"], row["rows"]) for row in market_rows] == [("adata", 2), ("baostock", 2)]
+    market_rows = [
+        (source, market_lake.aggregate(
+            kind="bars", asset_class="equity", market="china", venue="china",
+            source=source, columns="count(*) as rows", predicates=("symbol='600519'",),
+        )["rows"])
+        for source in ("adata", "baostock")
+    ]
+    assert market_rows == [("adata", 2), ("baostock", 2)]

@@ -6,6 +6,7 @@ from typing import Any
 
 from ..db import db, rows_to_dicts, row_to_dict, utc_now
 from ..lean_engine.symbols import normalize_symbol
+from . import market_lake
 
 
 IDENTIFIER_NAMESPACE = uuid.UUID("218a4045-7221-4d43-ac4f-f196fc3bf4ea")
@@ -80,7 +81,6 @@ def candidate_instruments(symbols: list[str] | None = None) -> list[dict[str, An
         queries = {
             "securities": "select symbol from securities",
             "instruments": "select symbol from instruments where asset_class = 'equity' and market = 'china'",
-            "market_daily_bars": "select distinct symbol from market_daily_bars where asset_class = 'equity' and market = 'china'",
         }
         found: dict[str, set[str]] = defaultdict(set)
         invalid: Counter[str] = Counter()
@@ -92,6 +92,13 @@ def candidate_instruments(symbols: list[str] | None = None) -> list[dict[str, An
                     found[normalized].add(source_name)
                 elif raw:
                     invalid[source_name] += 1
+    for row in market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", resolution="daily",
+        data_type="trade", adjust="raw", columns="distinct symbol",
+    ):
+        normalized = _normalize_candidate_symbol(row.get("symbol"))
+        if normalized:
+            found[normalized].add("market_lake")
     return [
         {"symbol": symbol, "sources": sorted(sources), "reason": None}
         for symbol, sources in sorted(found.items())

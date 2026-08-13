@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from ..db import db, json_dump, rows_to_dicts, utc_now
+from . import market_lake
 
 
 CAPABILITY_SCOPES = (
@@ -32,30 +33,13 @@ def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, in
             "select count(*) as count from provider_raw_records where dataset_key='opt_basic'"
         ).fetchone()["count"]
         return int(metadata or 0), 0
-    if resolution == "minute":
-        rows = connection.execute(
-            "select count(*) as count from market_intraday_bars where asset_class=?",
-            (asset_class,),
-        ).fetchone()["count"]
-    elif resolution == "tick":
-        rows = connection.execute(
-            "select count(*) as count from market_ticks where asset_class=?",
-            (asset_class,),
-        ).fetchone()["count"]
-    elif asset_class == "etf":
-        rows = connection.execute(
-            """
-            select count(*) as count from market_daily_bars bar
-            join instruments instrument on instrument.instrument_id=bar.instrument_id
-            where instrument.asset_class='equity'
-              and (lower(instrument.name) like '%etf%' or lower(instrument.metadata_json) like '%etf%')
-            """
-        ).fetchone()["count"]
-    else:
-        rows = connection.execute(
-            "select count(*) as count from market_daily_bars where asset_class=?",
-            (asset_class,),
-        ).fetchone()["count"]
+    lake_class = "equity" if asset_class == "etf" else asset_class
+    rows = sum(
+        int(market_lake.aggregate(**scope, columns="count(*) as count").get("count") or 0)
+        for scope in market_lake.matching_scopes(
+            kind="bars", asset_class=lake_class, resolution=resolution,
+        )
+    )
     metadata_class = "equity" if asset_class == "etf" else asset_class
     metadata = connection.execute(
         "select count(*) as count from instruments where asset_class=?",
@@ -85,7 +69,7 @@ def refresh_capabilities() -> list[dict[str, Any]]:
                 "schemaVersion": 1,
                 "metadataCount": metadata_count,
                 "canonicalRowCount": row_count,
-                "derivedFromCanonicalTables": True,
+                "derivedFromParquetLake": True,
             }
             connection.execute(
                 """

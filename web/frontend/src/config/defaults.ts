@@ -23,7 +23,7 @@ export const defaultSettings: AppSettings = {
 };
 
 export const defaultBarPreviewValues = {
-  source: "database",
+  source: "parquet",
   assetClass: "equity",
   symbol: "000001",
   market: "china",

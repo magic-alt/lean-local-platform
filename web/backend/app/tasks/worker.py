@@ -18,6 +18,7 @@ from ..domain.backtest_job import CANCELLED
 from ..repositories.backtest_repository import get_backtest, update_backtest
 from ..runners.lean_runner import LeanRunner
 from ..services.data import fetch_and_import_symbol
+from ..services import market_lake
 from ..services.ashare_multisource import quality_gate_range
 from ..services.ashare_repository import assert_ashare_ready, assert_benchmark_ready
 from ..services.backtest_validation import build_backtest_validation, build_experiment_record
@@ -564,16 +565,14 @@ def run_research_batch_item_task(batch_id: str, item_id: str):
             )
         else:
             symbol = str(parameters.get("symbol") or "").upper()
-            with db() as connection:
-                coverage = connection.execute(
-                    """
-                    select count(*) as rows,min(trade_date) as first_date,max(trade_date) as last_date,
-                           count(distinct source) as sources
-                    from market_daily_bars where (?='' or symbol=?)
-                    """,
-                    (symbol, symbol),
-                ).fetchone()
-            result = {"exampleKey": parameters.get("exampleKey"), "symbol": symbol or None, "coverage": dict(coverage or {})}
+            predicates = ("symbol=?",) if symbol else ()
+            coverage_rows = market_lake.query_matching(
+                kind="bars", columns="count(*) rows,min(trade_date) first_date,max(trade_date) last_date",
+                predicates=predicates, parameters=(symbol,) if symbol else (),
+            )
+            coverage = coverage_rows[0] if coverage_rows else {"rows": 0, "first_date": None, "last_date": None}
+            coverage["sources"] = len(market_lake.matching_scopes(kind="bars"))
+            result = {"exampleKey": parameters.get("exampleKey"), "symbol": symbol or None, "coverage": coverage}
         finish_research_item(batch_id, item_id, result=result)
         dispatch_experiment_batch_task.apply_async(args=[batch_id], queue="default")
         return {"status": "success", "itemId": item_id, "result": result}

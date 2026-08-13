@@ -11,6 +11,7 @@ from ..research.factors import upsert_factor_values
 from .ashare_repository import upsert_index_weights, upsert_universe_membership
 from .pit_data import import_financial_statements
 from .tushare_adapter import TushareAdapter
+from . import market_lake
 
 
 DEFAULT_DATASETS = [
@@ -139,31 +140,32 @@ def preparation_preview(start_date: str, end_date: str) -> dict[str, Any]:
         ).fetchone()
         counts = {}
         for key, sql in {
-            "dailyBasic": "select count(*) n from daily_basic_factor_values where trade_date between ? and ?",
             "financial": "select count(*) n from financial_statements where effective_date <= ? and report_date >= ?",
             "nameHistory": "select count(*) n from security_name_history where start_date <= ?",
             "industry": "select count(*) n from industry_membership where in_date <= ?",
         }.items():
-            params = (start_date, end_date) if key == "dailyBasic" else (end_date, "2013-01-01") if key == "financial" else (end_date,)
+            params = (end_date, "2013-01-01") if key == "financial" else (end_date,)
             counts[key] = int(connection.execute(sql, params).fetchone()["n"] or 0)
-        bars = connection.execute(
-            """select count(*) n,count(distinct symbol) symbols,min(trade_date) first_date,max(trade_date) last_date
-               from market_daily_bars where asset_class='equity' and market='china' and venue='china'
-               and resolution='daily' and data_type='trade' and adjust='raw' and trade_date between ? and ?""",
-            (start_date, end_date),
-        ).fetchone()
-        counts["dailyBars"] = int(bars["n"] or 0)
-        counts["benchmarkBars"] = int(connection.execute(
-            """select count(*) n from market_daily_bars where symbol='000300' and asset_class='index'
-               and adjust='raw' and trade_date between ? and ?""",
-            (start_date, end_date),
-        ).fetchone()["n"] or 0)
-        counts["tradeStatus"] = int(connection.execute(
-            """select count(*) n from market_trade_status
-               where asset_class='equity' and market='china' and venue='china'
-                 and trade_date between ? and ?""",
-            (start_date, end_date),
-        ).fetchone()["n"] or 0)
+    date_filter = ("trade_date between ? and ?",)
+    bars = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china", resolution="daily",
+        data_type="trade", adjust="raw", columns="count(*) n,count(distinct symbol) symbols,min(trade_date) first_date,max(trade_date) last_date",
+        predicates=date_filter, parameters=(start_date, end_date),
+    )
+    bar = bars[0] if bars else {"n": 0}
+    counts["dailyBars"] = int(bar.get("n") or 0)
+    counts["dailyBasic"] = sum(int(row.get("n") or 0) for row in market_lake.query_matching(
+        kind="daily_basic", asset_class="equity", market="china", resolution="daily", data_type="metric",
+        columns="count(*) n", predicates=date_filter, parameters=(start_date, end_date),
+    ))
+    counts["benchmarkBars"] = sum(int(row.get("n") or 0) for row in market_lake.query_matching(
+        kind="bars", asset_class="index", market="china", resolution="daily", data_type="trade",
+        columns="count(*) n", predicates=("symbol='000300'", *date_filter), parameters=(start_date, end_date),
+    ))
+    counts["tradeStatus"] = sum(int(row.get("n") or 0) for row in market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", resolution="daily", data_type="status",
+        columns="count(*) n", predicates=date_filter, parameters=(start_date, end_date),
+    ))
     member = dict(member_row) if member_row else {}
     symbols = int(member.get("symbols") or 0)
     blocking = []

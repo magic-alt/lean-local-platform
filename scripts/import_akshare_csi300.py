@@ -16,6 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db import database_descriptor, db, init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.lean import LeanPlatformError, normalize_symbol  # noqa: E402
 from app.services.ashare_repository import universe_as_of  # noqa: E402
 from app.services.data import fetch_and_import_symbol  # noqa: E402
@@ -96,17 +97,13 @@ def summarize_database(symbols: list[str], start: str, end: str, membership_as_o
     placeholders = ",".join("?" for _ in symbols)
     if not placeholders:
         return {"symbols": 0, "bars": 0, "firstDate": None, "lastDate": None, "assets": 0, "csi300Members": 0}
+    bars = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        columns="count(*) as rows,count(distinct symbol) as symbols,min(trade_date) as first_date,max(trade_date) as last_date",
+        predicates=(f"symbol in ({placeholders})", "trade_date>=?", "trade_date<=?"),
+        parameters=[*symbols, start, end],
+    )
     with db() as connection:
-        bars = connection.execute(
-            f"""
-            select count(*) as rows, count(distinct symbol) as symbols, min(trade_date) as first_date, max(trade_date) as last_date
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-              and symbol in ({placeholders}) and trade_date >= ? and trade_date <= ?
-            """,
-            [*symbols, start, end],
-        ).fetchone()
         assets = connection.execute(
             f"""
             select count(*) as rows

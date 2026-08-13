@@ -4,8 +4,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from ..db import db
 from ..services.source_gate import resolve_source_context
+from ..services import market_lake
 
 
 class MarketDataUnavailable(RuntimeError):
@@ -43,29 +43,18 @@ def close_price(
         )
     except ValueError as exc:
         raise MarketDataUnavailable(str(exc)) from exc
-    with db() as connection:
-        row = connection.execute(
-            """
-            select symbol,trade_date,close,source,asset_class
-            from market_daily_bars
-            where symbol=? and market=? and source=?
-              and asset_class=?
-              and resolution='daily' and data_type='trade' and adjust='raw'
-              and trade_date<=? and close is not null
-            order by trade_date desc limit 1
-            """,
-            (
-                str(symbol).upper(),
-                market,
-                context["source"],
-                normalized_asset_class,
-                as_of_date,
-            ),
-        ).fetchone()
-    if row is None:
+    rows = market_lake.query_rows(
+        kind="bars", asset_class=normalized_asset_class, market=market, venue=market,
+        resolution="daily", data_type="trade", adjust="raw", source=str(context["source"]),
+        columns="symbol,trade_date,close,source,asset_class",
+        predicates=("symbol=?", "trade_date<=?", "close is not null"),
+        parameters=(str(symbol).upper(), as_of_date), order_by="trade_date desc", limit=1,
+    )
+    if not rows:
         raise MarketDataUnavailable(
             f"market_data_unavailable:{str(symbol).upper()}:{as_of_date}:{context['source']}"
         )
+    row = rows[0]
     price = Decimal(str(row["close"]))
     if not price.is_finite() or price <= 0:
         raise MarketDataUnavailable(

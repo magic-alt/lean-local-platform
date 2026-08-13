@@ -31,4 +31,11 @@ def use_sqlite_test_backend(tmp_path, monkeypatch, request):
     monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setattr(db_module, "SQLITE_TEST_BACKEND_ENABLED", True)
+    # Market time series are filesystem-owned. Every unit test receives an
+    # isolated lake so it can never mutate the developer's configured Data dir.
+    from app.services import market_lake
+    from app.services import db_object_store
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path / "parquet")
+    monkeypatch.setattr(db_object_store, "FILE_OBJECT_STORE_DIR", tmp_path / "object-store")
     yield

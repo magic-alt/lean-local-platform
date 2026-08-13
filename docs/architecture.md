@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-04.
 
-This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. MySQL is the runtime fact store; SQLite is allowed only as an isolated test backend.
+This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. Parquet under `data/` is the market-time-series fact layer; MySQL is the control-plane fact store. SQLite is allowed only as an isolated test backend.
 
 The sealed production topology is one local machine and A-share daily data only. Research, LEAN Backtest, Optimization, Reports and Paper Account are the only production surfaces. Cross-asset workflows are `research_only` or `preview_only`; live execution and minute/Tick execution are disabled; incomplete point-in-time windows fail closed; scheduled unattended operation is not ready unless an external alert channel has persisted a successful delivery. These are deployment boundaries, not invitations to add fallback engines or synthetic data.
 
@@ -36,8 +36,10 @@ Browser
        API schemas and request validation
   -> Domain services and repositories
        backtests, data sync, experiments, reports, paper, research
-  -> MySQL runtime fact store
-       metadata, canonical market data, PIT data, results, stored objects
+  -> MySQL control-plane fact store
+       metadata, registries, PIT/control data, results, accounts and audit
+  -> Parquet market lake
+       Bronze/Silver/Gold market facts and immutable revisions
   -> Celery / Redis
        default, data, data-demand and backtest queues; beat coordination
   -> restricted lean-runner
@@ -46,9 +48,9 @@ Browser
        digest allowlists, bounded resources, reduced mounts and isolated runs
 
 Derived and optional stores
-  MySQL -> LEAN Data cache
-  MySQL -> Parquet -> DuckDB
-  MySQL -> optional ClickHouse mirror
+  Parquet -> LEAN Data cache
+  Parquet <- DuckDB queries
+  Parquet -> optional ClickHouse mirror
   run workspace <-> stored_objects archive
 ```
 
@@ -88,8 +90,8 @@ web/backend/tests/
 web/runtime/
   Rebuildable or archived runtime cache: projects, runs, reports and uploads.
 
-LEAN_DATA_DIR (default: workspace parent/Data)
-  LEAN execution cache and derived Parquet datasets; not the metadata fact store.
+LEAN_DATA_DIR (default: repository/data)
+  Canonical bronze/silver/gold market lake plus LEAN/Qlib derived caches.
 
 docs/help/
   Articles served by the in-app Docs page.
@@ -107,7 +109,7 @@ Project/template selection (projectId required)
   -> Celery run_backtest_task -> repeat the fail-closed gates
   -> propagate trace/workflow context to the restricted runner and LEAN
   -> prepare isolated web/runtime/runs/<run_id>
-  -> restore or rebuild required LEAN cache from MySQL/object archive
+  -> restore or rebuild required LEAN cache from Silver/Gold Parquet
   -> run pinned LEAN Docker image
   -> preserve stdout, result JSON, summary and order events
   -> parse metrics/charts and create artifact manifest
@@ -213,7 +215,8 @@ TuShare Pro
   -> capability/policy check
   -> concurrent bounded fetch and rate limiting
   -> normalize, validate, deduplicate and quarantine
-  -> batched canonical MySQL writes
+  -> Bronze Parquet + archived revisions
+  -> normalized Silver Parquet through atomic partition publication
   -> persist manifest, checkpoint, watermark and validation
   -> update optional ClickHouse mirror / derived cache work
 ```
@@ -229,11 +232,13 @@ contracts, partitions, hashes and watermarks in MySQL. See
 
 ## Storage Ownership
 
-- MySQL: authoritative runtime metadata, canonical data, PIT membership, task state, reports and binary archives.
+- `data/`: authoritative market time series, Bronze revisions, Silver normalization, Gold/PIT/features and derived cache roots.
+- MySQL: authoritative control metadata, dataset registry, PIT/control membership, task state, accounts, reports and audit records.
 - `stored_objects`: durable object catalog; payloads are either compatibility MySQL chunks or checksum-verified files under the externally backed `LEAN_DATA_DIR/object-store` root.
 - `web/runtime`: local execution/debug cache; safe to prune only after verifying required objects are archived.
-- `Data/`: LEAN-readable cache generated or restored from authoritative data.
-- Parquet/DuckDB: rebuildable analytical layer.
+- `data/lean`: LEAN-readable cache generated or restored from authoritative Parquet.
+- DuckDB: direct query engine over Parquet; not a separate database authority.
+- `data/qlib` and `gold/qlib_staging`: external read-only Qlib materializations; lean-platform never mutates them.
 - ClickHouse: optional mirror with an independent health/watermark boundary; never the source of truth.
 - SQLite: tests only. Do not reintroduce it as a local runtime fallback.
 
@@ -248,11 +253,11 @@ contracts, partitions, hashes and watermarks in MySQL. See
 ## Architectural Rules
 
 - LEAN remains the only production backtest executor.
-- MySQL remains the only runtime fact store; derived stores must be rebuildable.
+- Parquet remains the market-time-series authority; MySQL remains the control-plane fact store.
 - API routes delegate orchestration to services/runners.
 - Every run uses an isolated workspace and preserves raw artifacts before parsing.
 - Trusted runs persist fingerprint, validation, experiment and normalized version links.
-- A production source is trusted only after persisted batch lineage, QA and MySQL/Parquet/DuckDB/file-hash consistency certification; provider names alone grant no trust.
+- A production source is trusted only after persisted batch lineage, QA and Parquet/DuckDB/manifest/file-hash certification; provider names alone grant no trust.
 - A-share runs require real benchmark data and cannot use a constant fallback.
 - Cancellation flows through services so Celery state, containers and database state remain consistent.
 - Provider data must retain audit hashes and source/batch metadata without duplicating canonical payloads.

@@ -7,6 +7,7 @@ from typing import Any
 from ..core.errors import LeanWebError
 from ..db import bulk_db, db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..lean_engine.errors import LeanPlatformError
+from . import market_lake
 from .market_repository import (
     instrument_id,
     upsert_instrument,
@@ -38,6 +39,23 @@ def _trade_status_priority_sql(column: str = "source") -> str:
             else 50
         end
     """
+
+
+def _trade_status_priority(source: str | None) -> int:
+    value = str(source or "").lower()
+    if "suspend" in value or "daily_absence" in value:
+        return 120
+    if "official" in value:
+        return 110
+    if any(token in value for token in ("tushare", "jqdata", "rqdata", "ifind", "choice", "wind", "stk_limit")):
+        return 100
+    if "manual" in value:
+        return 90
+    if any(token in value for token in ("adata", "baostock", "akshare", "sina", "eastmoney")):
+        return 70
+    if "inferred" in value or "ohlcv" in value:
+        return 10
+    return 50
 
 
 def _chunks(values: list[Any], size: int) -> list[list[Any]]:
@@ -589,20 +607,11 @@ def upsert_adjustment_factors(
 ) -> None:
     values = [row for row in rows if row.get("adj_factor") is not None]
     if values:
-        from ..db import bulk_db
-
-        context = bulk_db if bulk else db
-        with context() as connection:
-            connection.executemany(
-                """
-                insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id)
-                values (?, ?, ?, ?, ?)
-                on conflict(symbol, trade_date, source) do update set
-                    adj_factor = excluded.adj_factor,
-                    batch_id = excluded.batch_id
-                """,
-                [(row["symbol"], row["trade_date"], row["adj_factor"], source, batch_id) for row in values],
-            )
+        market_lake.upsert_rows(
+            [{**row, "source": source, "batch_id": batch_id} for row in values],
+            kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="factor", adjust="raw", source=source,
+        )
 
 
 def import_adjustment_factors(records: list[dict[str, Any]], source: str = "manual") -> dict[str, Any]:
@@ -695,19 +704,15 @@ def adjustment_factors(symbol: str, start: str | None = None, end: str | None = 
     if end:
         clauses.append("trade_date <= ?")
         values.append(end)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol, trade_date, adj_factor, source, batch_id
-            from adjustment_factors
-            where {" and ".join(clauses)}
-            order by trade_date asc, source desc
-            """,
-            values,
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="factor", adjust="raw",
+        columns="symbol,trade_date,adj_factor,source,batch_id",
+        predicates=clauses, parameters=values, order_by="trade_date asc, source desc",
+    )
     result = []
     seen: set[str] = set()
-    for row in rows_to_dicts(rows):
+    for row in rows:
         if row["trade_date"] in seen:
             continue
         seen.add(row["trade_date"])
@@ -888,16 +893,22 @@ def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[st
     if not symbols:
         return {}
     placeholders = ",".join("?" for _ in symbols)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select * from market_trade_status
-            where asset_class='equity' and market='china' and venue='china'
-              and trade_date = ? and symbol in ({placeholders})
-            order by symbol,{_trade_status_priority_sql()} desc,updated_at desc
-            """,
-            [as_of_date, *symbols],
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="trade_status",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        predicates=("trade_date = ?", f"symbol in ({placeholders})"),
+        parameters=(as_of_date, *symbols),
+    )
+    rows.sort(
+        key=lambda row: (
+            str(row.get("symbol") or ""),
+            _trade_status_priority(row.get("source")),
+            str(row.get("updated_at") or ""),
+        ),
+        reverse=True,
+    )
     result: dict[str, dict[str, Any]] = {}
     bool_fields = {
         "is_suspended",
@@ -910,26 +921,28 @@ def trade_status_as_of(symbols: list[str], as_of_date: str) -> dict[str, dict[st
         "is_st",
     }
     for row in rows:
-        item = row_to_dict(row) or {}
+        item = dict(row)
         for field in bool_fields:
             if field in item:
                 item[field] = bool(item[field])
-        result.setdefault(row["symbol"], item)
+        result.setdefault(str(row["symbol"]), item)
     return result
 
 
 def effective_trade_status(symbol: str, trade_date: str) -> dict[str, Any] | None:
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select * from market_trade_status
-            where symbol = ? and trade_date = ? and asset_class='equity'
-              and market='china' and venue='china'
-            order by {_trade_status_priority_sql()} desc,updated_at desc limit 1
-            """,
-            (symbol, trade_date),
-        ).fetchone()
-    status = row_to_dict(row)
+    rows = market_lake.query_matching(
+        kind="trade_status",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        predicates=("symbol = ?", "trade_date = ?"),
+        parameters=(symbol, trade_date),
+    )
+    rows.sort(
+        key=lambda row: (_trade_status_priority(row.get("source")), str(row.get("updated_at") or "")),
+        reverse=True,
+    )
+    status = dict(rows[0]) if rows else None
     if status:
         for field in (
             "is_tradeable", "is_suspended", "can_buy", "can_sell", "is_limit_up",
@@ -963,61 +976,55 @@ def is_tradeable(symbol: str, trade_date: str, side: str) -> tuple[bool, str]:
 
 
 def latest_batch_for_symbol(symbol: str, source: str | None = None) -> dict[str, Any] | None:
-    source_clause = "and d.source = ?" if source else ""
-    params: list[Any] = [symbol]
-    if source:
-        params.append(source)
+    rows = market_lake.query_matching(
+        kind="bars",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        source=source,
+        columns="batch_id",
+        predicates=("symbol = ?", "batch_id is not null"),
+        parameters=(symbol,),
+    )
+    batch_ids = sorted({str(row["batch_id"]) for row in rows if row.get("batch_id")})
+    if not batch_ids:
+        return None
+    placeholders = ",".join("?" for _ in batch_ids)
     with db() as connection:
         row = connection.execute(
             f"""
-            select b.* from data_import_batches b
-            join market_daily_bars d on d.batch_id = b.id
-            where d.symbol = ?
-              and d.asset_class='equity' and d.market='china' and d.venue='china'
-              and d.resolution='daily' and d.data_type='trade'
-              {source_clause}
-              and b.status in ('success', 'failed')
-            order by b.started_at desc
+            select * from data_import_batches
+            where id in ({placeholders}) and status in ('success', 'failed')
+            order by started_at desc
             limit 1
             """,
-            params,
+            batch_ids,
         ).fetchone()
     return row_to_dict(row)
 
 
 def data_coverage(symbol: str, start: str, end: str, adjust: str = "raw", source: str | None = None) -> dict[str, Any]:
-    source_clause = "and source = ?" if source else ""
-    source_params: list[Any] = [source] if source else []
-    with db() as connection:
-        status_row = connection.execute(
-            """
-            select count(distinct trade_date) as count from market_trade_status
-            where symbol = ? and asset_class='equity' and market='china' and venue='china'
-              and trade_date >= ? and trade_date <= ?
-            """,
-            (symbol, start, end),
-        ).fetchone()
-        market_row = connection.execute(
-            f"""
-            select count(*) as raw_count,count(distinct trade_date) as count,
-                   min(trade_date) as first_date,max(trade_date) as last_date
-            from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = 'china' and venue='china'
-              and resolution = 'daily' and data_type = 'trade' and adjust = ?
-              and trade_date >= ? and trade_date <= ?
-              {source_clause}
-            """,
-            (symbol, adjust, start, end, *source_params),
-        ).fetchone()
+    status_rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="trade_date", predicates=("symbol = ?", "trade_date >= ?", "trade_date <= ?"),
+        parameters=(symbol, start, end),
+    )
+    bar_rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust=adjust, source=source,
+        columns="trade_date", predicates=("symbol = ?", "trade_date >= ?", "trade_date <= ?"),
+        parameters=(symbol, start, end),
+    )
+    dates = sorted({str(row["trade_date"])[:10] for row in bar_rows})
+    status_dates = {str(row["trade_date"])[:10] for row in status_rows}
     return {
-        "bar_count": market_row["count"] if market_row else 0,
-        "bar_raw_count": market_row["raw_count"] if market_row else 0,
-        "first_date": market_row["first_date"] if market_row else None,
-        "last_date": market_row["last_date"] if market_row else None,
-        "status_count": status_row["count"] if status_row else 0,
-        "market_bar_count": market_row["count"] if market_row else 0,
-        "market_first_date": market_row["first_date"] if market_row else None,
-        "market_last_date": market_row["last_date"] if market_row else None,
+        "bar_count": len(dates), "bar_raw_count": len(bar_rows),
+        "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None,
+        "status_count": len(status_dates), "market_bar_count": len(dates),
+        "market_first_date": dates[0] if dates else None,
+        "market_last_date": dates[-1] if dates else None,
     }
 
 
@@ -1028,53 +1035,35 @@ def _execution_coverage_dates(
     adjust: str,
     source: str | None,
 ) -> tuple[set[str], dict[str, bool]]:
-    source_clause = "and source = ?" if source else ""
-    source_params: list[Any] = [source] if source else []
-    with db() as connection:
-        bar_rows = connection.execute(
-            f"""
-            select trade_date
-            from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = 'china' and venue='china'
-              and resolution = 'daily' and data_type = 'trade' and adjust = ?
-              and trade_date >= ? and trade_date <= ?
-              {source_clause}
-            """,
-            (
-                symbol,
-                adjust,
-                start,
-                end,
-                *source_params,
-            ),
-        ).fetchall()
-        status_rows = connection.execute(
-            """
-            select trade_date, max(is_suspended) as is_suspended
-            from market_trade_status
-            where symbol = ? and asset_class='equity' and market='china' and venue='china'
-              and trade_date >= ? and trade_date <= ?
-            group by trade_date
-            """,
-            (symbol, start, end),
-        ).fetchall()
+    bar_rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust=adjust, source=source,
+        columns="trade_date", predicates=("symbol = ?", "trade_date >= ?", "trade_date <= ?"),
+        parameters=(symbol, start, end),
+    )
+    status_rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="trade_date,is_suspended", predicates=("symbol = ?", "trade_date >= ?", "trade_date <= ?"),
+        parameters=(symbol, start, end),
+    )
+    suspended: dict[str, bool] = {}
+    for row in status_rows:
+        key = str(row["trade_date"])[:10]
+        suspended[key] = suspended.get(key, False) or bool(row.get("is_suspended"))
     return (
-        {str(row["trade_date"]) for row in bar_rows},
-        {str(row["trade_date"]): bool(row["is_suspended"]) for row in status_rows},
+        {str(row["trade_date"])[:10] for row in bar_rows}, suspended,
     )
 
 
 def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select * from market_trade_status
-            where symbol = ? and asset_class='equity' and market='china' and venue='china'
-              and trade_date >= ? and trade_date <= ?
-            order by trade_date asc,{_trade_status_priority_sql()} desc,updated_at desc
-            """,
-            (symbol, start, end),
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        predicates=("symbol = ?", "trade_date >= ?", "trade_date <= ?"),
+        parameters=(symbol, start, end),
+    )
+    rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+    rows.sort(key=lambda row: _trade_status_priority(row.get("source")), reverse=True)
+    rows.sort(key=lambda row: str(row.get("trade_date") or ""))
     status_by_date: dict[str, dict[str, Any]] = {}
     for row in rows:
         status_by_date.setdefault(
@@ -1097,6 +1086,22 @@ def status_payload(symbol: str, start: str, end: str) -> dict[str, Any]:
 
 def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
     code = index_code.strip().upper()
+    status_rows = market_lake.query_matching(
+        kind="trade_status",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        columns="symbol,trade_date,is_suspended,is_st",
+    )
+    status_dates = [str(row["trade_date"])[:10] for row in status_rows]
+    trade_status = {
+        "total": len(status_rows),
+        "symbols": len({str(row["symbol"]) for row in status_rows}),
+        "suspended_days": sum(bool(row.get("is_suspended")) for row in status_rows),
+        "st_days": sum(bool(row.get("is_st")) for row in status_rows),
+        "start_date": min(status_dates) if status_dates else None,
+        "end_date": max(status_dates) if status_dates else None,
+    }
     with db() as connection:
         calendar = connection.execute(
             """
@@ -1113,18 +1118,6 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
                    sum(case when status = 'delisted' or delisted_date is not null then 1 else 0 end) as delisted,
                    sum(case when is_st = 1 then 1 else 0 end) as st
             from securities
-            """
-        ).fetchone()
-        trade_status = connection.execute(
-            """
-            select count(*) as total,
-                   count(distinct symbol) as symbols,
-                   sum(case when is_suspended = 1 then 1 else 0 end) as suspended_days,
-                   sum(case when is_st = 1 then 1 else 0 end) as st_days,
-                   min(trade_date) as start_date,
-                   max(trade_date) as end_date
-            from market_trade_status
-            where asset_class='equity' and market='china' and venue='china'
             """
         ).fetchone()
         actions = connection.execute(
@@ -1160,7 +1153,7 @@ def reference_data_coverage(index_code: str = "CSI300") -> dict[str, Any]:
         ).fetchone()
     calendar = row_to_dict(calendar) or {}
     securities = row_to_dict(securities) or {}
-    trade_status = row_to_dict(trade_status) or {}
+    trade_status = dict(trade_status)
     actions = row_to_dict(actions) or {}
     pit = row_to_dict(pit) or {}
     reference_report = row_to_dict(reference_report) or {}
@@ -1319,32 +1312,29 @@ def assert_benchmark_ready(
     benchmark = str(symbol or "").strip().upper()
     if not benchmark:
         raise LeanPlatformError("benchmark_missing: A-share benchmarkSymbol is required.")
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(distinct trade_date) as row_count,
-                   min(trade_date) as first_date,
-                   max(trade_date) as last_date
-            from market_daily_bars
-            where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
-              and resolution = ? and data_type = ? and adjust = ?
-              and trade_date between ? and ?
-              {"and source = ?" if source else ""}
-            """,
-            (
-                benchmark,
-                asset_class.lower(),
-                market.lower(),
-                venue.lower(),
-                resolution.lower(),
-                data_type.lower(),
-                adjust or "raw",
-                start,
-                end,
-                *([source] if source else []),
-            ),
-        ).fetchone()
-    benchmark_row = dict(row) if row else {}
+    rows: list[dict[str, Any]] = []
+    for candidate_class in dict.fromkeys((asset_class.lower(), "index")):
+        rows.extend(
+            market_lake.query_matching(
+                kind="bars",
+                asset_class=candidate_class,
+                market=market.lower(),
+                venue=venue.lower(),
+                resolution=resolution.lower(),
+                data_type=data_type.lower(),
+                adjust=adjust or "raw",
+                source=source,
+                columns="trade_date",
+                predicates=("symbol = ?", "trade_date between ? and ?"),
+                parameters=(benchmark, start, end),
+            )
+        )
+    dates = sorted({str(row["trade_date"])[:10] for row in rows})
+    benchmark_row = {
+        "row_count": len(dates),
+        "first_date": dates[0] if dates else None,
+        "last_date": dates[-1] if dates else None,
+    }
     row_count = int(benchmark_row.get("row_count") or 0)
     if row_count <= 0:
         raise LeanPlatformError(f"benchmark_missing:{benchmark} has no daily bars in {start} -> {end}.")

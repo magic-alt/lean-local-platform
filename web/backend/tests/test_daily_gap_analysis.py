@@ -116,43 +116,15 @@ def test_summaries_never_pool_different_sector_proxies():
 
 
 def test_research_template_runs_from_stored_daily_bars_and_states_daily_limits():
-    from app.db import db, init_db, utc_now
-    from app.services import research_analysis
+    from app.db import init_db
+    from app.services import research_analysis, market_lake
 
     init_db()
     rows = _daily_rows("512800.SH")
-    with db() as connection:
-        connection.executemany(
-            """
-            insert into market_daily_bars
-                (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                 data_type,open,high,low,close,volume,amount,prev_close,adjust,source,created_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                (
-                    "fund:china:china:512800.SH",
-                    row["symbol"],
-                    "fund",
-                    "china",
-                    "china",
-                    row["trade_date"],
-                    "daily",
-                    "trade",
-                    row["open"],
-                    row["high"],
-                    row["low"],
-                    row["close"],
-                    row["volume"],
-                    row["amount"],
-                    row["prev_close"],
-                    "raw",
-                    "tushare",
-                    utc_now(),
-                )
-                for row in rows
-            ],
-        )
+    market_lake.upsert_rows(
+        rows, kind="bars", asset_class="fund", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source="tushare",
+    )
     scope = {
         "asset": {
             "assetClass": "fund",

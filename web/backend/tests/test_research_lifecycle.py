@@ -96,20 +96,14 @@ def test_research_runner_waits_for_container_port_inside_container(monkeypatch, 
 def test_research_run_uses_shared_data_scope_and_old_analysis_routes_are_absent(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient
-    from app.db import db, utc_now
+    from app.services import market_lake
     from app.main import app
 
-    with db() as connection:
-        connection.execute(
-            """
-            insert into market_daily_bars
-                (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                 data_type,open,high,low,close,volume,adjust,source,created_at)
-            values ('equity:china:china:000001.SZ','000001.SZ','equity','china','china',
-                    '2026-01-05','daily','trade',10,11,9,10.5,1000,'raw','tushare',?)
-            """,
-            (utc_now(),),
-        )
+    market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": "2026-01-05", "open": 10, "high": 11,
+          "low": 9, "close": 10.5, "volume": 1000}],
+        kind="bars", source="tushare",
+    )
     client = TestClient(app)
     scope = {
         "asset": {"assetClass": "equity", "market": "china", "venue": "china", "resolution": "daily", "dataType": "trade"},
@@ -239,7 +233,4 @@ def test_compose_routes_api_research_operations_to_socket_owner():
 
     assert compose.count("/var/run/docker.sock:/var/run/docker.sock") == 1
     assert "LEAN_RUNNER_URL: http://lean-runner:8010" in compose
-    assert (
-        "LEAN_HOST_PARQUET_DIR: "
-        "${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}"
-    ) in compose
+    assert "LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}" in compose

@@ -9,6 +9,7 @@ from app.main import app
 from app.services import dataset_preview as dataset_preview_service
 from app.services.db_object_store import put_bytes
 from app.services.market_repository import upsert_market_daily_bars
+from app.services import market_lake
 
 
 def _store_archive(dataset: str, rows: list[dict[str, object]]) -> None:
@@ -55,14 +56,11 @@ def test_trade_calendar_preview_filters_and_pages_canonical_rows():
 
 def test_symbol_preview_uses_normalized_exact_match():
     init_db()
-    with db() as connection:
-        connection.executemany(
-            """
-            insert into adjustment_factors (symbol,trade_date,adj_factor,source,batch_id)
-            values (?, '2026-07-17', 1.0, 'tushare', 'test')
-            """,
-            [("600519",), ("1600519",)],
-        )
+    market_lake.upsert_rows(
+        [{"symbol": symbol, "trade_date": "2026-07-17", "adj_factor": 1.0, "batch_id": "test"}
+         for symbol in ("600519", "1600519")],
+        kind="adjustment_factor", data_type="factor", source="tushare",
+    )
 
     response = TestClient(app).get(
         "/api/data/dataset-preview/adj_factor",
@@ -75,17 +73,13 @@ def test_symbol_preview_uses_normalized_exact_match():
     assert result["items"][0]["symbol"] == "600519"
 
 
-def test_daily_basic_and_dividend_previews_read_canonical_mysql_tables():
+def test_daily_basic_parquet_and_dividend_metadata_previews():
     init_db()
+    market_lake.upsert_rows(
+        [{"symbol": "600519", "trade_date": "2026-07-17", "pe_ttm": 21.5, "batch_id": "test"}],
+        kind="daily_basic", data_type="metric", source="tushare:daily_basic",
+    )
     with db() as connection:
-        connection.execute(
-            """
-            insert into factor_values
-                (symbol,trade_date,factor_name,value,source,batch_id,created_at)
-            values ('600519','2026-07-17','pe_ttm',21.5,'tushare:daily_basic','test',?)
-            """,
-            (utc_now(),),
-        )
         connection.execute(
             """
             insert into corporate_actions

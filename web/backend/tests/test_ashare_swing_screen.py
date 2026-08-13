@@ -94,6 +94,7 @@ def test_pullback_runs_keep_current_episode_out_of_historical_p80():
 
 def _seed_screen_data(db_module):
     from app.db import db, utc_now
+    from app.services import market_lake
 
     dates = pd.bdate_range(end="2026-07-31", periods=520).strftime("%Y-%m-%d").tolist()
     histories = {
@@ -138,25 +139,17 @@ def _seed_screen_data(db_module):
                 """,
                 (f"name-{symbol}", symbol, name, symbol * 10 + "abcd", now),
             )
-            connection.execute(
-                """
-                insert into market_trade_status
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
-                     can_buy,can_sell,source,batch_id,updated_at)
-                values (?,?,'equity','china','china','2026-07-31',1,1,1,'tushare:stk_limit','unit',?)
-                """,
-                (f"inst-{symbol}",symbol,now),
+            market_lake.upsert_rows(
+                [{"symbol": symbol, "trade_date": "2026-07-31", "can_buy": True, "can_sell": True,
+                  "batch_id": "unit", "updated_at": now}],
+                kind="trade_status", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="status", source="tushare:stk_limit",
             )
-            connection.executemany(
-                """
-                insert into factor_values
-                    (symbol,trade_date,factor_name,value,source,batch_id,created_at)
-                values (?,'2026-07-31',?,?,'tushare:daily_basic','unit',?)
-                """,
-                [
-                    (symbol, "pe_ttm", 8.0, now),
-                    (symbol, "total_mv_cny", 300_000_000_000.0, now),
-                ],
+            market_lake.upsert_rows(
+                [{"symbol": symbol, "trade_date": "2026-07-31", "pe_ttm": 8.0,
+                  "total_mv_cny": 300_000_000_000.0, "batch_id": "unit", "created_at": now}],
+                kind="daily_basic", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="metric", source="tushare:daily_basic",
             )
             connection.executemany(
                 """
@@ -174,34 +167,22 @@ def _seed_screen_data(db_module):
             factors = []
             for row_index, trade_date in enumerate(dates):
                 close = float(frame["close_qfq"].iloc[row_index])
-                bars.append(
-                    (
-                        f"inst-{symbol}",symbol,
-                        trade_date,
-                        close,
-                        float(frame["high_qfq"].iloc[row_index]),
-                        float(frame["low_qfq"].iloc[row_index]),
-                        close,
-                        float(frame["volume"].iloc[row_index]),
-                        float(frame["amount"].iloc[row_index]),
-                        "tushare",
-                        "unit",
-                        now,
-                    )
-                )
-                factors.append((symbol, trade_date, 1.0, "tushare", "unit"))
-            connection.executemany(
-                """
-                insert into market_daily_bars
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
-                     open,high,low,close,volume,amount,adjust,source,batch_id,created_at)
-                values (?,?,'equity','china','china',?,'daily','trade',?,?,?,?,?,?,'raw',?,?,?)
-                """,
-                bars,
+                bars.append({"instrument_id": f"inst-{symbol}", "symbol": symbol,
+                             "trade_date": trade_date, "open": close,
+                             "high": float(frame["high_qfq"].iloc[row_index]),
+                             "low": float(frame["low_qfq"].iloc[row_index]), "close": close,
+                             "volume": float(frame["volume"].iloc[row_index]),
+                             "amount": float(frame["amount"].iloc[row_index]),
+                             "batch_id": "unit", "created_at": now})
+                factors.append({"symbol": symbol, "trade_date": trade_date, "adj_factor": 1.0,
+                                "batch_id": "unit"})
+            market_lake.upsert_rows(
+                bars, kind="bars", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="trade", adjust="raw", source="tushare",
             )
-            connection.executemany(
-                "insert into adjustment_factors (symbol,trade_date,adj_factor,source,batch_id) values (?,?,?,?,?)",
-                factors,
+            market_lake.upsert_rows(
+                factors, kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="factor", adjust="raw", source="tushare",
             )
 
 

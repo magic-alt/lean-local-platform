@@ -802,103 +802,6 @@ def init_db() -> None:
                 primary key (instrument_id, id_type, id_value, source)
             );
 
-            create table if not exists market_daily_bars (
-                instrument_id text not null,
-                symbol text not null,
-                asset_class text not null,
-                market text not null,
-                venue text,
-                trade_date text not null,
-                resolution text not null default 'daily',
-                data_type text not null default 'trade',
-                open real,
-                high real,
-                low real,
-                close real,
-                settle real,
-                volume real,
-                amount real,
-                turnover_rate real,
-                open_interest real,
-                prev_close real,
-                pct_change real,
-                adjust text not null default 'raw',
-                adj_factor real,
-                source text not null,
-                batch_id text,
-                created_at text not null,
-                primary key (instrument_id, trade_date, resolution, data_type, adjust, source)
-            );
-
-            create table if not exists market_trade_status (
-                instrument_id text not null,
-                symbol text not null,
-                asset_class text not null,
-                market text not null,
-                venue text,
-                trade_date text not null,
-                is_tradeable integer not null default 1,
-                is_suspended integer not null default 0,
-                can_buy integer not null default 1,
-                can_sell integer not null default 1,
-                limit_up real,
-                limit_down real,
-                is_limit_up integer not null default 0,
-                is_limit_down integer not null default 0,
-                is_one_word_limit_up integer not null default 0,
-                is_one_word_limit_down integer not null default 0,
-                is_st integer not null default 0,
-                status text,
-                reason text,
-                source text not null,
-                batch_id text,
-                updated_at text not null,
-                primary key (instrument_id, trade_date, source)
-            );
-
-            create table if not exists market_intraday_bars (
-                instrument_id text not null,
-                symbol text not null,
-                asset_class text not null,
-                market text not null,
-                venue text,
-                timestamp text not null,
-                frequency text not null,
-                data_type text not null default 'trade',
-                open real,
-                high real,
-                low real,
-                close real,
-                volume real,
-                amount real,
-                open_interest real,
-                adjust text not null default 'raw',
-                source text not null,
-                batch_id text,
-                created_at text not null,
-                primary key (instrument_id, timestamp, frequency, data_type, adjust, source)
-            );
-
-            create table if not exists market_ticks (
-                id text primary key,
-                instrument_id text not null,
-                symbol text not null,
-                asset_class text not null,
-                market text not null,
-                venue text,
-                timestamp text not null,
-                last_price real,
-                bid_price real,
-                ask_price real,
-                bid_volume real,
-                ask_volume real,
-                volume real,
-                open_interest real,
-                source text not null,
-                batch_id text,
-                created_at text not null
-            );
-
             create table if not exists parquet_datasets (
                 id text primary key,
                 dataset_key text not null unique,
@@ -956,15 +859,6 @@ def init_db() -> None:
                 source text,
                 batch_id text,
                 primary key (market, trade_date)
-            );
-
-            create table if not exists adjustment_factors (
-                symbol text not null,
-                trade_date text not null,
-                adj_factor real not null,
-                source text not null,
-                batch_id text not null,
-                primary key (symbol, trade_date, source)
             );
 
             create table if not exists corporate_actions (
@@ -1233,60 +1127,6 @@ def init_db() -> None:
                 created_at text not null,
                 primary key (symbol, trade_date, factor_name, source)
             );
-
-            create table if not exists daily_basic_values (
-                symbol text not null,
-                trade_date text not null,
-                turnover_rate real,
-                turnover_rate_float real,
-                volume_ratio real,
-                pe real,
-                pe_ttm real,
-                pb real,
-                ps real,
-                ps_ttm real,
-                dividend_yield real,
-                dividend_yield_ttm real,
-                total_share_shares real,
-                float_share_shares real,
-                free_share_shares real,
-                total_mv_cny real,
-                circ_mv_cny real,
-                source text not null,
-                batch_id text,
-                created_at text not null,
-                primary key (symbol, trade_date, source)
-            );
-
-            create view if not exists daily_basic_factor_values as
-            select symbol,trade_date,factor_name,value,source,batch_id,created_at
-            from factor_values f where f.source='tushare:daily_basic'
-              and not exists (
-                  select 1 from daily_basic_values d
-                  where d.symbol=f.symbol and d.trade_date=f.trade_date and d.source=f.source
-              )
-            union all select symbol,trade_date,'turnover_rate',turnover_rate,source,batch_id,created_at from daily_basic_values where turnover_rate is not null
-            union all select symbol,trade_date,'turnover_rate_float',turnover_rate_float,source,batch_id,created_at from daily_basic_values where turnover_rate_float is not null
-            union all select symbol,trade_date,'volume_ratio',volume_ratio,source,batch_id,created_at from daily_basic_values where volume_ratio is not null
-            union all select symbol,trade_date,'pe',pe,source,batch_id,created_at from daily_basic_values where pe is not null
-            union all select symbol,trade_date,'pe_ttm',pe_ttm,source,batch_id,created_at from daily_basic_values where pe_ttm is not null
-            union all select symbol,trade_date,'pb',pb,source,batch_id,created_at from daily_basic_values where pb is not null
-            union all select symbol,trade_date,'ps',ps,source,batch_id,created_at from daily_basic_values where ps is not null
-            union all select symbol,trade_date,'ps_ttm',ps_ttm,source,batch_id,created_at from daily_basic_values where ps_ttm is not null
-            union all select symbol,trade_date,'dividend_yield',dividend_yield,source,batch_id,created_at from daily_basic_values where dividend_yield is not null
-            union all select symbol,trade_date,'dividend_yield_ttm',dividend_yield_ttm,source,batch_id,created_at from daily_basic_values where dividend_yield_ttm is not null
-            union all select symbol,trade_date,'total_share_shares',total_share_shares,source,batch_id,created_at from daily_basic_values where total_share_shares is not null
-            union all select symbol,trade_date,'float_share_shares',float_share_shares,source,batch_id,created_at from daily_basic_values where float_share_shares is not null
-            union all select symbol,trade_date,'free_share_shares',free_share_shares,source,batch_id,created_at from daily_basic_values where free_share_shares is not null
-            union all select symbol,trade_date,'total_mv_cny',total_mv_cny,source,batch_id,created_at from daily_basic_values where total_mv_cny is not null
-            union all select symbol,trade_date,'circ_mv_cny',circ_mv_cny,source,batch_id,created_at from daily_basic_values where circ_mv_cny is not null;
-
-            create view if not exists all_factor_values as
-            select symbol,trade_date,factor_name,value,source,batch_id,created_at
-            from factor_values where source<>'tushare:daily_basic'
-            union all
-            select symbol,trade_date,factor_name,value,source,batch_id,created_at
-            from daily_basic_factor_values;
 
             create table if not exists factor_evaluations (
                 id text primary key,
@@ -1874,14 +1714,6 @@ def init_db() -> None:
                 on instruments(asset_class, market, venue, symbol);
             create index if not exists idx_instruments_status
                 on instruments(asset_class, market, status, listed_date, delisted_date);
-            create index if not exists idx_market_daily_symbol_date
-                on market_daily_bars(asset_class, market, symbol, trade_date);
-            create index if not exists idx_market_status_symbol_date
-                on market_trade_status(asset_class, market, symbol, trade_date);
-            create index if not exists idx_market_intraday_symbol_time
-                on market_intraday_bars(asset_class, market, symbol, frequency, timestamp);
-            create index if not exists idx_market_ticks_symbol_time
-                on market_ticks(asset_class, market, symbol, timestamp);
             create index if not exists idx_parquet_datasets_lookup
                 on parquet_datasets(asset_class, market, venue, resolution, data_type, adjust, source);
             create index if not exists idx_parquet_files_dataset
@@ -1924,8 +1756,6 @@ def init_db() -> None:
                 on financial_facts(symbol, field_name, effective_date, announce_date, report_date);
             create index if not exists idx_factor_values_name_date
                 on factor_values(factor_name, trade_date, symbol);
-            create index if not exists idx_daily_basic_values_date_symbol
-                on daily_basic_values(trade_date, symbol);
             create index if not exists idx_factor_evaluations_created_at
                 on factor_evaluations(created_at desc);
             create index if not exists idx_cbond_daily_date
@@ -1999,11 +1829,6 @@ def init_db() -> None:
         _add_column(connection, "backtest_results", "performance_json", "text")
         _add_column(connection, "backtest_results", "raw_result_object_id", "text")
         _add_column(connection, "backtest_results", "summary_object_id", "text")
-        _add_column(connection, "market_trade_status", "is_limit_up", "integer not null default 0")
-        _add_column(connection, "market_trade_status", "is_limit_down", "integer not null default 0")
-        _add_column(connection, "market_trade_status", "is_one_word_limit_up", "integer not null default 0")
-        _add_column(connection, "market_trade_status", "is_one_word_limit_down", "integer not null default 0")
-        _add_column(connection, "market_trade_status", "is_st", "integer not null default 0")
         _add_column(connection, "data_assets", "lean_object_id", "text")
         _add_column(connection, "data_assets", "factor_object_id", "text")
         _add_column(connection, "object_store_items", "stored_object_id", "text")

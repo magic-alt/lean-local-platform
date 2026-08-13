@@ -1,20 +1,6 @@
 from __future__ import annotations
 
 
-def test_direct_reset_cli_requires_all_three_acknowledgements(monkeypatch):
-    import sys
-
-    from scripts import mysql_storage_maintenance
-
-    monkeypatch.setattr(sys, "argv", ["mysql_storage_maintenance.py", "direct-market-reset", "--confirm"])
-    try:
-        mysql_storage_maintenance.main()
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:  # pragma: no cover - makes an accidental safety regression explicit.
-        raise AssertionError("direct-market-reset must require --no-backup and --direct-reset")
-
-
 def test_market_reset_filesystem_cleanup_is_scoped_to_named_child(tmp_path):
     from app.services.storage_maintenance import _remove_directory_contents, _safe_maintenance_directory
 
@@ -53,6 +39,7 @@ def test_clickhouse_reset_is_a_noop_when_disabled(monkeypatch):
 
 def test_filesystem_object_storage_round_trip_and_migration(tmp_path, monkeypatch):
     import app.db as db_module
+    from app.services import market_lake
     from app.services import db_object_store
 
     db_module.init_db()
@@ -76,16 +63,15 @@ def test_filesystem_object_storage_round_trip_and_migration(tmp_path, monkeypatc
 
 def test_daily_basic_eav_cleanup_preserves_uncovered_and_mismatched_rows():
     import app.db as db_module
+    from app.services import market_lake
     from app.services.storage_maintenance import daily_basic_eav_audit, delete_equivalent_daily_basic_eav
 
     db_module.init_db()
+    market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": "2026-01-02", "pe": 10, "pb": 2}],
+        kind="daily_basic", data_type="metric", source="tushare:daily_basic",
+    )
     with db_module.db() as connection:
-        connection.execute(
-            """
-            insert into daily_basic_values(symbol,trade_date,pe,pb,source,batch_id,created_at)
-            values ('000001','2026-01-02',10,2,'tushare:daily_basic','batch','now')
-            """
-        )
         connection.executemany(
             """
             insert into factor_values(symbol,trade_date,factor_name,value,source,batch_id,created_at)
@@ -162,8 +148,10 @@ def test_canonical_ashare_writes_skip_duplicate_specialized_tables():
             """
         ).fetchone()
         assert legacy["n"] == 0
-        status = connection.execute(
-            "select is_st,is_limit_up from market_trade_status where symbol='000001' and trade_date='2026-01-02'"
-        ).fetchone()
-        assert status["is_st"] == 1
-        assert status["is_limit_up"] == 1
+    from app.services import market_lake
+    status = market_lake.query_matching(
+        kind="trade_status", columns="is_st,is_limit_up",
+        predicates=("symbol='000001'", "trade_date='2026-01-02'"), limit=1,
+    )[0]
+    assert status["is_st"] == 1
+    assert status["is_limit_up"] == 1

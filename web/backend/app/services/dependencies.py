@@ -275,7 +275,7 @@ def _database_table_counts(connection, tables: list[str]) -> tuple[dict[str, int
 
 
 def check_database() -> dict[str, Any]:
-    expected_tables = ["instruments", "market_daily_bars", "market_trade_status", "universe_membership", "index_membership_pit", "stored_objects"]
+    expected_tables = ["instruments", "universe_membership", "index_membership_pit", "parquet_datasets", "stored_objects"]
     fallback = {
         "missingTables": expected_tables,
         "counts": {},
@@ -337,7 +337,7 @@ def check_database() -> dict[str, Any]:
         core_ok = (
             not missing
             and counts.get("instruments", 0) >= 0
-            and counts.get("market_daily_bars", 0) >= 0
+            and counts.get("parquet_datasets", 0) >= 0
             and orphan_archives == 0
         )
         ok = bool(core_ok)

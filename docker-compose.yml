@@ -206,8 +206,8 @@ services:
       POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
       LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
-      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
-      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
+      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
       LEAN_ON_DEMAND_EXPORT_ROOTS: ${LEAN_ON_DEMAND_EXPORT_ROOTS:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
@@ -266,8 +266,8 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
-      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
       - lean_api_token
@@ -370,8 +370,8 @@ services:
       POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
       LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
-      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
-      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
+      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
       LEAN_ON_DEMAND_EXPORT_ROOTS: ${LEAN_ON_DEMAND_EXPORT_ROOTS:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
@@ -403,8 +403,8 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
-      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     tmpfs:
       - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
@@ -464,8 +464,8 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data
-      - ${LEAN_HOST_PARQUET_DIR:-../Data/parquet}:/workspace/parquet
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
       - lean_runner_token
@@ -512,8 +512,8 @@ services:
       LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
-      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}
-      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/../Data/parquet}
+      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
+      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
       LEAN_DOCKER_NETWORK: none
       LEAN_DOCKER_CPUS: ${LEAN_DOCKER_CPUS:-2}
       LEAN_DOCKER_MEMORY: ${LEAN_DOCKER_MEMORY:-4g}
@@ -521,7 +521,7 @@ services:
       LEAN_DOCKER_READ_ONLY: "1"
     volumes:
       - .:/workspace:ro
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/../Data}:/workspace/Data:ro
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     secrets:
       - lean_runner_token

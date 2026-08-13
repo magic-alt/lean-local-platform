@@ -1,14 +1,12 @@
 import json
 import time
 import re
-import zlib
 from bisect import bisect_left, bisect_right
-from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
 from ..core.config import REPO_ROOT
-from ..db import bulk_db, database_backend, db, json_dump, utc_now
+from ..db import db, json_dump, utc_now
 from ..lean_engine.data_paths import list_local_symbols
 from ..lean_engine.data_writers import (
     write_lean_crypto_daily_zip,
@@ -34,7 +32,8 @@ from ..domain.assets import (
 from .market_data import mirror_rows
 from .db_object_store import put_file
 from .lean_cache import rebuild_ashare_lean_cache_from_db
-from .market_repository import instrument_id, upsert_instrument, upsert_market_daily_bars
+from .market_repository import upsert_instrument, upsert_market_daily_bars
+from . import market_lake
 from .data_provider_manager import DATA_PROVIDER_MANAGER, ProviderExhaustedError, provider_requirements
 from .source_gate import DATA_SOURCE_PRIORITY, PRIMARY_DATA_SOURCE
 from .ashare_source_adapters import fetch_adata_rows, fetch_baostock_rows
@@ -740,7 +739,7 @@ def import_ashare_research_data(
         finish_import_batch(batch_id, "failed", qa_report=exc.report, error=str(exc))
         raise
     except Exception as exc:
-        finish_import_batch(batch_id, "failed", qa_report={"passed": False, "items": qa_by_symbol}, error=str(exc))
+        finish_import_batch(batch_id, "failed", qa_report=qa_report or {"passed": False}, error=str(exc))
         raise
 
 
@@ -762,138 +761,45 @@ def _daily_values_match(existing: dict[str, Any], incoming: dict[str, Any]) -> b
     return True
 
 
-def _mysql_changed_daily_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str]]:
-    """Return exact changed keys while avoiding an unconditional full readback."""
-    fields = (
-        "open", "high", "low", "close", "volume", "amount", "turnover_rate",
-        "prev_close", "pct_change", "adj_factor",
-    )
-
+def _changed_daily_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Compare a provider batch with the authoritative Parquet slice."""
     symbols = sorted({str(row["symbol"]) for row in rows})
     first_date = min(str(row["trade_date"]) for row in rows)
     last_date = max(str(row["trade_date"]) for row in rows)
-    columns = "symbol,trade_date," + ",".join(fields)
-
-    def changed_from_exact_rows(
-        market_rows: list[Any],
-        eligible_symbols: set[str] | None = None,
-    ) -> set[tuple[str, str]]:
-        market_values = {
-            (str(row["symbol"]), str(row["trade_date"])): dict(row)
-            for row in market_rows
-        }
-        return {
-            (str(row["symbol"]), str(row["trade_date"]))
-            for row in rows
-            if (eligible_symbols is None or str(row["symbol"]) in eligible_symbols)
-            and (
-                (str(row["symbol"]), str(row["trade_date"])) not in market_values
-                or not _daily_values_match(
-                    market_values[(str(row["symbol"]), str(row["trade_date"]))], row
-                )
-            )
-        }
-
-    # Full-market date batches are bounded to at most 100k incoming rows and a
-    # few dozen sessions. Reading that contiguous source/date slice once is
-    # substantially cheaper than planning thousands of sparse instrument-id
-    # ranges, especially when most dates have not been loaded yet. Keep the
-    # sparse fingerprint path below for small universes and long histories.
-    incoming_dates = {str(row["trade_date"]) for row in rows}
-    if len(symbols) >= 500 and len(incoming_dates) <= 32:
-        with db() as connection:
-            market_exact = connection.execute(
-                f"""
-                select {columns} from market_daily_bars
-                    force index (idx_market_daily_source_date_symbol)
-                where source='tushare' and adjust='raw' and asset_class='equity'
-                  and market='china' and venue='china' and resolution='daily'
-                  and data_type='trade' and trade_date>=? and trade_date<=?
-                """,
-                (first_date, last_date),
-            ).fetchall()
-        return changed_from_exact_rows(list(market_exact))
-
-    def token(value: Any) -> str:
-        if value is None:
-            return "~"
-        scaled = (Decimal(str(value)) * Decimal("10000")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-        return str(int(scaled))
-
-    incoming: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        symbol = str(row["symbol"])
-        item = incoming.setdefault(symbol, {"count": 0, "first_date": None, "last_date": None, "checksum": 0})
-        trade_date = str(row["trade_date"])
-        payload = "|".join([symbol, trade_date, *(token(row.get(field)) for field in fields)])
-        item["count"] += 1
-        item["first_date"] = min(item["first_date"] or trade_date, trade_date)
-        item["last_date"] = max(item["last_date"] or trade_date, trade_date)
-        item["checksum"] ^= zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF
-
-    market_instrument_ids = [instrument_id("equity", "china", symbol, "china") for symbol in symbols]
-    encoded_fields = ",".join(
-        f"coalesce(cast(round({field}*10000) as char),'~')" for field in fields
+    placeholders = ",".join("?" for _ in symbols)
+    existing_rows = market_lake.query_rows(
+        kind="bars",
+        asset_class="equity",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        adjust="raw",
+        source="tushare",
+        columns=(
+            "symbol,trade_date,open,high,low,close,volume,amount,turnover_rate,"
+            "prev_close,pct_change,adj_factor"
+        ),
+        predicates=("trade_date >= ?", "trade_date <= ?", f"symbol in ({placeholders})"),
+        parameters=(first_date, last_date, *symbols),
     )
-    checksum = (
-        # PyMySQL applies %-formatting when parameters are present, so the
-        # DATE_FORMAT percent signs must be doubled in the SQL text.
-        "bit_xor(crc32(concat_ws('|',symbol,date_format(trade_date,'%%Y-%%m-%%d'),"
-        + encoded_fields
-        + "))) as checksum"
-    )
-    placeholders = ",".join("?" for _ in market_instrument_ids)
-    market_parameters = [*market_instrument_ids, first_date, last_date]
-    with db() as connection:
-        market_rows = connection.execute(
-            f"""
-            select min(symbol) as symbol,count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date,{checksum}
-            from market_daily_bars
-            where source='tushare' and adjust='raw' and asset_class='equity' and market='china'
-              and venue='china' and resolution='daily' and data_type='trade'
-              and instrument_id in ({placeholders})
-              and trade_date>=? and trade_date<=?
-            group by instrument_id
-            """,
-            market_parameters,
-        ).fetchall()
-
-    def comparable(row: Any) -> tuple[int, str, str, int]:
-        return (
-            int(row["count"] or 0), str(row["first_date"] or "")[:10],
-            str(row["last_date"] or "")[:10], int(row["checksum"] or 0),
-        )
-
-    market = {str(row["symbol"]): comparable(row) for row in market_rows}
-    changed_symbols = {
-        symbol
-        for symbol, item in incoming.items()
-        if comparable(item) != market.get(symbol)
+    existing = {
+        (str(row["symbol"]), str(row["trade_date"])[:10]): row
+        for row in existing_rows
     }
-    if not changed_symbols:
-        return set()
-
-    # A fingerprint mismatch normally means one provider correction among
-    # thousands of unchanged bars. Read only those symbols and return only
-    # the corrected/missing dates, instead of rewriting the complete history.
-    changed_placeholders = ",".join("?" for _ in changed_symbols)
-    changed_market_parameters = [
-        *(instrument_id("equity", "china", symbol, "china") for symbol in sorted(changed_symbols)),
-        first_date,
-        last_date,
+    changed = [
+        row
+        for row in rows
+        if (str(row["symbol"]), str(row["trade_date"])) not in existing
+        or not _daily_values_match(existing[(str(row["symbol"]), str(row["trade_date"]))], row)
     ]
-    with db() as connection:
-        market_exact = connection.execute(
-            f"""
-            select {columns} from market_daily_bars
-            where source='tushare' and adjust='raw' and asset_class='equity'
-              and market='china' and venue='china' and resolution='daily'
-              and data_type='trade' and instrument_id in ({changed_placeholders})
-              and trade_date>=? and trade_date<=?
-            """,
-            changed_market_parameters,
-        ).fetchall()
-    return changed_from_exact_rows(list(market_exact), changed_symbols)
+    inserted = sum(
+        (str(row["symbol"]), str(row["trade_date"])) not in existing
+        for row in changed
+    )
+    return changed, inserted
 
 
 def import_ashare_research_batch(
@@ -997,44 +903,7 @@ def import_ashare_research_batch(
             assert_quality_passed(report)
             qa_by_symbol[symbol] = report
 
-        if database_backend() == "mysql":
-            changed_keys = _mysql_changed_daily_keys(all_rows)
-            changed_rows = [row for row in all_rows if (row["symbol"], row["trade_date"]) in changed_keys]
-            # The distinction is informational; exact INSERT/UPDATE counts are
-            # intentionally not obtained with another full-row readback.
-            inserted_rows = len(changed_rows)
-        else:
-            placeholders = ",".join("?" for _ in symbols)
-            with db() as connection:
-                market_rows = connection.execute(
-                    f"""
-                    select symbol,trade_date,open,high,low,close,volume,amount,turnover_rate,
-                           prev_close,pct_change,adj_factor
-                    from market_daily_bars
-                    where source='tushare' and adjust='raw' and asset_class='equity'
-                      and market='china' and venue='china' and resolution='daily'
-                      and data_type='trade' and symbol in ({placeholders})
-                      and trade_date>=? and trade_date<=?
-                    """,
-                    [*symbols, calendar_start, calendar_end],
-                ).fetchall()
-            market_values = {
-                (str(row["symbol"]), str(row["trade_date"])): dict(row)
-                for row in market_rows
-            }
-            changed_rows = [
-                row
-                for row in all_rows
-                if (row["symbol"], row["trade_date"]) not in market_values
-                or not _daily_values_match(
-                    market_values[(row["symbol"], row["trade_date"])], row
-                )
-            ]
-            inserted_rows = sum(
-                1
-                for row in changed_rows
-                if (row["symbol"], row["trade_date"]) not in market_values
-            )
+        changed_rows, inserted_rows = _changed_daily_rows(all_rows)
         if changed_rows:
             upsert_daily_bars(changed_rows, source="tushare", batch_id=batch_id, adjust="raw", bulk=True)
             upsert_trade_status(
@@ -1123,57 +992,31 @@ def _reconcile_market_daily_snapshot(
         for symbol, rows in normalized_by_symbol.items()
         for row in rows
     ]
-    deleted = 0
-    with bulk_db() as connection:
-        connection.execute(
-            """
-            create temporary table if not exists tmp_full_daily_scopes (
-                symbol varchar(32) primary key,
-                start_date varchar(10) not null,
-                end_date varchar(10) not null
-            )
-            """
-        )
-        connection.execute(
-            """
-            create temporary table if not exists tmp_full_daily_keys (
-                symbol varchar(32) not null,
-                trade_date varchar(10) not null,
-                primary key(symbol,trade_date)
-            )
-            """
-        )
-        connection.execute("delete from tmp_full_daily_scopes")
-        connection.execute("delete from tmp_full_daily_keys")
-        connection.executemany(
-            "insert into tmp_full_daily_scopes(symbol,start_date,end_date) values (?,?,?)",
-            scopes,
-        )
-        if keys:
-            for offset in range(0, len(keys), 10_000):
-                connection.executemany(
-                    "insert into tmp_full_daily_keys(symbol,trade_date) values (?,?)",
-                    keys[offset : offset + 10_000],
-                )
-        predicates = """
-            exists (
-                select 1 from tmp_full_daily_scopes s
-                where s.symbol={table}.symbol
-            )
-            and not exists (
-                select 1 from tmp_full_daily_keys k
-                where k.symbol={table}.symbol and k.trade_date={table}.trade_date
-            )
-        """
-        for table, source in (
-            ("market_trade_status", "tushare:ohlcv_inferred"),
-            ("market_daily_bars", "tushare"),
-        ):
-            cursor = connection.execute(
-                f"delete from {table} where source=? and " + predicates.format(table=table),
-                (source,),
-            )
-            deleted += max(0, int(cursor.rowcount or 0))
+    authoritative = set(keys)
+    deleted = market_lake.delete_snapshot_absences(
+        kind="bars",
+        scopes=scopes,
+        authoritative_keys=authoritative,
+        asset_class="equity",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        adjust="raw",
+        source="tushare",
+    )
+    deleted += market_lake.delete_snapshot_absences(
+        kind="trade_status",
+        scopes=scopes,
+        authoritative_keys=authoritative,
+        asset_class="equity",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade_status",
+        adjust="raw",
+        source="tushare:ohlcv_inferred",
+    )
     return deleted
 
 

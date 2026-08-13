@@ -14,6 +14,20 @@ def _init() -> None:
     init_db()
 
 
+def _seed_market_rows(rows: list[tuple[str, str, str, float]]) -> None:
+    from app.services import market_lake
+
+    for asset_class in {row[1] for row in rows}:
+        market_lake.upsert_rows(
+            [
+                {"symbol": symbol, "trade_date": trade_date, "close": close}
+                for symbol, row_asset_class, trade_date, close in rows
+                if row_asset_class == asset_class
+            ],
+            kind="bars", asset_class=asset_class, market="china", venue="china", source="unit",
+        )
+
+
 def _account(name: str, cash: str = "1000000.00") -> dict:
     from app.services.paper_accounts import create_account
 
@@ -219,29 +233,11 @@ def test_valuation_uses_as_of_price_not_latest() -> None:
             """,
             (account["shadow_session_id"], utc_now(), account["id"]),
         )
-        for symbol, asset_class, trade_date, close in (
-            ("600519", "equity", "2024-01-02", 10),
-            ("600519", "equity", "2024-01-03", 100),
-            ("000300", "index", "2024-01-02", 100),
-        ):
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                     data_type,close,adjust,source,created_at)
-                values (?,?,?,?,?,?,'daily','trade',?,'raw','unit',?)
-                """,
-                (
-                    f"{asset_class}:{symbol}",
-                    symbol,
-                    asset_class,
-                    "china",
-                    "china",
-                    trade_date,
-                    close,
-                    utc_now(),
-                ),
-            )
+    _seed_market_rows([
+        ("600519", "equity", "2024-01-02", 10),
+        ("600519", "equity", "2024-01-03", 100),
+        ("000300", "index", "2024-01-02", 100),
+    ])
     rebuild_projection(
         account["id"],
         "2024-01-02",
@@ -287,17 +283,10 @@ def test_projection_excludes_future_cycle_ledger_entries(tmp_path, monkeypatch) 
                 future_cycle["id"],
             ),
         )
-        for trade_date, close in (("2024-01-02", 100), ("2024-01-03", 101)):
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                     data_type,close,adjust,source,created_at)
-                values ('index:000300','000300','index','china','china',?,'daily',
-                        'trade',?,'raw','unit',?)
-                """,
-                (trade_date, close, utc_now()),
-            )
+    _seed_market_rows([
+        ("000300", "index", "2024-01-02", 100),
+        ("000300", "index", "2024-01-03", 101),
+    ])
 
     historical = paper_accounts.rebuild_projection(
         account["id"],
@@ -326,18 +315,10 @@ def test_excess_equals_cumulative_minus_benchmark() -> None:
     from app.services.paper_accounts import rebuild_projection
 
     account = _account("Benchmark account", "100000")
-    with db() as connection:
-        for trade_date, close in (("2024-01-02", 100), ("2024-01-03", 110)):
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                     data_type,close,adjust,source,created_at)
-                values ('index:000300','000300','index','china','china',?,'daily',
-                        'trade',?,'raw','unit',?)
-                """,
-                (trade_date, close, utc_now()),
-            )
+    _seed_market_rows([
+        ("000300", "index", "2024-01-02", 100),
+        ("000300", "index", "2024-01-03", 110),
+    ])
     projection = rebuild_projection(
         account["id"],
         "2024-01-03",
@@ -373,30 +354,11 @@ def test_market_data_repository_gates_equity_and_index_scopes_separately(monkeyp
     from app.db import db, utc_now
     from app.repositories import market_data_repository
 
-    with db() as connection:
-        for symbol, asset_class, trade_date, close in (
-            ("600519", "equity", "2024-01-03", 10),
-            ("000300", "index", "2024-01-02", 100),
-            ("000300", "index", "2024-01-03", 110),
-        ):
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,
-                     data_type,close,adjust,source,created_at)
-                values (?,?,?,?,?,?,'daily','trade',?,'raw','unit',?)
-                """,
-                (
-                    f"{asset_class}:{symbol}",
-                    symbol,
-                    asset_class,
-                    "china",
-                    "china",
-                    trade_date,
-                    close,
-                    utc_now(),
-                ),
-            )
+    _seed_market_rows([
+        ("600519", "equity", "2024-01-03", 10),
+        ("000300", "index", "2024-01-02", 100),
+        ("000300", "index", "2024-01-03", 110),
+    ])
 
     gated_asset_classes: list[str] = []
 

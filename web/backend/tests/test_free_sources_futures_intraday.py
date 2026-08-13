@@ -14,8 +14,9 @@ def configure_temp_db(tmp_path, monkeypatch):
 
 
 def test_intraday_import_writes_market_intraday_bars(tmp_path, monkeypatch):
-    db_module = configure_temp_db(tmp_path, monkeypatch)
+    configure_temp_db(tmp_path, monkeypatch)
 
+    from app.services import market_lake
     from app.services.intraday import import_intraday_bars
 
     result = import_intraday_bars(
@@ -32,8 +33,10 @@ def test_intraday_import_writes_market_intraday_bars(tmp_path, monkeypatch):
     )
 
     assert result["count"] == 2
-    with db_module.db() as connection:
-        count = connection.execute("select count(*) as count from market_intraday_bars").fetchone()["count"]
+    count = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="5m", data_type="trade", source="unit", columns="count(*) as count",
+    )["count"]
     assert count == 2
 
 

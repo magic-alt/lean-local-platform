@@ -12,14 +12,13 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-from ..core.config import FILE_OBJECT_STORE_DIR, PARQUET_DIR, RUNTIME_DIR
+from ..core.config import RUNTIME_DIR
 from ..db import database_backend, db, row_to_dict
-from . import db_object_store
+from . import db_object_store, market_lake
 
 
 REDUNDANT_INDEXES: tuple[tuple[str, str], ...] = (
     ("factor_values", "idx_factor_values_symbol_date"),
-    ("market_daily_bars", "idx_market_daily_instrument_date"),
 )
 
 DAILY_BASIC_COLUMNS = (
@@ -39,71 +38,6 @@ DAILY_BASIC_COLUMNS = (
     "total_mv_cny",
     "circ_mv_cny",
 )
-
-# These tables contain provider data, canonical market facts, or derived
-# catalogues which can be regenerated.  They deliberately exclude projects,
-# settings, user accounts, paper trading, backtests, reports, and strategy
-# versions.  The order is child-before-parent where the schema has references.
-MARKET_RESET_TABLES: tuple[str, ...] = (
-    "provider_raw_archive_issues",
-    "provider_raw_archives",
-    "provider_raw_records",
-    "provider_ingestion_manifests",
-    "provider_dataset_watermarks",
-    "provider_dataset_catalog",
-    "data_sync_work_items",
-    "data_sync_items",
-    "data_sync_runs",
-    "data_record_issues",
-    "data_import_batches",
-    "data_assets",
-    "parquet_files",
-    "derived_layer_watermarks",
-    "derived_maintenance_runs",
-    "asset_capabilities",
-    "data_quality_reports",
-    "data_gaps",
-    "universe_coverage_watermarks",
-    "index_source_artifacts",
-    "index_membership_events",
-    "index_weights",
-    "universe_membership",
-    "financial_facts",
-    "financial_statements",
-    "corporate_actions",
-    "factor_values",
-    "daily_basic_values",
-    "adjustment_factors",
-    "market_ticks",
-    "market_intraday_bars",
-    "market_trade_status",
-    "market_daily_bars",
-    "trade_calendar",
-    "instrument_identifiers",
-    "instruments",
-    "securities",
-)
-
-PRESERVED_TABLE_GROUPS = {
-    "businessAndConfiguration": (
-        "projects",
-        "settings",
-        "strategies",
-        "portfolios",
-        "paper_accounts",
-        "paper_orders",
-        "paper_positions",
-    ),
-    "backtestAndResearchMetadata": (
-        "backtest_runs",
-        "backtest_results",
-        "dataset_versions",
-        "reproducibility_certificates",
-        "tasks",
-        "pipeline_runs",
-        "pipeline_steps",
-    ),
-}
 
 # Backtest execution facts and their generated/reproducibility intermediates.
 # Paper accounts, projects, strategies, settings, provider data, and PIT
@@ -254,39 +188,6 @@ def _maintenance_work_state(types: dict[str, str]) -> tuple[dict[str, int], dict
                 else:
                     stale["derived_maintenance_runs"] = count
     return active, stale
-
-
-def market_reset_plan() -> dict[str, Any]:
-    """Return the exact destructive scope without changing database state."""
-    types = _relation_types()
-    reset_tables = tuple(table for table in MARKET_RESET_TABLES if types.get(table) == "BASE TABLE")
-    active_work, stale_work = _maintenance_work_state(types)
-    return {
-        "resetTables": list(reset_tables),
-        "resetRowEstimates": _relation_row_estimates(reset_tables, types),
-        "activeWork": active_work,
-        "staleStatusRecords": stale_work,
-        "preservedTableGroups": {key: list(value) for key, value in PRESERVED_TABLE_GROUPS.items()},
-        "derivedHandling": {
-            "parquetDatasets": "invalidate_metadata_and_remove_files",
-            "datasetReleases": "revoke_without_deleting_backtest_references",
-            "clickhouse": "truncate_market_bars_when_enabled",
-            "providerRawObjects": "delete_only_provider_raw_namespace",
-        },
-        "postResetBulkDatasets": [
-            "stock_basic",
-            "trade_cal",
-            "daily",
-            "adj_factor",
-            "daily_basic",
-            "suspend_d",
-            "stk_limit",
-            "index_basic",
-            "index_daily",
-            "fut_basic",
-            "opt_basic",
-        ],
-    }
 
 
 def _safe_maintenance_directory(directory: Path, *, required_leaf: str) -> Path:
@@ -482,122 +383,6 @@ def write_mysql_schema_report(output: Path) -> dict[str, Any]:
     return {"output": str(destination), "relations": len(types), "baseTables": len(base_tables)}
 
 
-def _invalidate_derived_catalogues(connection: Any, types: dict[str, str], timestamp: str) -> dict[str, int]:
-    invalidated: dict[str, int] = {}
-    if types.get("parquet_datasets") == "BASE TABLE":
-        columns = _relation_columns("parquet_datasets")
-        assignments = ["row_count=0", "file_count=0"]
-        parameters: list[Any] = []
-        if "status" in columns:
-            assignments.append("status='invalidated'")
-        if "is_production" in columns:
-            assignments.append("is_production=0")
-        if "is_certified" in columns:
-            assignments.append("is_certified=0")
-        if "qa_status" in columns:
-            assignments.append("qa_status='invalidated'")
-        if "superseded_at" in columns:
-            assignments.append("superseded_at=?")
-            parameters.append(timestamp)
-        if "superseded_reason" in columns:
-            assignments.append("superseded_reason='direct_market_reset'")
-        if "updated_at" in columns:
-            assignments.append("updated_at=?")
-            parameters.append(timestamp)
-        cursor = connection.execute(
-            "update parquet_datasets set " + ",".join(assignments),
-            parameters,
-        )
-        invalidated["parquet_datasets"] = int(cursor.rowcount or 0)
-    if types.get("dataset_releases") == "BASE TABLE":
-        from .dataset_releases import revoke_all_for_direct_market_reset
-
-        invalidated["dataset_releases"] = revoke_all_for_direct_market_reset(connection, timestamp)
-    if types.get("reproducibility_certificates") == "BASE TABLE":
-        cursor = connection.execute(
-            "update reproducibility_certificates set status='invalidated' where status <> 'invalidated'"
-        )
-        invalidated["reproducibility_certificates"] = int(cursor.rowcount or 0)
-    if types.get("paper_account_trust_certifications") == "BASE TABLE":
-        cursor = connection.execute(
-            """
-            update paper_account_trust_certifications
-            set status='revoked',revoked_at=?,revoke_reason='direct_market_reset'
-            where status <> 'revoked'
-            """,
-            (timestamp,),
-        )
-        invalidated["paper_account_trust_certifications"] = int(cursor.rowcount or 0)
-    return invalidated
-
-
-def direct_market_reset() -> dict[str, Any]:
-    """Clear regenerable market data without touching business/backtest rows.
-
-    This function is intentionally only reachable through the CLI's three
-    explicit acknowledgements.  It releases InnoDB space using TRUNCATE for
-    base tables, invalidates derived catalogues rather than violating their backtest FKs,
-    and clears only the provider-raw external object namespace.
-    """
-    _require_mysql()
-    # Validate every filesystem target before any database or ClickHouse
-    # mutation.  A custom broad path must fail before destructive work starts.
-    _safe_maintenance_directory(PARQUET_DIR, required_leaf="parquet")
-    _safe_maintenance_directory(FILE_OBJECT_STORE_DIR / "provider-raw", required_leaf="provider-raw")
-    plan = market_reset_plan()
-    if plan["activeWork"]:
-        raise RuntimeError(f"active_work_must_stop_before_market_reset:{plan['activeWork']}")
-
-    from . import market_data
-
-    clickhouse = market_data.clear_market_bars()
-    types = _relation_types()
-    timestamp = datetime.now(timezone.utc).isoformat()
-    raw_object_ids: list[str] = []
-    if types.get("provider_raw_archives") == "BASE TABLE":
-        with db() as connection:
-            raw_object_ids = [
-                str(row["object_id"])
-                for row in connection.execute("select distinct object_id from provider_raw_archives").fetchall()
-            ]
-
-    reset_tables = [table for table in MARKET_RESET_TABLES if types.get(table) == "BASE TABLE"]
-    with db() as connection:
-        invalidated = _invalidate_derived_catalogues(connection, types, timestamp)
-        for table in reset_tables:
-            connection.execute(f"truncate table `{table}`")
-
-    deleted_objects = 0
-    for object_id in raw_object_ids:
-        db_object_store.delete_object(object_id)
-        deleted_objects += 1
-    compacted_object_tables: list[str] = []
-    if deleted_objects and _relation_types().get("stored_object_chunks") == "BASE TABLE":
-        # Provider-raw chunks were selectively deleted to preserve backtest
-        # evidence.  Rebuilding this much smaller residual table is what
-        # actually returns its now-free .ibd pages to the filesystem.
-        with db() as connection:
-            connection.execute("optimize table stored_object_chunks")
-        compacted_object_tables.append("stored_object_chunks")
-    filesystem = {
-        "parquetEntriesRemoved": _remove_directory_contents(PARQUET_DIR, required_leaf="parquet"),
-        "providerRawEntriesRemoved": _remove_directory_contents(FILE_OBJECT_STORE_DIR / "provider-raw", required_leaf="provider-raw"),
-    }
-    result = {
-        "status": "complete",
-        "completedAt": datetime.now(timezone.utc).isoformat(),
-        "truncatedTables": reset_tables,
-        "invalidated": invalidated,
-        "providerRawObjectsDeleted": deleted_objects,
-        "compactedObjectTables": compacted_object_tables,
-        "filesystem": filesystem,
-        "clickhouse": clickhouse,
-        "preservedTableGroups": plan["preservedTableGroups"],
-    }
-    result["auditPath"] = _write_reset_audit({"plan": plan, "result": result})
-    return result
-
-
 def storage_report() -> dict[str, Any]:
     """Return logical data/index bytes without probing the host filesystem."""
     with db() as connection:
@@ -682,60 +467,63 @@ def _wide_value_sql(alias: str = "d") -> str:
 
 def daily_basic_eav_audit() -> dict[str, int]:
     """Classify legacy EAV values without relying on compatibility views."""
-    value = _wide_value_sql()
     with db() as connection:
-        row = connection.execute(
-            f"""
-            select
-              count(*) as legacy_rows,
-              sum(case when d.symbol is null then 1 else 0 end) as uncovered_rows,
-              sum(case when d.symbol is not null and ({value}) is null then 1 else 0 end) as null_wide_rows,
-              sum(case when d.symbol is not null and ({value}) is not null
-                        and abs(f.value - ({value})) <= 0.000000001 then 1 else 0 end) as equivalent_rows,
-              sum(case when d.symbol is not null and ({value}) is not null
-                        and abs(f.value - ({value})) > 0.000000001 then 1 else 0 end) as mismatched_rows
-            from factor_values f
-            left join daily_basic_values d
-              on d.symbol=f.symbol and d.trade_date=f.trade_date and d.source=f.source
-            where f.source='tushare:daily_basic'
-            """
-        ).fetchone()
-    result = row_to_dict(row) or {}
-    return {key: int(result.get(key) or 0) for key in ("legacy_rows", "uncovered_rows", "null_wide_rows", "equivalent_rows", "mismatched_rows")}
+        legacy = [dict(row) for row in connection.execute(
+            "select symbol,trade_date,factor_name,value from factor_values where source='tushare:daily_basic'"
+        ).fetchall()]
+    wide = market_lake.query_matching(
+        kind="daily_basic", asset_class="equity", market="china", resolution="daily",
+        data_type="metric", source="tushare:daily_basic", columns="*",
+    )
+    lookup = {(str(row["symbol"]), str(row["trade_date"])): row for row in wide}
+    result = {"legacy_rows": len(legacy), "uncovered_rows": 0, "null_wide_rows": 0, "equivalent_rows": 0, "mismatched_rows": 0}
+    for row in legacy:
+        current = lookup.get((str(row["symbol"]), str(row["trade_date"])))
+        if current is None:
+            result["uncovered_rows"] += 1
+        elif current.get(str(row["factor_name"])) is None:
+            result["null_wide_rows"] += 1
+        elif abs(float(row["value"]) - float(current[str(row["factor_name"])])) <= 1e-9:
+            result["equivalent_rows"] += 1
+        else:
+            result["mismatched_rows"] += 1
+    return result
 
 
 def delete_equivalent_daily_basic_eav(*, batch_size: int = 10_000, max_batches: int | None = None) -> dict[str, int]:
     """Delete only legacy rows whose wide-column value is present and equal."""
-    value = _wide_value_sql()
+    wide = market_lake.query_matching(
+        kind="daily_basic", asset_class="equity", market="china", resolution="daily",
+        data_type="metric", source="tushare:daily_basic", columns="*",
+    )
+    lookup = {(str(row["symbol"]), str(row["trade_date"])): row for row in wide}
     deleted = 0
     batches = 0
     last_key = ("", "", "", "")
     while max_batches is None or batches < max_batches:
         with db() as connection:
-            rows = connection.execute(
-                f"""
-                select f.symbol,f.trade_date,f.factor_name,f.source
-                from factor_values f join daily_basic_values d
-                  on d.symbol=f.symbol and d.trade_date=f.trade_date and d.source=f.source
-                where f.source='tushare:daily_basic' and ({value}) is not null
-                  and abs(f.value - ({value})) <= 0.000000001
-                  and (f.symbol,f.trade_date,f.factor_name,f.source) > (?,?,?,?)
-                order by f.symbol,f.trade_date,f.factor_name,f.source
-                limit ?
-                """,
+            scanned = connection.execute(
+                """select symbol,trade_date,factor_name,source,value from factor_values
+                   where source='tushare:daily_basic'
+                     and (symbol,trade_date,factor_name,source) > (?,?,?,?)
+                   order by symbol,trade_date,factor_name,source limit ?""",
                 (*last_key, max(1, min(int(batch_size), 100_000))),
             ).fetchall()
-            if not rows:
+            if not scanned:
                 break
-            connection.executemany(
-                """
-                delete from factor_values
-                where symbol=? and trade_date=? and factor_name=? and source=?
-                """,
-                [(row["symbol"], row["trade_date"], row["factor_name"], row["source"]) for row in rows],
-            )
-            last = rows[-1]
+            last = scanned[-1]
             last_key = (str(last["symbol"]), str(last["trade_date"]), str(last["factor_name"]), str(last["source"]))
+            rows = [row for row in scanned if (current := lookup.get((str(row["symbol"]), str(row["trade_date"]))))
+                    and current.get(str(row["factor_name"])) is not None
+                    and abs(float(row["value"]) - float(current[str(row["factor_name"])])) <= 1e-9]
+            if rows:
+                connection.executemany(
+                    """
+                    delete from factor_values
+                    where symbol=? and trade_date=? and factor_name=? and source=?
+                    """,
+                    [(row["symbol"], row["trade_date"], row["factor_name"], row["source"]) for row in rows],
+                )
         deleted += len(rows)
         batches += 1
     return {"deleted": deleted, "batches": batches, **daily_basic_eav_audit()}

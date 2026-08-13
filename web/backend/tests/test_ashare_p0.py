@@ -73,6 +73,7 @@ def import_sample_ashare(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services.benchmark import import_benchmark_rows
     from app.services.data import import_ashare_research_data
+    from app.services.ashare_repository import upsert_trade_status
 
     asset = {}
     for source in ("akshare", "tushare"):
@@ -115,13 +116,6 @@ def import_sample_ashare(tmp_path, monkeypatch):
         )
         connection.execute(
             "update securities set is_st=1 where symbol='600519'"
-        )
-        connection.execute(
-            """
-            update market_trade_status set is_suspended=1,can_buy=0,can_sell=0
-            where symbol='600519' and trade_date='2024-01-04'
-              and asset_class='equity' and market='china' and venue='china'
-            """
         )
         connection.execute(
             """
@@ -175,6 +169,11 @@ def import_sample_ashare(tmp_path, monkeypatch):
             "update parquet_datasets set dataset_version=? where id='fixture-tushare'",
             (f"tushare-{'fixture-tushare'[:12]}-{manifest_sha256[:12]}",),
         )
+    upsert_trade_status(
+        [{"symbol": "600519", "trade_date": "2024-01-04", "is_suspended": True,
+          "can_buy": False, "can_sell": False}],
+        source="official-fixture", batch_id="fixture",
+    )
     return asset
 
 
@@ -882,15 +881,18 @@ def test_run_input_fingerprint_is_stable_across_run_ids(tmp_path, monkeypatch):
         parameters={**parameters, "initialCash": 200000},
         docker_image="quantconnect/lean@sha256:fixed",
     )
-    import app.db as db_module
+    from app.services import market_lake
 
-    with db_module.db() as connection:
-        connection.execute(
-            """
-            update market_daily_bars set close=close+0.01
-            where symbol='600519' and source='akshare' and trade_date='2024-01-03'
-            """
-        )
+    correction = market_lake.query_rows(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source="akshare",
+        predicates=("symbol=?", "trade_date=?"), parameters=("600519", "2024-01-03"), limit=1,
+    )[0]
+    correction["close"] = float(correction["close"]) + 0.01
+    market_lake.upsert_rows(
+        [correction], kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source="akshare",
+    )
     changed_data = run_fingerprint.build_run_fingerprint(
         run_id="run-e",
         parameters=parameters,
@@ -1170,20 +1172,14 @@ def test_suspension_evidence_is_not_overwritten_by_stk_limit_status(tmp_path, mo
 def test_execution_coverage_uses_canonical_market_suspension_evidence(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
-    from app.db import db
     from app.services.ashare_repository import _execution_coverage_dates
     from app.services.market_repository import upsert_market_trade_status
 
-    with db() as connection:
-        connection.execute(
-            """
-            insert into market_trade_status
-                (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
-                 is_suspended,can_buy,can_sell,source,batch_id,updated_at)
-            values ('legacy-test-status',?,'equity','china','china',?,1,?,?,?,?,?,'now')
-            """,
-            ("000301", "2021-12-22", 0, 1, 1, "tushare:stk_limit", "limit-batch"),
-        )
+    upsert_market_trade_status(
+        [{"trade_date": "2021-12-22", "is_suspended": False, "can_buy": True, "can_sell": True}],
+        symbol="000301", asset_class="equity", market="china",
+        source="tushare:stk_limit", batch_id="limit-batch",
+    )
     upsert_market_trade_status(
         [
             {
@@ -1304,8 +1300,8 @@ def test_security_master_bulk_path_populates_all_canonical_tables(tmp_path, monk
 def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
-    from app.db import db
     from app.services.ashare_repository import LOOKUP_BATCH_SIZE, effective_trade_status, upsert_trade_status
+    from app.services import market_lake
 
     start = datetime(2024, 1, 1)
     official_rows = [
@@ -1323,10 +1319,9 @@ def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     upsert_trade_status(official_rows, source="official-unit", batch_id="official-batch")
     upsert_trade_status(inferred_rows, source="unit:ohlcv_inferred", batch_id="inferred-batch")
 
-    with db() as connection:
-        market = connection.execute(
-            "select count(*) as count from market_trade_status where symbol='600001'"
-        ).fetchone()
+    market = market_lake.query_matching(
+        kind="trade_status", predicates=("symbol=?",), parameters=("600001",), columns="symbol",
+    )
 
     first = effective_trade_status("600001", start.date().isoformat())
     last = effective_trade_status(
@@ -1335,7 +1330,7 @@ def test_trade_status_bulk_priority_spans_lookup_chunks(tmp_path, monkeypatch):
     assert first and last
     assert first["can_buy"] is last["can_buy"] is False
     assert first["source"] == last["source"] == "official-unit"
-    assert market["count"] == (LOOKUP_BATCH_SIZE + 1) * 2
+    assert len(market) == (LOOKUP_BATCH_SIZE + 1) * 2
 
 
 def test_adjustment_factors_write_factor_file_and_corporate_actions(tmp_path, monkeypatch):

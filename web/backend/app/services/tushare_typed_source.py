@@ -180,7 +180,7 @@ def persist_typed_source_rows(
     rows: list[dict[str, Any]],
     batch_id: str,
 ) -> dict[str, int]:
-    if not rows or os.environ.get("LEAN_TUSHARE_TYPED_SOURCE_WRITES", "1").lower() in {"0", "false", "no", "off"}:
+    if not rows or os.environ.get("LEAN_TUSHARE_TYPED_SOURCE_WRITES", "0").lower() in {"0", "false", "no", "off"}:
         return {"scanned": len(rows), "inserted": 0, "revised": 0, "unchanged": len(rows)}
     contract = contract_for(dataset_key)
     if not contract or contract["storageTier"] == "columnar":

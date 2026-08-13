@@ -1,157 +1,135 @@
-# 数据、增量更新与 PIT
+# 数据
 
-MySQL 是行情、参考数据、同步状态和质量记录的事实来源。LEAN 缓存、Parquet/DuckDB 和 ClickHouse 是可重建或可选派生层。
+平台的股票行情事实层是仓库下的 `data/` Parquet 数据湖。MySQL 只保存任务、水位、数据集注册、质量结果、认证、账户与审计等控制平面数据，不保存日线、分钟线、复权因子或每日指标。
 
-![Data Library 的一键同步、容量和数据集状态](assets/data-library.png)
+## 数据目录与职责
 
-## 数据集类型
+默认根目录是 `/Users/kaermax/lean-platform/data`，也可通过 `LEAN_DATA_DIR` / `LEAN_MARKET_DATA_DIR` 显式覆盖。目录职责如下：
 
-### 一键更新的 10 个数据集
+```text
+data/
+├── bronze/tushare/
+│   ├── current/<dataset>/trade_date=YYYYMMDD/data.parquet
+│   └── revisions/<dataset>/...
+├── silver/
+│   ├── daily/current/trade_date=YYYYMMDD/data.parquet
+│   └── reference/current/*.parquet
+├── gold/
+│   ├── adjusted/
+│   ├── pit/
+│   ├── features/
+│   └── qlib_staging/
+├── qlib/                 # 外部 Qlib 产物，只读
+├── lean/                 # LEAN 可重建缓存
+├── registry/
+├── quality/
+└── output/parquet/       # 平台分析/ML 派生产物
+```
 
-| Dataset | 内容 | 常用消费者 |
-| --- | --- | --- |
-| `stock_basic` | A 股证券主数据和上市状态 | 搜索、公司资料、交易规则 |
-| `trade_cal` | 交易日历 | preflight、回测日期和增量窗口 |
-| `daily` | A 股日线 OHLCV | 回测、Preview、研究 |
-| `adj_factor` | 复权因子 | LEAN factor 文件和复权研究 |
-| `suspend_d` | 停牌历史 | 可交易状态和执行门禁 |
-| `stk_limit` | 每日涨跌停价 | A 股成交约束 |
-| `index_basic` | 指数资料 | 基准和股票池元数据 |
-| `index_daily` | 指数日线 | 真实基准和指数 Preview |
-| `fut_basic` | 期货合约资料 | 合约搜索和研究 |
-| `opt_basic` | 期权合约资料 | 合约搜索和研究 |
+- Bronze 保存 Provider 原始字段。日线按交易日写入，每个分区同时保存 `manifest.json`；已有分区被修订时，旧文件和旧 manifest 先进入 `revisions/`。
+- Silver 是平台统一读取的规范化行情层。A 股日线主路径为 `silver/daily/current/trade_date=*/data.parquet`。
+- Gold 用于 PIT、复权视图、特征和模型输入。
+- `qlib/` 与 `gold/qlib_staging/` 可被平台读取，但 lean-platform 不写入、不修改；Qlib 仓库也不在本项目改动范围内。
+- LEAN、Qlib、ClickHouse 都是可由事实层生成的消费层，不是股票行情主库。
 
-`daily_basic` 等其他 catalog 数据集默认是 `on_demand`，不会参与一键更新。
+不要在根目录重新创建 `Data/`、`parquet/`、`runs/` 或 `results/` 作为运行目录。
 
-### 全量与增量
+## 股票数据下载和保存
 
-- 没有成功完整建库标记时，页面显示“一键全量更新”。
-- 10 个数据集完整成功后保存建库状态、水位和 checkpoint，按钮变为“一键增量更新”。
-- 重启 API、worker 或电脑不会重置全量完成状态。
-- 增量同步按数据集水位决定范围；`daily`、`stk_limit` 等日常数据优先按缺失交易日更新。
-- 同步幂等：重复处理不等于重复插入，因此 `processed` 可以大于 `inserted`。
+Data 页面的一键建库/增量更新仍通过 TuShare 任务运行。股票日线的保存顺序是：
 
-## 进度字段
+```text
+TuShare daily
+  -> 字段与日期校验
+  -> 临时 Parquet
+  -> bronze/tushare/current/daily/trade_date=YYYYMMDD
+  -> 旧版本归档到 bronze/tushare/revisions
+  -> silver/daily/current/trade_date=YYYYMMDD
+  -> 原子替换 data.parquet 和 manifest.json
+  -> MySQL 更新任务、水位、血缘和质量状态
+```
+
+写入使用临时文件加 `os.replace` 发布，读取者不会看到半个分区。股票日线、`adj_factor`、`daily_basic` 和交易状态都直接进入 Parquet 数据层；不会回写已删除的 MySQL 股票表。
+
+全量更新用于首次建库或明确重建。增量更新从已保存的交易日水位继续，并允许 Provider 对历史日期做修订。历史分区被改写前必须先保留修订副本，因此同一日期的新版本不会静默覆盖证据。
+
+下载进度中的常用含义：
 
 | 字段 | 含义 |
 | --- | --- |
-| API 真实调用 | Provider 实际请求次数，不是股票计数 |
-| 下载 | Provider 返回并进入处理链路的行数 |
-| 入库 | 成功写入或幂等更新 canonical 表的行数 |
-| 校验 | 通过字段和业务质量检查的行数 |
-| 隔离 | 未通过校验、不能进入 canonical 表的行数 |
-| 空结果 | 合法请求但没有返回数据的工作单元 |
-| 工作单元/s | 股票、交易日或批次的完成速度 |
-| Checkpoint | 可恢复的小批次边界 |
+| 下载 | Provider 返回并进入校验链路的行数 |
+| 落盘 | 成功原子发布到 Parquet 分区的行数 |
+| 隔离 | 未通过 schema/质量校验、未进入 current 的行数 |
+| 水位 | 已完整发布且可继续增量的最后交易日 |
+| checkpoint | 可重试任务已完成的工作单元 |
 
-某些股票没有停牌或涨跌停记录，`suspend_d`/`stk_limit` 空结果是正常现象。大量空结果仍会计入覆盖分析。
+## 其他数据集与按需下载
 
-## 正确性和审计链
+财务、指数成分、停复牌、涨跌停和公司行为采用各自的 Bronze 分区及 PIT 规则。按需下载必须选择明确的数据集、范围和目标；股票类事实默认写 Parquet，控制平面只记录请求、任务和产物清单。
 
-每个 Provider 批次依次执行：
+对于未纳入规范化模型的 Provider 响应，系统可保存校验过的压缩原始归档。原始归档不能替代 Bronze/Silver 分区，也不能把逐行 JSON 当作新的股票事实表。
 
-1. 检查接口权限、请求范围和响应结构。
-2. 标准化股票代码、日期、数值和 null。
-3. 验证必填字段、主键、日期范围、OHLC 关系和业务约束。
-4. 响应内去重，并按 canonical 主键幂等 upsert。
-5. 在内存或整批范围内处理来源优先级。
-6. 将无效行连同原因、来源和批次信息写入隔离区。
-7. 保存 manifest、请求/载荷哈希、计数、质量报告和水位。
-8. 需要时比较 MySQL、Parquet 或另一来源的行数与日期范围。
+`LEAN_TUSHARE_TYPED_SOURCE_WRITES` 默认关闭。它只用于仍需保留的参考类 typed source 兼容表，不得用于重新建立 MySQL 行情或每日指标表。
 
-生产查询不会因为 provider 名称为 `tushare` 就自动信任数据。每次 canonical
-写入都会撤销该范围的旧认证；只有批次来源、QA、MySQL/Parquet/DuckDB 行数和
-文件哈希全部通过，才会生成新的 production certification。AKShare、Baostock、
-AData、合成 fixture 等只能在显式 `allowResearchSource=true` 时用于研究。
+## 后端如何读取
 
-安装 2026-07-22 fail-closed migration 后，旧认证保持撤销，直到管理员执行受控的
-`full_rebuild` 同步。普通增量 no-op 不能反向证明旧 import batch；production
-回测和 Paper 会继续阻断，直至全量同步、raw archive、派生层 materialization 和
-一致性报告全部成功。
+所有行情服务经 `app.services.market_lake` 读取。该层把现有文件字段统一成平台契约，例如：
 
-规范化表已经无损保存的数据不会再次逐行序列化完整 JSON。`provider_raw_records` 只保留键、日期和哈希索引；不能无损规范化的响应按批 gzip 压缩并内容寻址归档。
+- `ts_code=600519.SH` / `symbol=SH600519` 统一为 `600519`；
+- `trade_date=20260812` 统一为 `2026-08-12`；
+- `vol`、`pre_close`、`pct_chg` 映射为 `volume`、`prev_close`、`pct_change`；
+- Silver 中的 `paused`、`known_suspended`、`is_st` 和涨跌停价形成交易状态视图。
 
-## 按需下载
-
-展开其他数据集后点击单独下载：
-
-1. 选择 catalog 中标记为 `on_demand` 的数据集。
-2. 从后台批准的宿主机目标中选择实际存储地址。
-3. 选择 Parquet 或 JSON Lines 等支持格式。
-4. 查看任务状态和最终 artifact 路径。
-
-表单按数据来源、标的范围、时间范围和输出选项分组。API Key 与覆盖已有文件等低频选项位于高级设置；弹窗最多两列，小屏自动单列。
-
-系统不会无提示地固定写到电脑默认硬盘。`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` 默认 50 GiB，限制单次按需 MySQL 写入估算，不限制一键建库，也不会用包含全量同步数据的 MySQL 实例总大小误判按需修复。所有写入仍受物理磁盘安全线保护。
-
-## 数据集 Preview
-
-- 股票 Preview：行情、公司资料、复权、停牌、涨跌停、覆盖、标识符和股票池。
-- 交易日历 Preview：按市场、来源和日期查看交易状态。
-- 指数 Preview：指数资料和指数日线；点击指数资料中的代码可直接加载该指数 K 线。
-- 期货/期权 Preview：只显示 Asia/Shanghai 当前日期处于上市日至最后交易日之间的合约；生命周期字段缺失时 fail closed，不展示该记录。
-
-Preview 只读取本地数据库，不会因为打开预览而自动调用 Provider。未知字段必须安全格式化，单个预览错误不能导致整个 Web 白屏。
-
-期权 Preview 表示合约生命周期当前有效，不代表此刻存在报价、流动性、账户权限或可成交条件。字段解释、合约选择、盈亏风险、到期处理和平台当前执行边界见 [期权数据、研究与交易边界](options-trading.md)。
-
-## CSV 导入
-
-导入前先下载匹配模板：
+DuckDB 直接查询 Parquet，并进行列裁剪和条件下推。API 示例：
 
 ```text
-GET  /api/data/import-csv/template
-POST /api/data/import-csv
+GET /api/data/query?source=parquet&providerSource=tushare&market=china&symbol=600519
 ```
 
-模板随 Asset Class、Market、Resolution 和 Data Type 变化。后端会先检查必填列、日期和数值类型；格式错误应整体拒绝并返回字段信息，不能静默部分入库。
+`source` 只接受 `parquet`、`duckdb`，以及已配置的可选 `clickhouse`；`mysql`、`database`、`local` 不再是行情查询来源。Preview 也只读本地 Parquet/归档，不会因为打开页面而调用 Provider。
 
-## PIT 股票池
+在 Python 服务内应使用 `market_lake.query_rows()`、`query_matching()` 或领域 repository，不要直接拼接某个分区路径，也不要查询已删除的 `market_daily_bars`、`market_intraday_bars`、`market_trade_status`、`adjustment_factors`、`daily_basic_values` 表。
 
-独立批量回测默认解析回测开始日的历史有效成分，并把股票代码固化到批次配置。动态组合在每个调仓日根据 `announce_date`、`effective_date`、`start_date` 和 `end_date` 解析成分。
+## Qlib 与 LEAN
 
-缺少历史覆盖时必须阻止运行，不能用当前成分回填历史。CSI300 官方公告与附件
-现已从 2005-04-08 起完整重建；生产清单保存逐源 URL/哈希和 bundle SHA，离线
-重放会验证历史链条及各年抽样日均为 300 只。
+Qlib 产物是外部派生层。lean-platform 可以参考现有 Qlib 数据层次并读取 `gold/qlib_staging` 中的基准数据，但不能修改 Qlib 仓库、`data/qlib` 或 Qlib 自己的缓存。
 
-`GET /api/pit/universes/coverage` 独立列出每个已提供 universe 的发布日、实际
-覆盖范围、来源、bundle 哈希和 `complete/partial/missing/failed` 认证。CSI500、
-CSI1000、SSE50 和 STAR50 已导入可获得的 TuShare 月度历史，但发布日至首个
-快照之间的缺口仍保持 `partial`，不得用当前成员回填。
+LEAN 数据由 Silver/Gold 生成或恢复。回测前的缓存准备、fingerprint 和校验都必须指向同一数据版本；删除 LEAN 缓存不会删除事实数据。平台不再执行“MySQL 导出 Parquet”，旧的 export/rebuild API 已移除；现在的 Parquet registry 操作只负责发现、注册和校验已有数据湖。
 
-## 跨资产质量和派生水位
+## 数据质量和可复现
 
-ETF、可转债、期货和期权同步完成前会执行各自的数据质量门，包括合约/证券身份、
-上市到期生命周期、转股与赎回条款、乘数和最小变动价位、OHLC、结算价、成交量
-及持仓量。Critical 错误会阻止 manifest 晋级。
+每个可用于生产的范围至少需要：
 
-Parquet 和 ClickHouse 在工作日收盘后独立增量维护。Data 页面和
-`GET /api/data/derived/watermarks` 分别显示 canonical 范围、各层已物化范围、
-状态、行数和最后一次维护运行；MySQL 始终是事实来源。
+1. Provider、请求参数、抓取时间和批次 ID；
+2. 分区行数、日期范围和 SHA-256；
+3. schema、重复键、OHLC、交易日和异常值检查；
+4. PIT 生效时间与摄取时间；
+5. 数据集版本、认证状态和撤销原因；
+6. 回测/研究 Run 中保存的数据版本和文件指纹。
 
-## 容量和磁盘安全
+任何 current 分区改变都会使旧认证失效，重新完成文件哈希、DuckDB 可读性和质量检查后才能重新认证。MySQL 中的 registry 是目录，不是行情副本；以 Parquet 文件内容和 manifest 校验和为准。
 
-- 一键同步没有数据库大小上限。
-- 更新后必须保留 `max(500 GiB, 总磁盘 50%)` 的空间。
-- 页面显示 MySQL 物理分配空间，不等于单表逻辑行内容。
-- 删除行或清空旧 JSON 后，InnoDB 通常不会立即把物理空间返还给宿主机。
-- bulk loader 可关闭可重建 Provider 数据的 binlog；业务元数据仍保持正常持久性。
+## 备份与恢复
 
-## 常用接口
+股票数据备份必须覆盖整个 `data/`，至少包含 Bronze current/revisions、Silver、Gold、registry、quality 和需要保留的 LEAN/Qlib 派生产物。MySQL 逻辑备份只覆盖控制平面，不能恢复股票行情。
 
-| 方法 | 路径 | 说明 |
+恢复顺序建议为：
+
+1. 恢复 `data/` 并校验 manifest/SHA-256；
+2. 启动 MySQL，恢复任务、注册、账户和审计数据；
+3. 重新发现/注册 Parquet 数据集；
+4. 按需重建 LEAN、ClickHouse 和其他缓存；
+5. 做代码、数据版本、行数、日期和抽样 OHLC 校验。
+
+## 主要接口
+
+| Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/data/catalog` | 数据集、权限、策略和同步状态 |
-| `POST` | `/api/data/sync-runs` | 创建一键或指定数据集同步 |
-| `GET` | `/api/data/sync-runs/{id}` | 查询实时进度 |
-| `GET` | `/api/data/sync-runs/{id}/validation` | 质量和隔离结果 |
-| `POST` | `/api/data/sync-runs/{id}/cancel` | 干净取消 |
-| `POST` | `/api/data/sync-runs/{id}/resume` | 从 checkpoint 恢复 |
-| `GET` | `/api/data/dataset-preview/{dataset}` | 数据集感知 Preview |
-| `POST` | `/api/data/on-demand/downloads` | 创建按需下载 |
-| `GET` | `/api/data/quality/cross-asset` | 跨资产最新质量门状态 |
-| `GET` | `/api/data/derived/watermarks` | Parquet/ClickHouse 独立水位 |
-| `POST` | `/api/data/derived/maintenance` | 创建派生层增量维护 |
-| `GET` | `/api/pit/universes/coverage` | 所有已提供 universe 的 PIT 覆盖认证 |
+| `GET` | `/api/data/query` | DuckDB/Parquet 行情查询 |
+| `POST` | `/api/data/resolve` | 解析 Data Scope 与可用覆盖 |
+| `GET` | `/api/data/parquet/datasets` | 浏览已发现/注册的数据集 |
+| `POST` | `/api/data/parquet/consistency` | 校验分区、manifest 和可读性 |
+| `POST` | `/api/data/on-demand/downloads` | 创建按需下载任务 |
+| `GET` | `/api/data/derived/watermarks` | 查看可选派生层水位 |
 
-更完整的数据模型、归档和派生层说明见 [数据管线](../data_pipeline.md)。
+详细路径和 schema 以 [API Reference](api-reference.md) 为准。

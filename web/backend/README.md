@@ -66,9 +66,9 @@ The API also serves the example catalog, experiment batches, dataset previews/on
 Useful data maintenance tasks:
 
 ```bash
-# Rebuild derived Parquet datasets from MySQL market_daily_bars and persist a consistency report.
-.venv/bin/python ../../scripts/rebuild_market_parquet.py \
-  --asset-class equity --market china --venue china --resolution daily --data-type trade --adjust raw
+# Validate/register the existing canonical Parquet lake through the API.
+curl -X POST http://127.0.0.1:8000/api/data/parquet/consistency \
+  -H 'Content-Type: application/json' -d '{"assetClass":"equity","market":"china","source":"tushare"}'
 
 # Generate a batch A-share multisource QA acceptance report from already ingested provider data.
 .venv/bin/python ../../scripts/compare_ashare_sources_batch.py \

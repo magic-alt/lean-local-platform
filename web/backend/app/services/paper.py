@@ -21,6 +21,7 @@ from .trading_config import ashare_trading_config, hk_trading_config
 from .trading_calendar import next_trade_date
 from .run_paths import run_directory
 from . import paper_order_pipeline
+from . import market_lake
 
 
 def _side(value: str) -> str:
@@ -1822,65 +1823,33 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
 
 
 def _ashare_bar(symbol: str, trade_date: str, source: str | None = None) -> dict[str, Any] | None:
-    source_clause = "and source = ?" if source else ""
-    params: list[Any] = [symbol, trade_date]
-    if source:
-        params.append(source)
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select * from market_daily_bars
-            where symbol = ? and trade_date = ? and asset_class='equity'
-              and market='china' and venue='china' and resolution='daily'
-              and data_type='trade' and adjust = 'raw'
-              {source_clause}
-            order by source desc
-            limit 1
-            """,
-            params,
-        ).fetchone()
-    return row_to_dict(row)
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source=source,
+        predicates=("symbol=?", "trade_date=?"), parameters=(symbol, trade_date),
+        order_by="source desc", limit=1,
+    )
+    return rows[0] if rows else None
 
 
 def _market_bar(symbol: str, trade_date: str, *, asset_class: str = "equity", market: str = "china", source: str | None = None) -> dict[str, Any] | None:
-    source_clause = "and source = ?" if source else ""
-    params: list[Any] = [symbol, trade_date, asset_class, market]
-    if source:
-        params.append(source)
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select * from market_daily_bars
-            where symbol = ? and trade_date = ? and asset_class = ? and market = ?
-              and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
-              {source_clause}
-            order by source desc
-            limit 1
-            """,
-            params,
-        ).fetchone()
-    return row_to_dict(row)
+    rows = market_lake.query_matching(
+        kind="bars", asset_class=asset_class, market=market,
+        resolution="daily", data_type="trade", adjust="raw", source=source,
+        predicates=("symbol=?", "trade_date=?"), parameters=(symbol, trade_date),
+        order_by="source desc", limit=1,
+    )
+    return rows[0] if rows else None
 
 
 def _latest_ashare_bars(symbol: str, trade_date: str, limit: int, source: str | None = None) -> list[dict[str, Any]]:
-    source_clause = "and source = ?" if source else ""
-    params: list[Any] = [symbol, trade_date]
-    if source:
-        params.append(source)
-    params.append(limit)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select * from market_daily_bars
-            where symbol = ? and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and trade_date <= ? and adjust = 'raw'
-              {source_clause}
-            order by trade_date desc
-            limit ?
-            """,
-            params,
-        ).fetchall()
-    return list(reversed(rows_to_dicts(rows)))
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source=source,
+        predicates=("symbol=?", "trade_date<=?"), parameters=(symbol, trade_date),
+        order_by="trade_date desc", limit=limit,
+    )
+    return list(reversed(rows))
 
 
 def _latest_market_bars(
@@ -1891,23 +1860,13 @@ def _latest_market_bars(
     market: str,
     source: str | None = None,
 ) -> list[dict[str, Any]]:
-    source_clause = "and source = ?" if source else ""
-    params: list[Any] = [symbol, market, trade_date]
-    if source:
-        params.append(source)
-    params.append(limit)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select * from market_daily_bars
-            where symbol = ? and asset_class = 'equity' and market = ?
-              and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
-              and trade_date <= ? {source_clause}
-            order by trade_date desc limit ?
-            """,
-            params,
-        ).fetchall()
-    return list(reversed(rows_to_dicts(rows)))
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market=market,
+        resolution="daily", data_type="trade", adjust="raw", source=source,
+        predicates=("symbol=?", "trade_date<=?"), parameters=(symbol, trade_date),
+        order_by="trade_date desc", limit=limit,
+    )
+    return list(reversed(rows))
 
 
 def create_signal(
@@ -2162,17 +2121,11 @@ def _next_symbol_trade_date(session: dict[str, Any], symbol: str, trade_date: st
         ).fetchone()
         if row:
             return row["trade_date"]
-        row = connection.execute(
-            """
-            select distinct trade_date
-            from market_daily_bars
-            where symbol = ? and market = ? and trade_date > ?
-            order by trade_date asc
-            limit 1
-            """,
-            (symbol, market, date_value),
-        ).fetchone()
-    return row["trade_date"] if row else None
+    rows = market_lake.query_matching(
+        kind="bars", market=market, predicates=("symbol=?", "trade_date>?"),
+        parameters=(symbol, date_value), columns="trade_date", order_by="trade_date asc", limit=1,
+    )
+    return str(rows[0]["trade_date"])[:10] if rows else None
 
 
 def _signal_execution_date(session: dict[str, Any], signal: dict[str, Any], policy: str) -> str | None:
@@ -2687,17 +2640,12 @@ def _replay_dates(session: dict[str, Any], start_date: str, end_date: str) -> li
         if dates:
             return dates
         placeholders = ",".join("?" for _ in symbols)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select distinct trade_date
-                from market_daily_bars
-                where symbol in ({placeholders}) and market = ? and trade_date between ? and ?
-                order by trade_date asc
-                """,
-                (*symbols, market, start, end),
-            ).fetchall()
-        return [row["trade_date"] for row in rows]
+        rows = market_lake.query_matching(
+            kind="bars", market=market, columns="trade_date",
+            predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+            parameters=(*symbols, start, end), order_by="trade_date asc",
+        )
+        return sorted({str(row["trade_date"])[:10] for row in rows})
     return []
 
 

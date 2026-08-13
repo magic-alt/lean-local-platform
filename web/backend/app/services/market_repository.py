@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import math
-import os
-import tempfile
 import uuid
 from datetime import datetime
 from typing import Any
 
-from ..db import bulk_db, database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .alerts import emit_alert
+from . import market_lake
 from .source_gate import invalidate_source_certification
 
 
@@ -195,7 +194,7 @@ def upsert_market_daily_bars(
         return {"count": 0}
     first_symbol = symbol or str(rows[0].get("symbol") or rows[0].get("code") or rows[0].get("ts_code") or "").upper()
     if not first_symbol:
-        raise ValueError("symbol is required for market_daily_bars.")
+        raise ValueError("symbol is required for market bars.")
     item_id = upsert_instrument(
         symbol=first_symbol,
         asset_class=asset_class,
@@ -204,83 +203,28 @@ def upsert_market_daily_bars(
         source=source,
         status="active",
     )
-    now = utc_now()
-    parameters = []
-    for row in rows:
-        trade_date = normalize_date(
-            row.get("trade_date") or row.get("tradeDate") or row.get("date") or row.get("timestamp"),
-            "trade_date",
-        )
-        parameters.append(
-            (
-                item_id,
-                first_symbol,
-                asset_class.lower(),
-                market.lower(),
-                (venue or market).lower(),
-                trade_date,
-                resolution,
-                data_type,
-                optional_float(row.get("open")),
-                optional_float(row.get("high")),
-                optional_float(row.get("low")),
-                optional_float(row.get("close")),
-                optional_float(row.get("settle") or row.get("settle_price")),
-                optional_float(row.get("volume")),
-                optional_float(row.get("amount")),
-                optional_float(row.get("turnover_rate") or row.get("turnoverRate")),
-                optional_float(row.get("open_interest") or row.get("openInterest")),
-                optional_float(row.get("prev_close") or row.get("pre_close") or row.get("prevClose")),
-                optional_float(row.get("pct_change") or row.get("pctChange")),
-                adjust or "raw",
-                optional_float(row.get("adj_factor") or row.get("adjFactor")),
-                source,
-                batch_id,
-                now,
-            )
-        )
-    sql = """
-        insert into market_daily_bars
-            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-             open, high, low, close, settle, volume, amount, turnover_rate, open_interest,
-             prev_close, pct_change, adjust, adj_factor, source, batch_id, created_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict(instrument_id, trade_date, resolution, data_type, adjust, source) do update set
-            open = excluded.open,
-            high = excluded.high,
-            low = excluded.low,
-            close = excluded.close,
-            settle = excluded.settle,
-            volume = excluded.volume,
-            amount = excluded.amount,
-            turnover_rate = excluded.turnover_rate,
-            open_interest = excluded.open_interest,
-            prev_close = excluded.prev_close,
-            pct_change = excluded.pct_change,
-            adj_factor = excluded.adj_factor,
-            batch_id = excluded.batch_id,
-            created_at = excluded.created_at
-    """
-    connection_factory = bulk_db if bulk else db
-    certification_revoked = False
-    with connection_factory() as connection:
-        use_local_infile = (
-            bulk
-            and database_backend() == "mysql"
-            and os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower()
-            in {"1", "true", "yes", "on"}
-            and len(parameters) >= 1_000
-        )
-        if use_local_infile:
-            _load_market_daily_bars(connection, parameters)
-        else:
-            for chunk in _chunks(parameters):
-                connection.executemany(sql, chunk)
+    prepared = [
+        {
+            **row,
+            "instrument_id": item_id,
+            "symbol": first_symbol,
+            "batch_id": batch_id,
+            "settle": row.get("settle") or row.get("settle_price"),
+            "turnover_rate": row.get("turnover_rate") or row.get("turnoverRate"),
+            "open_interest": row.get("open_interest") or row.get("openInterest"),
+            "prev_close": row.get("prev_close") or row.get("pre_close") or row.get("prevClose"),
+            "pct_change": row.get("pct_change") or row.get("pctChange"),
+            "adj_factor": row.get("adj_factor") or row.get("adjFactor"),
+        }
+        for row in rows
+    ]
+    lake_result = market_lake.upsert_rows(
+        prepared, kind="bars", asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+    )
+    with db() as connection:
         certification_revoked = invalidate_source_certification(
-            source,
-            asset_class=asset_class,
-            market=market,
-            venue=venue or market,
+            source, asset_class=asset_class, market=market, venue=venue or market,
             connection=connection,
         )
     if certification_revoked:
@@ -290,7 +234,7 @@ def upsert_market_daily_bars(
             market=market.lower(),
             venue=(venue or market).lower(),
         )
-    return {"instrumentId": item_id, "count": len(parameters)}
+    return {"instrumentId": item_id, "count": len(prepared), **lake_result}
 
 
 def upsert_market_daily_bars_batch(
@@ -306,13 +250,13 @@ def upsert_market_daily_bars_batch(
     adjust: str = "raw",
     bulk: bool = False,
 ) -> dict[str, Any]:
-    """Write many symbols with one instrument lookup and one SQL pipeline."""
+    """Write many symbols directly to the canonical Parquet market lake."""
     if not rows:
         return {"count": 0, "symbols": 0}
     target_venue = (venue or market).lower()
     symbols = sorted({str(row.get("symbol") or "").upper() for row in rows if row.get("symbol")})
     if not symbols:
-        raise ValueError("symbol is required for market_daily_bars.")
+        raise ValueError("symbol is required for market bars.")
     placeholders = ",".join("?" for _ in symbols)
     with db() as connection:
         existing = connection.execute(
@@ -333,57 +277,28 @@ def upsert_market_daily_bars_batch(
                 source=source,
                 status="active",
             )
-    now = utc_now()
-    parameters = []
+    prepared = []
     for row in rows:
         symbol = str(row["symbol"]).upper()
-        parameters.append(
-            (
-                instrument_ids[symbol], symbol, asset_class.lower(), market.lower(), target_venue,
-                normalize_date(row.get("trade_date") or row.get("date"), "trade_date"),
-                resolution, data_type, optional_float(row.get("open")), optional_float(row.get("high")),
-                optional_float(row.get("low")), optional_float(row.get("close")),
-                optional_float(row.get("settle") or row.get("settle_price")), optional_float(row.get("volume")),
-                optional_float(row.get("amount")), optional_float(row.get("turnover_rate") or row.get("turnoverRate")),
-                optional_float(row.get("open_interest") or row.get("openInterest")),
-                optional_float(row.get("prev_close") or row.get("pre_close") or row.get("prevClose")),
-                optional_float(row.get("pct_change") or row.get("pctChange")), adjust or "raw",
-                optional_float(row.get("adj_factor") or row.get("adjFactor")), source, batch_id, now,
-            )
+        prepared.append(
+            {
+                **row, "symbol": symbol, "instrument_id": instrument_ids[symbol],
+                "batch_id": batch_id,
+                "settle": row.get("settle") or row.get("settle_price"),
+                "turnover_rate": row.get("turnover_rate") or row.get("turnoverRate"),
+                "open_interest": row.get("open_interest") or row.get("openInterest"),
+                "prev_close": row.get("prev_close") or row.get("pre_close") or row.get("prevClose"),
+                "pct_change": row.get("pct_change") or row.get("pctChange"),
+                "adj_factor": row.get("adj_factor") or row.get("adjFactor"),
+            }
         )
-    sql = """
-        insert into market_daily_bars
-            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-             open, high, low, close, settle, volume, amount, turnover_rate, open_interest,
-             prev_close, pct_change, adjust, adj_factor, source, batch_id, created_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict(instrument_id, trade_date, resolution, data_type, adjust, source) do update set
-            open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
-            settle=excluded.settle, volume=excluded.volume, amount=excluded.amount,
-            turnover_rate=excluded.turnover_rate, open_interest=excluded.open_interest,
-            prev_close=excluded.prev_close, pct_change=excluded.pct_change,
-            adj_factor=excluded.adj_factor, batch_id=excluded.batch_id, created_at=excluded.created_at
-    """
-    connection_factory = bulk_db if bulk else db
-    certification_revoked = False
-    with connection_factory() as connection:
-        use_local_infile = (
-            bulk
-            and database_backend() == "mysql"
-            and os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower()
-            in {"1", "true", "yes", "on"}
-            and len(parameters) >= 1_000
-        )
-        if use_local_infile:
-            _load_market_daily_bars(connection, parameters)
-        else:
-            for chunk in _chunks(parameters):
-                connection.executemany(sql, chunk)
+    lake_result = market_lake.upsert_rows(
+        prepared, kind="bars", asset_class=asset_class, market=market, venue=target_venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+    )
+    with db() as connection:
         certification_revoked = invalidate_source_certification(
-            source,
-            asset_class=asset_class,
-            market=market,
-            venue=target_venue,
+            source, asset_class=asset_class, market=market, venue=target_venue,
             connection=connection,
         )
     if certification_revoked:
@@ -393,93 +308,7 @@ def upsert_market_daily_bars_batch(
             market=market.lower(),
             venue=target_venue,
         )
-    return {"count": len(parameters), "symbols": len(symbols)}
-
-
-def _mysql_tsv_value(value: Any) -> str:
-    if value is None:
-        return r"\N"
-    return (
-        str(value)
-        .replace("\\", "\\\\")
-        .replace("\t", "\\t")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
-
-
-def _load_market_daily_bars(connection: Any, parameters: list[tuple[Any, ...]]) -> None:
-    """Load a validated daily batch through a session-local staging table."""
-    columns = (
-        "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
-        "resolution", "data_type", "open", "high", "low", "close", "settle", "volume",
-        "amount", "turnover_rate", "open_interest", "prev_close", "pct_change", "adjust",
-        "adj_factor", "source", "batch_id", "created_at",
-    )
-    connection.execute(
-        """
-        create temporary table tmp_market_daily_load (
-            instrument_id varchar(64) not null,
-            symbol varchar(32) not null,
-            asset_class varchar(32) not null,
-            market varchar(32) not null,
-            venue varchar(32) not null,
-            trade_date date not null,
-            resolution varchar(32) not null,
-            data_type varchar(32) not null,
-            open decimal(38,10), high decimal(38,10), low decimal(38,10), close decimal(38,10),
-            settle decimal(38,10), volume decimal(38,10), amount decimal(38,10),
-            turnover_rate decimal(38,10), open_interest decimal(38,10),
-            prev_close decimal(38,10), pct_change decimal(38,10),
-            adjust varchar(32) not null, adj_factor decimal(38,10),
-            source varchar(96) not null, batch_id varchar(64), created_at varchar(32) not null
-        ) engine=InnoDB
-        """
-    )
-    path = ""
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="\n",
-            prefix="lean-daily-load-", suffix=".tsv", delete=False,
-        ) as handle:
-            path = handle.name
-            for values in parameters:
-                handle.write("\t".join(_mysql_tsv_value(value) for value in values))
-                handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        quoted_columns = ",".join(f"`{column}`" for column in columns)
-        connection.execute(
-            f"""
-            load data local infile ? into table tmp_market_daily_load
-            character set utf8mb4
-            fields terminated by '\\t' escaped by '\\\\'
-            lines terminated by '\\n'
-            ({quoted_columns})
-            """,
-            (path,),
-        )
-        updates = ",".join(
-            f"`{column}`=values(`{column}`)"
-            for column in (
-                "open", "high", "low", "close", "settle", "volume", "amount",
-                "turnover_rate", "open_interest", "prev_close", "pct_change", "adj_factor",
-                "batch_id", "created_at",
-            )
-        )
-        connection.execute(
-            f"""
-            insert into market_daily_bars ({quoted_columns})
-            select {quoted_columns} from tmp_market_daily_load where 1=1
-            on duplicate key update {updates}
-            """
-        )
-    finally:
-        if path:
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
+    return {"count": len(prepared), "symbols": len(symbols), **lake_result}
 
 
 def upsert_market_trade_status(
@@ -533,13 +362,13 @@ def upsert_market_trade_status_batch(
         - {""}
     )
     if not symbols:
-        raise ValueError("symbol is required for market_trade_status.")
+        raise ValueError("symbol is required for market trade status.")
     ids = {symbol: instrument_id(asset_class, market, symbol, venue) for symbol in symbols}
     parameters = []
     for row in rows:
         row_symbol = str(row.get("symbol") or row.get("code") or row.get("ts_code") or "").split(".", 1)[0].upper()
         if not row_symbol:
-            raise ValueError("symbol is required for market_trade_status.")
+            raise ValueError("symbol is required for market trade status.")
         trade_date = normalize_date(
             row.get("trade_date") or row.get("tradeDate") or row.get("date"),
             "trade_date",
@@ -573,31 +402,7 @@ def upsert_market_trade_status_batch(
                 now,
             )
         )
-    sql = """
-        insert into market_trade_status
-            (instrument_id, symbol, asset_class, market, venue, trade_date, is_tradeable, is_suspended,
-             can_buy, can_sell, limit_up, limit_down, is_limit_up, is_limit_down,
-             is_one_word_limit_up, is_one_word_limit_down, is_st, status, reason, source, batch_id, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict(instrument_id, trade_date, source) do update set
-            is_tradeable = excluded.is_tradeable,
-            is_suspended = excluded.is_suspended,
-            can_buy = excluded.can_buy,
-            can_sell = excluded.can_sell,
-            limit_up = excluded.limit_up,
-            limit_down = excluded.limit_down,
-            is_limit_up = excluded.is_limit_up,
-            is_limit_down = excluded.is_limit_down,
-            is_one_word_limit_up = excluded.is_one_word_limit_up,
-            is_one_word_limit_down = excluded.is_one_word_limit_down,
-            is_st = excluded.is_st,
-            status = excluded.status,
-            reason = excluded.reason,
-            batch_id = excluded.batch_id,
-            updated_at = excluded.updated_at
-    """
-    connection_factory = bulk_db if bulk else db
-    with connection_factory() as connection:
+    with db() as connection:
         connection.executemany(
             """
             insert into instruments
@@ -614,9 +419,12 @@ def upsert_market_trade_status_batch(
                 for item in symbols
             ],
         )
-        for chunk in _chunks(parameters):
-            connection.executemany(sql, chunk)
-    return {"count": len(parameters), "instruments": len(symbols)}
+    prepared = [dict(zip(market_lake.STATUS_COLUMNS, values, strict=True)) for values in parameters]
+    result = market_lake.upsert_rows(
+        prepared, kind="trade_status", asset_class=asset_class, market=market,
+        venue=venue, resolution="daily", data_type="status", adjust="raw", source=source,
+    )
+    return {"count": len(parameters), "instruments": len(symbols), **result}
 
 
 def list_instruments(asset_class: str | None = None, market: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
@@ -664,34 +472,14 @@ def market_data_coverage(
     adjust: str = "raw",
     source: str | None = None,
 ) -> dict[str, Any]:
-    source_clause = "and source = ?" if source else ""
-    values: list[Any] = [
-        symbol.upper(),
-        asset_class.lower(),
-        market.lower(),
-        (venue or market).lower(),
-        resolution.lower(),
-        data_type.lower(),
-        adjust or "raw",
-        start,
-        end,
-    ]
-    if source:
-        values.append(source)
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(distinct trade_date) as row_count,
-                   min(trade_date) as first_date,
-                   max(trade_date) as last_date
-            from market_daily_bars
-            where symbol = ? and asset_class = ? and market = ? and venue = ?
-              and resolution = ? and data_type = ? and adjust = ?
-              and trade_date between ? and ? {source_clause}
-            """,
-            values,
-        ).fetchone()
-    item = row_to_dict(row) or {}
+    selected_source = source or "tushare"
+    item = market_lake.aggregate(
+        kind="bars", asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=selected_source,
+        columns="count(distinct trade_date) as row_count, min(trade_date) as first_date, max(trade_date) as last_date",
+        predicates=("symbol = ?", "trade_date between ? and ?"),
+        parameters=(symbol.upper(), start, end),
+    )
     return {
         "bar_count": int(item.get("row_count") or 0),
         "first_date": item.get("first_date"),

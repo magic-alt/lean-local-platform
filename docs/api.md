@@ -240,9 +240,7 @@ Dataset preview is data-aware for stocks, calendars, indexes, futures and option
 Parquet and quality routes:
 
 ```text
-POST   /api/data/parquet/export
 GET    /api/data/parquet/datasets
-POST   /api/data/parquet/rebuild
 POST   /api/data/parquet/consistency
 POST   /api/data/quality/ashare/daily/compare
 POST   /api/data/quality/ashare/daily/compare-batch

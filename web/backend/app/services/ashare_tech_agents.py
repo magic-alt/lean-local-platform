@@ -26,6 +26,7 @@ from ..core.config import (
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from .tasks import append_log
 from .tushare_adapter import TushareAdapter
+from . import market_lake
 
 
 AGENT_PROMPT_VERSION = "ashare-tech-agent-v3"
@@ -284,16 +285,30 @@ def _latest_fundamentals(symbols: list[str], as_of_date: str) -> dict[str, dict[
             [*symbols, *raw_fields, as_of_date],
         ).fetchall()
         factor_placeholders = ",".join("?" for _ in VALUATION_FACTORS)
-        factors = connection.execute(
+        factors = rows_to_dicts(connection.execute(
             f"""
             select symbol,factor_name,value,trade_date,source
-            from all_factor_values
+            from factor_values
             where symbol in ({placeholders})
               and factor_name in ({factor_placeholders}) and trade_date <= ?
             order by symbol,trade_date,factor_name
             """,
             [*symbols, *VALUATION_FACTORS, as_of_date],
-        ).fetchall()
+        ).fetchall())
+    daily_fields = [name for name in VALUATION_FACTORS if name in market_lake.DAILY_BASIC_COLUMNS]
+    if daily_fields:
+        daily_rows = market_lake.query_matching(
+            kind="daily_basic", data_type="metric",
+            columns="symbol,trade_date,source," + ",".join(daily_fields),
+            predicates=(f"symbol in ({placeholders})", "trade_date<=?"),
+            parameters=(*symbols, as_of_date),
+        )
+        for item in daily_rows:
+            for field in daily_fields:
+                if item.get(field) is not None:
+                    factors.append({"symbol": item["symbol"], "factor_name": field,
+                                    "value": item[field], "trade_date": item["trade_date"],
+                                    "source": item.get("source")})
     for row in rows_to_dicts(facts):
         symbol = str(row["symbol"])
         canonical = FUNDAMENTAL_FIELD_ALIASES[str(row["field_name"])]
@@ -306,7 +321,7 @@ def _latest_fundamentals(symbols: list[str], as_of_date: str) -> dict[str, dict[
             "reportDate": str(row.get("report_date"))[:10],
             "source": row.get("source"),
         }]
-    for row in rows_to_dicts(factors):
+    for row in factors:
         symbol = str(row["symbol"])
         canonical = VALUATION_FACTORS[str(row["factor_name"])]
         result[symbol]["metrics"][canonical] = row.get("value")

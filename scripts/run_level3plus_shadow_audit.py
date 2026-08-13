@@ -18,6 +18,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db, rows_to_dicts  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.alerts import emit_alert  # noqa: E402
 from app.services.ashare_multisource import compare_ashare_daily_sources_batch  # noqa: E402
 from app.services.data_coverage import benchmark_coverage  # noqa: E402
@@ -60,21 +61,20 @@ def _trade_reference_summary(symbols: list[str], start_date: str, end_date: str)
     if not symbols:
         return {"coverageRatio": 0.0, "missingSymbols": []}
     placeholders = ", ".join("?" for _ in symbols)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol, count(*) as rows,
-                   sum(case when is_st = 1 then 1 else 0 end) as st_rows,
-                   sum(case when is_suspended = 1 then 1 else 0 end) as suspended_rows,
-                   sum(case when is_limit_up = 1 or is_limit_down = 1 then 1 else 0 end) as limit_rows
-            from market_trade_status
-            where asset_class='equity' and market='china' and venue='china'
-              and symbol in ({placeholders}) and trade_date between ? and ?
-            group by symbol
-            """,
-            (*symbols, start_date, end_date),
-        ).fetchall()
-    items = rows_to_dicts(rows)
+    records = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="symbol,trade_date,is_st,is_suspended,is_limit_up,is_limit_down",
+        predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+        parameters=[*symbols, start_date, end_date],
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in records:
+        item = grouped.setdefault(str(row["symbol"]), {"symbol": row["symbol"], "rows": 0, "st_rows": 0, "suspended_rows": 0, "limit_rows": 0})
+        item["rows"] += 1
+        item["st_rows"] += int(bool(row.get("is_st")))
+        item["suspended_rows"] += int(bool(row.get("is_suspended")))
+        item["limit_rows"] += int(bool(row.get("is_limit_up") or row.get("is_limit_down")))
+    items = list(grouped.values())
     covered = {item["symbol"] for item in items if int(item.get("rows") or 0) > 0}
     return {
         "coverageRatio": len(covered) / len(symbols),

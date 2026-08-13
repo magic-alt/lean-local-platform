@@ -11,6 +11,7 @@ from .data_coverage import benchmark_coverage, symbol_coverage
 from .instrument_identity import INDEX_SYMBOLS, identifier_coverage
 from .provider_certification import add_warning_allowlist, warning_allowlist_status
 from .source_gate import require_source_allowed, resolve_effective_data_source, source_priority_for_window
+from . import market_lake
 
 
 def _symbols(value: list[str] | None) -> list[str] | None:
@@ -34,23 +35,23 @@ def candidate_symbols(
     selected = _symbols(candidates)
     if selected:
         return [symbol for symbol in selected if symbol not in INDEX_SYMBOLS][: max(1, target_size)]
-    rows_by_symbol: dict[str, dict[str, Any]] = {}
-    with db() as connection:
-        for row in connection.execute(
-            """
-            select symbol, count(distinct trade_date) as rows, avg(coalesce(amount, volume, 0)) as liquidity
-            from market_daily_bars
-            where source = ? and asset_class = 'equity' and market = 'china'
-              and resolution = 'daily' and data_type = 'trade' and adjust = 'raw'
-              and trade_date between ? and ?
-            group by symbol
-            """,
-            (source, start_date, end_date),
-        ).fetchall():
-            rows_by_symbol[row["symbol"]] = {
-                "symbol": row["symbol"], "rows": int(row["rows"] or 0),
-                "liquidity": float(row["liquidity"] or 0),
-            }
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", resolution="daily",
+        data_type="trade", adjust="raw", source=source,
+        columns="symbol,trade_date,amount,volume",
+        predicates=("trade_date between ? and ?",), parameters=(start_date, end_date),
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["symbol"]), []).append(row)
+    rows_by_symbol = {
+        symbol: {
+            "symbol": symbol,
+            "rows": len({str(row["trade_date"])[:10] for row in items}),
+            "liquidity": sum(float(row.get("amount") or row.get("volume") or 0) for row in items) / len(items),
+        }
+        for symbol, items in grouped.items()
+    }
     ranked = sorted(rows_by_symbol.values(), key=lambda item: (item["rows"], item["liquidity"], item["symbol"]), reverse=True)
     return [item["symbol"] for item in ranked if item["symbol"] not in INDEX_SYMBOLS][: max(1, int(target_size))]
 

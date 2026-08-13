@@ -7,6 +7,7 @@ from .ashare_multisource import quality_gate_range
 from .ashare_repository import data_coverage, reference_data_coverage
 from .data import provider_availability
 from .source_gate import resolve_effective_data_source, source_certification
+from . import market_lake
 
 
 def _row_count(sql: str, params: tuple[Any, ...]) -> dict[str, Any]:
@@ -26,29 +27,33 @@ def symbol_coverage(
     source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
     provider_source = source_policy["effectiveSource"]
     bars = data_coverage(symbol, start_date, end_date, adjust, source=provider_source)
-    status = _row_count(
-        """
-        select count(distinct trade_date) as rows,
-               sum(case when is_suspended = 1 then 1 else 0 end) as suspended_rows,
-               sum(case when is_st = 1 then 1 else 0 end) as st_rows,
-               sum(case when is_limit_up = 1 then 1 else 0 end) as limit_up_rows,
-               sum(case when is_limit_down = 1 then 1 else 0 end) as limit_down_rows,
-               min(trade_date) as start_date,
-               max(trade_date) as end_date
-        from market_trade_status
-        where symbol = ? and asset_class='equity' and market='china' and venue='china'
-          and trade_date between ? and ?
-        """,
-        (symbol, start_date, end_date),
+    status_rows = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china",
+        columns="trade_date,is_suspended,is_st,is_limit_up,is_limit_down",
+        predicates=("symbol = ?", "trade_date between ? and ?"),
+        parameters=(symbol, start_date, end_date),
     )
-    adjustments = _row_count(
-        """
-        select count(*) as rows, min(trade_date) as start_date, max(trade_date) as end_date
-        from adjustment_factors
-        where symbol = ? and trade_date between ? and ?
-        """,
-        (symbol, start_date, end_date),
+    status_dates = sorted({str(row["trade_date"])[:10] for row in status_rows})
+    status = {
+        "rows": len(status_dates),
+        "suspended_rows": sum(bool(row.get("is_suspended")) for row in status_rows),
+        "st_rows": sum(bool(row.get("is_st")) for row in status_rows),
+        "limit_up_rows": sum(bool(row.get("is_limit_up")) for row in status_rows),
+        "limit_down_rows": sum(bool(row.get("is_limit_down")) for row in status_rows),
+        "start_date": status_dates[0] if status_dates else None,
+        "end_date": status_dates[-1] if status_dates else None,
+    }
+    factor_rows = market_lake.query_matching(
+        kind="adjustment_factor", columns="trade_date",
+        predicates=("symbol = ?", "trade_date between ? and ?"),
+        parameters=(symbol, start_date, end_date),
     )
+    factor_dates = sorted(str(row["trade_date"])[:10] for row in factor_rows)
+    adjustments = {
+        "rows": len(factor_rows),
+        "start_date": factor_dates[0] if factor_dates else None,
+        "end_date": factor_dates[-1] if factor_dates else None,
+    }
     actions = _row_count(
         """
         select count(*) as rows, min(ex_date) as start_date, max(ex_date) as end_date
@@ -103,16 +108,22 @@ def benchmark_coverage(
 ) -> dict[str, Any]:
     source_policy = resolve_effective_data_source(source, start_date=start_date, end_date=end_date)
     provider_source = source_policy["effectiveSource"]
-    row = _row_count(
-        """
-        select count(distinct trade_date) as rows, min(trade_date) as start_date, max(trade_date) as end_date
-        from market_daily_bars
-        where symbol = ? and asset_class in ('index','equity') and market = 'china'
-          and resolution = 'daily' and data_type = 'trade' and adjust = ? and source = ?
-          and trade_date between ? and ?
-        """,
-        (symbol, adjust, provider_source, start_date, end_date),
-    )
+    market_rows: list[dict[str, Any]] = []
+    for asset_class in ("index", "equity"):
+        market_rows.extend(
+            market_lake.query_matching(
+                kind="bars", asset_class=asset_class, market="china",
+                resolution="daily", data_type="trade", adjust=adjust, source=provider_source,
+                columns="trade_date", predicates=("symbol = ?", "trade_date between ? and ?"),
+                parameters=(symbol, start_date, end_date),
+            )
+        )
+    dates = sorted({str(item["trade_date"])[:10] for item in market_rows})
+    row = {
+        "rows": len(dates),
+        "start_date": dates[0] if dates else None,
+        "end_date": dates[-1] if dates else None,
+    }
     rows = int(row.get("rows") or 0)
     issues = [] if rows > 0 else ["benchmark_missing"]
     return {

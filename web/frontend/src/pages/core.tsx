@@ -500,7 +500,7 @@ function MarketDataDownloader({
 
   async function queryLocalBars(values: any, symbol: string, providerOverride?: string) {
     return api.queryData({
-      source: values.source ?? "database",
+      source: values.source ?? "parquet",
       symbol,
       assetClass: selectedAssetClass,
       market: selectedMarket,
@@ -562,7 +562,7 @@ function MarketDataDownloader({
       if (!result.enabled) {
         message.warning(result.error ?? "Selected local data store is unavailable.");
       } else if (result.items.length === 0) {
-        message.warning(`No local MySQL bars found for ${symbol}.`);
+        message.warning(`No local Parquet bars found for ${symbol}.`);
       }
     } catch (error) {
       if (requestId === previewRequestId.current) {
@@ -646,7 +646,7 @@ function MarketDataDownloader({
             <Form.Item name="source" label="Preview Store">
               <Select
                 options={[
-                  { value: "database", label: "Local MySQL" },
+                  { value: "parquet", label: "Local Parquet" },
                   { value: "clickhouse", label: "ClickHouse" },
                   { value: "duckdb", label: "DuckDB Parquet" }
                 ]}

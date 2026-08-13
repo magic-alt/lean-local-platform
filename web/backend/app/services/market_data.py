@@ -18,6 +18,7 @@ from ..core.config import (
 )
 from ..lean_engine.symbols import market_key, normalize_symbol
 from ..observability.metrics import set_dependency_status
+from . import market_lake
 
 try:
     import clickhouse_connect
@@ -529,42 +530,28 @@ def query_database_bars(
     normalized_symbol = _normalize_query_symbol(symbol, asset_class_key, market_value or None, venue_key)
     resolution_key = resolution.strip().lower()
     data_type_key = data_type.strip().lower()
-    predicates = ["asset_class = ?", "symbol = ?", "resolution = ?", "data_type = ?"]
-    params: list[Any] = [asset_class_key, normalized_symbol, resolution_key, data_type_key]
-    if market_value:
-        predicates.append("market = ?")
-        params.append(market_value)
-    if venue_key:
-        predicates.append("venue = ?")
-        params.append(venue_key)
-    if provider_source:
-        predicates.append("source = ?")
-        params.append(provider_source)
+    predicates = ["symbol = ?"]
+    params: list[Any] = [normalized_symbol]
     if start_date:
         predicates.append("trade_date >= ?")
         params.append(start_date)
     if end_date:
         predicates.append("trade_date <= ?")
         params.append(end_date)
-    bounded_limit = _bounded_limit(limit)
-    if bounded_limit is None:
-        sql = f"""
-            select trade_date, open, high, low, close, volume, source
-            from market_daily_bars
-            where {" and ".join(predicates)}
-            order by trade_date asc, source asc
-            """
-    else:
-        params.append(bounded_limit)
-        sql = f"""
-            select trade_date, open, high, low, close, volume, source
-            from market_daily_bars
-            where {" and ".join(predicates)}
-            order by trade_date asc, source asc
-            limit ?
-            """
-    with db() as connection:
-        rows = connection.execute(sql, params).fetchall()
+    rows = market_lake.query_matching(
+        kind="bars",
+        asset_class=asset_class_key,
+        market=market_value or None,
+        venue=venue_key or None,
+        resolution=resolution_key,
+        data_type=data_type_key,
+        source=provider_source,
+        columns="trade_date,open,high,low,close,volume,source",
+        predicates=predicates,
+        parameters=params,
+        order_by="trade_date asc, source asc",
+        limit=_bounded_limit(limit),
+    )
     items = [
         {
             "timestamp": row["trade_date"],
@@ -577,4 +564,4 @@ def query_database_bars(
         }
         for row in rows
     ]
-    return {"enabled": True, "source": "database", "items": items, "count": len(items)}
+    return {"enabled": True, "source": "parquet", "items": items, "count": len(items)}

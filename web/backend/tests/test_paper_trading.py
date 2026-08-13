@@ -122,36 +122,16 @@ def import_rows_for_symbol(symbol: str):
 
 
 def import_benchmark_rows():
-    import app.db as db_module
+    from app.services import market_lake
 
-    with db_module.db() as connection:
-        for trade_date, close in (("2024-01-03", 100.0), ("2024-01-04", 101.0), ("2024-01-05", 102.0)):
-            connection.execute(
-                """
-                insert into market_daily_bars
-                    (instrument_id, symbol, asset_class, market, venue, trade_date, resolution,
-                     data_type, open, high, low, close, volume, adjust, source, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "idx-000300",
-                    "000300",
-                    "equity",
-                    "china",
-                    "china",
-                    trade_date,
-                    "daily",
-                    "trade",
-                    close,
-                    close,
-                    close,
-                    close,
-                    1000000,
-                    "raw",
-                    "akshare",
-                    "now",
-                ),
-            )
+    market_lake.upsert_rows(
+        [
+            {"symbol": "000300", "trade_date": trade_date, "open": close, "high": close,
+             "low": close, "close": close, "volume": 1000000}
+            for trade_date, close in (("2024-01-03", 100.0), ("2024-01-04", 101.0), ("2024-01-05", 102.0))
+        ],
+        kind="bars", asset_class="equity", source="akshare",
+    )
 
 
 def test_paper_daily_match_creates_order_position_and_snapshot(tmp_path, monkeypatch):
@@ -261,16 +241,13 @@ def test_paper_constraints_reject_blacklist_watchlist_cash_floor_and_missing_sta
 
     missing_status = create_session({"symbol": "600519", "assetClass": "equity", "market": "china", "cash": 100000})
     create_signal(missing_status["id"], trade_date="2024-01-02", side="buy", target_percent=1)
-    import app.db as db_module
+    from app.services import market_lake
 
-    with db_module.db() as connection:
-            connection.execute(
-                """
-                delete from market_trade_status where symbol = ? and trade_date = ?
-                  and asset_class='equity' and market='china' and venue='china'
-                """,
-                ("600519", "2024-01-03"),
-            )
+    market_lake.delete_snapshot_absences(
+        kind="trade_status", scopes=[("600519", "2024-01-03", "2024-01-03")],
+        authoritative_keys=set(), asset_class="equity", market="china", venue="china",
+        data_type="status", source="akshare:ohlcv_inferred",
+    )
     assert match_daily_orders(missing_status["id"], "2024-01-03", auto_signal=False)["orders"][0]["reason"] == "trade_status_missing"
 
 

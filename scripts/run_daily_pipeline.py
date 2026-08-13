@@ -16,6 +16,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.ashare_multisource import compare_ashare_daily_sources_batch  # noqa: E402
 from app.services.parquet_lake import rebuild_all_market_parquet  # noqa: E402
 from app.services.paper import run_replay  # noqa: E402
@@ -56,7 +57,7 @@ def _reference_import(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _benchmark_coverage(symbol: str, start_date: str | None, end_date: str | None) -> dict[str, Any]:
-    predicates = ["symbol = ?", "asset_class = 'equity'", "market = 'china'", "venue = 'china'", "resolution = 'daily'", "data_type = 'trade'"]
+    predicates = ["symbol = ?"]
     params: list[Any] = [symbol]
     if start_date:
         predicates.append("trade_date >= ?")
@@ -64,15 +65,11 @@ def _benchmark_coverage(symbol: str, start_date: str | None, end_date: str | Non
     if end_date:
         predicates.append("trade_date <= ?")
         params.append(end_date)
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(distinct trade_date) as rows, min(trade_date) as start_date, max(trade_date) as end_date
-            from market_daily_bars
-            where {" and ".join(predicates)}
-            """,
-            params,
-        ).fetchone()
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source="tushare",
+        columns="count(distinct trade_date) as rows,min(trade_date) as start_date,max(trade_date) as end_date",
+        predicates=predicates, parameters=params,
+    )
     return {"symbol": symbol, "rows": int(row["rows"] or 0), "startDate": row["start_date"], "endDate": row["end_date"]}
 
 

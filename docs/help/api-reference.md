@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **274** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **272** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -91,8 +91,6 @@
 | `GET` | `/api/data/on-demand/storage-targets` | On Demand Storage Targets | - | `200` - |
 | `POST` | `/api/data/parquet/consistency` | Parquet Consistency | body `ParquetConsistencyRequest` | `200` - |
 | `GET` | `/api/data/parquet/datasets` | Parquet Datasets | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
-| `POST` | `/api/data/parquet/export` | Export Parquet Data | body `ParquetExportRequest` | `200` - |
-| `POST` | `/api/data/parquet/rebuild` | Rebuild Parquet Data | body `ParquetRebuildRequest` | `200` - |
 | `GET` | `/api/data/providers` | Providers | `includeAvailability` (query) | `200` - |
 | `GET` | `/api/data/providers/availability` | Data Provider Availability | `provider` (query) | `200` - |
 | `POST` | `/api/data/quality/ashare/daily/compare` | Compare Ashare Daily Data | body `AshareDailyCompareRequest` | `200` - |

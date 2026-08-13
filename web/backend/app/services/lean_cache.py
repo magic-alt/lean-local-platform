@@ -14,6 +14,7 @@ from ..lean_engine.providers import fetch_yahoo_rows
 from ..lean_engine.symbols import parse_date
 from ..lean_engine.symbols import normalize_symbol, symbol_key
 from .db_object_store import put_file, restore_to_path
+from . import market_lake
 
 
 LEAN_DATA_NAMESPACE = "lean-data-files"
@@ -271,49 +272,27 @@ def _rows_for_lean(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _query_full_ashare_rows(symbol: str, *, source: str, adjust: str) -> list[dict[str, Any]]:
     symbol_key_value = normalize_symbol(symbol, "china")
-    with db() as connection:
-        # Certified benchmarks are canonical index rows even though LEAN reads
-        # the generated file via AddEquity. Prefer that explicit lineage over
-        # a potentially overlapping listed-security code.
-        rows = connection.execute(
-            """
-            select trade_date, open, high, low, close, volume, adj_factor, batch_id
-            from market_daily_bars
-            where symbol = ? and asset_class = 'index' and market = 'china'
-              and resolution = 'daily' and data_type = 'trade'
-              and adjust = ? and source = ?
-            order by trade_date asc
-            """,
-            (symbol_key_value, adjust or "raw", source),
-        ).fetchall()
-        if not rows:
-            rows = connection.execute(
-                """
-                select trade_date, open, high, low, close, volume, adj_factor, batch_id
-                from market_daily_bars
-                where symbol = ? and asset_class = 'equity' and market = 'china'
-                  and resolution = 'daily' and data_type = 'trade'
-                  and adjust = ? and source = ?
-                order by trade_date asc
-                """,
-                (symbol_key_value, adjust or "raw", source),
-            ).fetchall()
-    return rows_to_dicts(rows)
+    columns = "trade_date,open,high,low,close,volume,adj_factor,batch_id"
+    for asset_class in ("index", "equity"):
+        rows = market_lake.query_rows(
+            kind="bars", asset_class=asset_class, market="china", venue="china",
+            resolution="daily", data_type="trade", adjust=adjust or "raw", source=source,
+            columns=columns, predicates=("symbol = ?",), parameters=(symbol_key_value,),
+            order_by="trade_date asc",
+        )
+        if rows:
+            return rows
+    return []
 
 
 def _query_adjustment_rows(symbol: str, *, source: str) -> list[dict[str, Any]]:
     symbol_key_value = normalize_symbol(symbol, "china")
-    with db() as connection:
-        rows = connection.execute(
-            """
-            select trade_date, adj_factor
-            from adjustment_factors
-            where symbol = ? and source = ?
-            order by trade_date asc
-            """,
-            (symbol_key_value, source),
-        ).fetchall()
-    return rows_to_dicts(rows)
+    return market_lake.query_rows(
+        kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="factor", adjust="raw", source=source,
+        columns="trade_date,adj_factor", predicates=("symbol = ?",),
+        parameters=(symbol_key_value,), order_by="trade_date asc",
+    )
 
 
 def rebuild_ashare_lean_cache_from_db(

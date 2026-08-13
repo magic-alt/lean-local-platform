@@ -178,11 +178,8 @@ local Trivy reports, unapproved/expired Critical findings, or an invalid
 Ed25519 release-evidence signature. Exceptions require a reason and expiry and
 remain visible in the signed evidence.
 
-`scripts/start_web_single_instance.sh` generates a runtime-only MySQL loader
-password and grants that account only the privileges required for rebuildable
-market-data batches. Bulk sessions disable their own binlog; API, projects,
-backtests and paper-trading metadata continue using the normal database user.
-The same launcher creates and reuses the local API token; deleting the token
+`scripts/start_web_single_instance.sh` creates and reuses the local API token;
+deleting the token
 file intentionally rotates it at the next clean start.
 
 LEAN and Research images must be referenced by immutable SHA-256 digest and
@@ -205,29 +202,23 @@ aggregate 16 market partitions or 100,000 rows. Initial and incremental
 `daily`, `adj_factor`, `daily_basic`, `stk_limit`, `suspend_d`, and `dividend`
 use complete market-wide date partitions. Provider pages are continued with
 `limit`/`offset` whenever a response reaches its documented cap.
-Validated daily batches enter MySQL through a loader-only `LOAD DATA LOCAL
-INFILE` staging table. Raw responses remain checksum-addressed on external
-storage, while the independent `data-lineage-worker` drains durable jobs into
-the versioned `src_tushare_*` tables without blocking canonical availability.
+Validated daily batches are written to temporary Parquet files, archived under
+`data/bronze/tushare/revisions` when replacing an existing date, and atomically
+published to Bronze current and `data/silver/daily/current`. MySQL records the
+job, manifest, watermark, quality and certification state only. Optional typed
+reference-source writes are disabled by default and do not include quote tables.
 Index daily history, and the index/futures/options basic catalogs, fan out their
 independent provider partitions under the same bounded concurrency and then use
-one canonical batch writer; normal incremental A-share datasets continue to use
+one Parquet batch writer; normal incremental A-share datasets continue to use
 their market-wide per-trading-date endpoints.
 Daily-bar and dividend increments use one market-wide request per missing trade
 date instead of contacting every listed instrument; initial dividend history
 uses the same concurrent, chunked ingestion path as the other bulk datasets.
 
-The workstation profile bounds each on-demand MySQL write estimate.
-`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB` defaults to 50 GiB and applies only to a
-single on-demand fetch. It is not compared with the whole MySQL instance because
-the canonical tables also contain governed bulk-sync data. One-click bulk
-synchronization has no database-size ceiling, and aggregate growth for both paths
-stops when the physical disk reserve would be breached. The reserve is the larger
-of 500 GiB and 50% of total disk capacity. The API and workers
-read the same MySQL data directory through a read-only observer mount, so the
-catalog and live progress both report its physical allocated size.
-The legacy `LEAN_MYSQL_MAX_DATABASE_GB` name remains a fallback for existing
-installations, but no longer limits one-click synchronization.
+Market-data capacity is governed by free space on `LEAN_MARKET_DATA_DIR`, not by
+MySQL size. One-click and on-demand Parquet writes stop before the configured
+absolute/ratio disk reserve would be breached. MySQL allocation is reported
+separately because it contains control-plane and business state, not quote facts.
 One-click refreshes retain only A-share execution data, benchmark indexes,
 CFFEX futures references, and SSE option references. Contract bars plus
 fundamentals, funds, overseas markets, macro data, and feature lists are fetched
@@ -275,7 +266,9 @@ Default database URL is MySQL:
 mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
 ```
 
-DuckDB is used only as a query engine over Parquet exports under `LEAN_PARQUET_DIR`; it is not a runtime metadata database.
+DuckDB is used only as a query engine over the canonical Parquet lake under
+`LEAN_MARKET_DATA_DIR` and generated outputs under `LEAN_PARQUET_DIR`; it is not
+a runtime metadata database.
 
 ## Docker Socket
 
@@ -304,7 +297,7 @@ multi-tenant service.
 ## Data Directories
 
 ```text
-LEAN_DATA_DIR (default workspace parent/Data)
+LEAN_DATA_DIR (default repository/data)
   LEAN cache mounted into containers.
 
 web/runtime/runs/
@@ -319,7 +312,7 @@ web/runtime/object-store/
 web/runtime/reports/
   report files.
 
-Data/parquet or LEAN_PARQUET_DIR
+data/output/parquet or LEAN_PARQUET_DIR
   Parquet research datasets.
 ```
 
@@ -365,13 +358,16 @@ LEAN_MYSQL_ROOT_PASSWORD=... scripts/run_restore_drill.py \
 
 Also back up:
 
-- `Data/`
+- `data/` (Bronze current/revisions, Silver, Gold, registry, quality and required caches)
 - `web/runtime/runs/`
 - `web/runtime/projects/`
 - `web/runtime/reports/`
-- Parquet root
+- any external `LEAN_MARKET_DATA_DIR` / `LEAN_PARQUET_DIR`
 
-If `stored_objects` contains all critical binaries, database backup covers archived artifacts, but raw filesystem workspaces are still useful for debugging.
+MySQL backup does not contain stock history. Restore drills must validate both
+the control-plane dump and the Parquet manifests/SHA-256 files. Qlib-derived
+directories remain read-only to lean-platform and are restored from their own
+backup or regenerated externally.
 
 ## Health Checks
 

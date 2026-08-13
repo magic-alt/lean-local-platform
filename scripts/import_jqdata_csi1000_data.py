@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db import db, init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.data import fetch_and_import_symbol  # noqa: E402
 from app.services.jqdata_adapter import jqdata_symbol  # noqa: E402
 from app.services.pit_data import import_index_members  # noqa: E402
@@ -124,24 +125,11 @@ def _parse_date(value: str) -> str:
 
 
 def _count_db_rows(symbol: str, start_date: str, end_date: str) -> dict[str, Any]:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select
-                count(*) as rows,
-                min(trade_date) as firstDate,
-                max(trade_date) as lastDate
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and symbol = ?
-              and source = 'jqdata'
-              and adjust = 'raw'
-              and trade_date between ? and ?
-            """,
-            (symbol, start_date, end_date),
-        ).fetchone()
-    if row is None:
-        return {"rows": 0, "firstDate": None, "lastDate": None}
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source="jqdata",
+        columns="count(*) as rows,min(trade_date) as firstDate,max(trade_date) as lastDate",
+        predicates=("symbol=?", "trade_date between ? and ?"), parameters=(symbol, start_date, end_date),
+    )
     return {"rows": int(row["rows"] or 0), "firstDate": row["firstDate"], "lastDate": row["lastDate"]}
 
 

@@ -19,6 +19,7 @@ lean-platform/
 ├── config/                versioned portable configuration and manifests
 ├── docs/                  living documentation and historical audits
 ├── docker/                monitoring and container configuration
+├── data/                  canonical local market-data lake; never committed
 └── tests/e2e/             browser acceptance suite
 ```
 
@@ -35,10 +36,11 @@ or machine-specific paths.
 reports, uploads, source caches, secrets and stored-object files. Root-level
 `results/` and `runs/` are obsolete and must not be recreated.
 
-Market data defaults to the workspace-level `Data` directory through
-`LEAN_DATA_DIR`, outside the repository. Parquet defaults to
-`LEAN_DATA_DIR/parquet`. MySQL and ClickHouse files live in their configured
-Docker volumes or explicit host directories.
+Market data defaults to the repository's lower-case `data/` directory through
+`LEAN_DATA_DIR` / `LEAN_MARKET_DATA_DIR`. Generated analytical Parquet defaults
+to `data/output/parquet`. The upper-case root `Data/` and root `parquet/` paths
+are unsupported. MySQL and ClickHouse files live in configured Docker volumes
+or explicit host directories.
 
 Run `python3 scripts/check_repository_hygiene.py` before committing to detect
 tracked runtime files and non-portable manifests.

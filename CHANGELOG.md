@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Make the repository `data/` lake the sole market-time-series authority: read the existing bronze/silver/gold Parquet hierarchy directly with DuckDB, write incremental date partitions atomically with retained revisions, keep only control metadata in MySQL, retire MySQL/database/local query modes and SQL-to-Parquet export routes, and preserve Qlib as an untouched downstream cache/engine.
+
 - Speed up full-rebuild daily ingestion with source/date/symbol indexes on canonical bars and trade status, a bounded contiguous date-slice comparison for market-wide batches, an explicit reconciliation phase, and a live heartbeat while large MySQL batches are being reconciled.
 
 - Ignore non-A-share legacy identifiers such as `T00018.SZ` in TuShare's historical dividend feed so a malformed provider row cannot abort a valid market-date batch.

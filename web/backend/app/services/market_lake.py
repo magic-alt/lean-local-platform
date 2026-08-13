@@ -1,0 +1,1056 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import uuid
+from contextlib import contextmanager
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Sequence
+
+from ..core.config import MARKET_DATA_DIR as PARQUET_DIR, PARQUET_COMPRESSION
+
+try:  # pragma: no cover - dependencies are mandatory in the runtime image.
+    import duckdb
+except Exception:  # pragma: no cover
+    duckdb = None
+
+try:  # pragma: no cover
+    import polars as pl
+except Exception:  # pragma: no cover
+    pl = None
+
+try:  # pragma: no cover - fcntl is available on the supported Linux/macOS hosts.
+    import fcntl
+except Exception:  # pragma: no cover
+    fcntl = None
+
+
+MANIFEST_NAME = "_active_manifest.json"
+MANIFEST_SCHEMA_VERSION = 2
+KINDS = {"bars", "trade_status", "adjustment_factor", "daily_basic"}
+
+BAR_COLUMNS = (
+    "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
+    "timestamp", "resolution", "data_type", "open", "high", "low", "close",
+    "settle", "volume", "amount", "turnover_rate", "open_interest", "prev_close",
+    "pct_change", "adjust", "adj_factor", "source", "batch_id", "created_at",
+)
+BAR_KEY = ("instrument_id", "trade_date", "timestamp", "resolution", "data_type", "adjust", "source")
+STATUS_COLUMNS = (
+    "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
+    "is_tradeable", "is_suspended", "can_buy", "can_sell", "limit_up", "limit_down",
+    "is_limit_up", "is_limit_down", "is_one_word_limit_up", "is_one_word_limit_down",
+    "is_st", "status", "reason", "source", "batch_id", "updated_at",
+)
+STATUS_KEY = ("instrument_id", "trade_date", "source")
+ADJUSTMENT_COLUMNS = ("symbol", "trade_date", "adj_factor", "source", "batch_id")
+ADJUSTMENT_KEY = ("symbol", "trade_date", "source")
+DAILY_BASIC_COLUMNS = (
+    "symbol", "trade_date", "turnover_rate", "turnover_rate_float", "volume_ratio",
+    "pe", "pe_ttm", "pb", "ps", "ps_ttm", "dividend_yield", "dividend_yield_ttm",
+    "total_share_shares", "float_share_shares", "free_share_shares", "total_mv_cny",
+    "circ_mv_cny", "source", "batch_id", "created_at",
+)
+DAILY_BASIC_KEY = ("symbol", "trade_date", "source")
+
+
+def _require_engine() -> None:
+    if duckdb is None or pl is None:
+        raise RuntimeError("duckdb and polars are required for the Parquet market lake")
+
+
+def _clean(value: str | None, default: str) -> str:
+    return (value or default).strip().lower() or default
+
+
+def _scope(
+    *,
+    kind: str,
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str = "tushare",
+) -> dict[str, str]:
+    kind = _clean(kind, "bars")
+    if kind not in KINDS:
+        raise ValueError(f"unsupported market lake kind: {kind}")
+    market = _clean(market, "china")
+    return {
+        "kind": kind,
+        "asset_class": _clean(asset_class, "equity"),
+        "market": market,
+        "venue": _clean(venue, market),
+        "resolution": _clean(resolution, "daily"),
+        "data_type": _clean(data_type, "trade"),
+        "adjust": _clean(adjust, "raw"),
+        "source": _clean(source, "tushare"),
+    }
+
+
+def dataset_key(**scope: str) -> str:
+    prefix = "" if scope["kind"] == "bars" else f"kind={scope['kind']}/"
+    return prefix + "/".join(
+        (
+            f"asset_class={scope['asset_class']}",
+            f"market={scope['market']}",
+            f"venue={scope['venue']}",
+            f"resolution={scope['resolution']}",
+            f"data_type={scope['data_type']}",
+            f"adjust={scope['adjust']}",
+            f"source={scope['source']}",
+        )
+    )
+
+
+def dataset_root(**scope: str) -> Path:
+    return PARQUET_DIR / dataset_key(**scope)
+
+
+def _native_glob(scope: dict[str, str]) -> str | None:
+    """Return the established qlib-platform lake relation for a logical kind."""
+    if scope["resolution"] != "daily" or scope["market"] != "china":
+        return None
+    if scope["kind"] == "bars" and scope["asset_class"] == "equity" and scope["source"] == "tushare":
+        return str(PARQUET_DIR / "silver" / "daily" / "current" / "trade_date=*" / "data.parquet")
+    if scope["kind"] == "bars" and scope["asset_class"] == "index" and scope["source"] == "tushare":
+        return str(PARQUET_DIR / "gold" / "qlib_staging" / "full" / "SH000300.parquet")
+    if scope["kind"] == "adjustment_factor" and scope["source"] == "tushare":
+        return str(PARQUET_DIR / "bronze" / "tushare" / "current" / "adj_factor" / "trade_date=*" / "data.parquet")
+    if scope["kind"] == "daily_basic" and scope["source"] == "tushare:daily_basic":
+        return str(PARQUET_DIR / "bronze" / "tushare" / "current" / "daily_basic" / "trade_date=*" / "data.parquet")
+    if scope["kind"] == "trade_status" and scope["source"].startswith("tushare:"):
+        return str(PARQUET_DIR / "silver" / "daily" / "current" / "trade_date=*" / "data.parquet")
+    return None
+
+
+def _native_files(scope: dict[str, str]) -> list[Path]:
+    pattern = _native_glob(scope)
+    if not pattern:
+        return []
+    if "*" not in pattern:
+        path = Path(pattern)
+        return [path] if path.is_file() else []
+    root = Path(pattern.split("trade_date=*", 1)[0])
+    return sorted(root.glob("trade_date=*/data.parquet")) if root.is_dir() else []
+
+
+def _native_available(scope: dict[str, str]) -> bool:
+    pattern = _native_glob(scope)
+    if not pattern:
+        return False
+    if "*" not in pattern:
+        return Path(pattern).is_file()
+    return Path(pattern.split("trade_date=*", 1)[0]).is_dir()
+
+
+def _native_write_supported(scope: dict[str, str]) -> bool:
+    """Limit writes to lake layers owned by lean-platform.
+
+    In particular, ``gold/qlib_staging`` and ``qlib/`` are read-only inputs.
+    They may be consumed for benchmark data, but this repository must never
+    publish into or mutate Qlib-owned materializations.
+    """
+    if scope["resolution"] != "daily" or scope["market"] != "china":
+        return False
+    if scope["kind"] == "bars":
+        return scope["asset_class"] == "equity" and scope["source"] == "tushare"
+    if scope["kind"] == "adjustment_factor":
+        return scope["source"] == "tushare"
+    if scope["kind"] == "daily_basic":
+        return scope["source"] == "tushare:daily_basic"
+    if scope["kind"] == "trade_status":
+        return scope["asset_class"] == "equity" and scope["source"].startswith("tushare:")
+    return False
+
+
+def _native_relation(scope: dict[str, str], pattern: str) -> str:
+    escaped_path = pattern.replace("'", "''")
+    source = scope["source"].replace("'", "''")
+    raw = f"read_parquet('{escaped_path}', union_by_name=true, hive_partitioning=false)"
+    staging_index = scope["kind"] == "bars" and scope["asset_class"] == "index"
+    raw_symbol = "symbol" if staging_index else "ts_code"
+    raw_date = "date" if staging_index else "trade_date"
+    symbol = f"regexp_replace(upper({raw_symbol}), '(^SH|^SZ|^BJ|[.]SH$|[.]SZ$|[.]BJ$)', '', 'g')"
+    trade_date = f"case when length(cast({raw_date} as varchar))=8 then substr(cast({raw_date} as varchar),1,4)||'-'||substr(cast({raw_date} as varchar),5,2)||'-'||substr(cast({raw_date} as varchar),7,2) else substr(cast({raw_date} as varchar),1,10) end"
+    if scope["kind"] == "bars":
+        fields = {
+            "instrument_id": f"'{scope['asset_class']}:china:china:'||{symbol}", "symbol": symbol,
+            "asset_class": f"'{scope['asset_class']}'", "market": "'china'", "venue": "'china'",
+            "trade_date": trade_date, "timestamp": "NULL", "resolution": "'daily'",
+            "data_type": "'trade'", "open": "open", "high": "high", "low": "low",
+            "close": "close", "settle": "NULL", "volume": "volume" if staging_index else "vol", "amount": "money" if staging_index else "amount",
+            "turnover_rate": "turnover_rate", "open_interest": "NULL", "prev_close": "NULL" if staging_index else "pre_close",
+            "pct_change": "change" if staging_index else "pct_chg", "adjust": "'raw'", "adj_factor": "factor" if staging_index else "adj_factor",
+            "source": f"'{source}'", "batch_id": "NULL", "created_at": "NULL",
+        }
+        columns = BAR_COLUMNS
+    elif scope["kind"] == "adjustment_factor":
+        fields = {"symbol": symbol, "trade_date": trade_date, "adj_factor": "adj_factor", "source": f"'{source}'", "batch_id": "NULL"}
+        columns = ADJUSTMENT_COLUMNS
+    elif scope["kind"] == "daily_basic":
+        fields = {
+            "symbol": symbol, "trade_date": trade_date, "turnover_rate": "turnover_rate",
+            "turnover_rate_float": "turnover_rate_f", "volume_ratio": "volume_ratio", "pe": "pe",
+            "pe_ttm": "pe_ttm", "pb": "pb", "ps": "ps", "ps_ttm": "ps_ttm",
+            "dividend_yield": "dv_ratio", "dividend_yield_ttm": "dv_ttm",
+            "total_share_shares": "total_share", "float_share_shares": "float_share",
+            "free_share_shares": "free_share", "total_mv_cny": "total_mv", "circ_mv_cny": "circ_mv",
+            "source": f"'{source}'", "batch_id": "NULL", "created_at": "NULL",
+        }
+        columns = DAILY_BASIC_COLUMNS
+    else:
+        suspended = "coalesce(known_suspended,paused,0)"
+        fields = {
+            "instrument_id": f"'equity:china:china:'||{symbol}", "symbol": symbol,
+            "asset_class": "'equity'", "market": "'china'", "venue": "'china'",
+            "trade_date": trade_date, "is_tradeable": f"case when {suspended}=0 then 1 else 0 end",
+            "is_suspended": suspended, "can_buy": f"case when {suspended}=0 then 1 else 0 end",
+            "can_sell": f"case when {suspended}=0 then 1 else 0 end", "limit_up": "up_limit",
+            "limit_down": "down_limit", "is_limit_up": "0", "is_limit_down": "0",
+            "is_one_word_limit_up": "0", "is_one_word_limit_down": "0", "is_st": "coalesce(is_st,0)",
+            "status": "NULL", "reason": "NULL", "source": f"'{source}'", "batch_id": "NULL", "updated_at": "NULL",
+        }
+        columns = STATUS_COLUMNS
+    return "(select " + ",".join(f"{fields[column]} as {column}" for column in columns) + f" from {raw})"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _relative(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PARQUET_DIR.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def _visible(path: str) -> Path:
+    value = Path(path)
+    return value if value.is_absolute() else PARQUET_DIR / value
+
+
+def _manifest_path(root: Path) -> Path:
+    return root / MANIFEST_NAME
+
+
+def _legacy_files(root: Path) -> list[Path]:
+    return sorted(
+        path for path in root.glob("year=*/*.parquet")
+        if path.is_file() and "/release=" not in path.as_posix()
+    )
+
+
+def load_manifest(**scope: str) -> dict[str, Any]:
+    root = dataset_root(**scope)
+    path = _manifest_path(root)
+    if path.is_file():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if int(payload.get("schemaVersion") or 0) != MANIFEST_SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported market manifest schema: {path}")
+        return payload
+    files = _legacy_files(root)
+    return {
+        "schemaVersion": MANIFEST_SCHEMA_VERSION,
+        "datasetKey": dataset_key(**scope),
+        "datasetVersion": None,
+        "kind": scope["kind"],
+        "files": [
+            {"path": _relative(file), "year": int(file.parent.name.split("=", 1)[1])}
+            for file in files
+        ],
+    }
+
+
+def active_files(**scope: str) -> list[Path]:
+    manifest = load_manifest(**scope)
+    files = [_visible(str(item["path"])) for item in manifest.get("files") or []]
+    missing = [str(path) for path in files if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"market_lake_manifest_files_missing:{missing[:10]}")
+    return files or _native_files(scope)
+
+
+def adopt_legacy_files(**scope: str) -> dict[str, Any]:
+    """Publish an immutable manifest for an existing year-partitioned lake."""
+    _require_engine()
+    normalized = _scope(**scope)
+    native = _native_files(normalized)
+    if native:
+        entries: list[dict[str, Any]] = []
+        for path in native:
+            frame = pl.scan_parquet(path).select(pl.len().alias("rows")).collect()
+            date_value = path.parent.name.split("=", 1)[-1]
+            if len(date_value) == 8 and date_value.isdigit():
+                date_value = f"{date_value[:4]}-{date_value[4:6]}-{date_value[6:]}"
+            entries.append({
+                "path": _relative(path), "year": int(date_value[:4]),
+                "rowCount": int(frame.item(0, "rows")), "firstTimestamp": date_value,
+                "lastTimestamp": date_value, "sha256": _sha256(path), "size": path.stat().st_size,
+            })
+        digest = hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        return {
+            "schemaVersion": MANIFEST_SCHEMA_VERSION, "datasetKey": dataset_key(**normalized),
+            "datasetVersion": f"{normalized['source']}-{digest[:24]}", "kind": normalized["kind"],
+            "scope": normalized, "manifestSha256": digest, "files": entries,
+            "nativeLayout": True,
+        }
+    root = dataset_root(**normalized)
+    current = load_manifest(**normalized)
+    if current.get("manifestSha256"):
+        return current
+    files = _legacy_files(root)
+    entries: list[dict[str, Any]] = []
+    for path in files:
+        frame = pl.scan_parquet(path).select(
+            pl.len().alias("rows"),
+            pl.col("trade_date").min().alias("first"),
+            pl.col("trade_date").max().alias("last"),
+        ).collect()
+        entries.append(
+            {
+                "path": _relative(path),
+                "year": int(path.parent.name.split("=", 1)[1]),
+                "rowCount": int(frame.item(0, "rows")),
+                "firstTimestamp": str(frame.item(0, "first")),
+                "lastTimestamp": str(frame.item(0, "last")),
+                "sha256": _sha256(path),
+                "size": path.stat().st_size,
+            }
+        )
+    digest = hashlib.sha256(
+        json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "schemaVersion": MANIFEST_SCHEMA_VERSION,
+        "datasetKey": dataset_key(**normalized),
+        "datasetVersion": f"{normalized['source']}-{digest[:24]}",
+        "kind": normalized["kind"],
+        "scope": normalized,
+        "manifestSha256": digest,
+        "files": entries,
+    }
+    if entries:
+        with _write_lock(root):
+            _write_manifest(root, payload)
+    return payload
+
+
+def available(**scope: str) -> bool:
+    return bool(active_files(**scope))
+
+
+def _sql_paths(files: Sequence[Path]) -> str:
+    return ",".join("'" + str(path).replace("'", "''") + "'" for path in files)
+
+
+def query_rows(
+    *,
+    kind: str = "bars",
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str = "tushare",
+    columns: str = "*",
+    predicates: Sequence[str] = (),
+    parameters: Sequence[Any] = (),
+    group_by: str | None = None,
+    order_by: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    _require_engine()
+    scope = _scope(
+        kind=kind, asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+    )
+    root = dataset_root(**scope)
+    custom_files = [_visible(str(item["path"])) for item in load_manifest(**scope).get("files") or []]
+    native_pattern = _native_glob(scope) if not custom_files else None
+    native_exists = bool(
+        native_pattern
+        and (
+            (Path(native_pattern).is_file() if "*" not in native_pattern else Path(native_pattern.split("trade_date=*", 1)[0]).is_dir())
+        )
+    )
+    files = custom_files
+    if not files and not native_exists:
+        return []
+    where = f" where {' and '.join(predicates)}" if predicates else ""
+    grouping = f" group by {group_by}" if group_by else ""
+    ordering = f" order by {order_by}" if order_by else ""
+    bounded = f" limit {max(1, int(limit))}" if limit is not None else ""
+    relation = _native_relation(scope, native_pattern) if native_pattern else f"read_parquet([{_sql_paths(files)}], union_by_name=true)"
+    sql = f"select {columns} from {relation}{where}{grouping}{ordering}{bounded}"
+    connection = duckdb.connect(database=":memory:")
+    try:
+        cursor = connection.execute(sql, list(parameters))
+        names = [item[0] for item in cursor.description]
+        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+    finally:
+        connection.close()
+
+
+def aggregate(
+    *,
+    kind: str = "bars",
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str = "tushare",
+    columns: str = "count(*) as row_count",
+    predicates: Sequence[str] = (),
+    parameters: Sequence[Any] = (),
+) -> dict[str, Any]:
+    rows = query_rows(
+        kind=kind, asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+        columns=columns, predicates=predicates, parameters=parameters, limit=None,
+    )
+    return rows[0] if rows else {}
+
+
+def all_scopes(*, kind: str = "bars") -> list[dict[str, str]]:
+    prefix = PARQUET_DIR if kind == "bars" else PARQUET_DIR / f"kind={kind}"
+    result: list[dict[str, str]] = []
+    if not prefix.exists():
+        return result
+    for source_dir in prefix.glob(
+        "asset_class=*/market=*/venue=*/resolution=*/data_type=*/adjust=*/source=*"
+    ):
+        parts = {}
+        for item in source_dir.relative_to(prefix).parts:
+            key, value = item.split("=", 1)
+            parts[key] = value
+        result.append(_scope(kind=kind, **parts))
+    native_candidates = {
+        "bars": [_scope(kind="bars", source="tushare"), _scope(kind="bars", asset_class="index", source="tushare")],
+        "adjustment_factor": [_scope(kind="adjustment_factor", data_type="factor", source="tushare")],
+        "daily_basic": [_scope(kind="daily_basic", data_type="metric", source="tushare:daily_basic")],
+        "trade_status": [
+            _scope(kind="trade_status", data_type="status", source=source)
+            for source in ("tushare:stk_limit", "tushare:suspend_d", "tushare:ohlcv_inferred")
+        ],
+    }.get(kind, [])
+    known = {dataset_key(**item) for item in result}
+    for candidate in native_candidates:
+        if dataset_key(**candidate) not in known and _native_available(candidate):
+            result.append(candidate)
+    return sorted(result, key=lambda item: dataset_key(**item))
+
+
+def matching_scopes(
+    *,
+    kind: str = "bars",
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    source: str | None = None,
+) -> list[dict[str, str]]:
+    filters = {
+        "asset_class": asset_class, "market": market, "venue": venue,
+        "resolution": resolution, "data_type": data_type, "adjust": adjust, "source": source,
+    }
+    return [
+        scope for scope in all_scopes(kind=kind)
+        if all(value is None or scope[key] == str(value).strip().lower() for key, value in filters.items())
+    ]
+
+
+def query_matching(
+    *,
+    kind: str = "bars",
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    source: str | None = None,
+    columns: str = "*",
+    predicates: Sequence[str] = (),
+    parameters: Sequence[Any] = (),
+    order_by: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for scope in matching_scopes(
+        kind=kind, asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+    ):
+        result.extend(
+            query_rows(
+                **scope, columns=columns, predicates=predicates, parameters=parameters,
+                order_by=None, limit=None,
+            )
+        )
+    if order_by:
+        # Cross-scope ordering is uncommon and bounded. Use DuckDB for complex
+        # ordering at call sites; this covers the date/source order used by APIs.
+        terms = [term.strip().split() for term in order_by.split(",")]
+        for term in reversed(terms):
+            column = term[0]
+            reverse = len(term) > 1 and term[1].lower() == "desc"
+            result.sort(key=lambda item: (item.get(column) is None, item.get(column)), reverse=reverse)
+    return result[: max(1, int(limit))] if limit is not None else result
+
+
+def _iso_date(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[4] == "-":
+        return text[:10]
+    if len(text) >= 8 and text[:8].isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    raise ValueError(f"invalid market date: {value!r}")
+
+
+def _kind_definition(kind: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return {
+        "bars": (BAR_COLUMNS, BAR_KEY),
+        "trade_status": (STATUS_COLUMNS, STATUS_KEY),
+        "adjustment_factor": (ADJUSTMENT_COLUMNS, ADJUSTMENT_KEY),
+        "daily_basic": (DAILY_BASIC_COLUMNS, DAILY_BASIC_KEY),
+    }[kind]
+
+
+def _normalise_rows(rows: Iterable[dict[str, Any]], scope: dict[str, str]) -> list[dict[str, Any]]:
+    columns, _ = _kind_definition(scope["kind"])
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        item = {column: raw.get(column) for column in columns}
+        item["symbol"] = str(raw.get("symbol") or raw.get("code") or raw.get("ts_code") or "").split(".", 1)[0].upper()
+        if not item["symbol"]:
+            raise ValueError("symbol is required for market lake rows")
+        item["trade_date"] = _iso_date(raw.get("trade_date") or raw.get("tradeDate") or raw.get("date") or raw.get("timestamp"))
+        if scope["kind"] in {"bars", "trade_status"}:
+            item["asset_class"] = scope["asset_class"]
+            item["market"] = scope["market"]
+            item["venue"] = scope["venue"]
+            item["instrument_id"] = raw.get("instrument_id") or f"{scope['asset_class']}:{scope['market']}:{scope['venue']}:{item['symbol']}"
+        if scope["kind"] == "bars":
+            item["timestamp"] = raw.get("timestamp")
+            item["resolution"] = scope["resolution"]
+            item["data_type"] = scope["data_type"]
+            item["adjust"] = scope["adjust"]
+            item["source"] = scope["source"]
+            item["created_at"] = raw.get("created_at") or now
+        elif scope["kind"] == "trade_status":
+            item["source"] = str(raw.get("source") or scope["source"])
+            item["updated_at"] = raw.get("updated_at") or now
+            for column, default in (
+                ("is_tradeable", 1), ("is_suspended", 0), ("can_buy", 1),
+                ("can_sell", 1), ("is_limit_up", 0), ("is_limit_down", 0),
+                ("is_one_word_limit_up", 0), ("is_one_word_limit_down", 0), ("is_st", 0),
+            ):
+                item[column] = int(bool(raw.get(column, default)))
+        else:
+            item["source"] = str(raw.get("source") or scope["source"])
+            if scope["kind"] == "daily_basic":
+                item["created_at"] = raw.get("created_at") or now
+        result.append(item)
+    return result
+
+
+def _ts_code(symbol: str) -> str:
+    suffix = "SH" if symbol.startswith(("5", "6", "9")) else "BJ" if symbol.startswith(("4", "8")) else "SZ"
+    return f"{symbol}.{suffix}"
+
+
+def _native_target(scope: dict[str, str], trade_date: str) -> Path:
+    compact = trade_date.replace("-", "")
+    if scope["kind"] == "adjustment_factor":
+        base = PARQUET_DIR / "bronze" / "tushare" / "current" / "adj_factor"
+    elif scope["kind"] == "daily_basic":
+        base = PARQUET_DIR / "bronze" / "tushare" / "current" / "daily_basic"
+    else:
+        base = PARQUET_DIR / "silver" / "daily" / "current"
+    return base / f"trade_date={compact}" / "data.parquet"
+
+
+def _native_patch(item: dict[str, Any], scope: dict[str, str]) -> dict[str, Any]:
+    patch: dict[str, Any] = {"ts_code": _ts_code(str(item["symbol"])), "trade_date": str(item["trade_date"]).replace("-", "")}
+    if scope["kind"] == "bars":
+        aliases = {"prev_close": "pre_close", "pct_change": "pct_chg", "volume": "vol"}
+        for name in ("open", "high", "low", "close", "prev_close", "pct_change", "volume", "amount", "adj_factor", "turnover_rate"):
+            if item.get(name) is not None:
+                patch[aliases.get(name, name)] = item[name]
+    elif scope["kind"] == "adjustment_factor":
+        patch["adj_factor"] = item.get("adj_factor")
+    elif scope["kind"] == "daily_basic":
+        aliases = {
+            "turnover_rate_float": "turnover_rate_f", "dividend_yield": "dv_ratio",
+            "dividend_yield_ttm": "dv_ttm", "total_share_shares": "total_share",
+            "float_share_shares": "float_share", "free_share_shares": "free_share",
+            "total_mv_cny": "total_mv", "circ_mv_cny": "circ_mv",
+        }
+        for name in DAILY_BASIC_COLUMNS[2:-3]:
+            if item.get(name) is not None:
+                patch[aliases.get(name, name)] = item[name]
+    else:
+        if item.get("is_suspended") is not None:
+            patch.update({"known_suspended": float(bool(item["is_suspended"])), "paused": float(bool(item["is_suspended"]))})
+        if item.get("is_st") is not None:
+            patch["is_st"] = float(bool(item["is_st"]))
+        if item.get("limit_up") is not None:
+            patch["up_limit"] = item["limit_up"]
+        if item.get("limit_down") is not None:
+            patch["down_limit"] = item["limit_down"]
+    return patch
+
+
+def _write_native_partition(
+    target: Path,
+    patches: list[dict[str, Any]],
+    *,
+    scope: dict[str, str],
+    revision_key: str,
+    manifest_extra: dict[str, Any] | None = None,
+) -> tuple[Any, int]:
+    """Merge one date partition, archiving the prior data and manifest."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing = pl.read_parquet(target).to_dicts() if target.is_file() else []
+    by_symbol = {str(row.get("ts_code") or "").upper(): row for row in existing}
+    changed = 0
+    for patch in patches:
+        key = str(patch["ts_code"]).upper()
+        before = dict(by_symbol.get(key) or {})
+        by_symbol.setdefault(key, {}).update(patch)
+        changed += int(before != by_symbol[key])
+    frame = pl.DataFrame(list(by_symbol.values()), infer_schema_length=None)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
+    if target.is_file():
+        prior_hash = _sha256(target)
+        revision = (
+            PARQUET_DIR / "bronze" / "tushare" / "revisions" / revision_key
+            / target.parent.name / prior_hash
+        )
+        revision.mkdir(parents=True, exist_ok=True)
+        archived = revision / "data.parquet"
+        if not archived.exists():
+            shutil.copy2(target, archived)
+        old_manifest = target.with_name("manifest.json")
+        archived_manifest = revision / "manifest.json"
+        if old_manifest.is_file() and not archived_manifest.exists():
+            shutil.copy2(old_manifest, archived_manifest)
+    os.replace(temporary, target)
+    digest = _sha256(target)
+    manifest = {
+        "trade_date": str(patches[0]["trade_date"]),
+        "rows": frame.height,
+        "sha256": digest,
+        "content_sha256": digest,
+        "source": scope["source"],
+        "status": "success",
+        "written_at_utc": datetime.now(UTC).isoformat(),
+        "writer": "lean-platform",
+        **(manifest_extra or {}),
+    }
+    manifest_path = target.with_name("manifest.json")
+    manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+    manifest_tmp.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+    os.replace(manifest_tmp, manifest_path)
+    return frame, changed
+
+
+def _upsert_native_locked(prepared: list[dict[str, Any]], scope: dict[str, str]) -> dict[str, Any]:
+    """Atomically update the established date partitions without a parallel store."""
+    changed = 0
+    files: list[dict[str, Any]] = []
+    for trade_date in sorted({str(item["trade_date"]) for item in prepared}):
+        day_items = [item for item in prepared if str(item["trade_date"]) == trade_date]
+        patches = [_native_patch(item, scope) for item in day_items]
+        if scope["kind"] == "bars":
+            # Preserve the provider-shaped raw daily response before publishing
+            # the normalized silver partition. Qlib materializations remain
+            # outside this write path and are never mutated here.
+            compact = trade_date.replace("-", "")
+            raw_target = (
+                PARQUET_DIR / "bronze" / "tushare" / "current" / "daily"
+                / f"trade_date={compact}" / "data.parquet"
+            )
+            _write_native_partition(
+                raw_target,
+                patches,
+                scope=scope,
+                revision_key="lean_daily",
+                manifest_extra={
+                    "api": "daily",
+                    "dataset": "daily",
+                    "columns": list(patches[0]),
+                    "params": {"trade_date": compact},
+                },
+            )
+        target = _native_target(scope, trade_date)
+        frame, partition_changed = _write_native_partition(
+            target, patches, scope=scope, revision_key=f"lean_{scope['kind']}"
+        )
+        changed += partition_changed
+        files.append({"path": _relative(target), "rowCount": frame.height, "sha256": _sha256(target)})
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"rows": len(prepared), "changedRows": changed, "datasetKey": dataset_key(**scope),
+            "datasetVersion": f"{scope['source']}-{digest[:24]}", "manifestSha256": digest,
+            "fileCount": len(files), "files": files}
+
+
+@contextmanager
+def _write_lock(root: Path) -> Iterator[None]:
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".write.lock"
+    with lock_path.open("a+b") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _upsert_native(prepared: list[dict[str, Any]], scope: dict[str, str]) -> dict[str, Any]:
+    lock_key = hashlib.sha256(dataset_key(**scope).encode("utf-8")).hexdigest()[:24]
+    with _write_lock(PARQUET_DIR / ".locks" / lock_key):
+        return _upsert_native_locked(prepared, scope)
+
+
+def _write_manifest(root: Path, payload: dict[str, Any]) -> None:
+    target = _manifest_path(root)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+    os.replace(temporary, target)
+
+
+def upsert_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    kind: str = "bars",
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str = "tushare",
+) -> dict[str, Any]:
+    """Merge rows into the canonical lake and atomically publish their manifest."""
+    _require_engine()
+    scope = _scope(
+        kind=kind, asset_class=asset_class, market=market, venue=venue,
+        resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+    )
+    prepared = _normalise_rows(rows, scope)
+    if not prepared:
+        return {"rows": 0, "changedRows": 0, "datasetKey": dataset_key(**scope)}
+    if _native_write_supported(scope) and _native_available(scope):
+        return _upsert_native(prepared, scope)
+    root = dataset_root(**scope)
+    columns, key = _kind_definition(kind)
+    years = sorted({int(item["trade_date"][:4]) for item in prepared})
+    with _write_lock(root):
+        previous = load_manifest(**scope)
+        previous_files = list(previous.get("files") or [])
+        retained = [item for item in previous_files if int(item.get("year") or 0) not in years]
+        new_files: list[dict[str, Any]] = []
+        total_changed = 0
+        for year in years:
+            incoming_rows = [item for item in prepared if int(item["trade_date"][:4]) == year]
+            current_paths = [_visible(str(item["path"])) for item in previous_files if int(item.get("year") or 0) == year]
+            frames = []
+            if current_paths:
+                frames.append(pl.read_parquet([str(path) for path in current_paths]))
+            frames.append(pl.DataFrame(incoming_rows, infer_schema_length=None))
+            frame = pl.concat(frames, how="diagonal_relaxed") if len(frames) > 1 else frames[0]
+            for column in columns:
+                if column not in frame.columns:
+                    frame = frame.with_columns(pl.lit(None).alias(column))
+            frame = frame.select(list(columns)).unique(subset=list(key), keep="last", maintain_order=True)
+            sort_columns = [column for column in ("trade_date", "timestamp", "symbol", "source") if column in frame.columns]
+            frame = frame.sort(sort_columns)
+            release_seed = hashlib.sha256(
+                json.dumps(incoming_rows, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()[:16]
+            release_dir = root / f"year={year}" / f"release={release_seed}"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            target = release_dir / "part-00000.parquet"
+            temporary = target.with_suffix(".parquet.tmp")
+            frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
+            os.replace(temporary, target)
+            checksum = _sha256(target)
+            new_files.append(
+                {
+                    "path": _relative(target), "year": year, "rowCount": frame.height,
+                    "firstTimestamp": str(frame.get_column("trade_date").min()),
+                    "lastTimestamp": str(frame.get_column("trade_date").max()),
+                    "sha256": checksum, "size": target.stat().st_size,
+                }
+            )
+            total_changed += len(incoming_rows)
+        manifest_files = sorted([*retained, *new_files], key=lambda item: (int(item.get("year") or 0), str(item["path"])))
+        manifest_digest = hashlib.sha256(
+            json.dumps(manifest_files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        version = f"{scope['source']}-{manifest_digest[:24]}"
+        payload = {
+            "schemaVersion": MANIFEST_SCHEMA_VERSION,
+            "datasetKey": dataset_key(**scope),
+            "datasetVersion": version,
+            "kind": kind,
+            "scope": scope,
+            "manifestSha256": manifest_digest,
+            "files": manifest_files,
+        }
+        _write_manifest(root, payload)
+    return {
+        "rows": len(prepared), "changedRows": total_changed,
+        "datasetKey": payload["datasetKey"], "datasetVersion": version,
+        "manifestSha256": manifest_digest, "fileCount": len(manifest_files),
+    }
+
+
+def delete_snapshot_absences(
+    *,
+    kind: str,
+    scopes: Sequence[tuple[str, str, str]],
+    authoritative_keys: set[tuple[str, str]],
+    asset_class: str = "equity",
+    market: str = "china",
+    venue: str | None = None,
+    resolution: str = "daily",
+    data_type: str = "trade",
+    adjust: str = "raw",
+    source: str = "tushare",
+) -> int:
+    """Remove rows absent from authoritative symbol/date snapshot windows.
+
+    The current manifest remains the only publication pointer. Old Parquet
+    files are intentionally retained as immutable revisions.
+    """
+    _require_engine()
+    if not scopes:
+        return 0
+    scope = _scope(
+        kind=kind,
+        asset_class=asset_class,
+        market=market,
+        venue=venue,
+        resolution=resolution,
+        data_type=data_type,
+        adjust=adjust,
+        source=source,
+    )
+    if _native_available(scope):
+        # Status is materialized as columns on the same silver bar rows. The
+        # bar reconciliation below removes stale rows; a second status delete
+        # must not remove otherwise valid market bars.
+        if kind != "bars" or not _native_write_supported(scope):
+            return 0
+        normalized_scopes = {
+            str(symbol).split(".", 1)[0].upper(): (str(start), str(end))
+            for symbol, start, end in scopes
+        }
+        normalized_keys = {
+            (str(symbol).split(".", 1)[0].upper(), str(trade_date))
+            for symbol, trade_date in authoritative_keys
+        }
+        deleted = 0
+        for target in _native_files(scope):
+            compact = target.parent.name.split("=", 1)[-1]
+            trade_date = _iso_date(compact)
+            applicable = {
+                symbol for symbol, (start, end) in normalized_scopes.items()
+                if start <= trade_date <= end
+            }
+            if not applicable:
+                continue
+            frame = pl.read_parquet(target)
+            rows = frame.to_dicts()
+            kept = []
+            for row in rows:
+                symbol = str(row.get("ts_code") or row.get("symbol") or "").split(".", 1)[0].upper()
+                remove = symbol in applicable and (symbol, trade_date) not in normalized_keys
+                deleted += int(remove)
+                if not remove:
+                    kept.append(row)
+            if len(kept) == len(rows):
+                continue
+            prior_hash = _sha256(target)
+            revision = (
+                PARQUET_DIR / "bronze" / "tushare" / "revisions" / "lean_snapshot_delete"
+                / target.parent.name / prior_hash
+            )
+            revision.mkdir(parents=True, exist_ok=True)
+            archived = revision / "data.parquet"
+            if not archived.exists():
+                shutil.copy2(target, archived)
+            updated = pl.DataFrame(kept, schema=frame.schema) if kept else frame.head(0)
+            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+            updated.write_parquet(temporary, compression=PARQUET_COMPRESSION)
+            os.replace(temporary, target)
+            manifest_path = target.with_name("manifest.json")
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+            except (OSError, json.JSONDecodeError):
+                manifest = {}
+            manifest.update(
+                {
+                    "trade_date": compact,
+                    "rows": updated.height,
+                    "sha256": _sha256(target),
+                    "written_at_utc": datetime.now(UTC).isoformat(),
+                    "writer": "lean-platform:snapshot-reconcile",
+                }
+            )
+            manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+            manifest_tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            )
+            os.replace(manifest_tmp, manifest_path)
+        return deleted
+    root = dataset_root(**scope)
+    columns, _ = _kind_definition(kind)
+    scope_frame = pl.DataFrame(
+        {
+            "symbol": [item[0] for item in scopes],
+            "_snapshot_start": [item[1] for item in scopes],
+            "_snapshot_end": [item[2] for item in scopes],
+        }
+    ).unique(subset=["symbol"], keep="last")
+    key_frame = pl.DataFrame(
+        {
+            "symbol": [item[0] for item in authoritative_keys],
+            "trade_date": [item[1] for item in authoritative_keys],
+            "_authoritative": [True] * len(authoritative_keys),
+        }
+    )
+    deleted = 0
+    with _write_lock(root):
+        previous = load_manifest(**scope)
+        previous_files = list(previous.get("files") or [])
+        replacements: list[dict[str, Any]] = []
+        retained: list[dict[str, Any]] = []
+        for year in sorted({int(item.get("year") or 0) for item in previous_files}):
+            year_files = [item for item in previous_files if int(item.get("year") or 0) == year]
+            if not any(start[:4] <= str(year) <= end[:4] for _, start, end in scopes):
+                retained.extend(year_files)
+                continue
+            paths = [_visible(str(item["path"])) for item in year_files]
+            frame = pl.read_parquet([str(path) for path in paths])
+            before = frame.height
+            staged = frame.join(scope_frame, on="symbol", how="left")
+            if not key_frame.is_empty():
+                staged = staged.join(key_frame, on=["symbol", "trade_date"], how="left")
+            else:
+                staged = staged.with_columns(pl.lit(None).alias("_authoritative"))
+            absent = (
+                pl.col("_snapshot_start").is_not_null()
+                & (pl.col("trade_date") >= pl.col("_snapshot_start"))
+                & (pl.col("trade_date") <= pl.col("_snapshot_end"))
+                & pl.col("_authoritative").is_null()
+            )
+            frame = staged.filter(~absent).select([column for column in frame.columns])
+            year_deleted = before - frame.height
+            if year_deleted <= 0:
+                retained.extend(year_files)
+                continue
+            deleted += year_deleted
+            for column in columns:
+                if column not in frame.columns:
+                    frame = frame.with_columns(pl.lit(None).alias(column))
+            frame = frame.select(list(columns))
+            revision = hashlib.sha256(
+                json.dumps(
+                    {
+                        "operation": "snapshot-delete",
+                        "year": year,
+                        "scopes": scopes,
+                        "authoritative": sorted(authoritative_keys),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            release_dir = root / f"year={year}" / f"release={revision}"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            target = release_dir / "part-00000.parquet"
+            temporary = target.with_suffix(".parquet.tmp")
+            frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
+            os.replace(temporary, target)
+            replacements.append(
+                {
+                    "path": _relative(target),
+                    "year": year,
+                    "rowCount": frame.height,
+                    "firstTimestamp": str(frame.get_column("trade_date").min()),
+                    "lastTimestamp": str(frame.get_column("trade_date").max()),
+                    "sha256": _sha256(target),
+                    "size": target.stat().st_size,
+                }
+            )
+        if deleted:
+            manifest_files = sorted(
+                [*retained, *replacements],
+                key=lambda item: (int(item.get("year") or 0), str(item["path"])),
+            )
+            digest = hashlib.sha256(
+                json.dumps(manifest_files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            _write_manifest(
+                root,
+                {
+                    "schemaVersion": MANIFEST_SCHEMA_VERSION,
+                    "datasetKey": dataset_key(**scope),
+                    "datasetVersion": f"{scope['source']}-{digest[:24]}",
+                    "kind": kind,
+                    "scope": scope,
+                    "manifestSha256": digest,
+                    "files": manifest_files,
+                },
+            )
+    return deleted
+
+
+def integrity_report(**scope: str) -> dict[str, Any]:
+    manifest = load_manifest(**scope)
+    issues: list[str] = []
+    rows = 0
+    for item in manifest.get("files") or []:
+        path = _visible(str(item["path"]))
+        if not path.is_file():
+            issues.append(f"missing:{item['path']}")
+            continue
+        if item.get("size") is not None and path.stat().st_size != int(item["size"]):
+            issues.append(f"size:{item['path']}")
+        if item.get("sha256") and _sha256(path) != item["sha256"]:
+            issues.append(f"sha256:{item['path']}")
+        rows += int(item.get("rowCount") or 0)
+    return {
+        "passed": not issues,
+        "datasetKey": manifest.get("datasetKey"),
+        "datasetVersion": manifest.get("datasetVersion"),
+        "fileCount": len(manifest.get("files") or []),
+        "manifestRows": rows,
+        "issues": issues,
+    }

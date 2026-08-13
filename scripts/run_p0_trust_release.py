@@ -22,6 +22,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, row_to_dict, rows_to_dicts  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.lean_engine.errors import LeanPlatformError  # noqa: E402
 from app.repositories.backtest_repository import get_backtest  # noqa: E402
 from app.services.backtest_execution_validation import canonical_result_sha256  # noqa: E402
@@ -162,18 +163,12 @@ def source_qa_reference_matrix() -> dict[str, Any]:
         market="china",
         venue="china",
     )
-    with db() as connection:
-        benchmark = row_to_dict(
-            connection.execute(
-                """
-                select count(*) as row_count,min(trade_date) as first_date,max(trade_date) as last_date
-                from market_daily_bars
-                where symbol='000300' and asset_class='index' and market='china'
-                  and trade_date between ? and ?
-                """,
-                (parameters["start"], parameters["end"]),
-            ).fetchone()
-        ) or {}
+    benchmark = market_lake.aggregate(
+        kind="bars", asset_class="index", market="china", venue="china", source="tushare",
+        columns="count(*) as row_count,min(trade_date) as first_date,max(trade_date) as last_date",
+        predicates=("symbol='000300'", "trade_date between ? and ?"),
+        parameters=(parameters["start"], parameters["end"]),
+    )
     benchmark["symbol"] = "000300"
     fingerprint = {
         "datasetCertification": certification,

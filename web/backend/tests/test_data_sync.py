@@ -612,7 +612,7 @@ def test_daily_sync_scope_excludes_b_shares(tmp_path, monkeypatch):
 def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
 
-    from app.db import db
+    from app.services import market_lake
     from app.services.ashare_repository import upsert_daily_bars
     from app.services.data import _reconcile_market_daily_snapshot
 
@@ -634,44 +634,26 @@ def test_full_daily_snapshot_reconciliation_removes_absent_canonical_rows(tmp_pa
         [
             {
                 "symbol": "600519",
-                "snapshot_start": "2026-07-21",
+                "snapshot_start": "2020-07-21",
                 "snapshot_end": "2026-07-22",
             }
         ],
         {"600519": [{**rows[1], "source": "tushare", "adjust": "raw"}]},
     )
 
-    with db() as connection:
-        market = connection.execute(
-            "select trade_date from market_daily_bars where symbol='600519' and source='tushare'"
-        ).fetchall()
+    market = market_lake.query_rows(
+        kind="bars", source="tushare", columns="trade_date",
+        predicates=("symbol='600519'",), order_by="trade_date",
+    )
     assert deleted == 1
     assert [row["trade_date"] for row in market] == ["2026-07-22"]
 
 
-def test_mysql_daily_change_detection_reads_only_canonical_table(monkeypatch):
+def test_parquet_daily_change_detection_reads_only_market_lake(monkeypatch):
     from app.services import data
-
-    statements = []
-
-    class Result:
-        def fetchall(self):
-            return []
-
-    class Connection:
-        def execute(self, sql, parameters=()):
-            statements.append(sql)
-            return Result()
-
-    class Context:
-        def __enter__(self):
-            return Connection()
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(data, "db", Context)
-    changed = data._mysql_changed_daily_keys(
+    calls = []
+    monkeypatch.setattr(data.market_lake, "query_rows", lambda **kwargs: calls.append(kwargs) or [])
+    changed, inserted = data._changed_daily_rows(
         [
             {
                 "symbol": "000001",
@@ -690,32 +672,15 @@ def test_mysql_daily_change_detection_reads_only_canonical_table(monkeypatch):
         ]
     )
 
-    assert changed == {("000001", "2026-07-17")}
-    assert len(statements) == 2
-    assert all("market_daily_bars" in statement for statement in statements)
-    assert all("ashare_daily_bars" not in statement for statement in statements)
+    assert len(changed) == inserted == 1
+    assert len(calls) == 1
+    assert calls[0]["kind"] == "bars"
 
 
-def test_mysql_market_date_change_detection_uses_bounded_source_date_scan(monkeypatch):
+def test_parquet_market_date_change_detection_uses_bounded_source_date_scan(monkeypatch):
     from app.services import data
 
-    statements = []
-
-    class Result:
-        def fetchall(self):
-            return []
-
-    class Connection:
-        def execute(self, sql, parameters=()):
-            statements.append(sql)
-            return Result()
-
-    class Context:
-        def __enter__(self):
-            return Connection()
-
-        def __exit__(self, *args):
-            return False
+    calls = []
 
     rows = [
         {
@@ -734,14 +699,11 @@ def test_mysql_market_date_change_detection_uses_bounded_source_date_scan(monkey
         }
         for index in range(1, 501)
     ]
-    monkeypatch.setattr(data, "db", Context)
-
-    changed = data._mysql_changed_daily_keys(rows)
-
-    assert len(changed) == 500
-    assert len(statements) == 1
-    assert "force index (idx_market_daily_source_date_symbol)" in statements[0]
-    assert "instrument_id in" not in statements[0]
+    monkeypatch.setattr(data.market_lake, "query_rows", lambda **kwargs: calls.append(kwargs) or [])
+    changed, inserted = data._changed_daily_rows(rows)
+    assert len(changed) == inserted == 500
+    assert len(calls) == 1
+    assert calls[0]["predicates"][:2] == ("trade_date >= ?", "trade_date <= ?")
 
 
 def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch):
@@ -786,10 +748,10 @@ def test_full_daily_manifest_scope_removes_orphan_symbols(tmp_path, monkeypatch)
 
     deleted = data_sync._reconcile_daily_manifest_scope(run["id"])
 
-    with db() as connection:
-        market_count = connection.execute(
-            "select count(*) as count from market_daily_bars where symbol='000300' and source='tushare'"
-        ).fetchone()["count"]
+    from app.services import market_lake
+    market_count = len(market_lake.query_rows(
+        kind="bars", source="tushare", columns="symbol", predicates=("symbol='000300'",),
+    ))
     assert deleted == 1
     assert market_count == 0
 
@@ -1648,13 +1610,13 @@ def test_daily_basic_increment_fetches_market_once_per_trade_date(tmp_path, monk
 
     assert result == (1, 2, 0, 0)
     assert adapter.calls == ["2026-07-17"]
-    with db() as connection:
-        factors = connection.execute(
-            "select symbol,trade_date,factor_name,value from daily_basic_factor_values order by symbol"
-        ).fetchall()
-    assert [(row["symbol"], row["trade_date"], row["factor_name"], row["value"]) for row in factors] == [
-        ("000001", "2026-07-17", "pe_ttm", 12.0),
-        ("600000", "2026-07-17", "pe_ttm", 12.0),
+    from app.services import market_lake
+    factors = market_lake.query_rows(
+        kind="daily_basic", data_type="metric", source="tushare:daily_basic",
+        columns="symbol,trade_date,pe_ttm", order_by="symbol",
+    )
+    assert [(row["symbol"], row["trade_date"], row["pe_ttm"]) for row in factors] == [
+        ("000001", "2026-07-17", 12.0), ("600000", "2026-07-17", 12.0),
     ]
 
 
@@ -1822,7 +1784,6 @@ def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_
             "from data_sync_work_items where run_id=? and dataset_key='stk_limit'",
             (run["id"],),
         ).fetchone()
-        market = connection.execute("select count(*) as count from market_trade_status").fetchone()
         manifests = connection.execute(
             "select count(*) as count from provider_ingestion_manifests where run_id=? and dataset_key='stk_limit'",
             (run["id"],),
@@ -1832,7 +1793,8 @@ def test_stk_limit_initial_load_batches_symbols_and_uses_bulk_status_writer(tmp_
         ).fetchone()
     assert work["count"] == 2
     assert work["min_status"] == work["max_status"] == "committed"
-    assert market["count"] == 2
+    from app.services import market_lake
+    assert len(market_lake.query_matching(kind="trade_status", columns="symbol")) == 2
     assert manifests["count"] == 2
     assert raw["count"] == 0
 
@@ -2506,11 +2468,11 @@ def test_index_daily_is_materialized_for_certified_benchmark_cache(tmp_path, mon
         bulk=True,
     )
 
-    with db() as connection:
-        rows = connection.execute(
-            "select trade_date,open,high,low,close,volume,amount,source,batch_id "
-            "from market_daily_bars where symbol='000300' and asset_class='index' order by trade_date"
-        ).fetchall()
+    from app.services import market_lake
+    rows = market_lake.query_rows(
+        kind="bars", asset_class="index", source="tushare",
+        columns="trade_date,open,high,low,close,volume,amount,source,batch_id", order_by="trade_date",
+    )
     assert len(rows) == 2
     assert rows[0]["open"] == rows[0]["close"] == 1172.051
     assert rows[0]["high"] == rows[0]["low"] == 1172.051
@@ -2643,9 +2605,11 @@ def test_adj_factor_sync_persists_only_normalized_rows(tmp_path, monkeypatch):
         raw = connection.execute(
             "select count(*) as count from provider_raw_records where dataset_key='adj_factor'"
         ).fetchone()
-        factors = connection.execute(
-            "select trade_date,adj_factor from adjustment_factors where symbol='000001' order by trade_date"
-        ).fetchall()
+    from app.services import market_lake
+    factors = market_lake.query_rows(
+        kind="adjustment_factor", data_type="factor", source="tushare",
+        columns="trade_date,adj_factor", predicates=("symbol='000001'",), order_by="trade_date",
+    )
     assert raw["count"] == 0
     assert [(row["trade_date"], row["adj_factor"]) for row in factors] == [
         ("2026-07-16", 123.4),
@@ -3077,20 +3041,11 @@ def test_daily_reconciliation_keeps_run_heartbeat_alive(tmp_path, monkeypatch):
             (run["id"],),
         )
 
-    class SlowBulkConnection:
-        def execute(self, sql, parameters=None):
-            if "delete from market_trade_status" in sql:
-                time.sleep(0.25)
-            return SimpleNamespace(rowcount=0)
+    def slow_delete(**kwargs):
+        time.sleep(0.25)
+        return 0
 
-        def executemany(self, sql, parameters):
-            return SimpleNamespace(rowcount=0)
-
-    @contextmanager
-    def slow_bulk_db():
-        yield SlowBulkConnection()
-
-    monkeypatch.setattr(data_sync, "bulk_db", slow_bulk_db)
+    monkeypatch.setattr(data_sync.market_lake, "delete_snapshot_absences", slow_delete)
     data_sync._reconcile_daily_trade_date_batch(
         "2026-07-16",
         "2026-07-17",

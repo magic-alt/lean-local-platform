@@ -27,6 +27,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db import database_descriptor, db, init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.csi300_pit import (  # noqa: E402
     build_membership_intervals,
     content_hash,
@@ -211,31 +212,19 @@ def _next_weekday(day: date) -> str:
 
 @lru_cache(maxsize=256)
 def _next_trade_date(after_date: str) -> str:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select min(trade_date) as trade_date
-            from (select distinct trade_date from market_daily_bars
-                  where asset_class='equity' and market='china' and venue='china'
-                    and resolution='daily' and data_type='trade' and trade_date > ?) as trade_dates
-            """,
-            (after_date,),
-        ).fetchone()
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source="tushare",
+        columns="min(trade_date) as trade_date", predicates=("trade_date>?",), parameters=(after_date,),
+    )
     return row["trade_date"] if row and row["trade_date"] else _next_weekday(date.fromisoformat(after_date))
 
 
 @lru_cache(maxsize=256)
 def _previous_trade_date(before_date: str) -> str:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select max(trade_date) as trade_date
-            from (select distinct trade_date from market_daily_bars
-                  where asset_class='equity' and market='china' and venue='china'
-                    and resolution='daily' and data_type='trade' and trade_date < ?) as trade_dates
-            """,
-            (before_date,),
-        ).fetchone()
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source="tushare",
+        columns="max(trade_date) as trade_date", predicates=("trade_date<?",), parameters=(before_date,),
+    )
     if row and row["trade_date"]:
         return row["trade_date"]
     current = date.fromisoformat(before_date) - timedelta(days=1)
@@ -255,17 +244,11 @@ def _parse_date_parts(year: str | None, month: str, day: str, publish_date: str)
 def _first_trade_date(year: int, month: int) -> str:
     start = date(year, month, 1)
     end = date(year, month, calendar.monthrange(year, month)[1])
-    with db() as connection:
-        row = connection.execute(
-            """
-            select min(trade_date) as trade_date
-            from (select distinct trade_date from market_daily_bars
-                  where asset_class='equity' and market='china' and venue='china'
-                    and resolution='daily' and data_type='trade'
-                    and trade_date between ? and ?) as trade_dates
-            """,
-            (start.isoformat(), end.isoformat()),
-        ).fetchone()
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china", source="tushare",
+        columns="min(trade_date) as trade_date", predicates=("trade_date between ? and ?",),
+        parameters=(start.isoformat(), end.isoformat()),
+    )
     if row and row["trade_date"]:
         return str(row["trade_date"])
     current = start

@@ -37,8 +37,13 @@ for _env_file in (PLATFORM_DIR / ".env", BACKEND_DIR / ".env"):
     _load_env_file(_env_file)
 
 
-DATA_DIR = Path(os.environ.get("LEAN_DATA_DIR", WORKSPACE_ROOT / "Data")).expanduser()
-HOST_DATA_DIR = Path(os.environ.get("LEAN_HOST_DATA_DIR", DATA_DIR)).expanduser().resolve()
+def _platform_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PLATFORM_DIR / path
+
+
+DATA_DIR = _platform_path(os.environ.get("LEAN_DATA_DIR", PLATFORM_DIR / "data"))
+HOST_DATA_DIR = _platform_path(os.environ.get("LEAN_HOST_DATA_DIR", DATA_DIR)).resolve()
 FRONTEND_DIST = WEB_DIR / "frontend" / "dist"
 
 RUNTIME_DIR = WEB_DIR / "runtime"
@@ -47,16 +52,16 @@ UPLOADS_DIR = RUNTIME_DIR / "uploads"
 PROJECTS_DIR = RUNTIME_DIR / "projects"
 RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
-# Database chunks remain the compatibility default.  Deployments can opt into
-# the filesystem backend (normally the externally mounted Data directory)
-# without changing callers of ``db_object_store``.
-OBJECT_STORE_MODE = os.environ.get("LEAN_OBJECT_STORE_MODE", "database").strip().lower()
-FILE_OBJECT_STORE_DIR = Path(
+# Binary/provider payloads live beside the configured Data directory. MySQL
+# stores only their metadata and hashes.
+OBJECT_STORE_MODE = os.environ.get("LEAN_OBJECT_STORE_MODE", "filesystem").strip().lower()
+FILE_OBJECT_STORE_DIR = _platform_path(
     os.environ.get("LEAN_FILE_OBJECT_STORE_DIR", DATA_DIR / "object-store")
-).expanduser()
+)
 REPORTS_DIR = RUNTIME_DIR / "reports"
-PARQUET_DIR = Path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "parquet")).expanduser()
-HOST_PARQUET_DIR = Path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).expanduser().resolve()
+MARKET_DATA_DIR = _platform_path(os.environ.get("LEAN_MARKET_DATA_DIR", DATA_DIR))
+PARQUET_DIR = _platform_path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "output" / "parquet"))
+HOST_PARQUET_DIR = _platform_path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).resolve()
 PARQUET_COMPRESSION = os.environ.get("LEAN_PARQUET_COMPRESSION", "zstd")
 PARQUET_PARTITION_ROWS = max(50_000, int(os.environ.get("LEAN_PARQUET_PARTITION_ROWS", "100000")))
 MYSQL_HOST = os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1")

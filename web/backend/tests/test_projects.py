@@ -273,11 +273,13 @@ def test_consolidate_automatic_copies_preserves_run_and_task_history(tmp_path, m
 def test_backtest_uses_immutable_project_snapshot(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
     import app.services.backtest_service as backtest_service
+    import app.lean_engine.config as lean_config
     import app.services.projects as projects
     import app.services.tasks as task_service
 
     monkeypatch.setattr(backtest_service, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(task_service, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(lean_config, "has_lean_data", lambda _request: True)
     project = projects.create_project("snapshot-project", template_key="ema_cross")
     original = (Path(project["project_path"]) / project["main_file"]).read_text(encoding="utf-8")
 

@@ -1,156 +1,91 @@
 # Data Pipeline
 
-Last reviewed: 2026-08-12.
+Last reviewed: 2026-08-13.
 
-MySQL is the runtime source of truth for market/reference data and synchronization state. LEAN files, Parquet and ClickHouse are generated or mirrored layers and must remain rebuildable. SQLite is used only by isolated tests.
+Parquet under `data/` is the source of truth for market time series. MySQL is the control-plane store for synchronization state, manifests, watermarks, quality, certification and business/runtime records. SQLite is used only by isolated tests.
 
-## Data Layers
+## Data layers
 
 ```text
 Provider / CSV
   -> normalize, validate, deduplicate, quarantine
-  -> MySQL canonical tables and import metadata
-  -> LEAN cache for execution
-  -> Parquet/DuckDB for analytical scans
-  -> optional ClickHouse mirror
+  -> Bronze Parquet + immutable revisions
+  -> Silver normalized Parquet
+  -> Gold PIT / adjusted / feature views
+  -> LEAN cache and read-only Qlib consumers
+  -> optional ClickHouse serving mirror
+
+MySQL
+  <- task, manifest, lineage, watermark, QA and certification metadata
 ```
 
-Key canonical domains include instruments and identifiers, A-share/reference tables, daily bars, trade status, adjustment factors, trading calendars, PIT memberships, futures/options contracts and import/quality metadata.
+The default root is `data/`. A-share daily reads use `silver/daily/current/trade_date=YYYYMMDD/data.parquet`; adjustment factors and daily-basic facts use their Bronze current partitions. No pipeline stage writes stock bars, status, adjustment factors or daily-basic time series to MySQL.
 
-The one-click registry is not the provider contract boundary. The checked-in
-TuShare contract snapshot contains 139 documented stock/index/futures/options
-datasets and exposes structural coverage through `GET /api/data/contracts`.
-Typed source revisions retain provider-native fields and hashes; selected facts
-then project into provider-neutral v2 tables. See the
-[commercial schema runbook](operations/tushare-commercial-schema.md) for exact
-coverage, high-frequency placement and empty-database preparation.
+## One-click build and incremental update
 
-## One-Click Build and Incremental Update
+The Data page bulk scope is defined by `BULK_DATASET_KEYS` and currently includes security/trading-calendar reference data plus daily bars, adjustment, status, index, futures and options basics. The checked-in TuShare contract catalog also exposes on-demand datasets independently of the bulk scope.
 
-The Data page exposes exactly 10 bulk datasets:
+Before the first successful build, the UI offers a full update. After manifests and watermarks exist, it offers an incremental update. Restarts do not reset this state.
 
-| Dataset | Purpose |
-| --- | --- |
-| `stock_basic` | A-share security master and listing state |
-| `trade_cal` | Exchange trading calendar |
-| `daily` | A-share daily OHLCV |
-| `adj_factor` | Adjustment factors and LEAN factor inputs |
-| `suspend_d` | Suspension history |
-| `stk_limit` | Daily limit-up/limit-down prices |
-| `index_basic` | Index master data |
-| `index_daily` | Index daily bars and benchmarks |
-| `fut_basic` | Futures contract master data |
-| `opt_basic` | Options contract master data |
+Daily market writes follow this contract:
 
-If no successful full build is recorded, the UI says “一键全量更新”. After a successful build, persisted sync metadata makes the same action “一键增量更新”. A restart does not reset this decision.
-
-Sync runs are idempotent, cancellable and resumable. They persist per-dataset progress, true provider call counts, checkpoints, heartbeats, watermarks, validation totals, empty-result counts and quarantined rows. `daily`, `suspend_d` and `stk_limit` use bounded concurrent fetch plus a single batched writer for initial history; everyday sparse-status updates use one market-wide request per trade date. A governed daily rebuild validates and archives every response, compares deterministic database fingerprints, reads exact rows only for mismatching symbols, and writes only missing/provider-corrected dates. `adj_factor` and `stk_limit` likewise skip unchanged canonical rows. Long `daily` requests use safe 22-year windows, while `index_daily` uses capped 2,500-day windows so provider row limits cannot silently truncate history.
-
-The small reference catalogs are fetched across every supported scope: index markets (`MSCI`, `CSI`, `SSE`, `SZSE`, `CICC`, `SW`, `OTH`), futures exchanges (`CFFEX`, `DCE`, `CZCE`, `SHFE`, `INE`, `GFEX`) and option exchanges (`SSE`, `SZSE`, `CFFEX`, `DCE`, `CZCE`, `SHFE`).
-
-## On-Demand Datasets
-
-All registry entries outside the 10 bulk datasets use `sync_policy=on_demand`. They do not participate in one-click update. The user starts them explicitly, chooses an approved host-visible storage target, and may select a database or file/Parquet-oriented result according to the dataset workflow.
-
-The 50 GiB default limit (`LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB`) bounds each
-on-demand MySQL write estimate. It is not compared with the aggregate MySQL
-instance size, which also includes governed bulk-sync data, and it does not cap
-one-click construction. Aggregate growth remains subject to the physical disk
-reserve.
-
-## Correctness and Audit Chain
-
-Every provider batch is checked in stages:
-
-1. Verify endpoint permission, request scope and response schema.
+1. Check endpoint permission and bounded request scope.
 2. Normalize identifiers, dates, numbers and nulls.
-3. Validate required fields, primary keys, date ranges and OHLC relationships.
-4. Deduplicate within the response and upsert using canonical keys.
-5. Resolve trade-status source precedence in memory or per batch.
-6. Quarantine invalid rows with reason and source metadata.
-7. Persist manifest counts, request/payload hashes, validation results and watermarks.
-8. Compare database counts/date bounds and, where configured, cross-source or Parquet consistency.
+3. Validate schema, unique keys, OHLC bounds and coverage.
+4. Write a temporary Bronze Parquet partition.
+5. Archive an existing partition and manifest under `bronze/tushare/revisions/`.
+6. Atomically publish Bronze current and normalized Silver current.
+7. Persist batch, checkpoint, watermark, row counts, hashes and quality state in MySQL.
+8. Revoke affected certification until file and DuckDB checks pass again.
 
-“Processed” is not equivalent to “inserted”: idempotent replays can process valid rows while updating or skipping existing keys. A zero-row result may be legitimate for a symbol/date scope, but is recorded separately for coverage analysis.
+Sync runs remain cancellable and resumable. Provider call count, processed/landed/quarantined row count, checkpoint and heartbeat are independent. Idempotent replay may process rows without changing the published partition.
 
-## Raw Provider Retention
+## On-demand data
 
-`provider_raw_records` is a lightweight key/date/hash index. It does not store a complete JSON document for every canonical row.
+Datasets outside the bulk scope are started explicitly. Market facts use an approved Parquet/file target; there is no MySQL market-table target or MySQL-size gate. Every target must be host-visible to the worker, remain inside an allowlisted data/export root and pass free-space checks.
 
-- Losslessly represented canonical datasets retain standard-table rows plus request, key and payload hashes.
-- Responses that cannot be mapped losslessly are serialized once per batch, gzip-compressed, content-addressed and cataloged by `provider_raw_archives`. Payloads can use MySQL chunks for compatibility or the checksum-verified external object-store root.
-- This removes the former third copy of large payloads while preserving source/batch auditability.
+Provider-native reference contracts may use compatibility typed-source tables only when `LEAN_TUSHARE_TYPED_SOURCE_WRITES=1`. The default is off, and this option must never recreate removed market time-series tables.
 
-Historical row JSON can be cleaned with:
+## Raw retention and revisions
 
-```bash
-cd web/backend
-.venv/bin/python ../../scripts/cleanup_provider_raw_json.py --help
-```
+Losslessly normalized TuShare daily data is retained in Bronze with provider-shaped fields and a per-partition `manifest.json`. When a current date is corrected, the old `data.parquet` and manifest are copied to a content-hash revision directory before publication.
 
-The script validates the target, clears JSON in resumable key ranges and preserves record hashes/metadata. Do not truncate `provider_raw_records`. Physical disk space usually is not returned until a separate low-traffic InnoDB table-space rebuild, which needs temporary free space and a backup.
+Responses that do not map losslessly to a governed dataset can be stored once as gzip-compressed, content-addressed raw archives. `provider_raw_records` is only a lightweight key/date/hash index, not another market-data copy.
 
-## CSV Import
+## Reading and Preview
 
-Download a schema-specific template from `GET /api/data/import-csv/template` before importing. The backend validates required columns and data types before converting supported equity, crypto and futures daily files into canonical/LEAN formats. Invalid CSV input is rejected with actionable field errors rather than partially imported silently.
+Backend services read through `app.services.market_lake`. DuckDB queries current Parquet partitions with projection and filter pushdown. The API accepts `source=parquet` or `source=duckdb`; removed `mysql`, `database` and `local` aliases fail closed.
 
-## Dataset Preview
+Dataset Preview reads local Parquet or governed archives and never calls a Provider just because a page is opened. Supported views include securities, daily bars, adjustment factors, suspension/limit history, calendars, indexes and derivative reference records.
 
-`GET /api/data/dataset-preview/{dataset}` supplies data-aware previews:
+## Derived layers
 
-- stocks: profile, daily bars, adjustment factors, suspension and limit history;
-- trading calendar: market/date sessions;
-- indexes: index master and daily bars;
-- futures/options: contract master data.
+### LEAN
 
-Preview values are JSON-safe and formatted defensively so an unfamiliar Provider field cannot blank the full application.
+LEAN files are generated/restored from Silver/Gold and included in run fingerprints. They are caches: deleting them must not remove canonical Parquet data.
 
-## Derived Layers
+### Qlib
 
-### LEAN cache
+`data/qlib` and `gold/qlib_staging` are external, read-only materializations. lean-platform may consume them, but never modifies the Qlib repository or publishes into those directories.
 
-LEAN consumes files from `LEAN_DATA_DIR`. Before a run, required files can be restored from `stored_objects` or rebuilt from MySQL canonical data. Their identifiers and hashes are included in the run fingerprint.
+### Registry and DuckDB
 
-### Parquet and DuckDB
-
-`parquet_datasets` and `parquet_files` track scope, row counts, date ranges, hashes and schema versions. Consistency jobs compare MySQL counts/date ranges, file hashes and DuckDB reads. Parquet is not a metadata database.
+`parquet_datasets` and `parquet_files` catalog paths, scope, coverage, versions and hashes in MySQL. Registering a dataset discovers existing files; it is not a database-to-Parquet export. DuckDB is a query engine, not a metadata database.
 
 ### ClickHouse
 
-ClickHouse is optional and mirrors committed MySQL data. Health/table checks should occur at task/batch scope, writes should be accumulated, and mirror failure must have an independent retry/watermark rather than rolling back authoritative MySQL data.
+ClickHouse is optional and mirrors Parquet facts for serving. It has an independent health/watermark boundary and can lag or fail without changing the authoritative lake.
 
-Weekday post-close maintenance incrementally rewrites only affected Parquet
-years and mirrors ClickHouse from its own last successful boundary. The two
-layers persist independent scope/source watermarks and run history; one layer
-can fail or lag without promoting the other or changing MySQL.
-When an existing ClickHouse scope has no persisted watermark, bootstrap compares
-deduplicated row counts by trading date and replays only deficient dates. It
-refuses to hide surplus derived rows behind a successful watermark; those
-require an explicit governed rebuild.
+## CSV import
 
-## Disk Safety and Size Reporting
+Download a schema-specific template from `GET /api/data/import-csv/template`. Supported rows are validated, normalized and written through the same market-lake contract. Invalid input is rejected before publication rather than partially inserted.
 
-- One-click sync has no database-size ceiling.
-- It stops before free disk would fall below `max(500 GiB, 50% of total capacity)`.
-- API and workers use the same read-only MySQL data-directory observer mount so the catalog and live task report the same physical allocated size.
-- Logical table size, InnoDB allocated size and host free disk are different metrics; documentation and UI label the physical value explicitly.
-- Bulk loader sessions disable binlog for rebuildable provider data. Business metadata retains normal durability; binlogs use minimal row images and expire by configuration.
+## Disk safety and backup
 
-## A-Share Backtest Contract
+Data download checks the filesystem holding `LEAN_MARKET_DATA_DIR`. UI and monitoring must report that filesystem separately from MySQL allocation. Backups must include the complete `data/` lake and an independent MySQL control-plane dump; neither alone is a complete recovery set.
 
-Trusted China-equity runs require canonical daily bars, a real benchmark, trading calendar and applicable execution status. The helper enforces T+1 selling, suspension and limit blocks, lot rounding, cash buffer, fees and slippage. The run stores fingerprint, validation and experiment snapshots plus normalized strategy/dataset version links.
+## A-share research/backtest gate
 
-Known limitations remain: intraday auction mechanics are incomplete and
-board-specific rules depend on imported reference quality. Dataset completion
-now runs asset-specific ETF, convertible-bond, futures and options gates for
-identity, lifecycle, trading terms, OHLC, settlement and open interest.
+Trusted China-equity runs require Parquet coverage for the requested bars, a real benchmark, trading calendar, adjustment/status rules and PIT universe inputs. Each run records dataset version, partition hashes, certification and LEAN cache state. Current constituents may not substitute for missing historical PIT membership, and provider labels alone never grant production trust.
 
-## Remaining Data Work
-
-- Maintain the immutable CSI300 bundle and record any official corrections
-  without substituting the `CSI300_TUSHARE` shadow universe.
-- Close the certified launch-date gaps for CSI500, CSI1000, SSE50 and STAR50
-  using immutable official/licensed evidence; partial TuShare snapshots remain
-  queryable but cannot be promoted as complete.
-- Extend cross-asset gates to factor inputs and exchange-specific microstructure.
-- Cross-asset adjustment, continuous-contract and corporate-action acceptance.
+See [Market Data Lake](market_data_lake.md) and [Data help](help/data.md) for concrete paths and API examples.

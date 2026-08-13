@@ -139,7 +139,7 @@ def test_source_certification_recovery_resumes_orphaned_maintenance_run(tmp_path
     assert stale["finished_at"] is None
 
 
-def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monkeypatch):
+def test_parquet_authority_does_not_require_database_export_start(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
 
     from app.db import db
@@ -183,7 +183,7 @@ def test_parquet_incremental_start_includes_historical_backfills(tmp_path, monke
         current_row_count=1,
     )
 
-    assert incremental_start == "2005-01-01"
+    assert incremental_start is None
 
 
 def test_clickhouse_child_failure_schedules_checkpoint_retry(tmp_path, monkeypatch):

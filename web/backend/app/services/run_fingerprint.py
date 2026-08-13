@@ -15,6 +15,7 @@ from ..db import db, rows_to_dicts, utc_now
 from ..lean_engine import data_paths
 from ..lean_engine.symbols import normalize_symbol, symbol_key
 from .source_gate import DEFAULT_PRODUCTION_SOURCE, source_certification
+from . import market_lake
 
 
 def _json_hash(value: Any) -> str:
@@ -167,189 +168,86 @@ def market_data_scope(parameters: dict[str, Any]) -> dict[str, Any]:
 def data_fingerprint(parameters: dict[str, Any]) -> dict[str, Any]:
     scope = market_data_scope(parameters)
     symbol = scope["symbol"]
-    rows: list[dict[str, Any]] = []
+    market_summary: dict[str, Any] = {}
     trade_status: dict[str, Any] = {}
     benchmark: dict[str, Any] = {}
     parquet_files: list[dict[str, Any]] = []
     if symbol:
-        source_clause = "and source = ?" if scope["source"] else ""
-        source_params = [scope["source"]] if scope["source"] else []
-        with db() as connection:
-            data_row = connection.execute(
-                f"""
-                select count(*) as row_count,
-                       min(trade_date) as first_date,
-                       max(trade_date) as last_date,
-                       min(batch_id) as first_batch_id,
-                       max(batch_id) as last_batch_id
-                from market_daily_bars
-                where symbol = ? and asset_class = ? and market = ? and venue = ?
-                  and resolution = ? and data_type = ? and adjust = ?
-                  {source_clause}
-                  and trade_date between ? and ?
-                """,
-                (
-                    symbol,
-                    str(scope["assetClass"]).lower(),
-                    str(scope["market"]).lower(),
-                    str(scope["venue"]).lower(),
-                    str(scope["resolution"]).lower(),
-                    str(scope["dataType"]).lower(),
-                    scope["adjust"],
-                    *source_params,
-                    scope["start"],
-                    scope["end"],
-                ),
-            ).fetchone()
-            bar_content_rows = rows_to_dicts(
-                connection.execute(
-                    f"""
-                    select symbol, trade_date, open, high, low, close, settle, volume, amount,
-                           turnover_rate, open_interest, prev_close, pct_change, adj_factor,
-                           resolution, data_type, adjust, source
-                    from market_daily_bars
-                    where symbol = ? and asset_class = ? and market = ? and venue = ?
-                      and resolution = ? and data_type = ? and adjust = ?
-                      {source_clause}
-                      and trade_date between ? and ?
-                    order by trade_date, source
-                    """,
-                    (
-                        symbol,
-                        str(scope["assetClass"]).lower(),
-                        str(scope["market"]).lower(),
-                        str(scope["venue"]).lower(),
-                        str(scope["resolution"]).lower(),
-                        str(scope["dataType"]).lower(),
-                        scope["adjust"],
-                        *source_params,
-                        scope["start"],
-                        scope["end"],
-                    ),
-                ).fetchall()
-            )
-            trade_status_row = connection.execute(
-                """
-                select count(distinct trade_date) as row_count,
-                       min(trade_date) as first_date,
-                       max(trade_date) as last_date
-                from market_trade_status
-                where asset_class = ? and market = ? and symbol = ?
-                  and trade_date between ? and ?
-                """,
-                (
-                    str(scope["assetClass"]).lower(),
-                    str(scope["market"]).lower(),
-                    symbol,
-                    scope["start"],
-                    scope["end"],
-                ),
-            ).fetchone()
-            trade_status_content_rows = rows_to_dicts(
-                connection.execute(
-                    """
-                    select symbol, trade_date, is_tradeable, is_suspended, can_buy, can_sell,
-                           limit_up, limit_down, status, reason, source
-                    from market_trade_status
-                    where asset_class = ? and market = ? and symbol = ?
-                      and trade_date between ? and ?
-                    order by trade_date, source
-                    """,
-                    (
-                        str(scope["assetClass"]).lower(),
-                        str(scope["market"]).lower(),
-                        symbol,
-                        scope["start"],
-                        scope["end"],
-                    ),
-                ).fetchall()
-            )
-            benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
-            if benchmark_symbol:
-                benchmark_row = connection.execute(
-                    f"""
-                    select count(distinct trade_date) as row_count,
-                           min(trade_date) as first_date,
-                           max(trade_date) as last_date
-                    from market_daily_bars
-                    where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
-                      and resolution = ? and data_type = ? and adjust = ?
-                      {source_clause}
-                      and trade_date between ? and ?
-                    """,
-                    (
-                        benchmark_symbol,
-                        str(scope["assetClass"]).lower(),
-                        str(scope["market"]).lower(),
-                        str(scope["venue"]).lower(),
-                        str(scope["resolution"]).lower(),
-                        str(scope["dataType"]).lower(),
-                        scope["adjust"],
-                        *source_params,
-                        scope["start"],
-                        scope["end"],
-                    ),
-                ).fetchone()
-                benchmark = {"symbol": benchmark_symbol, **(dict(benchmark_row) if benchmark_row else {})}
-                benchmark_content_rows = rows_to_dicts(
-                    connection.execute(
-                        f"""
-                        select symbol, trade_date, open, high, low, close, settle, volume, amount,
-                               turnover_rate, open_interest, prev_close, pct_change, adj_factor,
-                               resolution, data_type, adjust, source
-                        from market_daily_bars
-                        where symbol = ? and asset_class in (?, 'index') and market = ? and venue = ?
-                          and resolution = ? and data_type = ? and adjust = ?
-                          {source_clause}
-                          and trade_date between ? and ?
-                        order by trade_date, source
-                        """,
-                        (
-                            benchmark_symbol,
-                            str(scope["assetClass"]).lower(),
-                            str(scope["market"]).lower(),
-                            str(scope["venue"]).lower(),
-                            str(scope["resolution"]).lower(),
-                            str(scope["dataType"]).lower(),
-                            scope["adjust"],
-                            *source_params,
-                            scope["start"],
-                            scope["end"],
-                        ),
-                    ).fetchall()
+        common = {
+            "market": str(scope["market"]).lower(),
+            "venue": str(scope["venue"]).lower(),
+            "resolution": str(scope["resolution"]).lower(),
+            "data_type": str(scope["dataType"]).lower(),
+            "adjust": str(scope["adjust"]).lower(),
+            "source": scope["source"],
+        }
+        predicates = ("symbol = ?", "trade_date between ? and ?")
+        values = (symbol, scope["start"], scope["end"])
+        bar_content_rows = market_lake.query_matching(
+            kind="bars", asset_class=str(scope["assetClass"]).lower(), **common,
+            predicates=predicates, parameters=values, order_by="trade_date,source",
+        )
+        dates = sorted(str(row["trade_date"])[:10] for row in bar_content_rows)
+        batches = sorted(str(row["batch_id"]) for row in bar_content_rows if row.get("batch_id"))
+        market_summary = {
+            "row_count": len(bar_content_rows),
+            "first_date": dates[0] if dates else None,
+            "last_date": dates[-1] if dates else None,
+            "first_batch_id": batches[0] if batches else None,
+            "last_batch_id": batches[-1] if batches else None,
+            "content_sha256": _json_hash(bar_content_rows),
+        }
+        status_rows = market_lake.query_matching(
+            kind="trade_status", asset_class=str(scope["assetClass"]).lower(),
+            market=str(scope["market"]).lower(), venue=str(scope["venue"]).lower(),
+            predicates=predicates, parameters=values, order_by="trade_date,source",
+        )
+        status_dates = sorted({str(row["trade_date"])[:10] for row in status_rows})
+        trade_status = {
+            "row_count": len(status_dates),
+            "first_date": status_dates[0] if status_dates else None,
+            "last_date": status_dates[-1] if status_dates else None,
+            "content_sha256": _json_hash(status_rows),
+        }
+        benchmark_symbol = str(parameters.get("benchmarkSymbol") or parameters.get("benchmark_symbol") or "").upper()
+        if benchmark_symbol:
+            benchmark_rows: list[dict[str, Any]] = []
+            for candidate_class in dict.fromkeys((str(scope["assetClass"]).lower(), "index")):
+                benchmark_rows.extend(
+                    market_lake.query_matching(
+                        kind="bars", asset_class=candidate_class, **common,
+                        predicates=predicates,
+                        parameters=(benchmark_symbol, scope["start"], scope["end"]),
+                        order_by="trade_date,source",
+                    )
                 )
-                benchmark["content_sha256"] = _json_hash(benchmark_content_rows)
-            parquet_files = rows_to_dicts(
-                connection.execute(
-                    f"""
-                    select f.dataset_id, f.file_path, f.row_count, f.sha256, f.first_timestamp, f.last_timestamp
-                    from parquet_files f
-                    join parquet_datasets d on d.id = f.dataset_id
-                    where d.asset_class = ? and d.market = ? and d.venue = ?
-                      and d.resolution = ? and d.data_type = ? and d.adjust = ?
-                      {source_clause.replace('source = ?', 'd.source = ?')}
-                    order by f.file_path
-                    """,
-                    (
-                        str(scope["assetClass"]).lower(),
-                        str(scope["market"]).lower(),
-                        str(scope["venue"]).lower(),
-                        str(scope["resolution"]).lower(),
-                        str(scope["dataType"]).lower(),
-                        scope["adjust"],
-                        *source_params,
-                    ),
-                ).fetchall()
-            )
-        rows = [dict(data_row)] if data_row else []
-        if rows:
-            rows[0]["content_sha256"] = _json_hash(bar_content_rows)
-        trade_status = dict(trade_status_row) if trade_status_row else {}
-        if trade_status:
-            trade_status["content_sha256"] = _json_hash(trade_status_content_rows)
+            benchmark_dates = sorted({str(row["trade_date"])[:10] for row in benchmark_rows})
+            benchmark = {
+                "symbol": benchmark_symbol,
+                "row_count": len(benchmark_dates),
+                "first_date": benchmark_dates[0] if benchmark_dates else None,
+                "last_date": benchmark_dates[-1] if benchmark_dates else None,
+                "content_sha256": _json_hash(benchmark_rows),
+            }
+        for lake_scope in market_lake.matching_scopes(
+            kind="bars", asset_class=str(scope["assetClass"]).lower(), **common,
+        ):
+            manifest = market_lake.load_manifest(**lake_scope)
+            for item in manifest.get("files") or []:
+                parquet_files.append(
+                    {
+                        "dataset_id": manifest.get("datasetKey"),
+                        "dataset_version": manifest.get("datasetVersion"),
+                        "file_path": item.get("path"),
+                        "row_count": item.get("rowCount"),
+                        "sha256": item.get("sha256"),
+                        "first_timestamp": item.get("firstTimestamp"),
+                        "last_timestamp": item.get("lastTimestamp"),
+                    }
+                )
     return {
         "scope": scope,
-        "marketDailyBars": rows[0] if rows else {},
+        "marketDailyBars": market_summary,
         "tradeStatus": trade_status,
         "benchmark": benchmark,
         "parquetFiles": parquet_files,

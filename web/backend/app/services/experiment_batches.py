@@ -19,6 +19,7 @@ from .experiment_leakage import evaluate_experiment_leakage
 from .optimization import normalize_parameter_grid
 from .projects import get_project
 from .settings import get_settings
+from . import market_lake
 
 
 TERMINAL = {"success", "failed", "skipped", "cancelled"}
@@ -387,31 +388,24 @@ def _fundamental_schedule(symbols: list[str], start: str, end: str) -> list[dict
     valuation_monthly: dict[tuple[str, str, str], tuple[str, float]] = {}
     for chunk in _chunks(tickers):
         placeholders = ",".join("?" for _ in chunk)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select symbol,factor_name,trade_date,value
-                from all_factor_values
-                where symbol in ({placeholders})
-                  and factor_name in ('pe','pe_ttm','pb')
-                  and trade_date<=?
-                order by symbol,trade_date,factor_name,source,created_at,
-                         coalesce(batch_id,''),value
-                """,
-                [*chunk, end],
-            ).fetchall()
-        for row in rows_to_dicts(rows):
+        rows = market_lake.query_matching(
+            kind="daily_basic", asset_class="equity", market="china", resolution="daily",
+            data_type="metric", columns="symbol,trade_date,pe,pe_ttm,pb",
+            predicates=(f"symbol in ({placeholders})", "trade_date<=?"),
+            parameters=[*chunk, end], order_by="symbol,trade_date",
+        )
+        for row in rows:
             symbol = str(row["symbol"]).upper()
-            raw_field = str(row["factor_name"])
-            canonical = FUNDAMENTAL_FIELD_ALIASES[raw_field]
             effective_date = str(row["trade_date"])[:10]
-            value = row.get("value")
-            if value is None:
-                continue
-            if effective_date <= start:
-                valuation_initial[(symbol, canonical)] = (effective_date, float(value))
-            else:
-                valuation_monthly[(symbol, canonical, effective_date[:7])] = (effective_date, float(value))
+            for raw_field in ("pe", "pe_ttm", "pb"):
+                value = row.get(raw_field)
+                if value is None:
+                    continue
+                canonical = FUNDAMENTAL_FIELD_ALIASES[raw_field]
+                if effective_date <= start:
+                    valuation_initial[(symbol, canonical)] = (effective_date, float(value))
+                else:
+                    valuation_monthly[(symbol, canonical, effective_date[:7])] = (effective_date, float(value))
     for (symbol, canonical), (effective_date, value) in valuation_initial.items():
         chosen[(symbol, effective_date, canonical)] = (-1, value)
     for (symbol, canonical, _month), (effective_date, value) in valuation_monthly.items():

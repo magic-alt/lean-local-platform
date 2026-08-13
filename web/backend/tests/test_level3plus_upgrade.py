@@ -21,6 +21,8 @@ def configure_temp_db(tmp_path, monkeypatch):
 
 
 def seed_level3plus_data(db_module):
+    from app.services import market_lake
+
     now = "2026-07-07T00:00:00+00:00"
     symbols = ["600519", "000001"]
     dates = ["2026-06-01", "2026-06-02"]
@@ -75,38 +77,28 @@ def seed_level3plus_data(db_module):
             for index, trade_date in enumerate(dates):
                 close = 10 + index
                 for source in ("tushare", "jqdata", "akshare"):
-                    connection.execute(
-                        """
-                        insert into market_daily_bars
-                            (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-                             open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (f"inst-{symbol}", symbol, "equity", "china", "china", trade_date, "daily", "trade", close, close + 1, close - 1, close, 1000, 100000, "raw", source, "batch", now),
+                    market_lake.upsert_rows(
+                        [{"symbol": symbol, "trade_date": trade_date, "open": close,
+                          "high": close + 1, "low": close - 1, "close": close,
+                          "volume": 1000, "amount": 100000}],
+                        kind="bars", asset_class="equity", source=source,
                     )
-                connection.execute(
-                    """
-                    insert into market_trade_status
-                        (instrument_id,symbol,asset_class,market,venue,trade_date,is_tradeable,
-                         is_suspended,limit_up,limit_down,can_buy,can_sell,is_st,source,batch_id,updated_at)
-                    values (?,?,'equity','china','china',?,1,?,?,?,?,?,?,?,? ,?)
-                    """,
-                    (f"inst-{symbol}",symbol,trade_date,0,close * 1.1,close * 0.9,1,1,0,"akshare:unit","batch",now),
+                market_lake.upsert_rows(
+                    [{"symbol": symbol, "trade_date": trade_date, "is_tradeable": 1,
+                      "is_suspended": 0, "limit_up": close * 1.1, "limit_down": close * 0.9,
+                      "can_buy": 1, "can_sell": 1, "is_st": 0}],
+                    kind="trade_status", data_type="status", source="akshare:unit",
                 )
-                connection.execute(
-                    "insert into adjustment_factors (symbol, trade_date, adj_factor, source, batch_id) values (?, ?, ?, ?, ?)",
-                    (symbol, trade_date, 1.0, "jqdata", "batch"),
+                market_lake.upsert_rows(
+                    [{"symbol": symbol, "trade_date": trade_date, "adj_factor": 1.0}],
+                    kind="adjustment_factor", data_type="factor", source="jqdata",
                 )
         for trade_date in dates:
             for source in ("tushare", "jqdata", "akshare"):
-                connection.execute(
-                    """
-                    insert into market_daily_bars
-                        (instrument_id, symbol, asset_class, market, venue, trade_date, resolution, data_type,
-                         open, high, low, close, volume, amount, adjust, source, batch_id, created_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    ("index-000300", "000300", "equity", "china", "china", trade_date, "daily", "trade", 100, 101, 99, 100, 1000, 100000, "raw", source, "batch", now),
+                market_lake.upsert_rows(
+                    [{"symbol": "000300", "trade_date": trade_date, "open": 100,
+                      "high": 101, "low": 99, "close": 100, "volume": 1000, "amount": 100000}],
+                    kind="bars", asset_class="equity", source=source,
                 )
         connection.execute(
             """

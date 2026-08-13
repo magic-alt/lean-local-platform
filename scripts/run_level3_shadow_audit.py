@@ -18,6 +18,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.db import db, init_db  # noqa: E402
+from app.services import market_lake  # noqa: E402
 from app.services.instrument_identity import identifier_coverage  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE, resolve_source_context  # noqa: E402
 
@@ -166,8 +167,6 @@ def _table_counts() -> dict[str, int]:
     tables = [
         "instruments",
         "instrument_identifiers",
-        "market_daily_bars",
-        "market_trade_status",
         "data_quality_reports",
         "parquet_datasets",
         "stored_objects",
@@ -181,6 +180,14 @@ def _table_counts() -> dict[str, int]:
                 counts[table] = int(connection.execute(f"select count(*) as count from {table}").fetchone()["count"] or 0)
             except Exception:
                 counts[table] = -1
+    counts["market_daily_bars"] = sum(
+        int(row.get("rows") or 0)
+        for row in market_lake.query_matching(kind="bars", columns="count(*) as rows")
+    )
+    counts["market_trade_status"] = sum(
+        int(row.get("rows") or 0)
+        for row in market_lake.query_matching(kind="trade_status", columns="count(*) as rows")
+    )
     return counts
 
 

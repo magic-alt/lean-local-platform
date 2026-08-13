@@ -14,17 +14,14 @@ def configure_temp_db(tmp_path, monkeypatch):
 
 
 def insert_ashare_bar(connection, symbol, trade_date, close, volume, source):
-    from app.services.market_repository import instrument_id
+    del connection
+    from app.services.market_repository import upsert_market_daily_bars
 
-    connection.execute(
-        """
-        insert into market_daily_bars
-            (instrument_id,symbol,asset_class,market,venue,trade_date,resolution,data_type,
-             open,high,low,close,volume,adjust,source,batch_id,created_at)
-        values (?,?,'equity','china','china',?,'daily','trade',?,?,?,?,?,'raw',?,?,?)
-        """,
-        (instrument_id("equity", "china", symbol, "china"), symbol, trade_date,
-         close - 1, close + 1, close - 2, close, volume, source, "batch-1", "now"),
+    upsert_market_daily_bars(
+        [{"trade_date": trade_date, "open": close - 1, "high": close + 1,
+          "low": close - 2, "close": close, "volume": volume}],
+        symbol=symbol, asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source=source, batch_id="batch-1",
     )
 
 

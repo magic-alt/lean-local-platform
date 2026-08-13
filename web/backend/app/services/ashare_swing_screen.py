@@ -17,6 +17,7 @@ import pandas as pd
 from .. import db as db_module
 from ..db import db, rows_to_dicts, utc_now
 from .ashare_repository import trade_status_as_of, universe_as_of
+from . import market_lake
 
 
 TEMPLATE_KEY = "ashare-swing-candidates"
@@ -139,40 +140,19 @@ def _open_dates(as_of_date: str, limit: int = 12) -> list[str]:
 
 
 def _daily_counts(trade_date: str) -> dict[str, int]:
-    with db() as connection:
-        bars = connection.execute(
-            """
-            select count(distinct symbol) n from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-              and trade_date=? and adjust='raw' and source='tushare'
-            """,
-            (trade_date,),
-        ).fetchone()
-        basics = connection.execute(
-            """
-            select count(distinct symbol) n from daily_basic_factor_values
-            where trade_date=? and factor_name='pe_ttm'
-            """,
-            (trade_date,),
-        ).fetchone()
-        adjustments = connection.execute(
-            """
-            select count(distinct symbol) n from adjustment_factors
-            where trade_date=? and source='tushare'
-            """,
-            (trade_date,),
-        ).fetchone()
-        statuses = connection.execute(
-            """select count(distinct symbol) n from market_trade_status
-               where asset_class='equity' and market='china' and venue='china' and trade_date=?""",
-            (trade_date,),
-        ).fetchone()
+    def distinct(kind: str, data_type: str, source: str) -> int:
+        rows = market_lake.query_rows(
+            kind=kind, asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type=data_type, source=source,
+            columns="count(distinct symbol) n", predicates=("trade_date=?",),
+            parameters=(trade_date,),
+        )
+        return int(rows[0]["n"] or 0) if rows else 0
     return {
-        "bars": int(bars["n"] or 0),
-        "dailyBasic": int(basics["n"] or 0),
-        "adjustmentFactors": int(adjustments["n"] or 0),
-        "tradeStatus": int(statuses["n"] or 0),
+        "bars": distinct("bars", "trade", "tushare"),
+        "dailyBasic": distinct("daily_basic", "metric", "tushare:daily_basic"),
+        "adjustmentFactors": distinct("adjustment_factor", "factor", "tushare"),
+        "tradeStatus": distinct("trade_status", "status", "tushare:stk_limit"),
     }
 
 
@@ -246,19 +226,15 @@ def preview(scope: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]
         first_dates: list[str] = []
         for chunk in _chunks(symbols):
             placeholders = ",".join("?" for _ in chunk)
+            history_rows = market_lake.query_rows(
+                kind="bars", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="trade", adjust="raw", source="tushare",
+                columns="symbol,count(*) n,min(trade_date) first_date",
+                predicates=(f"symbol in ({placeholders})", "trade_date<=?"),
+                parameters=[*chunk, trade_date], group_by="symbol",
+            )
+            history_rows = [row for row in history_rows if int(row.get("n") or 0) >= rules.min_history_bars]
             with db() as connection:
-                history_rows = connection.execute(
-                    f"""
-                    select symbol,count(*) n,min(trade_date) first_date
-                    from market_daily_bars
-                    where asset_class='equity' and market='china' and venue='china'
-                      and resolution='daily' and data_type='trade'
-                      and symbol in ({placeholders}) and trade_date<=?
-                      and adjust='raw' and source='tushare'
-                    group by symbol having count(*)>=?
-                    """,
-                    [*chunk, trade_date, rules.min_history_bars],
-                ).fetchall()
                 profit_rows = connection.execute(
                     f"""
                     select distinct symbol from financial_facts
@@ -277,7 +253,7 @@ def preview(scope: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]
                     [*chunk, trade_date, trade_date],
                 ).fetchall()
             eligible += len(history_rows)
-            first_dates.extend(str(row["first_date"]) for row in history_rows if row["first_date"])
+            first_dates.extend(str(row["first_date"]) for row in history_rows if row.get("first_date"))
             positive_profit.update(str(row["symbol"]) for row in profit_rows)
             name_symbols.update(str(row["symbol"]) for row in name_rows)
         coverage.update(
@@ -489,17 +465,17 @@ def _latest_factors(symbols: list[str], trade_date: str) -> dict[str, dict[str, 
     result: dict[str, dict[str, float]] = {symbol: {} for symbol in symbols}
     for chunk in _chunks(symbols):
         placeholders = ",".join("?" for _ in chunk)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select symbol,factor_name,value from daily_basic_factor_values
-                where symbol in ({placeholders}) and trade_date=?
-                  and factor_name in ('pe_ttm','total_mv_cny','circ_mv_cny')
-                """,
-                [*chunk, trade_date],
-            ).fetchall()
-        for row in rows_to_dicts(rows):
-            result[str(row["symbol"])][str(row["factor_name"])] = float(row["value"])
+        rows = market_lake.query_rows(
+            kind="daily_basic", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="metric", source="tushare:daily_basic",
+            columns="symbol,pe_ttm,total_mv_cny,circ_mv_cny",
+            predicates=(f"symbol in ({placeholders})", "trade_date=?"),
+            parameters=[*chunk, trade_date],
+        )
+        for row in rows:
+            result[str(row["symbol"])].update(
+                {name: float(row[name]) for name in ("pe_ttm", "total_mv_cny", "circ_mv_cny") if row.get(name) is not None}
+            )
     return result
 
 
@@ -554,18 +530,13 @@ def _spot_bars(symbols: list[str], trade_date: str) -> dict[str, dict[str, Any]]
     result: dict[str, dict[str, Any]] = {}
     for chunk in _chunks(symbols):
         placeholders = ",".join("?" for _ in chunk)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select symbol,trade_date,open,high,low,close,volume,amount
-                from market_daily_bars where asset_class='equity' and market='china' and venue='china'
-                  and resolution='daily' and data_type='trade'
-                  and symbol in ({placeholders}) and trade_date=?
-                  and adjust='raw' and source='tushare'
-                """,
-                [*chunk, trade_date],
-            ).fetchall()
-        result.update({str(row["symbol"]): row for row in rows_to_dicts(rows)})
+        rows = market_lake.query_rows(
+            kind="bars", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="trade", adjust="raw", source="tushare",
+            columns="symbol,trade_date,open,high,low,close,volume,amount",
+            predicates=(f"symbol in ({placeholders})", "trade_date=?"), parameters=[*chunk, trade_date],
+        )
+        result.update({str(row["symbol"]): row for row in rows})
     return result
 
 
@@ -574,25 +545,25 @@ def _history(symbols: list[str], trade_date: str, rules: ScreenRules) -> dict[st
     result: dict[str, pd.DataFrame] = {}
     for chunk in _chunks(symbols, 120):
         placeholders = ",".join("?" for _ in chunk)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select b.symbol,b.trade_date,b.open,b.high,b.low,b.close,b.volume,
-                       coalesce(b.amount,0) amount,a.adj_factor verified_adj_factor
-                from market_daily_bars b
-                left join adjustment_factors a
-                  on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-                where b.asset_class='equity' and b.market='china' and b.venue='china'
-                  and b.resolution='daily' and b.data_type='trade'
-                  and b.symbol in ({placeholders}) and b.trade_date between ? and ?
-                  and b.adjust='raw' and b.source='tushare'
-                order by b.symbol,b.trade_date
-                """,
-                [*chunk, start, trade_date],
-            ).fetchall()
-        frame = pd.DataFrame(rows_to_dicts(rows))
+        parameters = [*chunk, start, trade_date]
+        bars = market_lake.query_rows(
+            kind="bars", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="trade", adjust="raw", source="tushare",
+            columns="symbol,trade_date,open,high,low,close,volume,coalesce(amount,0) amount",
+            predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+            parameters=parameters, order_by="symbol,trade_date",
+        )
+        adjustments = market_lake.query_rows(
+            kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="factor", source="tushare",
+            columns="symbol,trade_date,adj_factor verified_adj_factor",
+            predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+            parameters=parameters,
+        )
+        frame = pd.DataFrame(bars)
         if frame.empty:
             continue
+        frame = frame.merge(pd.DataFrame(adjustments), on=["symbol", "trade_date"], how="left")
         for symbol, group in frame.groupby("symbol", sort=False):
             group = group.dropna(subset=["verified_adj_factor"]).copy()
             if group.empty:

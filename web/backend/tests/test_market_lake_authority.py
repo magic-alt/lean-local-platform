@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from pathlib import Path
+import re
+
+import polars as pl
+
+
+OBSOLETE_RUNTIME_RELATION = re.compile(
+    r"(?i)(?:from|join|into|update|delete\s+from)\s+"
+    r"(?:market_daily_bars|market_trade_status|market_intraday_bars|market_ticks|"
+    r"adjustment_factors|daily_basic_values|all_factor_values|daily_basic_factor_values)\b"
+)
+
+
+def test_runtime_has_no_mysql_market_time_series_sql():
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    violations = []
+    for path in app_root.rglob("*.py"):
+        matches = OBSOLETE_RUNTIME_RELATION.findall(path.read_text(encoding="utf-8"))
+        if matches:
+            violations.append(str(path.relative_to(app_root)))
+    assert violations == []
+
+
+def test_native_silver_daily_layout_is_read_without_copy(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    target = tmp_path / "silver" / "daily" / "current" / "trade_date=20260811" / "data.parquet"
+    target.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "ts_code": ["000001.SZ"], "trade_date": ["20260811"],
+            "open": [11.1], "high": [11.3], "low": [11.0], "close": [11.26],
+            "pre_close": [11.2], "pct_chg": [0.54], "vol": [100.0], "amount": [1000.0],
+            "adj_factor": [139.008], "turnover_rate": [0.3],
+        }
+    ).write_parquet(target)
+
+    rows = market_lake.query_rows(
+        kind="bars", source="tushare", columns="symbol,trade_date,close",
+        predicates=("symbol=?",), parameters=("000001",),
+    )
+
+    assert rows == [{"symbol": "000001", "trade_date": "2026-08-11", "close": 11.26}]
+
+
+def test_native_incremental_write_replaces_partition_and_retains_revision(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    target = tmp_path / "silver" / "daily" / "current" / "trade_date=20260811" / "data.parquet"
+    target.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "ts_code": ["000001.SZ"], "trade_date": ["20260811"],
+            "open": [11.1], "high": [11.3], "low": [11.0], "close": [11.2],
+            "pre_close": [11.1], "pct_chg": [0.9], "vol": [100.0], "amount": [1000.0],
+            "adj_factor": [139.0], "turnover_rate": [0.3],
+        }
+    ).write_parquet(target)
+
+    result = market_lake.upsert_rows(
+        [{"symbol": "000001", "trade_date": "2026-08-11", "close": 11.26}],
+        kind="bars", source="tushare",
+    )
+
+    assert result["changedRows"] == 1
+    assert pl.read_parquet(target).filter(pl.col("ts_code") == "000001.SZ").item(0, "close") == 11.26
+    assert list((tmp_path / "bronze" / "tushare" / "revisions" / "lean_bars").rglob("data.parquet"))

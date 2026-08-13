@@ -8,6 +8,10 @@ from typing import Any
 
 
 VERSIONS_DIR = Path(__file__).parent / "versions"
+OBSOLETE_MARKET_INDEX_MIGRATIONS = {
+    "0043_p1_lineage_query_index",
+    "0050_daily_reconciliation_indexes",
+}
 
 
 def _description(script: str, revision: str) -> str:
@@ -31,6 +35,10 @@ def _columns(connection: Any, table: str) -> set[str]:
     except Exception:
         rows = connection.execute(f"pragma table_info({table})").fetchall()
         return {row["name"] if "name" in row.keys() else row[1] for row in rows}
+
+
+def _table_exists(connection: Any, table: str) -> bool:
+    return bool(_columns(connection, table))
 
 
 def _ensure_schema_migrations_columns(connection: Any) -> None:
@@ -127,7 +135,11 @@ def run_migrations(connection: Any, now: Callable[[], str]) -> None:
             continue
         script = item["script"]
         started = time.perf_counter()
-        if script.strip():
+        skip_obsolete_index = (
+            revision in OBSOLETE_MARKET_INDEX_MIGRATIONS
+            and not _table_exists(connection, "market_daily_bars")
+        )
+        if script.strip() and not skip_obsolete_index:
             connection.executescript(script)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         connection.execute(

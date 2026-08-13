@@ -11,7 +11,7 @@ to Git.
 
 | Provider | Role | Persistence policy |
 | --- | --- | --- |
-| TuShare Pro | Only eligible China production provider; eligibility still requires persisted certification | Canonical MySQL, verified batch lineage, compressed archives and certified Parquet evidence |
+| TuShare Pro | Only eligible China production provider; eligibility still requires persisted certification | Canonical Bronze/Silver Parquet, immutable revisions, verified lineage and manifest hashes |
 | AKShare | Public reference, selected China/Hong Kong fallback and preview support | Research/reference rows only; explicit `allowResearchSource=true` required |
 | JQData / RQData | Licensed research and PIT coverage where configured | Research rows only; imported with local credentials and entitlement checks |
 | TQSDK | Futures contract and market-data workflows | Imported on demand with provider attribution |
@@ -46,19 +46,22 @@ and archive details.
 ```text
 TuShare / other providers
         -> validation and normalization
-        -> MySQL canonical tables
-        -> compressed provider batch archives and metadata
+        -> Bronze/Silver canonical Parquet
+        -> compressed provider archives and immutable revisions
         -> rebuildable LEAN cache under LEAN_DATA_DIR
-        -> optional Parquet / ClickHouse derived copies
+        -> optional ClickHouse serving copy
+
+MySQL  -> jobs / registry / lineage / watermarks / quality / certification
 ```
 
-- MySQL is the canonical runtime fact store.
+- MySQL is the control-plane store; market time series are Parquet-owned.
 - `web/runtime/` contains local runs, projects, reports, uploads, source caches
   and object-store files. It is excluded from Git.
-- `LEAN_DATA_DIR` defaults to the workspace-level `Data` directory outside this
-  repository. LEAN zip, factor and map files are rebuildable caches.
-- `LEAN_PARQUET_DIR` defaults to `LEAN_DATA_DIR/parquet`; DuckDB only queries
-  those derived exports.
+- `LEAN_DATA_DIR` defaults to the repository `data` directory. Its bronze,
+  silver, gold and Qlib layers retain their existing hierarchy.
+- `LEAN_MARKET_DATA_DIR` defaults to `LEAN_DATA_DIR`; DuckDB reads its current
+  Parquet partitions directly. `LEAN_PARQUET_DIR` is reserved for generated
+  output under `data/output/parquet`.
 - Portable source manifests live in `config/data-sources/`. They may contain
   logical source names, hashes and manual corrections, but never local absolute
   paths or downloaded documents.
@@ -83,7 +86,7 @@ The platform must not substitute current constituents for missing historical
 PIT membership or silently mix providers with different adjustment semantics.
 Provider name is never sufficient certification. Any canonical write revokes
 the affected derived certification; promotion requires a successful TuShare
-batch lineage plus a persisted MySQL/Parquet/DuckDB/file-hash consistency
+batch lineage plus a persisted Parquet/DuckDB/manifest/file-hash consistency
 report. Synthetic and `environment=research` batches cannot be promoted.
 
 ## Portable CSI300 evidence

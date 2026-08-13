@@ -42,6 +42,7 @@ from .tushare_contracts import contract_for, contract_public_item, coverage_repo
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE, global_tushare_quota_status
 from .tushare_typed_source import persist_typed_source_rows
 from .tushare_lineage import async_lineage_enabled, enqueue_lineage_job, lineage_metrics
+from . import market_lake
 
 
 T = TypeVar("T")
@@ -479,13 +480,10 @@ DEFAULT_INDEX_DAILY_CODES: tuple[str, ...] = (
 
 def _missing_default_index_daily_codes() -> set[str]:
     expected = {code.split(".", 1)[0] for code in DEFAULT_INDEX_DAILY_CODES}
-    with db() as connection:
-        rows = connection.execute(
-            """
-            select distinct symbol from market_daily_bars
-            where asset_class='index' and market='china' and source='tushare'
-            """
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="index", market="china", source="tushare",
+        columns="distinct symbol",
+    )
     available = {str(row["symbol"] or "") for row in rows}
     return expected - available
 
@@ -1414,17 +1412,22 @@ def _current_task(run_id: str, task_id: str | None) -> bool:
 def audit_existing_data() -> dict[str, int]:
     """Register legacy/untrusted partitions so repair is explicit and auditable."""
     detected = 0
+    rows: list[dict[str, Any]] = []
+    for source in ("test", "manual", "csv"):
+        values = market_lake.query_matching(
+            kind="bars", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="trade", source=source,
+            columns="symbol,trade_date",
+        )
+        grouped: dict[str, list[str]] = {}
+        for item in values:
+            grouped.setdefault(str(item["symbol"]), []).append(str(item["trade_date"])[:10])
+        rows.extend(
+            {"source": source, "symbol": symbol, "start_date": min(dates),
+             "end_date": max(dates), "row_count": len(dates)}
+            for symbol, dates in grouped.items()
+        )
     with db() as connection:
-        rows = connection.execute(
-            """
-            select source, symbol, min(trade_date) as start_date, max(trade_date) as end_date, count(*) as row_count
-            from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-              and source in ('test', 'manual', 'csv')
-            group by source, symbol
-            """
-        ).fetchall()
         for row in rows:
             existing = connection.execute(
                 """
@@ -1878,54 +1881,34 @@ def _latest_open_trade_date(end_date: str, market: str = "china") -> str:
 
 
 def _latest_bar(symbol: str) -> str | None:
-    with db() as connection:
-        row = connection.execute(
-            """
-            select max(trade_date) as trade_date from market_daily_bars
-            where symbol=? and adjust='raw' and source='tushare'
-              and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-            """,
-            (symbol,),
-        ).fetchone()
-    return str(row["trade_date"]) if row and row["trade_date"] else None
+    row = market_lake.aggregate(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source="tushare",
+        columns="max(trade_date) as trade_date", predicates=("symbol=?",), parameters=(symbol,),
+    )
+    return str(row["trade_date"])[:10] if row.get("trade_date") else None
 
 
 def _latest_bars_by_symbol() -> dict[str, str]:
-    with db() as connection:
-        rows = connection.execute(
-            """
-            select symbol,max(trade_date) as trade_date
-            from market_daily_bars
-            where adjust='raw' and source='tushare'
-              and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade'
-            group by symbol
-            """
-        ).fetchall()
+    rows = market_lake.query_rows(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw", source="tushare",
+        columns="symbol,max(trade_date) as trade_date", group_by="symbol", order_by=None,
+    )
     return {str(row["symbol"]): str(row["trade_date"]) for row in rows if row["trade_date"]}
 
 
 def _latest_raw_date(spec: DatasetSpec, symbol: str | None = None) -> str | None:
+    if spec.key == "adj_factor":
+        predicates = ("symbol=?",) if symbol else ()
+        parameters = (symbol,) if symbol else ()
+        row = market_lake.aggregate(
+            kind="adjustment_factor", source="tushare",
+            columns="max(trade_date) as business_date",
+            predicates=predicates, parameters=parameters,
+        )
+        return str(row["business_date"])[:10] if row.get("business_date") else None
     with db() as connection:
-        if spec.key == "adj_factor":
-            if symbol:
-                row = connection.execute(
-                    "select max(trade_date) as business_date from adjustment_factors where source='tushare' and symbol=?",
-                    (symbol,),
-                ).fetchone()
-            else:
-                row = connection.execute(
-                    """
-                    select last_data_date as business_date from provider_dataset_catalog
-                    where provider='tushare' and dataset_key='adj_factor'
-                    """
-                ).fetchone()
-                if not row or not row["business_date"]:
-                    row = connection.execute(
-                        "select max(trade_date) as business_date from adjustment_factors where source='tushare'",
-                    ).fetchone()
-            return str(row["business_date"]) if row and row["business_date"] else None
         if symbol:
             suffix = ".SH" if symbol.startswith(("5", "6", "9")) else ".BJ" if symbol.startswith(("4", "8")) else ".SZ"
             row = connection.execute(
@@ -2762,38 +2745,17 @@ def _reconcile_daily_trade_date_batch(
         heartbeat_thread.start()
 
     try:
-        with bulk_db() as connection:
-            connection.execute(
-                """
-                create temporary table if not exists tmp_daily_date_keys (
-                    symbol varchar(32) not null,
-                    trade_date varchar(10) not null,
-                    primary key(symbol,trade_date)
-                )
-                """
+        symbols = sorted({symbol for symbol, _trade_date in keys})
+        scopes = [(symbol, start_date, end_date) for symbol in symbols]
+        for kind, data_type, source in (
+            ("bars", "trade", "tushare"),
+            ("trade_status", "status", "tushare:ohlcv_inferred"),
+        ):
+            deleted += market_lake.delete_snapshot_absences(
+                kind=kind, scopes=scopes, authoritative_keys=set(keys),
+                asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type=data_type, adjust="raw", source=source,
             )
-            connection.execute("delete from tmp_daily_date_keys")
-            if keys:
-                connection.executemany(
-                    "insert into tmp_daily_date_keys(symbol,trade_date) values (?,?)",
-                    keys,
-                )
-            for table, source in (
-                ("market_trade_status", "tushare:ohlcv_inferred"),
-                ("market_daily_bars", "tushare"),
-            ):
-                cursor = connection.execute(
-                    f"""
-                    delete from {table}
-                    where source=? and trade_date>=? and trade_date<=?
-                      and not exists (
-                          select 1 from tmp_daily_date_keys k
-                          where k.symbol={table}.symbol and k.trade_date={table}.trade_date
-                      )
-                    """,
-                    (source, start_date, end_date),
-                )
-                deleted += max(0, int(cursor.rowcount or 0))
     finally:
         heartbeat_stop.set()
         if heartbeat_thread:
@@ -2803,24 +2765,31 @@ def _reconcile_daily_trade_date_batch(
 
 def _reconcile_daily_manifest_scope(run_id: str) -> int:
     """Remove TuShare daily symbols outside the completed full-run scope."""
+    with db() as connection:
+        rows = connection.execute(
+            """select scope_key from provider_ingestion_manifests
+               where run_id=? and provider='tushare' and dataset_key='daily' and status='success'""",
+            (run_id,),
+        ).fetchall()
+    allowed = {str(row["scope_key"]).upper() for row in rows}
     deleted = 0
-    with bulk_db() as connection:
-        manifest_predicate = """
-            not exists (
-                select 1 from provider_ingestion_manifests p
-                where p.run_id=? and p.provider='tushare' and p.dataset_key='daily'
-                  and p.status='success' and p.scope_key={table}.symbol
-            )
-        """
-        for table, source in (
-            ("market_trade_status", "tushare:ohlcv_inferred"),
-            ("market_daily_bars", "tushare"),
-        ):
-            cursor = connection.execute(
-                f"delete from {table} where source=? and " + manifest_predicate.format(table=table),
-                (source, run_id),
-            )
-            deleted += max(0, int(cursor.rowcount or 0))
+    for kind, data_type, source in (
+        ("bars", "trade", "tushare"),
+        ("trade_status", "status", "tushare:ohlcv_inferred"),
+    ):
+        existing = market_lake.query_rows(
+            kind=kind, asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type=data_type, adjust="raw", source=source,
+            columns="symbol,min(trade_date) first_date,max(trade_date) last_date",
+            group_by="symbol",
+        )
+        absent = [row for row in existing if str(row["symbol"]).upper() not in allowed]
+        deleted += market_lake.delete_snapshot_absences(
+            kind=kind,
+            scopes=[(str(row["symbol"]), str(row["first_date"]), str(row["last_date"])) for row in absent],
+            authoritative_keys=set(), asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type=data_type, adjust="raw", source=source,
+        )
     return deleted
 
 
@@ -3088,15 +3057,12 @@ def _changed_adjustment_factor_rows(rows: list[dict[str, Any]]) -> list[dict[str
     placeholders = ",".join("?" for _ in symbols)
     first_date = min(str(row["trade_date"]) for row in rows)
     last_date = max(str(row["trade_date"]) for row in rows)
-    with db() as connection:
-        existing_rows = connection.execute(
-            f"""
-            select symbol,trade_date,adj_factor from adjustment_factors
-            where source='tushare' and symbol in ({placeholders})
-              and trade_date>=? and trade_date<=?
-            """,
-            [*symbols, first_date, last_date],
-        ).fetchall()
+    existing_rows = market_lake.query_matching(
+        kind="adjustment_factor", source="tushare",
+        columns="symbol,trade_date,adj_factor",
+        predicates=(f"symbol in ({placeholders})", "trade_date>=?", "trade_date<=?"),
+        parameters=(*symbols, first_date, last_date),
+    )
     existing = {
         (str(row["symbol"]), str(row["trade_date"])): float(row["adj_factor"])
         for row in existing_rows
@@ -3723,17 +3689,12 @@ def _sync_instrument_dataset_fast(
         placeholders = ",".join("?" for _ in symbols)
         first_date = min(str(row["trade_date"]) for row in rows)
         last_date = max(str(row["trade_date"]) for row in rows)
-        parameters = [*symbols, first_date, last_date]
-        with db() as connection:
-            market_rows = connection.execute(
-                f"""
-                select symbol,trade_date,limit_up,limit_down from market_trade_status
-                where source='tushare:stk_limit' and asset_class='equity'
-                  and market='china' and venue='china' and symbol in ({placeholders})
-                  and trade_date>=? and trade_date<=?
-                """,
-                parameters,
-            ).fetchall()
+        market_rows = market_lake.query_matching(
+            kind="trade_status", asset_class="equity", market="china", venue="china",
+            source="tushare:stk_limit", columns="symbol,trade_date,limit_up,limit_down",
+            predicates=(f"symbol in ({placeholders})", "trade_date>=?", "trade_date<=?"),
+            parameters=(*symbols, first_date, last_date),
+        )
 
         def values(items: list[Any]) -> dict[tuple[str, str], tuple[float | None, float | None]]:
             return {
@@ -4389,31 +4350,22 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
                 """
             ).fetchone()
         elif spec.key == "daily":
-            aggregate = connection.execute(
-                """
-                select count(*) as count, min(trade_date) as first_date, max(trade_date) as last_date
-                from market_daily_bars
-                where source='tushare' and adjust='raw'
-                  and asset_class='equity' and market='china' and venue='china'
-                  and resolution='daily' and data_type='trade'
-                """
-            ).fetchone()
+            aggregate = market_lake.aggregate(
+                kind="bars", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="trade", adjust="raw", source="tushare",
+                columns="count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date",
+            )
         elif spec.key == "adj_factor":
-            aggregate = connection.execute(
-                """
-                select count(*) as count, min(trade_date) as first_date, max(trade_date) as last_date
-                from adjustment_factors where source='tushare'
-                """
-            ).fetchone()
+            aggregate = market_lake.aggregate(
+                kind="adjustment_factor", source="tushare", data_type="factor",
+                columns="count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date",
+            )
         elif spec.key == "stk_limit":
-            aggregate = connection.execute(
-                """
-                select count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date
-                from market_trade_status
-                where source='tushare:stk_limit' and asset_class='equity'
-                  and market='china' and venue='china'
-                """
-            ).fetchone()
+            aggregate = market_lake.aggregate(
+                kind="trade_status", source="tushare:stk_limit", asset_class="equity",
+                market="china", venue="china", data_type="status",
+                columns="count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date",
+            )
         elif spec.normalizer == "namechange":
             aggregate = connection.execute(
                 """
@@ -4423,17 +4375,10 @@ def _set_catalog_coverage(spec: DatasetSpec) -> None:
                 """
             ).fetchone()
         elif spec.normalizer == "daily_basic":
-            aggregate = connection.execute(
-                """
-                select count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date
-                from (
-                    select symbol,trade_date from daily_basic_values
-                    union
-                    select symbol,trade_date from factor_values
-                    where source='tushare:daily_basic'
-                ) daily_basic_rows
-                """
-            ).fetchone()
+            aggregate = market_lake.aggregate(
+                kind="daily_basic", source="tushare:daily_basic", data_type="metric",
+                columns="count(*) as count,min(trade_date) as first_date,max(trade_date) as last_date",
+            )
         elif spec.normalizer == "dividend":
             aggregate = connection.execute(
                 """

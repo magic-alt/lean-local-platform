@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from ..db import db, rows_to_dicts
-from . import data_gateway
+from . import data_gateway, market_lake
 
 
 TEMPLATE_KEY = "daily-gap-events"
@@ -331,41 +331,15 @@ def _load_rows(scope: dict[str, Any], source: str) -> list[dict[str, Any]]:
     asset = scope["asset"]
     selection = scope["selection"]
     time = scope["time"]
-    clauses = [
-        "asset_class=?",
-        "market=?",
-        "coalesce(venue,market)=?",
-        "resolution=?",
-        "data_type=?",
-        "adjust=?",
-        "source=?",
-        f"symbol in ({','.join('?' for _ in selection['values'])})",
-        "trade_date>=?",
-        "trade_date<=?",
-    ]
-    params = [
-        asset["assetClass"],
-        asset["market"],
-        asset["venue"],
-        asset["resolution"],
-        asset["dataType"],
-        scope["price"]["adjust"],
-        source,
-        *selection["values"],
-        time["startDate"],
-        time["endDate"],
-    ]
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol,trade_date,open,high,low,close,prev_close,volume,amount,source
-            from market_daily_bars
-            where {' and '.join(clauses)}
-            order by symbol,trade_date
-            """,
-            params,
-        ).fetchall()
-    return rows_to_dicts(rows)
+    symbols = selection["values"]
+    return market_lake.query_rows(
+        kind="bars", asset_class=asset["assetClass"], market=asset["market"],
+        venue=asset["venue"], resolution=asset["resolution"], data_type=asset["dataType"],
+        adjust=scope["price"]["adjust"], source=source,
+        columns="symbol,trade_date,open,high,low,close,prev_close,volume,amount,source",
+        predicates=(f"symbol in ({','.join('?' for _ in symbols)})", "trade_date>=?", "trade_date<=?"),
+        parameters=[*symbols, time["startDate"], time["endDate"]], order_by="symbol,trade_date",
+    )
 
 
 def analyze(scope: dict[str, Any], parameters: dict[str, Any]) -> tuple[dict, list, list, list]:

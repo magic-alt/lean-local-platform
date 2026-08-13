@@ -6,12 +6,12 @@ CLI；回测、优化、Research 和 Paper Replay 均以版本化项目策略运
 
 ## 当前能力
 
-- MySQL 是唯一运行事实库；SQLite 仅用于隔离测试。
+- `data/` 下的 Parquet 是股票行情事实层；MySQL 是任务、注册、质量、账户和审计控制平面；SQLite 仅用于隔离测试。
 - Data 页支持十个 TuShare 数据集首次全量建库、后续增量更新，并通过版本化契约目录覆盖
   当前官方股票、指数、期货和期权专题的 139 个数据集；其他
   数据集的按需下载和可选存储目标。
-- Provider 数据经过标准化、来源判优、质量检查和隔离后写入 canonical 表；
-  原始响应使用轻量索引及压缩批次归档，不重复逐行保存完整 JSON。
+- Provider 数据经过标准化、来源判优、质量检查和隔离后原子发布到 Bronze/Silver Parquet；
+  旧分区保留为内容哈希修订，MySQL 只记录 manifest、血缘和状态。
 - Backtests、Optimization 和 Research 提供策略案例、批量实验、参数网格、
   滚动窗口和动态 PIT 股票池工作流。
 - 报告使用统一的 `report-layout-v2` HTML/Markdown/PDF/CSV/JSON 格式，并保留运行指纹、
@@ -53,8 +53,9 @@ docker compose --profile app up -d --build \
 
 ```text
 web/runtime/                  本地运行产物、项目副本、报告、上传和缓存；不提交
-$LEAN_DATA_DIR                LEAN 行情缓存；默认是仓库父目录的 Data
-$LEAN_DATA_DIR/parquet        可重建的 Parquet 派生数据
+$LEAN_DATA_DIR                数据湖与 LEAN 缓存；默认是仓库内 data
+$LEAN_DATA_DIR/silver/daily/current  A 股日行情权威 Parquet 分区
+$LEAN_DATA_DIR/output/parquet       平台生成的派生 Parquet
 Docker volumes                MySQL、Redis、ClickHouse、Grafana 等服务数据
 config/data-sources/          可移植的数据来源 manifest；纳入版本控制
 ```
@@ -68,14 +69,14 @@ Data 页一键更新范围以代码中的 `BULK_DATASET_KEYS` 为准，当前为
 `suspend_d`、`stk_limit`、`dividend`、`index_basic`、`index_daily`、
 `fut_basic`、`opt_basic`。
 
-首次完整成功后系统保存建库状态和水位，按钮切换为增量更新。`daily_basic`
-规范化写入 `factor_values`，`dividend` 写入 `corporate_actions`；其他数据集
-通过按需操作单独下载。
+首次完整成功后系统保存建库状态和水位，按钮切换为增量更新。`daily`、
+`adj_factor`、`daily_basic` 与交易状态均直接保存到 `data/` 的 Parquet 层；
+`dividend` 等控制/PIT 数据按各自契约保存，其他数据集通过按需操作单独下载。
 
 同步完成状态采用证据门禁：每个数据集必须同时具有 ready item、成功
-ingestion manifest、适用的 watermark，以及可读取的 raw archive。日线变更会
-立即撤销旧 source certification；异步重建 Parquet 并通过 MySQL/DuckDB/文件
-哈希一致性检查后，TuShare 数据才能重新进入 production 回测和 Paper。
+ingestion manifest、适用的 watermark，以及可读取的 Bronze/原始归档。日线变更会
+立即撤销旧 source certification；通过 Parquet manifest、DuckDB 可读性和文件
+哈希检查后，TuShare 数据才能重新进入 production 回测和 Paper。
 
 ## 回测策略约束
 

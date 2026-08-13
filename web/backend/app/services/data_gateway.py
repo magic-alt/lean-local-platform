@@ -6,6 +6,8 @@ from typing import Any
 
 from ..db import db, rows_to_dicts
 from ..domain.data_scope import DataScope
+from ..lean_engine.symbols import normalize_symbol
+from . import market_lake
 from .source_gate import (
     PRIMARY_DATA_SOURCE,
     require_source_allowed,
@@ -44,9 +46,10 @@ def normalize_scope(scope: DataScope | dict[str, Any]) -> dict[str, Any]:
     asset["venue"] = (asset.get("venue") or asset["market"]).strip().lower()
     asset["resolution"] = asset["resolution"].strip().lower()
     asset["dataType"] = asset["dataType"].strip().lower()
-    selection["values"] = sorted(
-        {str(value).strip().upper() for value in selection["values"] if str(value).strip()}
-    )
+    values = {str(value).strip().upper() for value in selection["values"] if str(value).strip()}
+    if selection.get("type") in {"symbols", "products"}:
+        values = {normalize_symbol(value, asset["market"]) for value in values}
+    selection["values"] = sorted(values)
     payload["price"]["adjust"] = payload["price"]["adjust"].strip().lower() or "raw"
     provider["source"] = provider["source"].strip().lower() or PRIMARY_DATA_SOURCE
     return payload
@@ -89,24 +92,8 @@ def _coverage_for_source(scope: dict[str, Any], source: str) -> dict[str, Any]:
     asset = scope["asset"]
     selection = scope["selection"]
     time = scope["time"]
-    clauses = [
-        "asset_class = ?",
-        "market = ?",
-        "coalesce(venue, market) = ?",
-        "resolution = ?",
-        "data_type = ?",
-        "adjust = ?",
-        "source = ?",
-    ]
-    params: list[Any] = [
-        asset["assetClass"],
-        asset["market"],
-        asset["venue"],
-        asset["resolution"],
-        asset["dataType"],
-        scope["price"]["adjust"],
-        source,
-    ]
+    clauses: list[str] = []
+    params: list[Any] = []
     if selection["type"] in {"symbols", "products"} and selection["values"]:
         clauses.append(f"symbol in ({','.join('?' for _ in selection['values'])})")
         params.extend(selection["values"])
@@ -116,16 +103,14 @@ def _coverage_for_source(scope: dict[str, Any], source: str) -> dict[str, Any]:
     if time.get("endDate"):
         clauses.append("trade_date <= ?")
         params.append(time["endDate"])
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(*) as rows, count(distinct symbol) as symbols,
-                   min(trade_date) as first_date, max(trade_date) as last_date
-            from market_daily_bars where {' and '.join(clauses)}
-            """,
-            params,
-        ).fetchone()
-    return dict(row) if row else {"rows": 0, "symbols": 0, "first_date": None, "last_date": None}
+    rows = market_lake.query_rows(
+        kind="bars", asset_class=asset["assetClass"], market=asset["market"],
+        venue=asset["venue"], resolution=asset["resolution"], data_type=asset["dataType"],
+        adjust=scope["price"]["adjust"], source=source,
+        columns="count(*) as rows, count(distinct symbol) as symbols, min(trade_date) as first_date, max(trade_date) as last_date",
+        predicates=clauses, parameters=params,
+    )
+    return rows[0] if rows else {"rows": 0, "symbols": 0, "first_date": None, "last_date": None}
 
 
 def resolve(scope: DataScope | dict[str, Any]) -> dict[str, Any]:
@@ -202,29 +187,50 @@ def query(
     if dataset == "factor-values":
         normalized = normalize_scope(scope)
         names = [str(value) for value in (fields or []) if str(value).strip()]
+        start = normalized["time"].get("startDate") or "0001-01-01"
+        end = normalized["time"].get("endDate") or "9999-12-31"
+        symbols = normalized["selection"]["values"] if normalized["selection"]["type"] == "symbols" else []
         clauses = ["trade_date between ? and ?"]
-        params: list[Any] = [
-            normalized["time"].get("startDate") or "0001-01-01",
-            normalized["time"].get("endDate") or "9999-12-31",
-        ]
-        if normalized["selection"]["values"] and normalized["selection"]["type"] == "symbols":
-            clauses.append(f"symbol in ({','.join('?' for _ in normalized['selection']['values'])})")
-            params.extend(normalized["selection"]["values"])
+        params: list[Any] = [start, end]
+        if symbols:
+            clauses.append(f"symbol in ({','.join('?' for _ in symbols)})")
+            params.extend(symbols)
         if names:
             clauses.append(f"factor_name in ({','.join('?' for _ in names)})")
             params.extend(names)
-        params.append(min(max(int(limit), 1), 1000))
+        bounded = min(max(int(limit), 1), 1000)
         with db() as connection:
             rows = rows_to_dicts(
                 connection.execute(
                     f"""
                     select symbol, trade_date, factor_name, value, source
-                    from all_factor_values where {' and '.join(clauses)}
+                    from factor_values where {' and '.join(clauses)}
                     order by trade_date, symbol, factor_name limit ?
                     """,
-                    params,
+                    [*params, bounded],
                 ).fetchall()
             )
+        daily_names = names or list(market_lake.DAILY_BASIC_COLUMNS[2:-3])
+        daily_names = [name for name in daily_names if name in market_lake.DAILY_BASIC_COLUMNS]
+        lake_predicates = ["trade_date between ? and ?"]
+        lake_parameters: list[Any] = [start, end]
+        if symbols:
+            lake_predicates.append(f"symbol in ({','.join('?' for _ in symbols)})")
+            lake_parameters.extend(symbols)
+        if daily_names:
+            daily = market_lake.query_matching(
+                kind="daily_basic", asset_class="equity", market="china", venue="china",
+                resolution="daily", data_type="metric", adjust="raw",
+                columns="symbol,trade_date,source," + ",".join(daily_names),
+                predicates=lake_predicates, parameters=lake_parameters,
+            )
+            for item in daily:
+                rows.extend(
+                    {"symbol": item["symbol"], "trade_date": item["trade_date"], "factor_name": name,
+                     "value": item[name], "source": item["source"]}
+                    for name in daily_names if item.get(name) is not None
+                )
+        rows = sorted(rows, key=lambda item: (str(item["trade_date"]), str(item["symbol"]), str(item["factor_name"])))[:bounded]
         fingerprint = hashlib.sha256(
             json.dumps({"scopeHash": scope_hash(normalized), "dataset": dataset, "items": rows}, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
@@ -248,24 +254,8 @@ def query(
         "symbol, trade_date, open, high, low, close, settle, volume, amount, "
         "turnover_rate, open_interest, prev_close, pct_change, source"
     )
-    clauses = [
-        "asset_class = ?",
-        "market = ?",
-        "coalesce(venue, market) = ?",
-        "resolution = ?",
-        "data_type = ?",
-        "adjust = ?",
-        "source = ?",
-    ]
-    params: list[Any] = [
-        asset["assetClass"],
-        asset["market"],
-        asset["venue"],
-        asset["resolution"],
-        asset["dataType"],
-        normalized["price"]["adjust"],
-        resolution["source"],
-    ]
+    clauses: list[str] = []
+    params: list[Any] = []
     if selection["type"] in {"symbols", "products"} and selection["values"]:
         clauses.append(f"symbol in ({','.join('?' for _ in selection['values'])})")
         params.extend(selection["values"])
@@ -275,15 +265,12 @@ def query(
     if time.get("endDate"):
         clauses.append("trade_date <= ?")
         params.append(time["endDate"])
-    params.append(min(max(int(limit), 1), 1000))
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select {projection} from market_daily_bars
-            where {' and '.join(clauses)}
-            order by trade_date, symbol limit ?
-            """,
-            params,
-        ).fetchall()
-    items = rows_to_dicts(rows)
+    items = market_lake.query_rows(
+        kind="bars", asset_class=asset["assetClass"], market=asset["market"],
+        venue=asset["venue"], resolution=asset["resolution"], data_type=asset["dataType"],
+        adjust=normalized["price"]["adjust"], source=resolution["source"],
+        columns=projection, predicates=clauses, parameters=params,
+        order_by="trade_date, symbol", limit=min(max(int(limit), 1), 1000),
+    )
+    items = [dict(item) for item in items]
     return {**resolution, "dataset": dataset, "count": len(items), "items": items}

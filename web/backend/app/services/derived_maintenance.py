@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from ..db import database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from . import market_lake
 
 
 LAYERS = ("parquet", "clickhouse")
@@ -154,17 +155,8 @@ def _upsert_watermark(
 
 
 def _canonical_stats(scope: dict[str, str]) -> dict[str, Any]:
-    predicates = " and ".join(f"{key}=?" for key in ("asset_class", "market", "venue", "resolution", "data_type", "adjust", "source"))
-    values = [scope[key] for key in ("asset_class", "market", "venue", "resolution", "data_type", "adjust", "source")]
-    with db() as connection:
-        row = connection.execute(
-            f"""
-            select count(*) as row_count,min(trade_date) as first_date,max(trade_date) as last_date
-            from market_daily_bars where {predicates}
-            """,
-            values,
-        ).fetchone()
-    return dict(row) if row else {"row_count": 0, "first_date": None, "last_date": None}
+    rows = market_lake.query_rows(kind="bars", **scope, columns="count(*) row_count,min(trade_date) first_date,max(trade_date) last_date")
+    return rows[0] if rows else {"row_count": 0, "first_date": None, "last_date": None}
 
 
 def _parquet_incremental_start(
@@ -173,109 +165,8 @@ def _parquet_incremental_start(
     *,
     current_row_count: int,
 ) -> str | None:
-    """Choose the earliest year that may have changed since a proven export."""
-    prior_end = str(prior.get("materialized_end") or "")
-    dataset_id = str(prior.get("dataset_id") or "")
-    if not prior_end or not dataset_id:
-        return None
-
-    with db() as connection:
-        file_total = connection.execute(
-            "select sum(row_count) as row_count from parquet_files where dataset_id=?",
-            (dataset_id,),
-        ).fetchone()
-        registered_row_count = int(file_total["row_count"] or 0) if file_total else 0
-        successful = connection.execute(
-            """
-            select max(finished_at) as finished_at
-            from derived_maintenance_runs
-            where status='success' and requested_layers_json like ?
-            """,
-            ('%"parquet"%',),
-        ).fetchone()
-        last_success = str(successful["finished_at"] or "") if successful else ""
-        change_since = (
-            str(prior.get("completed_at") or "")
-            if registered_row_count == current_row_count
-            else last_success
-        ) or last_success
-        if not change_since:
-            return None
-
-        predicates = " and ".join(
-            f"{key}=?" for key in (
-                "asset_class",
-                "market",
-                "venue",
-                "resolution",
-                "data_type",
-                "adjust",
-                "source",
-            )
-        )
-        scope_values = [
-            scope[key] for key in (
-                "asset_class",
-                "market",
-                "venue",
-                "resolution",
-                "data_type",
-                "adjust",
-                "source",
-            )
-        ]
-        changed = connection.execute(
-            f"""
-            select min(trade_date) as first_date
-            from market_daily_bars
-            where {predicates} and created_at > ?
-            """,
-            [*scope_values, change_since],
-        ).fetchone()
-
-        candidate_years = {int(prior_end[:4])}
-        changed_date = str(changed["first_date"] or "") if changed else ""
-        if changed_date:
-            candidate_years.add(int(changed_date[:4]))
-
-        if registered_row_count != current_row_count:
-            canonical_years = connection.execute(
-                f"""
-                select substr(trade_date,1,4) as year,count(*) as row_count
-                from market_daily_bars
-                where {predicates}
-                group by substr(trade_date,1,4)
-                """,
-                scope_values,
-            ).fetchall()
-            parquet_years = connection.execute(
-                """
-                select substr(first_timestamp,1,4) as year,sum(row_count) as row_count
-                from parquet_files
-                where dataset_id=?
-                group by substr(first_timestamp,1,4)
-                """,
-                (dataset_id,),
-            ).fetchall()
-            canonical_counts = {
-                str(row["year"]): int(row["row_count"] or 0)
-                for row in canonical_years
-            }
-            parquet_counts = {
-                str(row["year"]): int(row["row_count"] or 0)
-                for row in parquet_years
-            }
-            mismatched_years = {
-                int(year)
-                for year in set(canonical_counts) | set(parquet_counts)
-                if canonical_counts.get(year, 0) != parquet_counts.get(year, 0)
-            }
-            if mismatched_years:
-                candidate_years.add(min(mismatched_years))
-            else:
-                return None
-
-    return f"{min(candidate_years):04d}-01-01"
+    """Parquet is canonical, so there is no database export watermark."""
+    return None
 
 
 def _existing_layer_seed(layer: str, scope: dict[str, str], stats: dict[str, Any]) -> dict[str, Any]:
@@ -342,24 +233,10 @@ def _existing_layer_seed(layer: str, scope: dict[str, str], stats: dict[str, Any
 
 
 def _canonical_date_counts(scope: dict[str, str]) -> dict[str, int]:
-    predicates = " and ".join(
-        f"{key}=?" for key in ("asset_class", "market", "venue", "resolution", "data_type", "adjust", "source")
+    rows = market_lake.query_rows(
+        kind="bars", **scope, columns="trade_date,count(*) row_count",
+        group_by="trade_date", order_by="trade_date",
     )
-    values = [
-        scope[key]
-        for key in ("asset_class", "market", "venue", "resolution", "data_type", "adjust", "source")
-    ]
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select trade_date,count(*) as row_count
-            from market_daily_bars
-            where {predicates}
-            group by trade_date
-            order by trade_date
-            """,
-            values,
-        ).fetchall()
     return {str(row["trade_date"]): int(row["row_count"]) for row in rows}
 
 
@@ -404,16 +281,11 @@ def _clickhouse_reconcile_dates(scope: dict[str, str]) -> dict[str, Any]:
     for offset in range(0, len(repair_dates), 100):
         date_chunk = repair_dates[offset : offset + 100]
         placeholders = ",".join("?" for _ in date_chunk)
-        with db() as connection:
-            rows = connection.execute(
-                f"""
-                select symbol,trade_date,open,high,low,close,volume
-                from market_daily_bars
-                where {scope_predicates} and trade_date in ({placeholders})
-                order by symbol,trade_date
-                """,
-                [*scope_values, *date_chunk],
-            ).fetchall()
+        rows = market_lake.query_rows(
+            kind="bars", **scope, columns="symbol,trade_date,open,high,low,close,volume",
+            predicates=(f"trade_date in ({placeholders})",), parameters=date_chunk,
+            order_by="symbol,trade_date",
+        )
         by_symbol: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             item = dict(row)
@@ -503,14 +375,12 @@ def _clickhouse_incremental(scope: dict[str, str], start_date: str | None) -> di
     if start_date:
         predicates.append("trade_date>=?")
         values.append(start_date)
-    with db() as connection:
-        symbols = [
-            str(row["symbol"])
-            for row in connection.execute(
-                f"select distinct symbol from market_daily_bars where {' and '.join(predicates)} order by symbol",
-                values,
-            ).fetchall()
-        ]
+    lake_predicates = ("trade_date>=?",) if start_date else ()
+    lake_values = (start_date,) if start_date else ()
+    symbols = [str(row["symbol"]) for row in market_lake.query_rows(
+        kind="bars", **scope, columns="distinct symbol", predicates=lake_predicates,
+        parameters=lake_values, order_by="symbol",
+    )]
     inserted = 0
     skipped = 0
     batches = 0

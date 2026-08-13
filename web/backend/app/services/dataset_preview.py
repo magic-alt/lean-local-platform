@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from ..db import db, rows_to_dicts
 from ..lean_engine.symbols import normalize_symbol
 from .db_object_store import read_bytes
+from . import market_lake
 
 
 PREVIEW_DATASETS = {
@@ -173,6 +174,51 @@ def _sql_preview(
     limit: int,
     offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
+    lake_scope = {
+        "daily": ("bars", "equity", "trade", "tushare"),
+        "index_daily": ("bars", "index", "trade", "tushare"),
+        "adj_factor": ("adjustment_factor", "equity", "factor", "tushare"),
+        "daily_basic": ("daily_basic", "equity", "metric", "tushare:daily_basic"),
+        "suspend_d": ("trade_status", "equity", "status", "tushare:suspend_d"),
+        "stk_limit": ("trade_status", "equity", "status", "tushare:stk_limit"),
+    }.get(dataset)
+    if lake_scope:
+        kind, asset_class, data_type, source = lake_scope
+        predicates: list[str] = []
+        parameters: list[Any] = []
+        if start_date:
+            predicates.append("trade_date>=?")
+            parameters.append(start_date)
+        if end_date:
+            predicates.append("trade_date<=?")
+            parameters.append(end_date)
+        factor_filter = keyword if dataset == "daily_basic" and keyword in market_lake.DAILY_BASIC_COLUMNS else ""
+        if keyword and not factor_filter:
+            normalized = normalize_symbol(keyword, "china")
+            predicates.append("symbol=?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
+            parameters.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
+        rows = market_lake.query_matching(
+            kind=kind, asset_class=asset_class, market="china", resolution="daily",
+            data_type=data_type, adjust="raw", source=source,
+            predicates=predicates, parameters=parameters,
+            order_by="trade_date desc,symbol", limit=None,
+        )
+        if dataset == "daily_basic":
+            factor_names = [factor_filter] if factor_filter else list(market_lake.DAILY_BASIC_COLUMNS[2:-3])
+            rows = [
+                {"symbol": row["symbol"], "trade_date": row["trade_date"], "factor_name": name,
+                 "value": row[name], "source": row["source"]}
+                for row in rows for name in factor_names if row.get(name) is not None
+            ]
+        count = len(rows)
+        selected = rows[offset : offset + limit]
+        if dataset == "index_daily":
+            for row in selected:
+                symbol = str(row.pop("symbol", "") or "")
+                row["ts_code"] = f"{symbol}.{'SZ' if symbol.startswith('399') else 'SH'}"
+                row["pct_chg"] = row.pop("pct_change", None)
+                row["vol"] = row.pop("volume", None)
+        return selected, count
     clauses: list[str] = []
     values: list[Any] = []
     date_column: str | None = None
@@ -192,70 +238,6 @@ def _sql_preview(
         if keyword:
             clauses.append("(market like ? or source like ?)")
             values.extend([f"%{keyword}%", f"%{keyword}%"])
-    elif dataset == "daily":
-        table = "market_daily_bars"
-        select = "symbol,trade_date,open,high,low,close,prev_close,pct_change,volume,amount,adjust,source"
-        date_column = "trade_date"
-        order_by = "trade_date desc"
-        clauses.append("asset_class='equity' and market='china' and venue='china'")
-        clauses.append("resolution='daily' and data_type='trade' and adjust='raw'")
-        if keyword:
-            normalized = normalize_symbol(keyword, "china")
-            if normalized.isdigit() and len(normalized) == 6:
-                clauses.append("symbol = ?")
-                values.append(normalized)
-            else:
-                clauses.append("symbol like ?")
-                values.append(f"%{normalized}%")
-    elif dataset == "adj_factor":
-        table = "adjustment_factors"
-        select = "symbol,trade_date,adj_factor,source"
-        date_column = "trade_date"
-        order_by = "trade_date desc"
-        if keyword:
-            normalized = normalize_symbol(keyword, "china")
-            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
-            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
-    elif dataset == "daily_basic":
-        table = "daily_basic_factor_values"
-        select = "symbol,trade_date,factor_name,value,source"
-        date_column = "trade_date"
-        order_by = "trade_date desc, symbol, factor_name"
-        if keyword:
-            compact_symbol = keyword.upper().replace(".", "")
-            for affix in ("SH", "SZ", "BJ"):
-                if compact_symbol.startswith(affix):
-                    compact_symbol = compact_symbol[len(affix):]
-                elif compact_symbol.endswith(affix):
-                    compact_symbol = compact_symbol[:-len(affix)]
-            if compact_symbol.isdigit() and len(compact_symbol) == 6:
-                clauses.append("symbol = ?")
-                values.append(compact_symbol)
-            else:
-                clauses.append("(symbol like ? or factor_name like ?)")
-                values.extend([f"%{keyword}%", f"%{keyword}%"])
-    elif dataset == "suspend_d":
-        table = "market_trade_status"
-        select = "symbol,trade_date,is_suspended,can_buy,can_sell,source"
-        date_column = "trade_date"
-        order_by = "trade_date desc"
-        clauses.append("asset_class='equity' and market='china' and venue='china'")
-        clauses.append("source='tushare:suspend_d'")
-        if keyword:
-            normalized = normalize_symbol(keyword, "china")
-            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
-            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
-    elif dataset == "stk_limit":
-        table = "market_trade_status"
-        select = "symbol,trade_date,limit_up,limit_down,can_buy,can_sell,is_st,source"
-        date_column = "trade_date"
-        order_by = "trade_date desc"
-        clauses.append("asset_class='equity' and market='china' and venue='china'")
-        clauses.append("source='tushare:stk_limit'")
-        if keyword:
-            normalized = normalize_symbol(keyword, "china")
-            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
-            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
     elif dataset == "dividend":
         table = "corporate_actions"
         select = (
@@ -265,30 +247,6 @@ def _sql_preview(
         date_column = "ex_date"
         order_by = "ex_date desc, symbol"
         clauses.append("source='tushare:dividend'")
-        if keyword:
-            normalized = normalize_symbol(keyword, "china")
-            clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
-            values.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
-    elif dataset == "index_daily":
-        # Index sync materializes every retained batch into the canonical bar
-        # table.  Reading the latest raw archive here used to expose only the
-        # newest incremental response (often a single bar) and made historical
-        # candlestick previews unavailable even though the full series existed.
-        table = "market_daily_bars"
-        select = (
-            "symbol,trade_date,open,high,low,close,prev_close,"
-            "pct_change,volume,amount,source"
-        )
-        date_column = "trade_date"
-        order_by = "trade_date desc, symbol"
-        clauses.extend([
-            "asset_class='index'",
-            "market='china'",
-            "resolution='daily'",
-            "data_type='trade'",
-            "adjust='raw'",
-            "source='tushare'",
-        ])
         if keyword:
             normalized = normalize_symbol(keyword, "china")
             clauses.append("symbol = ?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
@@ -311,12 +269,6 @@ def _sql_preview(
             f"select {select} from {table}{where} order by {order_by} limit ? offset ?",
             [*values, limit, offset],
         ).fetchall())
-    if dataset == "index_daily":
-        for row in rows:
-            symbol = str(row.pop("symbol", "") or "")
-            row["ts_code"] = f"{symbol}.{'SZ' if symbol.startswith('399') else 'SH'}"
-            row["pct_chg"] = row.pop("pct_change", None)
-            row["vol"] = row.pop("volume", None)
     return rows, count
 
 

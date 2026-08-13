@@ -35,7 +35,7 @@ def test_contract_catalog_and_generated_source_tables_are_complete():
     status = commercial_schema_status()
 
     assert first == second == {"providers": 1, "datasets": 139, "contracts": 139}
-    assert status["coreTables"] == {"expected": 19, "present": 19, "missing": []}
+    assert status["coreTables"] == {"expected": 16, "present": 16, "missing": []}
     assert status["sourceTables"] == {"expected": 139, "present": 139}
     with db() as connection:
         dataset_count = connection.execute(
@@ -48,9 +48,12 @@ def test_contract_catalog_and_generated_source_tables_are_complete():
     assert contract_count == 139
 
 
-def test_typed_source_writer_keeps_revisions_and_handles_large_lookups():
+def test_typed_source_writer_keeps_revisions_and_handles_large_lookups(monkeypatch):
     from app.db import db, init_db
-    from app.services.tushare_typed_source import persist_typed_source_rows
+    from app.services import tushare_typed_source
+
+    monkeypatch.setenv("LEAN_TUSHARE_TYPED_SOURCE_WRITES", "1")
+    persist_typed_source_rows = tushare_typed_source.persist_typed_source_rows
 
     init_db()
     initial_rows = [

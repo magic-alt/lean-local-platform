@@ -25,7 +25,7 @@ from ..ml.cross_sectional import (
     prediction_metrics,
     preprocess_cross_section,
 )
-from . import db_object_store, ml_data_preparation
+from . import db_object_store, ml_data_preparation, market_lake
 
 
 TEMPLATE_KEY = "ml-cross-sectional-ranker"
@@ -190,59 +190,82 @@ def _stream_frame(sql: str, parameters: tuple[Any, ...]) -> pl.DataFrame:
 
 def _load_panel(start_date: str, end_date: str) -> tuple[pl.DataFrame, pl.DataFrame, dict[str, Any]]:
     load_start = f"{max(1990, int(start_date[:4]) - 2):04d}-01-01"
-    bars = _stream_frame(
-        """
-        select b.symbol,b.trade_date,b.open,b.high,b.low,b.close,b.volume,b.amount,
-               coalesce(a.adj_factor,b.adj_factor,1.0) adj_factor,
-               s.listed_date,
-               coalesce(t.is_suspended,0) is_suspended,
-               case when exists (
-                   select 1 from security_name_history n where n.symbol=b.symbol
-                     and n.start_date<=b.trade_date and (n.end_date is null or n.end_date>=b.trade_date) and n.is_st=1
-               ) then 1 else 0 end is_st,
-               case when exists (
-                   select 1 from universe_membership u where u.universe_code='CSI300' and u.symbol=b.symbol
-                     and u.start_date<=b.trade_date and (u.end_date is null or u.end_date>=b.trade_date)
-                     and (u.announce_date is null or u.announce_date<=b.trade_date)
-                     and (u.effective_date is null or u.effective_date<=b.trade_date)
-               ) then 1 else 0 end is_member,
-               (select i.industry_code from industry_membership i where i.symbol=b.symbol
-                    and i.taxonomy='SW2021' and i.level_no=1 and i.in_date<=b.trade_date
-                    and (i.out_date is null or i.out_date>=b.trade_date)
-                    order by i.in_date desc limit 1) industry_code
-        from market_daily_bars b
-        join securities s on s.symbol=b.symbol
-        left join adjustment_factors a on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-        left join (
-            select symbol,trade_date,max(is_suspended) is_suspended
-            from market_trade_status where asset_class='equity' and market='china' and venue='china'
-            group by symbol,trade_date
-        ) t on t.symbol=b.symbol and t.trade_date=b.trade_date
-        where b.asset_class='equity' and b.market='china' and b.venue='china'
-          and b.resolution='daily' and b.data_type='trade'
-          and b.adjust='raw' and b.trade_date between ? and ?
-          and exists (select 1 from universe_membership u where u.universe_code='CSI300' and u.symbol=b.symbol
-              and u.start_date<=? and (u.end_date is null or u.end_date>=?))
-        """,
-        (load_start, end_date, end_date, start_date),
+    memberships = _stream_frame(
+        """select symbol,start_date,end_date,announce_date,effective_date from universe_membership
+           where universe_code='CSI300' and start_date<=? and coalesce(end_date,?)>=?""",
+        (end_date, end_date, load_start),
     )
+    symbols = sorted(memberships["symbol"].unique().to_list()) if not memberships.is_empty() else []
+    if not symbols:
+        raise ValueError("No PIT CSI300 membership is available for the requested range.")
+    placeholders = ",".join("?" for _ in symbols)
+    predicates = (f"symbol in ({placeholders})", "trade_date between ? and ?")
+    parameters = [*symbols, load_start, end_date]
+    bar_rows = market_lake.query_rows(
+        kind="bars", asset_class="equity", market="china", venue="china", resolution="daily",
+        data_type="trade", adjust="raw", source="tushare",
+        columns="symbol,trade_date,open,high,low,close,volume,amount,adj_factor",
+        predicates=predicates, parameters=parameters, order_by="symbol,trade_date",
+    )
+    bars = pl.DataFrame(bar_rows, infer_schema_length=None) if bar_rows else pl.DataFrame()
     if bars.is_empty():
         raise ValueError("No PIT CSI300 daily bars are available for the requested range.")
-    valuation = _stream_frame(
-        """
-        select symbol,trade_date,
-          max(case when factor_name='turnover_rate' then value end) turnover_rate,
-          max(case when factor_name='volume_ratio' then value end) volume_ratio,
-          max(case when factor_name='pe_ttm' then value end) pe_ttm,
-          max(case when factor_name='pb' then value end) pb,
-          max(case when factor_name='ps_ttm' then value end) ps_ttm,
-          max(case when factor_name='total_mv_cny' then value end) total_mv
-        from daily_basic_factor_values where trade_date between ? and ?
-          and factor_name in ('turnover_rate','volume_ratio','pe_ttm','pb','ps_ttm','total_mv_cny')
-        group by symbol,trade_date
-        """,
-        (load_start, end_date),
+    adjustments = market_lake.query_rows(
+        kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="factor", source="tushare", columns="symbol,trade_date,adj_factor",
+        predicates=predicates, parameters=parameters,
     )
+    if adjustments:
+        bars = bars.drop("adj_factor").join(pl.DataFrame(adjustments), on=["symbol", "trade_date"], how="left")
+    bars = bars.with_columns(pl.col("adj_factor").fill_null(1.0))
+    securities = _stream_frame(
+        f"select symbol,listed_date from securities where symbol in ({placeholders})", tuple(symbols)
+    )
+    bars = bars.join(securities, on="symbol", how="left") if not securities.is_empty() else bars.with_columns(pl.lit(None).alias("listed_date"))
+    statuses = market_lake.query_matching(
+        kind="trade_status", asset_class="equity", market="china", venue="china", resolution="daily",
+        data_type="status", columns="symbol,trade_date,is_suspended,is_st",
+        predicates=predicates, parameters=parameters,
+    )
+    if statuses:
+        status_frame = pl.DataFrame(statuses).group_by(["symbol", "trade_date"]).agg(
+            pl.col("is_suspended").max(), pl.col("is_st").max()
+        )
+        bars = bars.join(status_frame, on=["symbol", "trade_date"], how="left")
+    else:
+        bars = bars.with_columns(pl.lit(0).alias("is_suspended"), pl.lit(0).alias("is_st"))
+    intervals: dict[str, list[tuple[str, str]]] = {}
+    for row in memberships.to_dicts():
+        intervals.setdefault(str(row["symbol"]), []).append((str(row["start_date"])[:10], str(row.get("end_date") or end_date)[:10]))
+    industry_rows = _stream_frame(
+        f"""select symbol,industry_code,in_date,out_date from industry_membership
+            where taxonomy='SW2021' and level_no=1 and symbol in ({placeholders}) and in_date<=?""",
+        (*symbols, end_date),
+    )
+    industries: dict[str, list[tuple[str, str, str]]] = {}
+    for row in industry_rows.to_dicts() if not industry_rows.is_empty() else []:
+        industries.setdefault(str(row["symbol"]), []).append(
+            (str(row["in_date"])[:10], str(row.get("out_date") or end_date)[:10], str(row["industry_code"]))
+        )
+    bars = bars.with_columns(
+        pl.struct("symbol", "trade_date").map_elements(
+            lambda item: int(any(start <= str(item["trade_date"]) <= end for start, end in intervals.get(str(item["symbol"]), []))),
+            return_dtype=pl.Int8,
+        ).alias("is_member"),
+        pl.struct("symbol", "trade_date").map_elements(
+            lambda item: next((code for start, end, code in reversed(industries.get(str(item["symbol"]), []))
+                               if start <= str(item["trade_date"]) <= end), None),
+            return_dtype=pl.String,
+        ).alias("industry_code"),
+        pl.col("is_suspended").fill_null(0), pl.col("is_st").fill_null(0),
+    )
+    valuation_rows = market_lake.query_rows(
+        kind="daily_basic", asset_class="equity", market="china", venue="china", resolution="daily",
+        data_type="metric", source="tushare:daily_basic",
+        columns="symbol,trade_date,turnover_rate,volume_ratio,pe_ttm,pb,ps_ttm,total_mv_cny total_mv",
+        predicates=predicates, parameters=parameters,
+    )
+    valuation = pl.DataFrame(valuation_rows, infer_schema_length=None) if valuation_rows else pl.DataFrame()
     if not valuation.is_empty():
         bars = bars.join(valuation, on=["symbol", "trade_date"], how="left")
     else:
@@ -282,12 +305,14 @@ def _load_panel(start_date: str, end_date: str) -> tuple[pl.DataFrame, pl.DataFr
     for name in ("roe", "grossprofit_margin", "netprofit_yoy", "or_yoy", "debt_to_assets", "operating_cashflow_to_profit"):
         if name not in bars.columns:
             bars = bars.with_columns(pl.lit(None).cast(pl.Float64).alias(name))
-    benchmark = _stream_frame(
-        """select trade_date,open,close,coalesce(adj_factor,1.0) adj_factor from market_daily_bars
-           where symbol='000300' and asset_class='index' and adjust='raw' and trade_date between ? and ?
-           order by trade_date""",
-        (load_start, end_date),
+    benchmark_rows = market_lake.query_rows(
+        kind="bars", asset_class="index", market="china", venue="china", resolution="daily",
+        data_type="trade", adjust="raw", source="tushare",
+        columns="trade_date,open,close,coalesce(adj_factor,1.0) adj_factor",
+        predicates=("symbol='000300'", "trade_date between ? and ?"), parameters=(load_start, end_date),
+        order_by="trade_date",
     )
+    benchmark = pl.DataFrame(benchmark_rows, infer_schema_length=None) if benchmark_rows else pl.DataFrame()
     if benchmark.is_empty():
         raise ValueError("CSI300 benchmark bars are missing.")
     manifest = {

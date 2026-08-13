@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 from ..core.errors import LeanWebError
 from ..db import db, rows_to_dicts
+from . import market_lake
 
 
 SNAPSHOT_FILE_NAME = "ashare-trend-pullback-input.json.gz"
@@ -148,28 +149,25 @@ def _market_inputs(
     bar_counts: dict[str, int] = defaultdict(int)
     for chunk in _chunks(symbols):
         placeholders = ",".join("?" for _ in chunk)
-        source_clause = "and b.source=?" if source else ""
+        selected_source = source or "tushare"
         parameters: list[Any] = [*chunk, warmup_start, end]
-        if source:
-            parameters.append(source)
-        with db() as connection:
-            rows = rows_to_dicts(
-                connection.execute(
-                    f"""
-                    select b.symbol,b.trade_date,b.amount,
-                           coalesce(a.adj_factor,b.adj_factor,1.0) adj_factor
-                    from market_daily_bars b
-                    left join adjustment_factors a
-                      on a.symbol=b.symbol and a.trade_date=b.trade_date and a.source='tushare'
-                    where b.asset_class='equity' and b.market='china' and b.venue='china'
-                      and b.resolution='daily' and b.data_type='trade'
-                      and b.symbol in ({placeholders}) and b.adjust='raw'
-                      and b.trade_date between ? and ? {source_clause}
-                    order by b.symbol,b.trade_date,b.source
-                    """,
-                    parameters,
-                ).fetchall()
-            )
+        rows = market_lake.query_rows(
+            kind="bars", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="trade", adjust="raw", source=selected_source,
+            columns="symbol,trade_date,amount,adj_factor",
+            predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+            parameters=parameters, order_by="symbol,trade_date",
+        )
+        adjustments = market_lake.query_rows(
+            kind="adjustment_factor", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="factor", source="tushare",
+            columns="symbol,trade_date,adj_factor",
+            predicates=(f"symbol in ({placeholders})", "trade_date between ? and ?"),
+            parameters=parameters,
+        )
+        factor_by_key = {(str(row["symbol"]), str(row["trade_date"])[:10]): row.get("adj_factor") for row in adjustments}
+        for row in rows:
+            row["adj_factor"] = factor_by_key.get((str(row["symbol"]), str(row["trade_date"])[:10])) or row.get("adj_factor") or 1.0
         grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         for row in rows:
             grouped[str(row["symbol"]).upper()][str(row["trade_date"])[:10]] = row

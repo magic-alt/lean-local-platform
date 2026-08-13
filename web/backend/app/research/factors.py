@@ -9,6 +9,7 @@ from ..core.errors import LeanWebError
 from ..db import bulk_db, db, json_dump, rows_to_dicts, utc_now
 from ..lean_engine.symbols import normalize_symbol, parse_date
 from ..services.ashare_repository import trade_dates_between, universe_as_of
+from ..services import market_lake
 
 
 DAILY_BASIC_FACTOR_COLUMNS = {
@@ -131,66 +132,38 @@ def upsert_daily_basic_factor_values(
     """Persist one wide row per symbol/date instead of up to 15 EAV rows."""
     if not records:
         return 0
-    now = utc_now()
     written = 0
     rows_per_chunk = max(1, int(chunk_rows))
-    connection_factory = bulk_db if bulk else db
-    with connection_factory() as connection:
-        for offset in range(0, len(records), rows_per_chunk):
-            values: list[tuple[Any, ...]] = []
-            for record in records[offset : offset + rows_per_chunk]:
-                symbol = _symbol(record["symbol"])
-                trade_date = _date(record.get("trade_date") or record.get("tradeDate"))
-                factors = dict(record.get("factors") or {})
-                unknown = set(factors) - set(DAILY_BASIC_FACTOR_COLUMNS)
-                if unknown:
-                    raise LeanWebError(f"unsupported daily_basic factors: {', '.join(sorted(unknown))}")
-                normalized: dict[str, float | None] = {}
-                for name in DAILY_BASIC_FACTOR_COLUMNS:
-                    raw_value = factors.get(name)
-                    if raw_value is None:
-                        normalized[name] = None
-                        continue
-                    value = float(raw_value)
-                    if not math.isfinite(value):
-                        raise LeanWebError("factor value must be finite.")
-                    normalized[name] = value
-                values.append(
-                    (
-                        symbol,
-                        trade_date,
-                        *(normalized[name] for name in DAILY_BASIC_FACTOR_COLUMNS),
-                        source,
-                        batch_id,
-                        now,
-                    )
-                )
-            if values:
-                connection.executemany(
-                    """
-                    insert into daily_basic_values
-                        (symbol,trade_date,turnover_rate,turnover_rate_float,volume_ratio,
-                         pe,pe_ttm,pb,ps,ps_ttm,dividend_yield,dividend_yield_ttm,
-                         total_share_shares,float_share_shares,free_share_shares,total_mv_cny,
-                         circ_mv_cny,source,batch_id,created_at)
-                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    on conflict(symbol,trade_date,source) do update set
-                        turnover_rate=excluded.turnover_rate,
-                        turnover_rate_float=excluded.turnover_rate_float,
-                        volume_ratio=excluded.volume_ratio,
-                        pe=excluded.pe,pe_ttm=excluded.pe_ttm,pb=excluded.pb,
-                        ps=excluded.ps,ps_ttm=excluded.ps_ttm,
-                        dividend_yield=excluded.dividend_yield,
-                        dividend_yield_ttm=excluded.dividend_yield_ttm,
-                        total_share_shares=excluded.total_share_shares,
-                        float_share_shares=excluded.float_share_shares,
-                        free_share_shares=excluded.free_share_shares,
-                        total_mv_cny=excluded.total_mv_cny,circ_mv_cny=excluded.circ_mv_cny,
-                        batch_id=excluded.batch_id,created_at=excluded.created_at
-                    """,
-                    values,
-                )
-                written += len(values)
+    for offset in range(0, len(records), rows_per_chunk):
+        values: list[dict[str, Any]] = []
+        for record in records[offset: offset + rows_per_chunk]:
+            symbol = _symbol(record["symbol"])
+            trade_date = _date(record.get("trade_date") or record.get("tradeDate"))
+            factors = dict(record.get("factors") or {})
+            unknown = set(factors) - set(DAILY_BASIC_FACTOR_COLUMNS)
+            if unknown:
+                raise LeanWebError(f"unsupported daily_basic factors: {', '.join(sorted(unknown))}")
+            normalized: dict[str, float | None] = {}
+            for name in DAILY_BASIC_FACTOR_COLUMNS:
+                raw_value = factors.get(name)
+                if raw_value is None:
+                    normalized[name] = None
+                    continue
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise LeanWebError("factor value must be finite.")
+                normalized[name] = value
+            values.append({
+                "symbol": symbol, "trade_date": trade_date, **normalized,
+                "source": source, "batch_id": batch_id,
+            })
+        if values:
+            market_lake.upsert_rows(
+                values, kind="daily_basic", asset_class="equity", market="china",
+                venue="china", resolution="daily", data_type="metric", adjust="raw",
+                source=source,
+            )
+            written += len(values)
     return written
 
 
@@ -198,18 +171,34 @@ def _factor_values(symbols: list[str], trade_date: str, factor_names: list[str])
     if not symbols or not factor_names:
         return {}
     symbol_placeholders = ",".join("?" for _ in symbols)
-    factor_placeholders = ",".join("?" for _ in factor_names)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol, factor_name, value from all_factor_values
-            where trade_date = ?
-              and symbol in ({symbol_placeholders})
-              and factor_name in ({factor_placeholders})
-            order by source desc
-            """,
-            [trade_date, *symbols, *factor_names],
-        ).fetchall()
+    regular_names = [name for name in factor_names if name not in DAILY_BASIC_FACTOR_COLUMNS]
+    rows: list[dict[str, Any]] = []
+    if regular_names:
+        regular_placeholders = ",".join("?" for _ in regular_names)
+        with db() as connection:
+            db_rows = connection.execute(
+                f"""
+                select symbol, factor_name, value from factor_values
+                where trade_date = ?
+                  and symbol in ({symbol_placeholders})
+                  and factor_name in ({regular_placeholders})
+                order by source desc
+                """,
+                [trade_date, *symbols, *regular_names],
+            ).fetchall()
+        rows.extend(rows_to_dicts(db_rows))
+    daily_names = [name for name in factor_names if name in DAILY_BASIC_FACTOR_COLUMNS]
+    if daily_names:
+        daily_rows = market_lake.query_matching(
+            kind="daily_basic", asset_class="equity", market="china", venue="china",
+            resolution="daily", data_type="metric", adjust="raw",
+            columns="*", predicates=("trade_date = ?", f"symbol in ({symbol_placeholders})"),
+            parameters=[trade_date, *symbols],
+        )
+        for item in daily_rows:
+            for name in daily_names:
+                if item.get(name) is not None:
+                    rows.append({"symbol": item["symbol"], "factor_name": name, "value": item[name]})
     values: dict[str, dict[str, float]] = {}
     seen: set[tuple[str, str]] = set()
     for row in rows:
@@ -225,17 +214,12 @@ def _closes(symbols: list[str], trade_date: str) -> dict[str, float]:
     if not symbols:
         return {}
     placeholders = ",".join("?" for _ in symbols)
-    with db() as connection:
-        rows = connection.execute(
-            f"""
-            select symbol, close from market_daily_bars
-            where trade_date = ? and asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and adjust = 'raw'
-              and symbol in ({placeholders})
-            order by source desc
-            """,
-            [trade_date, *symbols],
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw",
+        columns="symbol,close,source", predicates=("trade_date = ?", f"symbol in ({placeholders})"),
+        parameters=[trade_date, *symbols], order_by="source desc",
+    )
     closes: dict[str, float] = {}
     for row in rows:
         closes.setdefault(row["symbol"], float(row["close"]))
@@ -246,17 +230,12 @@ def _dates_for_analysis(start_date: str, end_date: str) -> list[str]:
     dates = trade_dates_between("china", start_date, end_date)
     if dates:
         return dates
-    with db() as connection:
-        rows = connection.execute(
-            """
-            select distinct trade_date from market_daily_bars
-            where asset_class='equity' and market='china' and venue='china'
-              and resolution='daily' and data_type='trade' and adjust='raw'
-              and trade_date >= ? and trade_date <= ?
-            order by trade_date asc
-            """,
-            (start_date, end_date),
-        ).fetchall()
+    rows = market_lake.query_matching(
+        kind="bars", asset_class="equity", market="china", venue="china",
+        resolution="daily", data_type="trade", adjust="raw",
+        columns="distinct trade_date", predicates=("trade_date >= ?", "trade_date <= ?"),
+        parameters=(start_date, end_date), order_by="trade_date asc",
+    )
     return [row["trade_date"] for row in rows]
 
 

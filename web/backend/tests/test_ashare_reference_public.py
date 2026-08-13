@@ -78,19 +78,15 @@ def test_public_reference_import_helpers_write_canonical_tables(tmp_path, monkey
 
     with db_module.db() as connection:
         security = connection.execute("select status, delisted_date, is_st from securities where symbol = '600001'").fetchone()
-        suspended_row = connection.execute(
-            """
-            select is_suspended,can_buy,can_sell from market_trade_status
-            where symbol='000003' and asset_class='equity' and market='china' and venue='china'
-            """
-        ).fetchone()
         action = connection.execute("select cash_dividend, stock_dividend from corporate_actions where symbol = '600519'").fetchone()
         action_symbols = connection.execute("select distinct symbol from corporate_actions order by symbol").fetchall()
 
     assert security["status"] == "delisted"
     assert security["delisted_date"] == "2009-12-29"
     assert security["is_st"] == 1
-    assert suspended_row["is_suspended"] == 1
+    from app.services.ashare_repository import effective_trade_status
+    suspended_row = effective_trade_status("000003", "2026-07-06")
+    assert suspended_row and suspended_row["is_suspended"] == 1
     assert suspended_row["can_buy"] == 0
     assert suspended_row["can_sell"] == 0
     assert action["cash_dividend"] == 3.0
