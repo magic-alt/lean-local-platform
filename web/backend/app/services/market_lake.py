@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -55,6 +57,11 @@ DAILY_BASIC_COLUMNS = (
     "circ_mv_cny", "source", "batch_id", "created_at",
 )
 DAILY_BASIC_KEY = ("symbol", "trade_date", "source")
+
+DUCKDB_MEMORY_LIMIT = os.environ.get("LEAN_DUCKDB_MEMORY_LIMIT", "256MB").strip() or "256MB"
+DUCKDB_THREADS = max(1, int(os.environ.get("LEAN_DUCKDB_THREADS", "2")))
+DUCKDB_QUERY_CONCURRENCY = max(1, int(os.environ.get("LEAN_DUCKDB_QUERY_CONCURRENCY", "1")))
+_DUCKDB_QUERY_SLOTS = threading.BoundedSemaphore(DUCKDB_QUERY_CONCURRENCY)
 
 
 def _require_engine() -> None:
@@ -149,6 +156,44 @@ def _native_available(scope: dict[str, str]) -> bool:
     return Path(pattern.split("trade_date=*", 1)[0]).is_dir()
 
 
+def native_partition_summary(**raw_scope: str) -> dict[str, Any]:
+    """Return cheap filesystem coverage without opening Parquet row groups."""
+    scope = _scope(**raw_scope)
+    pattern = _native_glob(scope)
+    if not pattern:
+        return {"available": False, "partitionCount": 0, "firstDate": None, "lastDate": None}
+    if "trade_date=*" not in pattern:
+        path = Path(pattern)
+        return {
+            "available": path.is_file(),
+            "partitionCount": int(path.is_file()),
+            "firstDate": None,
+            "lastDate": None,
+        }
+    root = Path(pattern.split("trade_date=*", 1)[0])
+    first_date: str | None = None
+    last_date: str | None = None
+    count = 0
+    if root.is_dir():
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not entry.is_dir() or not entry.name.startswith("trade_date="):
+                    continue
+                value = entry.name.split("=", 1)[1]
+                if len(value) < 8 or not value[:8].isdigit():
+                    continue
+                normalized = f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+                first_date = normalized if first_date is None or normalized < first_date else first_date
+                last_date = normalized if last_date is None or normalized > last_date else last_date
+                count += 1
+    return {
+        "available": count > 0,
+        "partitionCount": count,
+        "firstDate": first_date,
+        "lastDate": last_date,
+    }
+
+
 def _native_write_supported(scope: dict[str, str]) -> bool:
     """Limit writes to lake layers owned by lean-platform.
 
@@ -169,10 +214,19 @@ def _native_write_supported(scope: dict[str, str]) -> bool:
     return False
 
 
-def _native_relation(scope: dict[str, str], pattern: str) -> str:
+def _native_relation(
+    scope: dict[str, str],
+    pattern: str,
+    *,
+    files: Sequence[Path] = (),
+) -> str:
     escaped_path = pattern.replace("'", "''")
     source = scope["source"].replace("'", "''")
-    raw = f"read_parquet('{escaped_path}', union_by_name=true, hive_partitioning=false)"
+    raw = (
+        f"read_parquet([{_sql_paths(files)}], union_by_name=true, hive_partitioning=false)"
+        if files
+        else f"read_parquet('{escaped_path}', union_by_name=true, hive_partitioning=false)"
+    )
     staging_index = scope["kind"] == "bars" and scope["asset_class"] == "index"
     raw_symbol = "symbol" if staging_index else "ts_code"
     raw_date = "date" if staging_index else "trade_date"
@@ -218,6 +272,23 @@ def _native_relation(scope: dict[str, str], pattern: str) -> str:
         }
         columns = STATUS_COLUMNS
     return "(select " + ",".join(f"{fields[column]} as {column}" for column in columns) + f" from {raw})"
+
+
+@contextmanager
+def _duckdb_connection() -> Iterator[Any]:
+    """Open one bounded DuckDB connection suitable for the 2 GiB API container."""
+    _require_engine()
+    temp_root = Path(tempfile.gettempdir()) / "lean-platform-duckdb"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with _DUCKDB_QUERY_SLOTS:
+        connection = duckdb.connect(database=":memory:")
+        try:
+            connection.execute("set memory_limit=?", [DUCKDB_MEMORY_LIMIT])
+            connection.execute("set threads=?", [DUCKDB_THREADS])
+            connection.execute("set temp_directory=?", [str(temp_root)])
+            yield connection
+        finally:
+            connection.close()
 
 
 def _sha256(path: Path) -> str:
@@ -370,6 +441,8 @@ def query_rows(
     group_by: str | None = None,
     order_by: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    recent_partitions: int | None = None,
 ) -> list[dict[str, Any]]:
     _require_engine()
     scope = _scope(
@@ -379,6 +452,20 @@ def query_rows(
     root = dataset_root(**scope)
     custom_files = [_visible(str(item["path"])) for item in load_manifest(**scope).get("files") or []]
     native_pattern = _native_glob(scope) if not custom_files else None
+    if native_pattern and scope["kind"] == "bars" and scope["asset_class"] == "index":
+        exact_symbol = next(
+            (
+                str(value).strip().upper()
+                for predicate, value in zip(predicates, parameters, strict=False)
+                if predicate.replace(" ", "").lower() == "symbol=?"
+            ),
+            "",
+        )
+        if exact_symbol:
+            code = exact_symbol.split(".", 1)[0]
+            prefix = "SZ" if code.startswith("399") else "SH"
+            candidate = PARQUET_DIR / "gold" / "qlib_staging" / "full" / f"{prefix}{code}.parquet"
+            native_pattern = str(candidate)
     native_exists = bool(
         native_pattern
         and (
@@ -392,15 +479,20 @@ def query_rows(
     grouping = f" group by {group_by}" if group_by else ""
     ordering = f" order by {order_by}" if order_by else ""
     bounded = f" limit {max(1, int(limit))}" if limit is not None else ""
-    relation = _native_relation(scope, native_pattern) if native_pattern else f"read_parquet([{_sql_paths(files)}], union_by_name=true)"
-    sql = f"select {columns} from {relation}{where}{grouping}{ordering}{bounded}"
-    connection = duckdb.connect(database=":memory:")
-    try:
+    skipped = f" offset {max(0, int(offset))}" if offset else ""
+    selected_native_files: list[Path] = []
+    if native_pattern and recent_partitions and "*" in native_pattern:
+        selected_native_files = _native_files(scope)[-max(1, int(recent_partitions)) :]
+    relation = (
+        _native_relation(scope, native_pattern, files=selected_native_files)
+        if native_pattern
+        else f"read_parquet([{_sql_paths(files)}], union_by_name=true)"
+    )
+    sql = f"select {columns} from {relation}{where}{grouping}{ordering}{bounded}{skipped}"
+    with _duckdb_connection() as connection:
         cursor = connection.execute(sql, list(parameters))
         names = [item[0] for item in cursor.description]
         return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
-    finally:
-        connection.close()
 
 
 def aggregate(
@@ -428,16 +520,15 @@ def aggregate(
 def all_scopes(*, kind: str = "bars") -> list[dict[str, str]]:
     prefix = PARQUET_DIR if kind == "bars" else PARQUET_DIR / f"kind={kind}"
     result: list[dict[str, str]] = []
-    if not prefix.exists():
-        return result
-    for source_dir in prefix.glob(
-        "asset_class=*/market=*/venue=*/resolution=*/data_type=*/adjust=*/source=*"
-    ):
-        parts = {}
-        for item in source_dir.relative_to(prefix).parts:
-            key, value = item.split("=", 1)
-            parts[key] = value
-        result.append(_scope(kind=kind, **parts))
+    if prefix.exists():
+        for source_dir in prefix.glob(
+            "asset_class=*/market=*/venue=*/resolution=*/data_type=*/adjust=*/source=*"
+        ):
+            parts = {}
+            for item in source_dir.relative_to(prefix).parts:
+                key, value = item.split("=", 1)
+                parts[key] = value
+            result.append(_scope(kind=kind, **parts))
     native_candidates = {
         "bars": [_scope(kind="bars", source="tushare"), _scope(kind="bars", asset_class="index", source="tushare")],
         "adjustment_factor": [_scope(kind="adjustment_factor", data_type="factor", source="tushare")],
@@ -490,7 +581,16 @@ def query_matching(
     parameters: Sequence[Any] = (),
     order_by: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    recent_partitions: int | None = None,
 ) -> list[dict[str, Any]]:
+    bounded_offset = max(0, int(offset))
+    bounded_limit = max(1, int(limit)) if limit is not None else None
+    # Apply a bound inside DuckDB for every scope.  The old implementation
+    # collected every matching Parquet row in Python before slicing, which can
+    # exhaust the API process for wide, long-lived datasets such as
+    # ``daily_basic``.
+    per_scope_limit = bounded_offset + bounded_limit if bounded_limit is not None else None
     result: list[dict[str, Any]] = []
     for scope in matching_scopes(
         kind=kind, asset_class=asset_class, market=market, venue=venue,
@@ -499,7 +599,7 @@ def query_matching(
         result.extend(
             query_rows(
                 **scope, columns=columns, predicates=predicates, parameters=parameters,
-                order_by=None, limit=None,
+                order_by=order_by, limit=per_scope_limit, recent_partitions=recent_partitions,
             )
         )
     if order_by:
@@ -510,7 +610,112 @@ def query_matching(
             column = term[0]
             reverse = len(term) > 1 and term[1].lower() == "desc"
             result.sort(key=lambda item: (item.get(column) is None, item.get(column)), reverse=reverse)
-    return result[: max(1, int(limit))] if limit is not None else result
+    if bounded_limit is None:
+        return result
+    return result[bounded_offset : bounded_offset + bounded_limit]
+
+
+def count_matching(
+    *,
+    kind: str = "bars",
+    asset_class: str | None = None,
+    market: str | None = None,
+    venue: str | None = None,
+    resolution: str | None = None,
+    data_type: str | None = None,
+    adjust: str | None = None,
+    source: str | None = None,
+    predicates: Sequence[str] = (),
+    parameters: Sequence[Any] = (),
+) -> int:
+    """Count matching rows in DuckDB without materialising the result set."""
+    return sum(
+        int(
+            aggregate(
+                **scope,
+                columns="count(*) as row_count",
+                predicates=predicates,
+                parameters=parameters,
+            ).get("row_count")
+            or 0
+        )
+        for scope in matching_scopes(
+            kind=kind, asset_class=asset_class, market=market, venue=venue,
+            resolution=resolution, data_type=data_type, adjust=adjust, source=source,
+        )
+    )
+
+
+def query_daily_basic_preview(
+    *,
+    factor_names: Sequence[str],
+    predicates: Sequence[str] = (),
+    parameters: Sequence[Any] = (),
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Page daily-basic factors in DuckDB instead of expanding the full lake.
+
+    The native daily dataset is a wide table.  This query performs the
+    unpivot, filtering, counting, and pagination in DuckDB, so a preview never
+    transfers the complete history (potentially millions of wide rows) to the
+    API process.
+    """
+    _require_engine()
+    fields = [name for name in factor_names if name in DAILY_BASIC_COLUMNS]
+    if not fields:
+        return [], False
+    scopes = matching_scopes(
+        kind="daily_basic", asset_class="equity", market="china", resolution="daily",
+        data_type="metric", adjust="raw", source="tushare:daily_basic",
+    )
+    relations: list[str] = []
+    requested_rows = max(1, int(offset)) + max(1, int(limit)) + 1
+    exact_symbol = any(predicate.replace(" ", "").lower() == "symbol=?" for predicate in predicates)
+    for scope in scopes:
+        custom_files = [_visible(str(item["path"])) for item in load_manifest(**scope).get("files") or []]
+        native_pattern = _native_glob(scope) if not custom_files else None
+        native_exists = bool(
+            native_pattern
+            and (
+                Path(native_pattern).is_file()
+                if "*" not in native_pattern
+                else Path(native_pattern.split("trade_date=*", 1)[0]).is_dir()
+            )
+        )
+        selected_native_files: list[Path] = []
+        if native_pattern and native_exists and "*" in native_pattern:
+            native_files = _native_files(scope)
+            if not exact_symbol:
+                partition_limit = max(1, requested_rows // max(1, len(fields) * 4000) + 1)
+                selected_native_files = native_files[-min(len(native_files), partition_limit) :]
+        if custom_files or native_exists:
+            relations.append(
+                _native_relation(scope, native_pattern, files=selected_native_files)
+                if native_pattern
+                else f"read_parquet([{_sql_paths(custom_files)}], union_by_name=true)"
+            )
+    if not relations:
+        return [], False
+    source_relation = " union all ".join(f"select * from {relation}" for relation in relations)
+    fields_sql = ",".join(fields)
+    unpivoted = (
+        "(unpivot (select * from ("
+        + source_relation
+        + f") as daily_basic_source) on {fields_sql} into name factor_name value factor_value)"
+    )
+    where_parts = ["factor_value is not null", *predicates]
+    where = " where " + " and ".join(where_parts)
+    with _duckdb_connection() as connection:
+        cursor = connection.execute(
+            "select symbol,trade_date,factor_name,factor_value as value,source "
+            f"from {unpivoted}{where} "
+            "order by trade_date desc,symbol,factor_name limit ? offset ?",
+            [*parameters, max(1, int(limit)) + 1, max(0, int(offset))],
+        )
+        names = [item[0] for item in cursor.description]
+        rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        return rows[: max(1, int(limit))], len(rows) > max(1, int(limit))
 
 
 def _iso_date(value: Any) -> str:

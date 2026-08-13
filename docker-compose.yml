@@ -169,6 +169,7 @@ services:
   api:
     logging: *bounded-logging
     profiles: ["app"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: web/backend/Dockerfile
@@ -188,7 +189,7 @@ services:
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
       LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
       LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
@@ -199,8 +200,14 @@ services:
       CLICKHOUSE_DATABASE: lean_market
       PROMETHEUS_URL: http://127.0.0.1:9090
       GRAFANA_URL: http://127.0.0.1:${LEAN_GRAFANA_PORT:-3000}
-      LEAN_DATA_DIR: /workspace/Data
+      LEAN_DATA_DIR: /workspace/data
       LEAN_PARQUET_DIR: /workspace/parquet
+      # Bound interactive DuckDB work below the API container limit.  Preview
+      # requests are serialized so concurrent page loaders cannot OOM-kill the
+      # process and turn every route transition into a proxy HTTP 500.
+      LEAN_DUCKDB_MEMORY_LIMIT: ${LEAN_DUCKDB_MEMORY_LIMIT:-256MB}
+      LEAN_DUCKDB_THREADS: ${LEAN_DUCKDB_THREADS:-2}
+      LEAN_DUCKDB_QUERY_CONCURRENCY: ${LEAN_DUCKDB_QUERY_CONCURRENCY:-1}
       # Keep CPU-heavy Parquet compression from starving MySQL, the API and
       # Docker Desktop during a governed full rebuild.
       POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
@@ -266,7 +273,10 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      # Keep this spelling aligned with the data directory inherited from the
+      # repository bind mount. Docker Desktop on case-insensitive filesystems
+      # treats /workspace/Data and /workspace/data as the same mountpoint.
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
       - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
@@ -295,6 +305,12 @@ services:
         condition: service_started
       lean-runner:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     cpus: "${LEAN_API_CPUS:-2.0}"
     mem_limit: ${LEAN_API_MEMORY:-2g}
 
@@ -311,7 +327,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
       LEAN_MYSQL_LOCAL_INFILE: ${LEAN_MYSQL_LOCAL_INFILE:-1}
@@ -365,7 +381,7 @@ services:
       CLICKHOUSE_USERNAME: lean
       CLICKHOUSE_PASSWORD: lean
       CLICKHOUSE_DATABASE: lean_market
-      LEAN_DATA_DIR: /workspace/Data
+      LEAN_DATA_DIR: /workspace/data
       LEAN_PARQUET_DIR: /workspace/parquet
       POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
       LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
@@ -403,7 +419,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
       - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     tmpfs:
@@ -464,7 +480,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
       - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
       - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
     secrets:
@@ -509,7 +525,7 @@ services:
       LEAN_RELEASE_ROLE: lean-runner
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
@@ -521,7 +537,7 @@ services:
       LEAN_DOCKER_READ_ONLY: "1"
     volumes:
       - .:/workspace:ro
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/Data:ro
+      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     secrets:
       - lean_runner_token
@@ -558,7 +574,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LEAN_DATABASE_URL: mysql+pymysql://lean:lean@mysql:3306/lean_market
       LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/Data/object-store
+      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
       LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -11,6 +12,9 @@ VERSIONS_DIR = Path(__file__).parent / "versions"
 OBSOLETE_MARKET_INDEX_MIGRATIONS = {
     "0043_p1_lineage_query_index",
     "0050_daily_reconciliation_indexes",
+}
+IDEMPOTENT_RECONCILIATION_MIGRATIONS = {
+    "0053_reconcile_instrument_identifier_columns",
 }
 
 
@@ -39,6 +43,30 @@ def _columns(connection: Any, table: str) -> set[str]:
 
 def _table_exists(connection: Any, table: str) -> bool:
     return bool(_columns(connection, table))
+
+
+def _run_idempotent_reconciliation(connection: Any, script: str) -> None:
+    """Apply additive repair statements on both SQLite tests and MySQL.
+
+    SQLite has no portable ``add column if not exists`` syntax, while MySQL
+    installations may be missing any subset of columns whose original
+    migrations are already recorded. Check each target explicitly.
+    """
+    for raw_statement in script.split(";"):
+        statement = "\n".join(
+            line for line in raw_statement.strip().splitlines()
+            if not line.strip().startswith("--")
+        ).strip()
+        if not statement:
+            continue
+        match = re.match(
+            r"alter\s+table\s+`?([A-Za-z0-9_]+)`?\s+add\s+column\s+`?([A-Za-z0-9_]+)`?",
+            statement,
+            flags=re.IGNORECASE,
+        )
+        if match and match.group(2) in _columns(connection, match.group(1)):
+            continue
+        connection.execute(statement)
 
 
 def _ensure_schema_migrations_columns(connection: Any) -> None:
@@ -140,7 +168,10 @@ def run_migrations(connection: Any, now: Callable[[], str]) -> None:
             and not _table_exists(connection, "market_daily_bars")
         )
         if script.strip() and not skip_obsolete_index:
-            connection.executescript(script)
+            if revision in IDEMPOTENT_RECONCILIATION_MIGRATIONS:
+                _run_idempotent_reconciliation(connection, script)
+            else:
+                connection.executescript(script)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         connection.execute(
             """

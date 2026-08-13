@@ -399,7 +399,7 @@ def query_duckdb_bars(
     source = str(context["source"])
     scope = _normalize_scope(asset_class, market or venue or "china", venue, resolution, data_type, adjust, source)
     value = symbol.strip().upper()
-    if scope["asset_class"] == "equity" and scope["market"] in {"china", "hongkong"}:
+    if scope["asset_class"] in {"equity", "index"} and scope["market"] in {"china", "hongkong"}:
         value = normalize_symbol(value, scope["market"])
     predicates = ["symbol = ?"]
     parameters: list[Any] = [value]
@@ -409,11 +409,14 @@ def query_duckdb_bars(
     if end_date:
         predicates.append("trade_date <= ?")
         parameters.append(end_date)
+    requested_limit = 20_000 if int(limit) <= 0 else max(1, min(int(limit), 20_000))
     rows = market_lake.query_rows(
         kind="bars", **scope, columns="trade_date,open,high,low,close,volume,source",
-        predicates=predicates, parameters=parameters, order_by="trade_date asc,source asc",
-        limit=max(1, min(int(limit), 5000)),
+        predicates=predicates, parameters=parameters, order_by="trade_date desc,source desc",
+        limit=requested_limit + 1,
     )
+    truncated = len(rows) > requested_limit
+    rows = sorted(rows[:requested_limit], key=lambda item: (str(item.get("trade_date") or ""), str(item.get("source") or "")))
     manifest = market_lake.load_manifest(kind="bars", **scope)
     return {
         "enabled": True, "source": "parquet", "effectiveEngine": "duckdb",
@@ -427,6 +430,8 @@ def query_duckdb_bars(
             for row in rows
         ],
         "count": len(rows),
+        "truncated": truncated,
+        "limitApplied": requested_limit,
     }
 
 

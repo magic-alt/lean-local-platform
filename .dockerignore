@@ -11,6 +11,11 @@ web/runtime
 runs
 results
 Data
+# Host market data is mounted into the containers at runtime.  The checkout on
+# macOS commonly uses the lowercase spelling, while Docker's ignore matching
+# is case-sensitive, so ignore both spellings explicitly.
+data
+data.zip
 
 *.log
 .DS_Store

@@ -48,6 +48,16 @@ CONTRACT_LIFECYCLE_FIELDS = {
     ),
 }
 
+LOCAL_INDEXES = (
+    ("000001.SH", "上证指数", "SSE", "SSE"),
+    ("000016.SH", "上证50", "SSE", "SSE"),
+    ("000300.SH", "沪深300", "CSI", "CSI"),
+    ("000905.SH", "中证500", "CSI", "CSI"),
+    ("000852.SH", "中证1000", "CSI", "CSI"),
+    ("399001.SZ", "深证成指", "SZSE", "SZSE"),
+    ("399006.SZ", "创业板指", "SZSE", "SZSE"),
+)
+
 
 def _current_market_date() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
@@ -165,6 +175,28 @@ def _archive_preview(
     return filtered, updated_at
 
 
+def _local_index_basic_preview(*, keyword: str) -> list[dict[str, Any]]:
+    query = keyword.casefold()
+    items: list[dict[str, Any]] = []
+    for ts_code, name, market, publisher in LOCAL_INDEXES:
+        code, suffix = ts_code.split(".", 1)
+        path = market_lake.PARQUET_DIR / "gold" / "qlib_staging" / "full" / f"{suffix}{code}.parquet"
+        if not path.is_file():
+            continue
+        item = {
+            "ts_code": ts_code,
+            "name": name,
+            "market": market,
+            "publisher": publisher,
+            "category": "综合指数",
+            "base_date": None,
+            "list_date": None,
+        }
+        if not query or _like_keyword(item, query):
+            items.append(item)
+    return items
+
+
 def _sql_preview(
     dataset: str,
     *,
@@ -173,7 +205,7 @@ def _sql_preview(
     end_date: str | None,
     limit: int,
     offset: int,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int | None, bool]:
     lake_scope = {
         "daily": ("bars", "equity", "trade", "tushare"),
         "index_daily": ("bars", "index", "trade", "tushare"),
@@ -197,28 +229,40 @@ def _sql_preview(
             normalized = normalize_symbol(keyword, "china")
             predicates.append("symbol=?" if normalized.isdigit() and len(normalized) == 6 else "symbol like ?")
             parameters.append(normalized if normalized.isdigit() and len(normalized) == 6 else f"%{normalized}%")
-        rows = market_lake.query_matching(
-            kind=kind, asset_class=asset_class, market="china", resolution="daily",
-            data_type=data_type, adjust="raw", source=source,
-            predicates=predicates, parameters=parameters,
-            order_by="trade_date desc,symbol", limit=None,
-        )
         if dataset == "daily_basic":
             factor_names = [factor_filter] if factor_filter else list(market_lake.DAILY_BASIC_COLUMNS[2:-3])
-            rows = [
-                {"symbol": row["symbol"], "trade_date": row["trade_date"], "factor_name": name,
-                 "value": row[name], "source": row["source"]}
-                for row in rows for name in factor_names if row.get(name) is not None
-            ]
-        count = len(rows)
-        selected = rows[offset : offset + limit]
+            selected, has_more = market_lake.query_daily_basic_preview(
+                factor_names=factor_names,
+                predicates=predicates,
+                parameters=parameters,
+                limit=limit,
+                offset=offset,
+            )
+        else:
+            exact_symbol = any(predicate.replace(" ", "").lower() == "symbol=?" for predicate in predicates)
+            recent_partitions = None
+            if dataset != "index_daily" and not start_date and not end_date:
+                if not exact_symbol and dataset in {"suspend_d", "stk_limit"}:
+                    recent_partitions = max(64, offset + limit + 2)
+                elif not exact_symbol:
+                    recent_partitions = max(1, (offset + limit + 1) // 4000 + 1)
+            selected = market_lake.query_matching(
+                kind=kind, asset_class=asset_class, market="china", resolution="daily",
+                data_type=data_type, adjust="raw", source=source,
+                predicates=predicates, parameters=parameters,
+                order_by="trade_date desc,symbol", limit=limit + 1, offset=offset,
+                recent_partitions=recent_partitions,
+            )
+            has_more = len(selected) > limit
+            selected = selected[:limit]
         if dataset == "index_daily":
             for row in selected:
                 symbol = str(row.pop("symbol", "") or "")
                 row["ts_code"] = f"{symbol}.{'SZ' if symbol.startswith('399') else 'SH'}"
                 row["pct_chg"] = row.pop("pct_change", None)
                 row["vol"] = row.pop("volume", None)
-        return selected, count
+        count = None if has_more else offset + len(selected)
+        return [_safe_value(row) for row in selected], count, has_more
     clauses: list[str] = []
     values: list[Any] = []
     date_column: str | None = None
@@ -269,7 +313,7 @@ def _sql_preview(
             f"select {select} from {table}{where} order by {order_by} limit ? offset ?",
             [*values, limit, offset],
         ).fetchall())
-    return rows, count
+    return rows, count, offset + len(rows) < count
 
 
 def dataset_preview(
@@ -286,6 +330,21 @@ def dataset_preview(
     bounded_limit = max(1, min(int(limit), 500))
     bounded_offset = max(0, int(offset))
     selected_keyword = str(keyword or "").strip()
+    if dataset == "index_basic":
+        rows = _local_index_basic_preview(keyword=selected_keyword)
+        return {
+            "dataset": dataset,
+            "items": rows[bounded_offset : bounded_offset + bounded_limit],
+            "count": len(rows),
+            "countExact": True,
+            "hasMore": bounded_offset + bounded_limit < len(rows),
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "storage": "local_parquet",
+            "updatedAt": None,
+        }
+    if dataset == "index_daily" and not selected_keyword:
+        selected_keyword = "000300.SH"
     if dataset in ARCHIVE_DATASETS:
         as_of_date = _current_market_date() if dataset in CURRENT_CONTRACT_DATASETS else None
         rows, updated_at = _archive_preview(
@@ -297,7 +356,7 @@ def dataset_preview(
         )
         storage = "compressed_archive"
     else:
-        selected, count = _sql_preview(
+        selected, count, has_more = _sql_preview(
             dataset,
             keyword=selected_keyword,
             start_date=start_date,
@@ -306,11 +365,13 @@ def dataset_preview(
             offset=bounded_offset,
         )
         updated_at = None
-        storage = "canonical_table"
+        storage = "local_parquet" if dataset in {"daily", "index_daily", "adj_factor", "daily_basic", "suspend_d", "stk_limit"} else "control_metadata"
         return {
             "dataset": dataset,
             "items": selected,
             "count": count,
+            "countExact": count is not None,
+            "hasMore": has_more,
             "limit": bounded_limit,
             "offset": bounded_offset,
             "storage": storage,
@@ -320,6 +381,8 @@ def dataset_preview(
         "dataset": dataset,
         "items": rows[bounded_offset : bounded_offset + bounded_limit],
         "count": len(rows),
+        "countExact": True,
+        "hasMore": bounded_offset + bounded_limit < len(rows),
         "limit": bounded_limit,
         "offset": bounded_offset,
         "storage": storage,

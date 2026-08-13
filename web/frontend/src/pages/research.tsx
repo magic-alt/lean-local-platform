@@ -419,19 +419,6 @@ function NewResearch({
     }
   }
 
-  async function prepareData() {
-    if (!resolution?.preparationRequest) return;
-    try {
-      setBusy("run");
-      await api.prepareMlData(resolution.preparationRequest);
-      message.success(selected === "ml-cross-sectional-ranker" ? "PIT 历史并集数据准备任务已进入 data-bulk 队列" : "筛选所需Tushare数据准备任务已进入队列");
-    } catch (error) {
-      if (error instanceof Error) message.error(error.message);
-    } finally {
-      setBusy(undefined);
-    }
-  }
-
   return (
     <div className="research-workbench">
       <aside className="research-template-rail" aria-label="研究模板">
@@ -517,7 +504,9 @@ function NewResearch({
           </Card>
           <Space>
             <Button icon={<DatabaseOutlined />} loading={busy === "preview"} onClick={() => void preflight()}>数据预检</Button>
-            {resolution?.preparationRequest && (resolution.blocking || []).length > 0 && <Button onClick={() => void prepareData()}>{selected === "ml-cross-sectional-ranker" ? "准备 PIT 训练数据" : "准备筛选数据"}</Button>}
+            {resolution?.preparationRequest && (resolution.blocking || []).length > 0 && (
+              <Tag color="warning">请将所需数据放入本地 Data 目录后重新预检</Tag>
+            )}
             <Button type="primary" icon={<PlayCircleOutlined />} loading={busy === "run"} onClick={() => void run()}>运行并固化结果</Button>
           </Space>
         </Form>

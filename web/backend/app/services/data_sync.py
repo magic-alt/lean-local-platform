@@ -316,7 +316,7 @@ def ensure_catalog() -> None:
             )
 
 
-def catalog_payload() -> dict[str, Any]:
+def _database_catalog_payload() -> dict[str, Any]:
     ensure_catalog()
     with db() as connection:
         rows = connection.execute(
@@ -389,6 +389,140 @@ def catalog_payload() -> dict[str, Any]:
         "recommendedMode": "incremental" if completed_initial_sync else "initial_full",
         "contractCoverage": coverage_report(DATASET_REGISTRY),
     }
+
+
+_LOCAL_LAKE_DATASETS: dict[str, tuple[str, str, str, str]] = {
+    "daily": ("bars", "equity", "trade", "tushare"),
+    "index_daily": ("bars", "index", "trade", "tushare"),
+    "adj_factor": ("adjustment_factor", "equity", "factor", "tushare"),
+    "daily_basic": ("daily_basic", "equity", "metric", "tushare:daily_basic"),
+    "suspend_d": ("trade_status", "equity", "status", "tushare:suspend_d"),
+    "stk_limit": ("trade_status", "equity", "status", "tushare:stk_limit"),
+}
+
+
+def _local_catalog_control_state() -> dict[str, Any]:
+    """Read sync orchestration state without making MySQL a market-data store."""
+    try:
+        with db() as connection:
+            active = connection.execute(
+                "select id from data_sync_runs where status in ('queued','running','cancelling') "
+                "order by created_at desc limit 1"
+            ).fetchone()
+            latest = connection.execute(
+                "select id from data_sync_runs order by created_at desc limit 1"
+            ).fetchone()
+            completed = connection.execute(
+                "select id from data_sync_runs "
+                "where status='success' and coalesce(canonical_status,'ready')='ready' "
+                "order by finished_at desc limit 1"
+            ).fetchone()
+        active_id = str(active["id"]) if active else None
+        latest_id = str(latest["id"]) if latest else None
+        return {
+            "activeRun": sync_run(active_id) if active_id else None,
+            "latestRun": sync_run(latest_id) if latest_id else None,
+            "hasCompletedInitialSync": bool(completed),
+        }
+    except Exception as exc:
+        # Migration 0052 repairs installations whose migration ledger survived
+        # an old table cleanup.  Keep local reads available during that one-time
+        # startup window instead of turning a control-plane drift into HTTP 500.
+        logger.warning("local catalog control state unavailable: %s", exc)
+        return {"activeRun": None, "latestRun": None, "hasCompletedInitialSync": False}
+
+
+def _local_lake_catalog_payload() -> dict[str, Any]:
+    """Return a usable data-library catalog when SQL metadata is unavailable.
+
+    Market-data reads are backed by the mounted ``data/`` Parquet lake.  This
+    fallback deliberately reports only the availability that can be verified
+    from that directory and does not attempt to initialize the old sync tables.
+    """
+    summaries: dict[str, dict[str, Any]] = {}
+    for key, (kind, asset_class, data_type, source) in _LOCAL_LAKE_DATASETS.items():
+        scopes = market_lake.matching_scopes(
+            kind=kind, asset_class=asset_class, market="china", resolution="daily",
+            data_type=data_type, source=source,
+        )
+        if scopes:
+            summary = market_lake.native_partition_summary(**scopes[0])
+            summary["available"] = bool(summary.get("available") or market_lake.available(**scopes[0]))
+            summaries[key] = summary
+    available_keys = {key for key, summary in summaries.items() if summary.get("available")}
+    items = []
+    for spec in DATASET_REGISTRY:
+        present = spec.key in available_keys
+        summary = summaries.get(spec.key) or {}
+        items.append(
+            {
+                "provider": "local_parquet",
+                "dataset_key": spec.key,
+                "api_name": spec.api_name,
+                "category": spec.category,
+                "scope_type": spec.scope,
+                "cadence": spec.cadence,
+                "permission_status": "available" if present else "unknown",
+                "permission_reason": "本地 data 目录可读取" if present else "本地 data 目录未发现该数据集",
+                "row_count": 0,
+                "row_count_exact": False,
+                "partition_count": int(summary.get("partitionCount") or 0),
+                "first_data_date": summary.get("firstDate"),
+                "last_data_date": summary.get("lastDate"),
+                "last_checked_at": None,
+                "last_synced_at": None,
+                "metadata": _catalog_metadata(spec),
+                "sync_policy": "on_demand" if not present else "incremental",
+                "rate_limit_per_hour": spec.rate_limit_per_hour,
+                "skip_reason": None if present else "当前本地数据湖未包含该数据集",
+            }
+        )
+    control_state = _local_catalog_control_state()
+    usage = shutil.disk_usage(DATA_DIR if DATA_DIR.exists() else Path("/"))
+    reserve = _disk_hard_reserve_bytes(usage.total)
+    return {
+        "provider": "local_parquet",
+        "entitlementPoints": 0,
+        "boundary": "local_data_directory",
+        "items": items,
+        "count": len(items),
+        "available": len(available_keys),
+        "storage": {
+            "diskFreeBytes": usage.free,
+            "diskTotalBytes": usage.total,
+            "diskFreePercent": round(usage.free * 100 / max(usage.total, 1), 2),
+            "diskReserveBytes": reserve,
+            "diskWritableBytes": max(0, usage.free - reserve),
+            "databaseBytes": 0,
+            "databaseLimitBytes": 0,
+            "databaseUsagePercent": 0.0,
+            "databaseLimitEnforced": False,
+            "databaseSizeSource": "not_used_for_market_data",
+        },
+        "activeRun": control_state["activeRun"],
+        "latestRun": control_state["latestRun"],
+        "hasCompletedInitialSync": control_state["hasCompletedInitialSync"] or bool(available_keys),
+        "recommendedMode": "incremental" if (control_state["hasCompletedInitialSync"] or available_keys) else "initial_full",
+        "contractCoverage": coverage_report(DATASET_REGISTRY),
+        "localOnly": True,
+        "marketDataAuthority": "local_parquet",
+        "marketDataRoot": str(DATA_DIR),
+    }
+
+
+def catalog_payload() -> dict[str, Any]:
+    # Since migration 0051, MySQL is no longer a market-data store.  Keep the
+    # legacy synchronization catalog available only for test/explicit legacy
+    # deployments; the web data page must inspect the mounted local lake first.
+    if (
+        database_backend() == "mysql"
+        and os.environ.get("LEAN_DATA_CATALOG_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
+        return _local_lake_catalog_payload()
+    try:
+        return _database_catalog_payload()
+    except DatabaseUnavailableError:
+        return _local_lake_catalog_payload()
 
 
 def on_demand_storage_targets() -> list[dict[str, Any]]:

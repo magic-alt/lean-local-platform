@@ -5,7 +5,8 @@ import hashlib
 import json
 from typing import Any
 
-from ..db import database_backend, db, row_to_dict
+from ..db import DatabaseUnavailableError, database_backend, db, row_to_dict
+from . import market_lake
 
 
 PRIMARY_DATA_SOURCE = "tushare"
@@ -193,17 +194,37 @@ def require_source_allowed(source: str | None, *, allow_research_source: bool = 
 
 def source_certification(source: str | None, *, asset_class: str = "equity", market: str = "china", venue: str | None = "china") -> dict[str, Any]:
     normalized = normalize_source(source)
-    with db() as connection:
-        row = connection.execute(
-            """
-            select *
-            from parquet_datasets
-            where source = ? and asset_class = ? and market = ? and coalesce(venue, ?) = ?
-            order by is_certified desc, updated_at desc
-            limit 1
-            """,
-            (normalized, asset_class.lower(), market.lower(), (venue or market).lower(), (venue or market).lower()),
-        ).fetchone()
+    if (
+        database_backend() == "mysql"
+        and os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
+        local = _local_lake_certification(
+            normalized,
+            asset_class=asset_class,
+            market=market,
+            venue=venue,
+        )
+        if local["localAuthority"]:
+            return local
+    try:
+        with db() as connection:
+            row = connection.execute(
+                """
+                select *
+                from parquet_datasets
+                where source = ? and asset_class = ? and market = ? and coalesce(venue, ?) = ?
+                order by is_certified desc, updated_at desc
+                limit 1
+                """,
+                (normalized, asset_class.lower(), market.lower(), (venue or market).lower(), (venue or market).lower()),
+            ).fetchone()
+    except DatabaseUnavailableError:
+        return _local_lake_certification(
+            normalized,
+            asset_class=asset_class,
+            market=market,
+            venue=venue,
+        )
     item = row_to_dict(row)
     if item:
         dataset_id = item.get("id")
@@ -264,6 +285,18 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             certification_valid = False
         if certification_valid and dataset_id:
             dataset_version = expected_dataset_version
+        # The SQL registry may intentionally be absent or stale after the
+        # quote-table cutover.  A readable mounted lake is the current
+        # authority for market-data reads and takes precedence in that case.
+        if not certification_valid:
+            local = _local_lake_certification(
+                normalized,
+                asset_class=asset_class,
+                market=market,
+                venue=venue,
+            )
+            if local["localAuthority"]:
+                return local
         return {
             "source": normalized,
             "sourceRole": source_role(normalized),
@@ -289,6 +322,14 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
             "fileCount": len(files),
             "fileManifestSha256": file_manifest_sha256,
         }
+    local = _local_lake_certification(
+        normalized,
+        asset_class=asset_class,
+        market=market,
+        venue=venue,
+    )
+    if local["localAuthority"]:
+        return local
     return {
         "source": normalized,
         "sourceRole": source_role(normalized),
@@ -309,6 +350,69 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
         "datasetReleaseId": None,
         "fileCount": 0,
         "fileManifestSha256": None,
+        "localAuthority": False,
+    }
+
+
+def _local_lake_certification(
+    source: str,
+    *,
+    asset_class: str,
+    market: str,
+    venue: str | None,
+) -> dict[str, Any]:
+    """Describe a readable local Parquet scope without requiring SQL metadata.
+
+    The lake is the market-data authority.  MySQL stores optional application
+    governance metadata, so a missing database must not make already-present
+    local quotes unavailable to chart, research, or backtest read paths.
+    """
+    scopes = market_lake.matching_scopes(
+        kind="bars",
+        asset_class=asset_class.lower(),
+        market=market.lower(),
+        venue=(venue or market).lower(),
+        source=source,
+    )
+    file_count = 0
+    summaries: list[dict[str, Any]] = []
+    manifests = []
+    for scope in scopes:
+        summary = market_lake.native_partition_summary(**scope)
+        manifest = market_lake.load_manifest(**scope)
+        custom_files = manifest.get("files") or []
+        available = bool(custom_files) or bool(summary["available"])
+        if not available:
+            continue
+        file_count += len(custom_files) or int(summary.get("partitionCount") or 0)
+        summaries.append({"datasetKey": market_lake.dataset_key(**scope), **summary})
+        manifests.append(manifest)
+    authority = bool(summaries)
+    fingerprint = hashlib.sha256(
+        json.dumps(summaries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest() if authority else None
+    return {
+        "source": source,
+        "sourceRole": source_role(source),
+        "sourcePriority": DATA_SOURCE_PRIORITY.index(source) + 1 if source in DATA_SOURCE_PRIORITY else None,
+        "datasetVersion": f"local-{fingerprint[:24]}" if fingerprint else None,
+        "environment": "local",
+        "isProduction": False,
+        "isCertified": authority,
+        "certificationValid": authority,
+        "certificationError": None if authority else "local_parquet_scope_missing",
+        "certifiedAt": None,
+        "certifiedBy": "local_parquet",
+        "coverageStart": None,
+        "coverageEnd": None,
+        "qaStatus": "local",
+        "qaReportId": None,
+        "datasetId": None,
+        "datasetReleaseId": None,
+        "fileCount": file_count,
+        "fileManifestSha256": fingerprint,
+        "localAuthority": authority,
+        "manifests": [item.get("datasetKey") for item in manifests],
     }
 
 
@@ -382,12 +486,14 @@ def resolve_source_context(
     )
     normalized = require_source_allowed(str(requested) if requested else None, allow_research_source=allow)
     certification = source_certification(normalized, asset_class=asset_class, market=market, venue=venue)
-    if not allow and not (
+    trusted_production = (
         certification.get("isProduction")
         and certification.get("isCertified")
         and certification.get("environment") == "production"
         and str(certification.get("qaStatus") or "").lower() == "ok"
-    ):
+    )
+    trusted_local_lake = bool(certification.get("localAuthority"))
+    if not allow and not (trusted_production or trusted_local_lake):
         reason = certification.get("certificationError") or certification.get("qaStatus") or "unverified"
         raise ValueError(f"source_not_certified:{normalized}:{reason}")
     return {

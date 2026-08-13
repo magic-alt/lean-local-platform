@@ -42,6 +42,8 @@ export interface DataSyncCatalogItem {
   permission_status: "unknown" | "available" | "empty" | "denied" | "retryable";
   permission_reason?: string | null;
   row_count: number;
+  row_count_exact?: boolean;
+  partition_count?: number;
   first_data_date?: string | null;
   last_data_date?: string | null;
   last_checked_at?: string | null;
@@ -104,93 +106,6 @@ export interface DataContractCatalog {
   count: number;
 }
 
-export interface DataSyncItem {
-  id: string;
-  run_id: string;
-  dataset_key: string;
-  status: string;
-  processed: number;
-  inserted: number;
-  updated: number;
-  failed: number;
-  checkpoint?: Record<string, unknown> | null;
-  error?: string | null;
-  metrics?: {
-    phase?: string;
-    apiCalls?: number;
-    apiCallsPerMinute?: number;
-    apiQuotaPerMinute?: number;
-    downloadedRows?: number;
-    committedRows?: number;
-    downloadRowsPerSecond?: number;
-    writeRowsPerSecond?: number;
-    rollingDownloadRowsPerSecond?: number;
-    rollingWriteRowsPerSecond?: number;
-    rollingUnitsPerSecond?: number;
-    rollingApiCallsPerMinute?: number;
-    rollingEtaSeconds?: number | null;
-    rateWindowSeconds?: number;
-    apiCallsInWindow?: number;
-    apiQuotaWaiting?: boolean;
-    apiQuotaRetryAfterSeconds?: number;
-    apiQuotaNextAllowedAt?: string | null;
-    canonicalWriteRowsPerSecond?: number;
-    fetchStrategy?: "market_date" | "market_window" | "instrument" | "global";
-    queueDepth?: number;
-    loadQueueDepth?: number;
-    spooledRows?: number;
-    processedUnits?: number;
-    fetchedUnits?: number;
-    totalUnits?: number;
-    emptyUnits?: number;
-    validatedRows?: number;
-    quarantinedRows?: number;
-    unitsPerSecond?: number;
-    sessionProcessedUnits?: number;
-    etaSeconds?: number | null;
-    endpointCalls?: Record<string, number>;
-    timingsMs?: Record<string, number>;
-    elapsedSeconds?: number;
-    diskFreeBytes?: number;
-    diskTotalBytes?: number;
-    diskFreePercent?: number;
-    diskReserveBytes?: number;
-    diskWritableBytes?: number;
-    databaseBytes?: number;
-    databaseLimitBytes?: number;
-    databaseUsagePercent?: number;
-    databaseLimitEnforced?: boolean;
-    onDemandDatabaseLimitBytes?: number;
-    databaseSizeSource?: string;
-    lineageStatus?: "success" | "pending" | "failed";
-    lineagePendingBatches?: number;
-    lineagePendingRows?: number;
-    lineageFailedBatches?: number;
-  } | null;
-}
-
-export interface DataSyncRun {
-  id: string;
-  task_id?: string | null;
-  provider: string;
-  mode: string;
-  scope: string;
-  status: string;
-  requestedDatasets?: string[];
-  summary?: Record<string, unknown>;
-  error?: string | null;
-  created_at: string;
-  started_at?: string | null;
-  heartbeat_at?: string | null;
-  finished_at?: string | null;
-  cancel_requested?: boolean | number;
-  canonical_status?: string | null;
-  canonical_ready_at?: string | null;
-  derivedStatus?: Record<string, unknown> | null;
-  requestScope?: Record<string, unknown> | null;
-  items?: DataSyncItem[];
-}
-
 export interface DerivedLayerWatermarks {
   items: Array<{
     layer_key: "parquet" | "clickhouse";
@@ -248,11 +163,13 @@ export interface DataSyncCatalog {
     onDemandDatabaseLimitBytes?: number;
     databaseSizeSource?: string;
   };
-  activeRun?: DataSyncRun | null;
-  latestRun?: DataSyncRun | null;
   hasCompletedInitialSync: boolean;
   recommendedMode: "initial_full" | "incremental";
   contractCoverage?: Omit<DataContractCatalog, "items" | "count">;
+  /** Market data is read directly from the configured local Data directory. */
+  localOnly?: boolean;
+  marketDataAuthority?: "local_parquet" | string;
+  marketDataRoot?: string;
 }
 
 export interface SecurityProfileIdentifier {
@@ -321,21 +238,15 @@ export interface SecurityProfile {
 export interface DatasetPreviewResult {
   dataset: string;
   items: Array<Record<string, unknown>>;
-  count: number;
+  count: number | null;
+  countExact: boolean;
+  hasMore: boolean;
   limit: number;
   offset: number;
   storage: "canonical_table" | "compressed_archive" | string;
   updatedAt?: string | null;
   scope?: "currently_tradable" | string | null;
   asOfDate?: string | null;
-}
-
-export interface OnDemandStorageTarget {
-  id: string;
-  label: string;
-  path: string;
-  displayPath: string;
-  kind: "mounted_data" | "parquet_lake" | "workspace" | "external" | string;
 }
 
 export interface MarketInfo {
@@ -1997,6 +1908,8 @@ export interface DataQueryResult {
   items: DataQueryRow[];
   count: number;
   enabled: boolean;
+  truncated?: boolean;
+  limitApplied?: number;
   message?: string;
   error?: string;
 }

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from ..db import db, row_to_dict, rows_to_dicts
 from ..lean_engine.symbols import market_key, normalize_symbol
 from .security_search import MARKET_LABELS
 from . import market_lake
+
+
+logger = logging.getLogger(__name__)
 
 
 def _json_list(value: Any) -> list[str]:
@@ -55,22 +59,23 @@ def _coverage_row(
 def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
     selected_market = market_key(market)
     normalized = normalize_symbol(symbol, selected_market).upper()
-    with db() as connection:
-        security = row_to_dict(connection.execute(
+    try:
+        with db() as connection:
+            security = row_to_dict(connection.execute(
             "select * from securities where symbol = ? and market = ? limit 1",
             (normalized, selected_market),
-        ).fetchone()) or {}
-        instrument = row_to_dict(connection.execute(
+            ).fetchone()) or {}
+            instrument = row_to_dict(connection.execute(
             """
             select * from instruments
             where symbol = ? and market = ? and asset_class = 'equity'
             order by updated_at desc limit 1
             """,
             (normalized, selected_market),
-        ).fetchone()) or {}
+            ).fetchone()) or {}
 
-        instrument_id = instrument.get("instrument_id")
-        identifiers = rows_to_dicts(connection.execute(
+            instrument_id = instrument.get("instrument_id")
+            identifiers = rows_to_dicts(connection.execute(
             """
             select provider, identifier_type, identifier_value, exchange, market,
                    valid_from, valid_to, is_primary, source
@@ -79,47 +84,56 @@ def security_profile(symbol: str, *, market: str = "china") -> dict[str, Any]:
             order by is_primary desc, provider, identifier_type
             """,
             (instrument_id or "",),
-        ).fetchall())
+            ).fetchall())
 
-        coverage: list[dict[str, Any]] = []
-        if selected_market == "china":
-            specs = (
-                ("corporate_actions", "公司行动", "corporate_actions", "ex_date", ""),
-                ("factor_values", "每日指标/因子", "factor_values", "trade_date", ""),
-                ("financial_statements", "财务报表", "financial_statements", "report_date", ""),
-            )
-            for key, label, table, date_column, predicate in specs:
-                item = _coverage_row(
-                    connection,
-                    key=key,
-                    label=label,
-                    table=table,
-                    symbol=normalized,
-                    date_column=date_column,
-                    predicate=predicate,
+            coverage: list[dict[str, Any]] = []
+            if selected_market == "china":
+                specs = (
+                    ("corporate_actions", "公司行动", "corporate_actions", "ex_date", ""),
+                    ("factor_values", "每日指标/因子", "factor_values", "trade_date", ""),
+                    ("financial_statements", "财务报表", "financial_statements", "report_date", ""),
                 )
-                if item:
-                    coverage.append(item)
-        memberships = rows_to_dicts(connection.execute(
+                for key, label, table, date_column, predicate in specs:
+                    item = _coverage_row(
+                        connection,
+                        key=key,
+                        label=label,
+                        table=table,
+                        symbol=normalized,
+                        date_column=date_column,
+                        predicate=predicate,
+                    )
+                    if item:
+                        coverage.append(item)
+            memberships = rows_to_dicts(connection.execute(
             """
             select universe_code, start_date, end_date, weight, source
             from universe_membership where symbol = ?
             order by coalesce(end_date, '9999-12-31') desc, start_date desc limit 50
             """,
             (normalized,),
-        ).fetchall()) if selected_market == "china" else []
+            ).fetchall()) if selected_market == "china" else []
+    except Exception as exc:
+        # Quote reads must remain usable when only the local market lake is
+        # configured. SQL master data is optional enrichment for this view, so
+        # an old partially migrated metadata table must not break Preview.
+        logger.warning("security metadata enrichment unavailable for %s: %s", normalized, exc)
+        security, instrument, identifiers, coverage, memberships = {}, {}, [], [], []
     bars = market_lake.query_matching(
         kind="bars", asset_class="equity", market=selected_market,
         resolution="daily", data_type="trade", adjust="raw",
-        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,source asc",
+        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,source asc", limit=1,
+        recent_partitions=5,
     )
     status_rows = market_lake.query_matching(
         kind="trade_status", asset_class="equity", market=selected_market,
-        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,updated_at desc",
+        predicates=("symbol=?",), parameters=(normalized,), order_by="trade_date desc,updated_at desc", limit=200,
+        recent_partitions=512,
     ) if selected_market == "china" else []
     adjustments = market_lake.query_matching(
         kind="adjustment_factor", predicates=("symbol=?",), parameters=(normalized,),
         order_by="trade_date desc,source desc", limit=200,
+        recent_partitions=512,
     ) if selected_market == "china" else []
     for key, label, items in (
         ("daily", "日线行情", bars),

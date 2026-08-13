@@ -5,9 +5,7 @@ import type {
   DataProvider,
   DataSyncCatalog,
   DataContractCatalog,
-  DataSyncRun,
   DerivedLayerWatermarks,
-  OnDemandStorageTarget,
   MarketInfo,
   AssetClassInfo,
   LocalDataFile,
@@ -281,23 +279,6 @@ export const api = {
       `/api/data/dataset-preview/${encodeURIComponent(dataset)}?${query.toString()}`
     );
   },
-  onDemandStorageTargets: () => request<{ items: OnDemandStorageTarget[] }>("/api/data/on-demand/storage-targets"),
-  createOnDemandDownload: (payload: {
-    dataset: string;
-    storageTarget: string;
-    relativePath?: string;
-    format: "parquet" | "jsonl";
-    startDate?: string;
-    endDate?: string;
-    symbol?: string;
-    apiParameters?: Record<string, unknown>;
-  }) => request<Task>("/api/data/on-demand/downloads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  }),
-  dataSyncRuns: () => request<PagedResponse<DataSyncRun>>("/api/data/sync-runs"),
-  dataSyncRun: (id: string) => request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}`),
   derivedLayerWatermarks: () => request<DerivedLayerWatermarks>("/api/data/derived/watermarks"),
   startDerivedMaintenance: (layers: Array<"parquet" | "clickhouse"> = ["parquet", "clickhouse"]) =>
     request<{ id: string; status: string }>("/api/data/derived/maintenance", {
@@ -305,22 +286,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ layers })
     }),
-  createDataSyncRun: (datasets?: string[], mode: "auto" | "incremental" | "full_rebuild" = "auto") =>
-    request<DataSyncRun>("/api/data/sync-runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ datasets: datasets?.length ? datasets : null, mode })
-    }),
-  prepareMlData: (payload: { mode: "auto" | "incremental" | "full_rebuild" | "universe_backfill" | "screen_backfill"; datasets: string[]; scope: Record<string, unknown> }) =>
-    request<DataSyncRun>("/api/data/sync-runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  cancelDataSyncRun: (id: string) =>
-    request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
-  resumeDataSyncRun: (id: string) =>
-    request<DataSyncRun>(`/api/data/sync-runs/${encodeURIComponent(id)}/resume`, { method: "POST" }),
   fetchData: (payload: {
     symbol: string;
     assetClass?: string;

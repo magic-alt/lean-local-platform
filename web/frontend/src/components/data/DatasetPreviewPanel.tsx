@@ -122,7 +122,7 @@ const TABLE_WIDTH: Record<string, number> = {
   opt_basic: 1250,
 };
 
-const INDEX_CHART_PAGE_SIZE = 500;
+const INDEX_CHART_PAGE_SIZE = 20_000;
 
 function normalizedChartDate(value: unknown) {
   const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
@@ -205,7 +205,9 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         items: Array.isArray(response.items)
           ? response.items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
           : [],
-        count: Number.isFinite(Number(response.count)) ? Number(response.count) : 0,
+        count: response.count !== null && Number.isFinite(Number(response.count)) ? Number(response.count) : null,
+        countExact: Boolean(response.countExact),
+        hasMore: Boolean(response.hasMore),
         offset: Number.isFinite(Number(response.offset)) ? Number(response.offset) : 0,
       });
     } catch (error) {
@@ -225,26 +227,39 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
     setChartError("");
     setChartLoading(true);
     try {
-      const firstPage = await api.datasetPreview("index_daily", {
-        keyword: indexCode,
-        limit: INDEX_CHART_PAGE_SIZE,
+      const response = await api.queryData({
+        symbol: indexCode,
+        assetClass: "index",
+        market: "china",
+        venue: "china",
+        resolution: "daily",
+        dataType: "trade",
+        source: "parquet",
+        providerSource: "tushare",
+        providerMode: "strict",
+        adjust: "raw",
+        limit: 0,
       });
       if (sequence !== chartRequestSequence.current) return;
-      const total = Math.max(0, Number(firstPage.count) || 0);
-      const remainingOffsets = Array.from(
-        { length: Math.max(0, Math.ceil(total / INDEX_CHART_PAGE_SIZE) - 1) },
-        (_, pageIndex) => (pageIndex + 1) * INDEX_CHART_PAGE_SIZE,
-      );
-      const remainingPages = await Promise.all(remainingOffsets.map((offset) => api.datasetPreview("index_daily", {
-        keyword: indexCode,
-        limit: INDEX_CHART_PAGE_SIZE,
-        offset,
-      })));
-      if (sequence !== chartRequestSequence.current) return;
-      const items = [firstPage, ...remainingPages]
-        .flatMap((page) => Array.isArray(page.items) ? page.items : [])
-        .filter((item) => String(item?.ts_code || "") === indexCode);
-      setIndexChartResult({ ...firstPage, items, count: items.length, offset: 0 });
+      const items = response.items.map((item) => ({
+        ts_code: indexCode,
+        trade_date: item.timestamp,
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        vol: item.volume,
+      }));
+      setIndexChartResult({
+        dataset: "index_daily",
+        items,
+        count: items.length,
+        countExact: !response.truncated,
+        hasMore: false,
+        limit: response.limitApplied ?? items.length,
+        offset: 0,
+        storage: "local_parquet",
+      });
       if (items.length === 0) {
         setChartError(`${indexCode} 尚未同步到本地指数日线；请先执行一次数据更新，再绘制 K 线。`);
       }
@@ -277,7 +292,9 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
 
   const selected = datasets.find((item) => item.key === dataset) ?? datasets[0];
   const currentPage = Math.floor((result?.offset ?? 0) / pageSize) + 1;
-  const totalPages = Math.max(1, Math.ceil((result?.count ?? 0) / pageSize));
+  const totalPages = result?.countExact && result.count !== null
+    ? Math.max(1, Math.ceil(result.count / pageSize))
+    : undefined;
   const columns = COLUMNS[dataset] ?? [];
   const chartRows = useMemo<DataQueryRow[]>(() => {
     const items = dataset === "index_daily"
@@ -306,8 +323,8 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
     ? `${selected.label} · 当前有效合约`
     : result?.storage === "compressed_archive"
       ? "读取压缩批次归档，不恢复逐行 JSON"
-      : "读取规范化 MySQL 表";
-  const previewDescription = `${result?.asOfDate ? `截至 ${result.asOfDate} · ` : ""}共匹配 ${(result?.count ?? 0).toLocaleString()} 条记录${result?.updatedAt ? ` · 归档时间 ${result.updatedAt}` : ""}`;
+      : "读取本地 Parquet 数据";
+  const previewDescription = `${result?.asOfDate ? `截至 ${result.asOfDate} · ` : ""}${result?.countExact && result.count !== null ? `共匹配 ${result.count.toLocaleString()} 条记录` : `当前页已加载 ${(result?.items.length ?? 0).toLocaleString()} 条记录`}${result?.updatedAt ? ` · 归档时间 ${result.updatedAt}` : ""}`;
 
   return (
     <Card size="small" className="dataset-preview-card">
@@ -329,7 +346,7 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         />
         <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} style={{ width: 150 }} />
         <Input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} style={{ width: 150 }} />
-        <Button type="primary" icon={<ReloadOutlined />} loading={loading} onClick={() => void load(1)}>查询数据库</Button>
+        <Button type="primary" icon={<ReloadOutlined />} loading={loading} onClick={() => void load(1)}>查询本地 Parquet</Button>
       </div>
       {dataset !== "index_basic" && (
         <Alert
@@ -414,10 +431,10 @@ function DatasetPreviewContent({ datasets }: { datasets: PreviewDatasetOption[] 
         </div>
       </Spin>
       <div className="dataset-preview-pagination">
-        <span>共 {(result?.count ?? 0).toLocaleString()} 条 · 第 {currentPage.toLocaleString()} / {totalPages.toLocaleString()} 页</span>
+        <span>{result?.countExact && result.count !== null ? `共 ${result.count.toLocaleString()} 条 · ` : ""}第 {currentPage.toLocaleString()}{totalPages ? ` / ${totalPages.toLocaleString()}` : ""} 页</span>
         <Space>
           <Button size="small" disabled={loading || currentPage <= 1} onClick={() => void load(currentPage - 1)}>上一页</Button>
-          <Button size="small" disabled={loading || currentPage >= totalPages} onClick={() => void load(currentPage + 1)}>下一页</Button>
+          <Button size="small" disabled={loading || !result?.hasMore} onClick={() => void load(currentPage + 1)}>下一页</Button>
         </Space>
       </div>
     </Card>

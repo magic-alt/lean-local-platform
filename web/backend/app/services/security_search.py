@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Any
 
-from ..db import db, rows_to_dicts
+from ..db import DatabaseUnavailableError, database_backend, db, rows_to_dicts
 from ..lean_engine.data_paths import list_local_symbols
 from ..lean_engine.symbols import MARKET_CONFIG, market_key, normalize_symbol
+from . import market_lake
 
 try:  # Optional at import time so older local environments keep working.
     from pypinyin import Style, lazy_pinyin
@@ -143,11 +145,75 @@ def _database_candidates(markets: list[str]) -> list[dict[str, Any]]:
     return list(merged.values())
 
 
+@lru_cache(maxsize=8)
+def _cached_local_lake_candidates(markets: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
+    """Build a cheap search index without grouping the complete Silver lake."""
+    candidates: list[dict[str, Any]] = []
+    if "china" not in markets:
+        return ()
+    gold_root = market_lake.PARQUET_DIR / "gold" / "qlib_staging" / "full"
+    if not gold_root.is_dir():
+        return ()
+    for path in gold_root.glob("*.parquet"):
+        raw_symbol = path.stem.upper()
+        if not raw_symbol.startswith(("SH", "SZ", "BJ")):
+            continue
+        symbol = raw_symbol[2:]
+        if not symbol.isdigit() or len(symbol) != 6:
+            continue
+        exchange = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}.get(raw_symbol[:2])
+        candidates.append(
+            {
+                "symbol": symbol,
+                "name": symbol,
+                "market": "china",
+                "exchange": exchange,
+                # Qlib instrument ranges are cache coverage, not legal listing
+                # dates. Leave this unset instead of truncating Preview history.
+                "listed_date": None,
+                "status": "local",
+                "aliases": [raw_symbol],
+            }
+        )
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in candidates:
+        key = (str(item["market"]), str(item["symbol"]))
+        prior = merged.get(key)
+        if prior is None or str(item.get("listed_date") or "") < str(prior.get("listed_date") or ""):
+            merged[key] = item
+    return tuple(merged.values())
+
+
+def _local_lake_candidates(markets: list[str]) -> list[dict[str, Any]]:
+    return [dict(item) for item in _cached_local_lake_candidates(tuple(markets))]
+
+
+def _has_local_lake_symbol(symbol: str, market: str) -> bool:
+    for scope in market_lake.matching_scopes(
+        kind="bars", asset_class="equity", market=market,
+    ):
+        rows = market_lake.query_rows(
+            **scope,
+            columns="symbol",
+            predicates=("symbol=?",),
+            parameters=(symbol,),
+            limit=1,
+        )
+        if rows:
+            return True
+    return False
+
+
 def search_securities(keyword: str = "", market: str = "all", limit: int = 50) -> dict[str, Any]:
     market_value = str(market or "all").strip().lower()
     markets = list(MARKET_CONFIG) if market_value in {"", "all", "global"} else [market_key(market_value)]
     local_by_market = {item_market: set(list_local_symbols(item_market)) for item_market in markets}
-    candidates = _database_candidates(markets)
+    try:
+        candidates = _database_candidates(markets)
+    except DatabaseUnavailableError:
+        candidates = []
+    if not candidates:
+        candidates = _local_lake_candidates(markets)
     known = {(item["market"], item["symbol"]) for item in candidates}
     for item_market, symbols in local_by_market.items():
         for symbol in symbols:
@@ -161,7 +227,10 @@ def search_securities(keyword: str = "", market: str = "all", limit: int = 50) -
         if not matched:
             continue
         score, match_type, match_field = matched
-        has_local_data = candidate["symbol"] in local_by_market[candidate["market"]]
+        has_local_data = (
+            candidate["symbol"] in local_by_market[candidate["market"]]
+            or candidate.get("status") == "local"
+        )
         results.append({
             "symbol": candidate["symbol"],
             "name": candidate["name"],
@@ -186,14 +255,15 @@ def search_securities(keyword: str = "", market: str = "all", limit: int = 50) -
         except Exception:
             normalized = ""
         if normalized and normalized == str(keyword).strip().upper() and (markets[0], normalized) not in known:
+            local_lake = _has_local_lake_symbol(normalized, markets[0])
             selected.insert(0, {
                 "symbol": normalized,
                 "name": normalized,
                 "market": markets[0],
                 "marketLabel": MARKET_LABELS[markets[0]],
                 "exchange": None,
-                "status": "manual",
-                "hasLocalData": normalized in local_by_market[markets[0]],
+                "status": "local" if local_lake else "manual",
+                "hasLocalData": local_lake or normalized in local_by_market[markets[0]],
                 "matchType": "exact",
                 "matchField": "code",
                 "score": 100,

@@ -65,6 +65,8 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert "0043_p1_lineage_query_index" in revisions
     assert "0050_daily_reconciliation_indexes" in revisions
     assert "0051_market_lake_authority" in revisions
+    assert "0052_reconcile_market_lake_control_plane" in revisions
+    assert "0053_reconcile_instrument_identifier_columns" in revisions
     with sqlite3.connect(db_path) as connection:
         paper_columns = {row[1] for row in connection.execute("pragma table_info(paper_sessions)").fetchall()}
         walkforward_table = connection.execute(
@@ -88,6 +90,12 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
         delivery_columns = {
             row[1] for row in connection.execute("pragma table_info(alert_deliveries)").fetchall()
         }
+        identifier_columns = {
+            row[1] for row in connection.execute("pragma table_info(instrument_identifiers)").fetchall()
+        }
+        financial_columns = {
+            row[1] for row in connection.execute("pragma table_info(financial_statements)").fetchall()
+        }
         outbox_columns = {
             row[1]
             for row in connection.execute("pragma table_info(paper_notification_outbox)").fetchall()
@@ -110,6 +118,8 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert {"certificate_json", "certificate_digest", "certified_at"} <= walk_forward_columns
     assert "terminal_at" in delivery_columns
     assert "terminal_at" in outbox_columns
+    assert {"provider", "identifier_type", "identifier_value", "valid_from", "valid_to"} <= identifier_columns
+    assert {"report_type", "update_flag", "payload_hash"} <= financial_columns
     assert lineage_index is None
     assert daily_reconcile_index is None
     assert status_reconcile_index is None

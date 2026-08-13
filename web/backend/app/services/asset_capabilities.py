@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any
 
-from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..db import database_backend, db, json_dump, rows_to_dicts, utc_now
 from . import market_lake
 
 
@@ -48,7 +49,56 @@ def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, in
     return int(metadata or 0), int(rows or 0)
 
 
+def _local_lake_capabilities() -> list[dict[str, Any]]:
+    """Compute executable data scopes straight from the mounted Parquet lake."""
+    now = utc_now()
+    items: list[dict[str, Any]] = []
+    for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
+        lake_class = "equity" if asset_class == "etf" else asset_class
+        scopes = market_lake.matching_scopes(
+            kind="bars", asset_class=lake_class, market=market,
+            venue=venue, resolution=resolution, data_type=data_type,
+        )
+        available = bool(scopes)
+        state = (
+            "executable" if available and asset_class in {"equity", "index"}
+            else "data_ready" if available
+            else "unavailable"
+        )
+        reason = None if state == "executable" else (
+            "execution_adapter_not_certified" if available else "local_parquet_scope_missing"
+        )
+        items.append(
+            {
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"local-lake:{asset_class}:{market}:{venue}:{resolution}:{data_type}")),
+                "asset_class": asset_class,
+                "market": market,
+                "venue": venue,
+                "resolution": resolution,
+                "data_type": data_type,
+                "state": state,
+                "metadata_count": 0,
+                "canonical_row_count": 0,
+                "executable_reason": reason,
+                "evidence": {
+                    "schemaVersion": 1,
+                    "derivedFromParquetLake": True,
+                    "localOnly": True,
+                    "scopeAvailable": available,
+                    "rowCountExact": False,
+                },
+                "refreshed_at": now,
+            }
+        )
+    return items
+
+
 def refresh_capabilities() -> list[dict[str, Any]]:
+    if (
+        database_backend() == "mysql"
+        and os.environ.get("LEAN_CAPABILITY_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
+        return _local_lake_capabilities()
     now = utc_now()
     with db() as connection:
         for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:

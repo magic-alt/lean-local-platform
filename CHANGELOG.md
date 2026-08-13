@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Repair local Data Preview and route stability after the Parquet cutover: reconcile missing MySQL control-plane tables plus drifted security-identifier and financial-audit columns without restoring retired quote tables, keep optional SQL enrichment failures from breaking local Preview, replace full-lake preview counts with bounded DuckDB paging and memory/concurrency limits, expose truthful partition coverage, load complete local stock/index charts in one bounded request, and add real-browser regression coverage for Preview plus Data/Backtest/Research navigation.
+
 - Make the repository `data/` lake the sole market-time-series authority: read the existing bronze/silver/gold Parquet hierarchy directly with DuckDB, write incremental date partitions atomically with retained revisions, keep only control metadata in MySQL, retire MySQL/database/local query modes and SQL-to-Parquet export routes, and preserve Qlib as an untouched downstream cache/engine.
 
 - Speed up full-rebuild daily ingestion with source/date/symbol indexes on canonical bars and trade status, a bounded contiguous date-slice comparison for market-wide batches, an explicit reconciliation phase, and a live heartbeat while large MySQL batches are being reconciled.

@@ -120,6 +120,41 @@ def test_data_query_api_selects_database_source(tmp_path, monkeypatch):
     assert payload["items"][0]["close"] == 1460.0
 
 
+def test_data_query_zero_limit_returns_full_bounded_chart_history(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services import market_lake
+    market_lake.upsert_rows(
+        [
+            {
+                "symbol": "000300", "trade_date": f"2026-01-{day:02d}",
+                "open": day, "high": day + 1, "low": day - 1, "close": day + 0.5,
+                "volume": day * 100,
+            }
+            for day in range(1, 21)
+        ],
+        kind="bars", asset_class="index", source="tushare",
+    )
+
+    from app.main import app
+
+    response = TestClient(app).get(
+        "/api/data/query",
+        params={
+            "source": "parquet", "assetClass": "index", "symbol": "000300.SH",
+            "market": "china", "venue": "china", "resolution": "daily",
+            "dataType": "trade", "providerSource": "tushare", "limit": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 20
+    assert payload["truncated"] is False
+    assert payload["limitApplied"] == 20_000
+    assert payload["items"][0]["timestamp"] == "2026-01-01"
+    assert payload["items"][-1]["timestamp"] == "2026-01-20"
+
+
 def test_data_query_api_auto_provider_uses_fallback_chain(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
     from app.services import market_lake

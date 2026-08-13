@@ -60,9 +60,7 @@ import type {
   DataScope,
   DataProvider,
   DataSyncCatalog,
-  DataSyncRun,
   DerivedLayerWatermarks,
-  OnDemandStorageTarget,
   DatabaseHealth,
   DependencyHealth,
   FactorEvaluationResult,
@@ -536,33 +534,11 @@ function MarketDataDownloader({
       const effectiveValues = { ...values, startDate: effectiveStartDate };
       let result = await queryLocalBars(effectiveValues, symbol);
       if (requestId !== previewRequestId.current) return;
-      if (result.enabled && result.items.length === 0 && ["china", "hongkong"].includes(selectedMarket)) {
-        message.info(`本地没有 ${symbol} 数据，正在按需从 TuShare Pro 获取并缓存。`);
-        await api.fetchData({
-          symbol,
-          assetClass: selectedAssetClass,
-          market: selectedMarket,
-          venue: selectedVenue,
-          resolution: selectedResolution,
-          dataType: selectedDataType,
-          provider: "tushare",
-          apiKey: values.apiKey,
-          outputsize: "full",
-          startDate: effectiveStartDate,
-          endDate: dayjs().format(ISO_DATE_FORMAT),
-          adjust: values.adjust,
-          overwrite: Boolean(values.overwrite)
-        });
-        if (requestId !== previewRequestId.current) return;
-        setSecurityInfo(await loadSecurityInfo(symbol));
-        result = await queryLocalBars(effectiveValues, symbol, "tushare");
-        if (requestId !== previewRequestId.current) return;
-      }
       setQueryResult(result);
       if (!result.enabled) {
         message.warning(result.error ?? "Selected local data store is unavailable.");
       } else if (result.items.length === 0) {
-        message.warning(`No local Parquet bars found for ${symbol}.`);
+        message.warning(`本地 Parquet 中没有 ${symbol} 数据；如需下载，请使用 Download。`);
       }
     } catch (error) {
       if (requestId === previewRequestId.current) {
@@ -1560,9 +1536,8 @@ export function DataPage() {
   const assetClasses = useAsyncData<AssetClassInfo[]>(api.assetClasses, []);
   const catalog = useAsyncData<DataSyncCatalog>(api.dataCatalog, {
     provider: "tushare", entitlementPoints: 5000, boundary: "low_frequency", items: [], count: 0, available: 0,
-    activeRun: null, latestRun: null, hasCompletedInitialSync: false, recommendedMode: "initial_full"
+    hasCompletedInitialSync: false, recommendedMode: "initial_full"
   }, false);
-  const [syncRun, setSyncRun] = useState<DataSyncRun>();
   const derivedWatermarks = useAsyncData<DerivedLayerWatermarks>(api.derivedLayerWatermarks, {
     items: [],
     count: 0,
@@ -1571,285 +1546,21 @@ export function DataPage() {
     schedule: { timezone: "Asia/Shanghai", days: "Monday-Friday", defaultTime: "19:30" },
     asOfDate: ""
   }, false);
-  const [syncActionLoading, setSyncActionLoading] = useState(false);
-  const loadOnDemandStorageTargets = useCallback(
-    () => api.onDemandStorageTargets().then((result) => result.items),
-    []
-  );
-  const storageTargets = useAsyncData<OnDemandStorageTarget[]>(
-    loadOnDemandStorageTargets,
-    [],
-    false,
-    "data:on-demand-storage-targets"
-  );
-  const [downloadForm] = Form.useForm();
-  const [downloadDataset, setDownloadDataset] = useState<DataSyncCatalog["items"][number] | null>(null);
-  const [downloadLoading, setDownloadLoading] = useState(false);
-  const [downloadTasks, setDownloadTasks] = useState<Record<string, Task>>({});
-  const [showAdditionalDatasets, setShowAdditionalDatasets] = useState(false);
-  const selectedStorageTarget = Form.useWatch("storageTarget", downloadForm);
-  const selectedStorage = storageTargets.data.find((item) => item.id === selectedStorageTarget);
   const [csvForm] = Form.useForm();
   const [csvImporting, setCsvImporting] = useState(false);
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
-
-  const catalogSync = catalog.data.activeRun || undefined;
-  const currentSync = catalogSync && catalogSync.id !== syncRun?.id
-    ? catalogSync
-    : (syncRun || catalogSync || catalog.data.latestRun || undefined);
-  const activeSync = Boolean(currentSync && ["queued", "running", "cancelling"].includes(currentSync.status));
-  const syncModeLabel = ({
-    initial_full: "首次全量建库",
-    incremental: "增量更新",
-    resume_checkpoint: "从检查点继续",
-    full_rebuild: "显式全量重建"
-  } as Record<string, string>)[currentSync?.mode || ""] || currentSync?.mode || "自动判断";
-  const syncItemsByDataset = useMemo(
-    () => new Map((currentSync?.items ?? []).map((item) => [item.dataset_key, item])),
-    [currentSync?.items]
+  const localCatalogRows = useMemo(
+    () => catalog.data.items.filter((item) => item.permission_status === "available"),
+    [catalog.data.items]
   );
-  const catalogRows = useMemo(
-    () => catalog.data.items.map((item) => ({ ...item, syncItem: syncItemsByDataset.get(item.dataset_key) })),
-    [catalog.data.items, syncItemsByDataset]
-  );
-  const oneClickCatalogRows = useMemo(
-    () => catalogRows.filter((item) => item.sync_policy !== "on_demand"),
-    [catalogRows]
-  );
-  const additionalCatalogRows = useMemo(
-    () => catalogRows.filter((item) => item.sync_policy === "on_demand"),
-    [catalogRows]
-  );
-  const visibleCatalogRows = showAdditionalDatasets
-    ? [...oneClickCatalogRows, ...additionalCatalogRows]
-    : oneClickCatalogRows;
-  const syncProgress = useMemo(() => {
-    const items = currentSync?.items ?? [];
-    const terminal = new Set(["success", "partial", "skipped", "failed", "cancelled", "paused"]);
-    const completed = items.filter((item) => terminal.has(item.status)).length;
-    const active = items.find((item) => ["checking", "running"].includes(item.status));
-    const activeTotal = Number(active?.metrics?.totalUnits ?? active?.checkpoint?.total ?? 0);
-    const activeProcessed = Number(active?.metrics?.processedUnits ?? active?.checkpoint?.index ?? 0);
-    const activeFetched = Number(active?.metrics?.fetchedUnits ?? activeProcessed);
-    const activeFraction = activeTotal > 0 ? Math.min(1, activeProcessed / activeTotal) : 0;
-    return {
-      active,
-      completed,
-      total: items.length,
-      activeTotal,
-      activeProcessed,
-      activeFetched,
-      activePercent: activeTotal > 0 ? Math.min(100, Math.round((activeProcessed / activeTotal) * 100)) : 0,
-      downloadPercent: activeTotal > 0 ? Math.min(100, Math.round((activeFetched / activeTotal) * 100)) : 0,
-      percent: items.length ? Math.min(100, Math.round(((completed + activeFraction) / items.length) * 100)) : 0,
-      denied: catalogRows.filter((item) => item.permission_status === "denied").length,
-      retryable: catalogRows.filter((item) => item.permission_status === "retryable").length,
-      onDemand: catalogRows.filter((item) => item.sync_policy === "on_demand").length,
-    };
-  }, [catalogRows, currentSync?.items]);
-
-  const syncPhaseLabel = syncProgress.active?.status === "checking"
-    ? "正在检查"
-    : ({
-        fetch: "正在下载",
-        load: "正在写入 MySQL",
-        reconcile: "正在核对 MySQL 快照",
-        validate: "正在校验",
-      } as Record<string, string>)[syncProgress.active?.metrics?.phase || ""] || "正在更新";
-  const activeSyncMetrics = syncProgress.active?.metrics;
-  const rollingDownloadRate = activeSyncMetrics?.rollingDownloadRowsPerSecond ?? activeSyncMetrics?.downloadRowsPerSecond;
-  const rollingWriteRate = activeSyncMetrics?.rollingWriteRowsPerSecond ?? activeSyncMetrics?.writeRowsPerSecond;
-  const rollingUnitRate = activeSyncMetrics?.rollingUnitsPerSecond ?? activeSyncMetrics?.unitsPerSecond;
-  const rollingEtaSeconds = activeSyncMetrics?.rollingEtaSeconds ?? activeSyncMetrics?.etaSeconds;
-
-  function permissionReason(item: typeof catalogRows[number]) {
-    if (item.sync_policy === "on_demand") return "按需获取，不参与一键更新";
-    if (item.permission_status === "denied") return "无权限，本次已跳过";
-    if (item.permission_status === "retryable") return "接口限频或暂时不可用，本次暂缓";
-    if (item.permission_status === "empty") {
-      return item.syncItem?.status === "success"
-        ? "本轮同步已成功；权限探测区间无事件记录属于正常结果"
-        : "接口已验证可访问；探测区间无事件记录属于正常结果";
-    }
-    if (item.permission_status === "available") return "已验证可访问";
-    return "尚未验证";
-  }
-
-  function permissionDisplayStatus(item: typeof catalogRows[number]) {
-    // An empty entitlement probe proves that the endpoint is reachable and
-    // authorized. Event datasets such as suspend_d legitimately return no
-    // rows for quiet probe windows, so do not present that as a failure-like
-    // EMPTY state beside a successful synchronization.
-    return item.permission_status === "empty" ? "available" : item.permission_status;
-  }
-
-  function syncError(item: typeof catalogRows[number]) {
-    if (!item.syncItem?.error) return permissionReason(item);
-    if (item.syncItem.status === "skipped") return permissionReason(item);
-    try {
-      const parsed = JSON.parse(item.syncItem.error) as { failed?: number; code?: string };
-      if (parsed.failed) return `${parsed.failed} 个标的失败，悬停查看详情`;
-      if (parsed.code === "MYSQL_CONNECTION_LOST") return "MySQL 连接中断；同步已在持久化断点暂停";
-    } catch {
-      // Provider errors are shown verbatim in the tooltip below.
-    }
-    return item.syncItem.error;
-  }
-
-  useEffect(() => {
-    const activeId = currentSync?.id;
-    if (!activeId) return;
-    let cancelled = false;
-    let refreshing = false;
-    const refresh = async () => {
-      if (refreshing) return;
-      refreshing = true;
-      try {
-        const next = await api.dataSyncRun(activeId);
-        if (!cancelled) {
-          setSyncRun(next);
-          if (!["queued", "running", "cancelling"].includes(next.status)) void catalog.reload();
-        }
-      } catch {
-        // The next scheduled refresh retries transient polling failures.
-      } finally {
-        refreshing = false;
-      }
-    };
-    void refresh();
-    if (!["queued", "running", "cancelling"].includes(currentSync?.status || "")) return () => { cancelled = true; };
-    const timer = window.setInterval(() => { void refresh(); }, 3000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [currentSync?.id, currentSync?.status]);
-
-  useEffect(() => {
-    const active = Object.entries(downloadTasks).filter(([, task]) => ["queued", "running"].includes(task.status));
-    if (!active.length) return;
-    let cancelled = false;
-    let refreshing = false;
-    const refresh = async () => {
-      if (refreshing) return;
-      refreshing = true;
-      try {
-        const items = await Promise.all(
-          active.map(([dataset, task]) => api.task(task.id).then((next) => [dataset, next] as const))
-        );
-        if (!cancelled) setDownloadTasks((current) => ({ ...current, ...Object.fromEntries(items) }));
-      } catch {
-        // The next scheduled refresh retries transient polling failures.
-      } finally {
-        refreshing = false;
-      }
-    };
-    const timer = window.setInterval(() => { void refresh(); }, 2000);
-    void refresh();
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [Object.values(downloadTasks).map((task) => `${task.id}:${task.status}`).join("|")]);
-
-  function openOnDemandDownload(item: DataSyncCatalog["items"][number]) {
-    setDownloadDataset(item);
-    downloadForm.resetFields();
-    downloadForm.setFieldsValue({
-      dataset: item.dataset_key,
-      relativePath: `tushare-on-demand/${item.dataset_key}`,
-      format: "parquet",
-      startDate: dayjs().subtract(30, "day").format("YYYY-MM-DD"),
-      endDate: dayjs().format("YYYY-MM-DD"),
-      apiParameters: "{}",
-    });
-  }
-
-  async function submitOnDemandDownload(values: Record<string, string>) {
-    if (!downloadDataset) return;
-    setDownloadLoading(true);
-    try {
-      const parsed = JSON.parse(values.apiParameters || "{}") as unknown;
-      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-        throw new Error("额外 API 参数必须是 JSON 对象");
-      }
-      const task = await api.createOnDemandDownload({
-        dataset: downloadDataset.dataset_key,
-        storageTarget: values.storageTarget,
-        relativePath: values.relativePath,
-        format: values.format as "parquet" | "jsonl",
-        startDate: values.startDate || undefined,
-        endDate: values.endDate || undefined,
-        symbol: values.symbol || undefined,
-        apiParameters: parsed as Record<string, unknown>,
-      });
-      setDownloadTasks((current) => ({ ...current, [downloadDataset.dataset_key]: task }));
-      setDownloadDataset(null);
-      message.success(`${task.title} 已进入按需下载队列`);
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setDownloadLoading(false);
-    }
-  }
-
-  async function startFullSync(mode: "auto" | "incremental" | "full_rebuild" = "auto") {
-    setSyncActionLoading(true);
-    try {
-      const run = await api.createDataSyncRun(undefined, mode);
-      setSyncRun(run);
-      message.success("TuShare Pro 全库更新已进入后台队列");
-      catalog.reload();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSyncActionLoading(false);
-    }
-  }
-
-  function confirmFullSync() {
-    const incremental = catalog.data.hasCompletedInitialSync;
-    Modal.confirm({
-      title: incremental ? "增量更新本地全部市场与研究数据？" : "首次全量建立本地数据库？",
-      content: incremental
-        ? "将从已保存的水位和检查点开始，仅拉取新增或缺失数据。daily_basic 按缺失交易日整市场更新，dividend 按标的补齐并写入 MySQL；港美股和每小时级限频数据仍按需获取。"
-        : "尚未发现成功完成的首次建库记录。将按当前权限把行情、daily_basic 和 dividend 等默认数据写入本地 MySQL，完成后系统会持久记住，后续按钮自动切换为增量更新。",
-      okText: incremental ? "开始增量更新" : "开始全量建库",
-      onOk: () => startFullSync("auto")
-    });
-  }
-
-  function confirmRebuild() {
-    Modal.confirm({
-      title: "确认全量重建本地数据？",
-      content: "全量重建会忽略增量水位并重新读取批量数据。仅在复权口径或已有数据确实错误时使用。",
-      okText: "全量重建",
-      okButtonProps: { danger: true },
-      onOk: () => startFullSync("full_rebuild")
-    });
-  }
-
-  async function cancelFullSync() {
-    if (!currentSync) return;
-    setSyncActionLoading(true);
-    try {
-      setSyncRun(await api.cancelDataSyncRun(currentSync.id));
-      await catalog.reload();
-      message.info("数据更新已停止，可从检查点继续");
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSyncActionLoading(false);
-    }
-  }
-
-  async function resumeFullSync() {
-    if (!currentSync) return;
-    setSyncActionLoading(true);
-    try {
-      setSyncRun(await api.resumeDataSyncRun(currentSync.id));
-      message.success("数据更新已从检查点恢复");
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSyncActionLoading(false);
-    }
-  }
+  const catalogRows: any[] = localCatalogRows.map((item) => ({ ...item, syncItem: undefined }));
+  const oneClickCatalogRows = catalogRows;
+  const additionalCatalogRows: typeof catalogRows = [];
+  const visibleCatalogRows = catalogRows;
+  const permissionReason = (item: typeof catalogRows[number]) => item.permission_reason || "本地 data 目录可读取";
+  const permissionDisplayStatus = (item: typeof catalogRows[number]) => item.permission_status === "empty" ? "available" : item.permission_status;
+  const syncError = (item: typeof catalogRows[number]) => permissionReason(item);
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
@@ -1898,45 +1609,33 @@ export function DataPage() {
     <>
       <div className="toolbar"><h1 className="page-title">Data Library</h1></div>
       <Card
-        title="Local MySQL · TuShare Pro 全库更新"
+        title="本地 Data · Parquet 股票数据"
         style={{ marginBottom: 16 }}
         extra={<Space>
-          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); derivedWatermarks.reload(); if (currentSync) api.dataSyncRun(currentSync.id).then(setSyncRun); }}>刷新</Button>
-          {activeSync
-            ? <Button danger loading={syncActionLoading} onClick={cancelFullSync}>{currentSync?.status === "cancelling" ? "强制停止" : "停止"}</Button>
-            : currentSync && ["failed", "cancelled", "partial", "paused"].includes(currentSync.status)
-              ? <>
-                  <Button type="primary" loading={syncActionLoading} onClick={() => startFullSync("incremental")}>开始新一轮增量</Button>
-                  <Tooltip title="保留已完成工作，仅重试失败项并追补新交易日">
-                    <Button loading={syncActionLoading} onClick={resumeFullSync}>继续上次检查点</Button>
-                  </Tooltip>
-                  <Button danger loading={syncActionLoading} onClick={confirmRebuild}>全量重建</Button>
-                </>
-              : <Button data-testid="sync-all-data-button" type="primary" icon={<DatabaseOutlined />} loading={syncActionLoading} onClick={confirmFullSync}>{catalog.data.hasCompletedInitialSync ? "一键增量更新" : "一键全量更新"}</Button>}
+          <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); derivedWatermarks.reload(); }}>刷新</Button>
         </Space>}
       >
         {catalog.error && <Alert type="warning" showIcon message="同步目录尚未初始化" description={catalog.error.message} style={{ marginBottom: 12 }} />}
         <div className="grid">
-          <Card size="small"><Statistic title="TuShare 权限" value={`${catalog.data.entitlementPoints} 积分`} /></Card>
-          <Card size="small"><Statistic title="批量数据集" value={catalog.data.count - syncProgress.onDemand} /></Card>
-          <Card size="small"><Statistic title="按需数据集" value={syncProgress.onDemand} /></Card>
+          <Card size="small"><Statistic title="数据源" value="本地 Parquet" /></Card>
+          <Card size="small"><Statistic title="可用数据集" value={localCatalogRows.length} /></Card>
+          <Card size="small"><Statistic title="数据根目录" value="data/" /></Card>
           <Card size="small">
             <Statistic
-              title="MySQL 物理占用（一键更新不限额）"
-              value={((catalog.data.storage?.databaseBytes || 0) / 1024 / 1024 / 1024).toFixed(1)}
-              suffix="GiB"
+              title="本地数据目录"
+              value="Parquet"
             />
           </Card>
           <Card size="small"><Statistic title="已验证可用" value={catalog.data.available} /></Card>
-          <Card size="small"><Statistic title="更新模式" value={syncModeLabel} /></Card>
-          <Card size="small"><Statistic title="同步状态" value={currentSync?.status || "idle"} /></Card>
+          <Card size="small"><Statistic title="读取模式" value="直接读取" /></Card>
+          <Card size="small"><Statistic title="存储格式" value="Parquet" /></Card>
         </div>
         <Alert
           type="info"
           showIcon
           style={{ margin: "12px 0" }}
-          message="实际接口探测优先于积分推断"
-          description={`一键更新写入 MySQL 的 A 股执行数据包含 daily_basic 每日指标与 dividend 分红，公司财务报表仍按研究需要获取；同时保留基准指数及 CFFEX/SSE 期货期权合约目录。具体合约行情、基金、港美股、宏观及特色数据按需查询。当前有 ${syncProgress.denied} 个无权限数据集、${syncProgress.onDemand} 个按需数据集、${syncProgress.retryable} 个暂时限频数据集。`}
+          message="股票行情直接读取本地 Data 目录"
+          description={`当前数据源：${catalog.data.marketDataRoot || "data/"}。日线、复权因子、每日指标、停牌和涨跌停均从本地 Parquet 数据湖读取。`}
         />
         <Card
           size="small"
@@ -1960,153 +1659,15 @@ export function DataPage() {
             )}
           </Space>
         </Card>
-        {currentSync && (
-          <Card size="small" style={{ marginBottom: 12 }}>
-            <Space direction="vertical" style={{ width: "100%" }} size={4}>
-              <Space wrap>
-                <StatusTag status={currentSync.status} />
-                {currentSync.canonical_status && (
-                  <Tag color={currentSync.canonical_status === "ready" ? "success" : "processing"}>
-                    MySQL {currentSync.canonical_status}
-                  </Tag>
-                )}
-                {Boolean(currentSync.derivedStatus?.status) && (
-                  <Tag color={currentSync.derivedStatus?.status === "ready" ? "success" : currentSync.derivedStatus?.status === "partial" ? "warning" : "processing"}>
-                    派生层 {String(currentSync.derivedStatus?.status)}
-                    {currentSync.derivedStatus?.completed !== undefined && currentSync.derivedStatus?.total
-                      ? ` ${String(currentSync.derivedStatus?.completed)}/${String(currentSync.derivedStatus?.total)}`
-                      : ""}
-                  </Tag>
-                )}
-                <strong>
-                  {syncProgress.active
-                    ? `${syncPhaseLabel}：${syncProgress.active.dataset_key}`
-                    : currentSync.status === "queued"
-                      ? "等待数据 worker 接收任务"
-                      : `已处理 ${syncProgress.completed}/${syncProgress.total} 个数据集`}
-                </strong>
-                {syncProgress.activeTotal > 0 && syncProgress.active && (
-                  <span>
-                    完成 {syncProgress.activeProcessed.toLocaleString()}/{syncProgress.activeTotal.toLocaleString()} 个工作单元
-                    {syncProgress.active.checkpoint?.symbol ? ` · 当前 ${String(syncProgress.active.checkpoint.symbol)}` : ""}
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.phase && <Tag color="processing">{syncProgress.active.metrics.phase}</Tag>}
-                {syncProgress.active?.metrics?.apiCalls !== undefined && (
-                  <span>
-                    API {syncProgress.active.metrics.apiCalls.toLocaleString()} 次真实调用
-                    {syncProgress.active.metrics.apiQuotaPerMinute !== undefined
-                      ? ` · 限额 ${syncProgress.active.metrics.apiQuotaPerMinute}/min`
-                      : ""}
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.endpointCalls && Object.keys(syncProgress.active.metrics.endpointCalls).length > 0 && (
-                  <span>
-                    {Object.entries(syncProgress.active.metrics.endpointCalls)
-                      .sort(([left], [right]) => left.localeCompare(right))
-                      .map(([endpoint, count]) => `${endpoint} ${count}`)
-                      .join(" · ")}
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.downloadedRows !== undefined && (
-                  <span>下载 {syncProgress.active.metrics.downloadedRows.toLocaleString()} rows</span>
-                )}
-                {rollingDownloadRate !== undefined && (
-                  <span>
-                    近一分钟下载速度 {Number(rollingDownloadRate) >= 100
-                      ? Math.round(Number(rollingDownloadRate)).toLocaleString()
-                      : Number(rollingDownloadRate).toFixed(1)} rows/s
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.committedRows !== undefined && (
-                  <span>入库 {syncProgress.active.metrics.committedRows.toLocaleString()} rows</span>
-                )}
-                {rollingWriteRate !== undefined && (
-                  <span>近一分钟 MySQL 规范表 {Math.round(Number(rollingWriteRate)).toLocaleString()} rows/s</span>
-                )}
-                {syncProgress.active?.metrics?.lineageStatus && (
-                  <span>
-                    来源归档 {syncProgress.active.metrics.lineageStatus === "success"
-                      ? "完成"
-                      : syncProgress.active.metrics.lineageStatus === "failed"
-                        ? `失败 ${syncProgress.active.metrics.lineageFailedBatches || 0} 批`
-                        : `排队 ${syncProgress.active.metrics.lineagePendingBatches || 0} 批 · ${(syncProgress.active.metrics.lineagePendingRows || 0).toLocaleString()} rows`}
-                  </span>
-                )}
-                {rollingUnitRate !== undefined && (
-                  <span>近一分钟处理 {Number(rollingUnitRate).toFixed(1)} 个工作单元/s</span>
-                )}
-                {syncProgress.active?.metrics?.apiQuotaWaiting && (
-                  <Tag color="warning">
-                    正在等待 API 配额
-                    {syncProgress.active.metrics.apiQuotaRetryAfterSeconds
-                      ? ` · 约 ${Math.ceil(syncProgress.active.metrics.apiQuotaRetryAfterSeconds)} 秒`
-                      : ""}
-                  </Tag>
-                )}
-                {syncProgress.active?.metrics?.emptyUnits !== undefined && (
-                  <span>空结果 {syncProgress.active.metrics.emptyUnits.toLocaleString()} 个</span>
-                )}
-                {syncProgress.active?.metrics?.validatedRows !== undefined && (
-                  <span>校验 {syncProgress.active.metrics.validatedRows.toLocaleString()} rows</span>
-                )}
-                {Boolean(syncProgress.active?.metrics?.quarantinedRows) && (
-                  <span>隔离 {syncProgress.active?.metrics?.quarantinedRows?.toLocaleString()} rows</span>
-                )}
-                {rollingEtaSeconds !== undefined && rollingEtaSeconds !== null && (
-                  <span>
-                    ETA {Number(rollingEtaSeconds) >= 60
-                      ? `${Math.ceil(Number(rollingEtaSeconds) / 60)} 分钟`
-                      : `${Math.ceil(Number(rollingEtaSeconds))} 秒`}
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.diskFreeBytes !== undefined && (
-                  <span>
-                    磁盘可用 {(syncProgress.active.metrics.diskFreeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB
-                    {syncProgress.active.metrics.diskReserveBytes !== undefined
-                      ? ` · 安全预留 ${(syncProgress.active.metrics.diskReserveBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
-                      : ""}
-                  </span>
-                )}
-                {syncProgress.active?.metrics?.databaseBytes !== undefined && (
-                  <span>
-                    MySQL 物理占用 {(syncProgress.active.metrics.databaseBytes / 1024 / 1024 / 1024).toFixed(1)} GiB · 一键更新不限额
-                  </span>
-                )}
-                {currentSync.heartbeat_at && <span>最近上报 {formatDateTime(currentSync.heartbeat_at)}</span>}
-              </Space>
-              {syncProgress.active && syncProgress.activeTotal > 0 && (
-                <div>
-                  <div className="data-catalog-meta">
-                    当前数据集下载进度 · {syncProgress.activeFetched.toLocaleString()}/{syncProgress.activeTotal.toLocaleString()} 个工作单元
-                  </div>
-                  <Progress percent={syncProgress.downloadPercent} size="small" status="active" />
-                  {syncProgress.activeProcessed < syncProgress.activeFetched && (
-                    <div className="data-catalog-meta">其中已完成校验与入库 {syncProgress.activePercent}%</div>
-                  )}
-                </div>
-              )}
-              <div>
-                <div className="data-catalog-meta">总体完成度 · {syncProgress.completed}/{syncProgress.total} 个数据集</div>
-                <Progress percent={syncProgress.percent} size="small" status={currentSync.status === "failed" ? "exception" : "active"} />
-              </div>
-            </Space>
-          </Card>
-        )}
-        {currentSync?.error && <Alert type={currentSync.status === "paused" ? "warning" : "error"} showIcon message={currentSync.error} style={{ marginBottom: 12 }} />}
         {catalogRows.length > 0 && (
           <>
             <div className="data-catalog-visibility">
               <div>
-                <strong>一键更新数据集（{oneClickCatalogRows.length}）</strong>
-                <div className="data-catalog-meta">默认仅显示参与一键全量/增量更新的数据及状态。</div>
+                <strong>本地数据集（{oneClickCatalogRows.length}）</strong>
+                <div className="data-catalog-meta">仅展示当前本地 Data 目录中可直接读取的数据集。</div>
               </div>
               {additionalCatalogRows.length > 0 && (
-                <Button onClick={() => setShowAdditionalDatasets((current) => !current)}>
-                  {showAdditionalDatasets
-                    ? "收起其他数据集"
-                    : `展开其他按需数据集（${additionalCatalogRows.length}）`}
-                </Button>
+                <Tag>本地只读</Tag>
               )}
             </div>
             <Table
@@ -2114,7 +1675,7 @@ export function DataPage() {
               size="small"
               rowKey="dataset_key"
               dataSource={visibleCatalogRows}
-              pagination={showAdditionalDatasets ? { pageSize: 20, showSizeChanger: true } : false}
+              pagination={false}
               tableLayout="fixed"
               columns={[
               {
@@ -2139,11 +1700,7 @@ export function DataPage() {
                 width: "18%",
                 render: (_, item) => (
                   <div className="data-catalog-tags">
-                    <Tooltip title={item.sync_policy === "on_demand" ? "按需获取，不参与一键更新" : "参与一键更新"}>
-                      <Tag color={item.sync_policy === "on_demand" ? "blue" : undefined}>
-                        {item.sync_policy === "on_demand" ? "按需" : "批量"}
-                      </Tag>
-                    </Tooltip>
+                    <Tag color="blue">本地读取</Tag>
                     <Tooltip title={permissionReason(item)}>
                       <span><StatusTag status={permissionDisplayStatus(item)} /></span>
                     </Tooltip>
@@ -2162,7 +1719,7 @@ export function DataPage() {
                 )
               },
               {
-                title: "同步进度",
+                title: "本地状态",
                 width: "28%",
                 render: (_, item) => {
                   const checkpoint = item.syncItem?.checkpoint as { symbol?: string; index?: number; total?: number } | null | undefined;
@@ -2170,7 +1727,7 @@ export function DataPage() {
                   const checkpointTotal = Number(checkpoint?.total || 0);
                   const percent = checkpointTotal ? Math.min(100, Math.round(checkpointIndex * 100 / checkpointTotal)) : 0;
                   const writeRate = item.syncItem?.metrics?.writeRowsPerSecond;
-                  if (!item.syncItem) return <span className="data-catalog-meta">尚未同步</span>;
+                  if (!item.syncItem) return <span className="data-catalog-meta">可直接读取</span>;
                   return (
                     <div className="data-catalog-progress">
                       {checkpointTotal > 0 && (
@@ -2184,8 +1741,8 @@ export function DataPage() {
                       )}
                       <div className="data-catalog-stats">
                         <span>处理 {item.syncItem.processed.toLocaleString()}</span>
-                        <span>入库 {item.syncItem.inserted.toLocaleString()}</span>
-                        <span>写入 {writeRate !== undefined ? `${Math.round(writeRate).toLocaleString()}/s` : "-"}</span>
+                        <span>本地行数 {item.syncItem.inserted.toLocaleString()}</span>
+                        <span>读取 {writeRate !== undefined ? `${Math.round(writeRate).toLocaleString()}/s` : "-"}</span>
                       </div>
                     </div>
                   );
@@ -2197,7 +1754,9 @@ export function DataPage() {
                 render: (_, item) => (
                   <div>
                     <div className="data-catalog-primary">
-                      {Number(item.row_count || 0).toLocaleString()} <span className="data-catalog-unit">rows</span>
+                      {item.row_count_exact === false
+                        ? <>{Number(item.partition_count || 0).toLocaleString()} <span className="data-catalog-unit">日期分区</span></>
+                        : <>{Number(item.row_count || 0).toLocaleString()} <span className="data-catalog-unit">rows</span></>}
                     </div>
                     <div className="data-catalog-meta">
                       {item.first_data_date ? `${item.first_data_date} → ${item.last_data_date || "-"}` : "暂无覆盖日期"}
@@ -2206,114 +1765,25 @@ export function DataPage() {
                 )
               },
               {
-                title: "操作",
+                title: "读取方式",
                 width: "13%",
-                render: (_, item) => {
-                  if (item.sync_policy !== "on_demand") return <span className="data-catalog-meta">随一键更新</span>;
-                  const task = downloadTasks[item.dataset_key];
-                  const busy = Boolean(task && ["queued", "running"].includes(task.status));
-                  return (
-                    <div className="data-catalog-actions">
-                      <Tooltip title={activeSync ? "一键更新进行中，为避免共享 TuShare 配额竞争，完成后可单独下载" : undefined}>
-                        <Button
-                          size="small"
-                          icon={<CloudDownloadOutlined />}
-                          loading={busy}
-                          disabled={item.permission_status === "denied" || activeSync}
-                          onClick={() => openOnDemandDownload(item)}
-                        >
-                          {task?.status === "success" ? "再次下载" : "单独下载"}
-                        </Button>
-                      </Tooltip>
-                      {task && !busy && (
-                        <Tooltip title={task.error || task.artifacts?.[0] || task.status}>
-                          <span><StatusTag status={task.status} /></span>
-                        </Tooltip>
-                      )}
-                    </div>
-                  );
-                }
+                render: () => <span className="data-catalog-meta">Parquet</span>
               }
               ]}
             />
           </>
         )}
       </Card>
-      <Modal
-        title={`单独下载数据集${downloadDataset ? ` · ${downloadDataset.dataset_key}` : ""}`}
-        open={Boolean(downloadDataset)}
-        onCancel={() => setDownloadDataset(null)}
-        onOk={() => downloadForm.submit()}
-        okText="开始下载"
-        confirmLoading={downloadLoading}
-        width={680}
-        destroyOnHidden
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="文件只写入你明确选择的存储位置"
-          description="存储目标必须手动选择。外置硬盘或 NAS 需要先挂载到服务，并通过 LEAN_ON_DEMAND_EXPORT_ROOTS 配置后才会出现在列表中。"
-        />
-        <Form form={downloadForm} layout="vertical" onFinish={submitOnDemandDownload}>
-          <Form.Item name="dataset" label="数据集"><Input disabled /></Form.Item>
-          <FormGrid modal>
-            <Form.Item name="storageTarget" label="下载地址" rules={[{ required: true, message: "请选择下载地址" }]}>
-              <Select
-                placeholder="请选择，不使用默认硬盘目录"
-                loading={storageTargets.loading}
-                options={storageTargets.data.map((item) => ({
-                  value: item.id,
-                  label: `${item.label} · ${item.displayPath}`,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item name="relativePath" label="目标子目录" rules={[{ required: true }]}>
-              <Input placeholder="例如 tushare-on-demand/fund_nav" />
-            </Form.Item>
-          </FormGrid>
-          {selectedStorage && (
-            <Alert type="success" showIcon style={{ marginBottom: 12 }} message={`实际保存到：${selectedStorage.displayPath}`} />
-          )}
-          <FormGrid modal>
-            <Form.Item name="format" label="文件格式" rules={[{ required: true }]}>
-              <Select options={[{ value: "parquet", label: "Parquet" }, { value: "jsonl", label: "JSON Lines" }]} />
-            </Form.Item>
-            <Form.Item
-              name="symbol"
-              label="标的代码"
-              rules={[{ required: downloadDataset?.scope_type === "instrument", message: "该数据集需要标的代码" }]}
-            >
-              <Input placeholder={downloadDataset?.scope_type === "instrument" ? "必填，例如 600519" : "可选"} />
-            </Form.Item>
-            <Form.Item label="接口限制">
-              <Input disabled value={downloadDataset?.rate_limit_per_hour ? `${downloadDataset.rate_limit_per_hour} 次/小时` : "全局 500 次/分钟"} />
-            </Form.Item>
-          </FormGrid>
-          <FormGrid modal>
-            <Form.Item name="startDate" label="开始日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
-            <Form.Item name="endDate" label="结束日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
-          </FormGrid>
-          <Form.Item
-            name="apiParameters"
-            label="额外 TuShare 参数（JSON，可选）"
-            tooltip="用于 index_code、exchange、trade_date 等数据集专有参数；这里的值会覆盖自动生成的参数。"
-          >
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder='例如 {"exchange":"CFFEX"}' />
-          </Form.Item>
-        </Form>
-      </Modal>
       <Card title="按数据集预览" style={{ marginTop: 16 }}>
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`${oneClickCatalogRows.length} 个一键更新数据集已按业务对象分组`}
-          description="股票行情页合并 stock_basic、daily、adj_factor、suspend_d、stk_limit；daily_basic 与 dividend 可在研究数据中直接查询规范化 MySQL 表。"
+          message={`${oneClickCatalogRows.length} 个本地数据集已按业务对象分组`}
+          description="股票行情、复权因子、每日指标、停牌和涨跌停均直接查询本地 Parquet 数据湖。"
         />
         <Tabs
-          destroyOnHidden={false}
+          destroyOnHidden
           items={[
             {
               key: "stocks",

@@ -758,6 +758,41 @@ def maintenance_lease_active() -> bool:
 
 
 def watermarks() -> dict[str, Any]:
+    if (
+        database_backend() == "mysql"
+        and os.environ.get("LEAN_DERIVED_WATERMARK_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
+        items = []
+        for scope in market_lake.all_scopes(kind="bars"):
+            summary = market_lake.native_partition_summary(**scope)
+            if not summary["available"]:
+                continue
+            items.append(
+                {
+                    **_scope_from_key(_scope_key(scope), scope["source"]),
+                    "layer_key": "parquet",
+                    "status": "ready",
+                    "materialized_end": summary.get("lastDate"),
+                    "row_count": 0,
+                    "partition_count": int(summary.get("partitionCount") or 0),
+                    "row_count_exact": False,
+                }
+            )
+        return {
+            "items": items,
+            "count": len(items),
+            "layers": {
+                "parquet": {
+                    "count": len(items), "ready": len(items), "failed": 0,
+                    "watermark": max((str(item["materialized_end"] or "") for item in items), default="") or None,
+                },
+                "clickhouse": {"count": 0, "ready": 0, "failed": 0, "watermark": None},
+            },
+            "runs": [],
+            "schedule": {"timezone": "Asia/Shanghai", "days": "local", "defaultTime": "按需读取"},
+            "asOfDate": date.today().isoformat(),
+            "localOnly": True,
+        }
     with db() as connection:
         rows = connection.execute(
             "select * from derived_layer_watermarks order by layer_key,scope_key,source"

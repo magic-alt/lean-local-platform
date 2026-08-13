@@ -23,6 +23,35 @@ def test_runtime_has_no_mysql_market_time_series_sql():
     assert violations == []
 
 
+def test_control_plane_reconciliation_migration_repairs_schema_drift():
+    from app import db as db_module
+
+    db_module.init_db()
+    with db_module.db() as connection:
+        connection.execute("drop table provider_raw_archive_issues")
+        connection.execute("drop table data_sync_runs")
+        connection.execute("drop table asset_capabilities")
+        connection.execute(
+            "delete from schema_migrations where revision='0052_reconcile_market_lake_control_plane'"
+        )
+
+    db_module.init_db()
+
+    with db_module.db() as connection:
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "select name from sqlite_master where type='table'"
+            ).fetchall()
+        }
+        issue_columns = {
+            row["name"]
+            for row in connection.execute("pragma table_info(provider_raw_archive_issues)").fetchall()
+        }
+    assert {"provider_raw_archive_issues", "data_sync_runs", "asset_capabilities"} <= tables
+    assert {"status", "resolution_code", "resolution_run_id", "resolved_at"} <= issue_columns
+
+
 def test_native_silver_daily_layout_is_read_without_copy(tmp_path, monkeypatch):
     from app.services import market_lake
 
@@ -44,6 +73,26 @@ def test_native_silver_daily_layout_is_read_without_copy(tmp_path, monkeypatch):
     )
 
     assert rows == [{"symbol": "000001", "trade_date": "2026-08-11", "close": 11.26}]
+
+
+def test_native_auxiliary_layouts_are_discovered_without_custom_manifest(tmp_path, monkeypatch):
+    """The local bronze/silver layers must not depend on a ``kind=`` tree."""
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    target = tmp_path / "bronze" / "tushare" / "current" / "adj_factor" / "trade_date=20260811" / "data.parquet"
+    target.parent.mkdir(parents=True)
+    pl.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20260811"], "adj_factor": [139.008]}).write_parquet(target)
+
+    scopes = market_lake.matching_scopes(
+        kind="adjustment_factor", asset_class="equity", market="china", source="tushare",
+    )
+    assert len(scopes) == 1
+    rows = market_lake.query_matching(
+        kind="adjustment_factor", asset_class="equity", market="china", source="tushare",
+        columns="symbol,trade_date,adj_factor", predicates=("symbol=?",), parameters=("000001",),
+    )
+    assert rows == [{"symbol": "000001", "trade_date": "2026-08-11", "adj_factor": 139.008}]
 
 
 def test_native_incremental_write_replaces_partition_and_retains_revision(tmp_path, monkeypatch):

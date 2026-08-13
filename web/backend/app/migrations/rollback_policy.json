@@ -52,6 +52,8 @@
     "0048_project_archival": {"mode": "compensating", "action": "Restore archived project source directories if required, clear projects.archived_at, and remove the additive column and index through a reviewed forward migration."},
     "0049_async_tushare_lineage": {"mode": "compensating", "action": "Stop lineage workers, drain or archive pending jobs, and remove the additive job table through a reviewed forward migration."},
     "0050_daily_reconciliation_indexes": {"mode": "compensating", "action": "No action on Parquet-authoritative installations; retain or drop the obsolete market-table indexes only with their legacy tables."},
-    "0051_market_lake_authority": {"mode": "irreversible", "action": "Restore the retired SQL quote tables only from a reviewed pre-cutover backup; preserve market_lake_cutovers evidence."}
+    "0051_market_lake_authority": {"mode": "irreversible", "action": "Restore the retired SQL quote tables only from a reviewed pre-cutover backup; preserve market_lake_cutovers evidence."},
+    "0052_reconcile_market_lake_control_plane": {"mode": "compensating", "action": "Retain restored control-plane metadata; remove a recreated empty table only through a reviewed forward migration after verifying no sync or governance workflow uses it."},
+    "0053_reconcile_instrument_identifier_columns": {"mode": "compensating", "action": "Retain additive identifier and financial audit metadata; remove compatibility columns only through a reviewed forward migration after verifying all profile and lineage readers."}
   }
 }

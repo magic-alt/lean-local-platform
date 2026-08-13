@@ -49,7 +49,7 @@ def test_trade_calendar_preview_filters_and_pages_canonical_rows():
     )
     assert response.status_code == 200
     result = response.json()
-    assert result["storage"] == "canonical_table"
+    assert result["storage"] == "control_metadata"
     assert result["count"] == 2
     assert result["items"][0]["trade_date"] == "2026-07-20"
 
@@ -94,9 +94,57 @@ def test_daily_basic_parquet_and_dividend_metadata_previews():
     dividend = client.get("/api/data/dataset-preview/dividend", params={"keyword": "SH600519"})
 
     assert basic.status_code == dividend.status_code == 200
-    assert basic.json()["storage"] == dividend.json()["storage"] == "canonical_table"
+    assert basic.json()["storage"] == "local_parquet"
+    assert dividend.json()["storage"] == "control_metadata"
     assert basic.json()["items"][0]["value"] == 21.5
     assert dividend.json()["items"][0]["cash_dividend"] == 2.5
+
+
+def test_daily_basic_preview_unpivots_and_pages_in_duckdb():
+    init_db()
+    market_lake.upsert_rows(
+        [
+            {"symbol": "600519", "trade_date": "2026-07-17", "pe_ttm": 21.5, "pb": 8.0, "batch_id": "test"},
+            {"symbol": "000001", "trade_date": "2026-07-16", "pe_ttm": 5.0, "batch_id": "test"},
+        ],
+        kind="daily_basic", data_type="metric", source="tushare:daily_basic",
+    )
+
+    response = TestClient(app).get(
+        "/api/data/dataset-preview/daily_basic",
+        params={"limit": 2, "offset": 1},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["count"] == 3
+    assert result["countExact"] is True
+    assert result["hasMore"] is False
+    assert result["offset"] == 1
+    assert [(item["symbol"], item["factor_name"]) for item in result["items"]] == [
+        ("600519", "pe_ttm"),
+        ("000001", "pe_ttm"),
+    ]
+
+
+def test_parquet_preview_reports_has_more_without_full_lake_count():
+    init_db()
+    market_lake.upsert_rows(
+        [
+            {"symbol": "000001", "trade_date": "2026-07-17", "close": 11.0},
+            {"symbol": "000002", "trade_date": "2026-07-17", "close": 12.0},
+        ],
+        kind="bars", source="tushare",
+    )
+
+    response = TestClient(app).get("/api/data/dataset-preview/daily", params={"limit": 1})
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["count"] is None
+    assert result["countExact"] is False
+    assert result["hasMore"] is True
+    assert len(result["items"]) == 1
 
 
 def test_index_daily_preview_reads_full_canonical_history_instead_of_latest_archive():
@@ -122,7 +170,7 @@ def test_index_daily_preview_reads_full_canonical_history_instead_of_latest_arch
     )
     assert response.status_code == 200
     result = response.json()
-    assert result["storage"] == "canonical_table"
+    assert result["storage"] == "local_parquet"
     assert result["count"] == 2
     assert [item["trade_date"] for item in result["items"]] == ["2026-07-17", "2026-07-16"]
     assert result["items"][0]["ts_code"] == "000001.SH"
