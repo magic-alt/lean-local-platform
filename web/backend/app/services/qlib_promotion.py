@@ -158,11 +158,14 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
     return {"validationId": validation_id, "validationArtifactId": validation_artifact_id, "replayed": False, "status": "LEAN_VALIDATED"}
 
 
-def assert_paper_eligible(lean_backtest_run_id: str) -> dict[str, Any] | None:
-    backtest = get_backtest(lean_backtest_run_id)
-    if not backtest:
-        raise KeyError(f"LEAN backtest not found: {lean_backtest_run_id}")
-    parameters = dict(backtest.get("parameters") or {})
+def assert_paper_eligible(
+    lean_backtest_run_id: str, *, parameters: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    if parameters is None:
+        backtest = get_backtest(lean_backtest_run_id)
+        if not backtest:
+            raise KeyError(f"LEAN backtest not found: {lean_backtest_run_id}")
+        parameters = dict(backtest.get("parameters") or {})
     target_id = str(parameters.get("qlibTargetPortfolioArtifactId") or "")
     if not target_id:
         return None
@@ -180,8 +183,10 @@ def assert_paper_eligible(lean_backtest_run_id: str) -> dict[str, Any] | None:
     return row_to_dict(validation)
 
 
-def mark_paper_started(lean_backtest_run_id: str, *, deployment_id: str) -> None:
-    validation = assert_paper_eligible(lean_backtest_run_id)
+def mark_paper_started(
+    lean_backtest_run_id: str, *, deployment_id: str, parameters: dict[str, Any] | None = None
+) -> None:
+    validation = assert_paper_eligible(lean_backtest_run_id, parameters=parameters)
     if not validation:
         return
     with db() as connection:

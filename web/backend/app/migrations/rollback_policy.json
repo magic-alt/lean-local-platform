@@ -55,6 +55,7 @@
     "0051_market_lake_authority": {"mode": "irreversible", "action": "Restore the retired SQL quote tables only from a reviewed pre-cutover backup; preserve market_lake_cutovers evidence."},
     "0052_reconcile_market_lake_control_plane": {"mode": "compensating", "action": "Retain restored control-plane metadata; remove a recreated empty table only through a reviewed forward migration after verifying no sync or governance workflow uses it."},
     "0053_reconcile_instrument_identifier_columns": {"mode": "compensating", "action": "Retain additive identifier and financial audit metadata; remove compatibility columns only through a reviewed forward migration after verifying all profile and lineage readers."},
-    "0054_data_release_and_artifact_contract_v2": {"mode": "compensating", "action": "Stop v2 release publication and Qlib imports, archive immutable manifests and registry rows, then remove additive tables and columns through a reviewed forward migration."}
+    "0054_data_release_and_artifact_contract_v2": {"mode": "compensating", "action": "Stop v2 release publication and Qlib imports, archive immutable manifests and registry rows, then remove additive tables and columns through a reviewed forward migration."},
+    "0055_qlib_lean_promotion_gates": {"mode": "compensating", "action": "Stop Qlib-to-LEAN promotions, preserve validation and Paper lineage evidence, and remove additive bindings only through a reviewed forward migration."}
   }
 }

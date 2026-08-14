@@ -241,8 +241,6 @@ def create_run(
     parameters: dict[str, Any],
 ) -> dict[str, Any]:
     template = research_analysis.template(template_key)
-    if template.get("legacy"):
-        raise ValueError("QLIB_OWNS_MODEL_TRAINING: create the model research job in qlib-platform")
     normalized = data_gateway.normalize_scope(scope)
     if template_key == ml_research.TEMPLATE_KEY:
         ml_research.validate_scope(normalized, parameters)

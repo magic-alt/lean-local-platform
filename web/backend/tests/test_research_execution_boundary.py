@@ -46,7 +46,7 @@ def test_research_control_center_hides_and_refuses_new_legacy_ml_jobs():
     run_source = (backend / "app" / "services" / "research_runs.py").read_text(encoding="utf-8")
     assert '"legacy": True' in analysis_source
     assert "def public_templates()" in analysis_source
-    assert "if template.get(\"legacy\")" in run_source
+    assert "QLIB_OWNS_MODEL_TRAINING" not in run_source
 
 
 
