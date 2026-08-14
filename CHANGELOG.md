@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Begin P3 execution-domain migration by moving the loopback-only, GET-only MiniQMT query gateway into `platform`; expose raw account/position/order/fill/quote observations without SQLite, PnL, risk, ledger or broker-write behavior, and add focused gateway boundary tests and operating documentation.
+
 - Make GitHub CI hermetic on hosted runners by isolating disk-capacity and provider-availability checks in unit-test fixtures, and disable API trailing-slash redirects so retired mutation routes fail closed instead of being invoked through redirects.
 
 - 2026-08-14 — establish the Research/Execution boundary: add immutable composite DataRelease v2 publication, a governed artifact registry, dual-version Qlib research imports, architecture freeze checks, shared JSON contracts and GitHub CI while retaining legacy dataset releases and v1 clients.
