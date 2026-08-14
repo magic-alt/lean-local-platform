@@ -6,6 +6,12 @@ from ..services.tasks import cancel_task, delete_task, get_task, list_tasks, tas
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
+@router.delete("/{task_id}/", include_in_schema=False)
+def retired_trailing_slash_delete(task_id: str):
+    del task_id
+    raise HTTPException(status_code=404, detail="Task route alias not found.")
+
+
 @router.get("")
 def tasks(
     limit: int = Query(default=100, ge=1, le=200),

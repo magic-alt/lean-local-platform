@@ -5,7 +5,7 @@
 ## Unreleased
 - Refresh the Longbridge Python SDK lock to 4.4.3 after the previously pinned 4.4.1 distribution became unavailable from PyPI, restoring reproducible hashed CI installs.
 
-- Align retired-route tests with explicit HTTP 405 fail-closed semantics, make the CSI300 research fixture supply independently effective-dated PIT membership, allow isolated acceptance runs to select their runtime and workspace roots explicitly, and retain US market hours when a minimal mounted Data directory supplies LEAN ResultsAnalyzer SPY data.
+- Give retired task-alias and legacy paper-session routes explicit HTTP 404 tombstones across framework versions, make the CSI300 research fixture supply independently effective-dated PIT membership, allow isolated acceptance runs to select their runtime and workspace roots explicitly, and retain US market hours when a minimal mounted Data directory supplies LEAN ResultsAnalyzer SPY data.
 
 - Retire new platform-owned cross-sectional ML runs at the service/API boundary while preserving historical reads, and add profile-aware Qlib research DataRelease inputs including PIT industry classification.
 
