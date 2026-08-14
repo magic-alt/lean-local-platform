@@ -40,7 +40,16 @@ def test_model_framework_imports_remain_inside_the_isolated_legacy_worker():
     assert offenders == set()
 
 
+def test_research_control_center_hides_and_refuses_new_legacy_ml_jobs():
+    backend = Path(__file__).resolve().parents[1]
+    analysis_source = (backend / "app" / "services" / "research_analysis.py").read_text(encoding="utf-8")
+    run_source = (backend / "app" / "services" / "research_runs.py").read_text(encoding="utf-8")
+    assert '"legacy": True' in analysis_source
+    assert "def public_templates()" in analysis_source
+    assert "if template.get(\"legacy\")" in run_source
+
+
+
 def test_contract_v2_never_assigns_execution_artifacts_to_qlib():
     from app.services.artifact_registry import QLIB_TYPES
-
     assert QLIB_TYPES.isdisjoint({"ORDER_INTENT", "BROKER_ORDER", "FILL", "POSITION", "CASH_LEDGER"})

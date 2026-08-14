@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
 from app.services.qlib_import_v2 import validate_payload
@@ -72,6 +75,8 @@ def test_validate_v2_rejects_unknown_parent_and_same_day_trade():
 
 
 def test_register_v2_artifact_graph_is_idempotent():
+
+
     from app import db as db_module
     from app.services.artifact_registry import register_qlib_artifacts
 
@@ -90,3 +95,44 @@ def test_register_v2_artifact_graph_is_idempotent():
 
     assert artifact_count == 2
     assert edge_count == 1
+
+
+def test_v2_import_persists_target_artifact_identity(tmp_path, monkeypatch):
+    from app import db as db_module
+    from app.services import qlib_import_v2
+
+    db_module.init_db()
+    release_id = "ds_" + "a" * 64
+    with db_module.db() as connection:
+        connection.execute(
+            """insert into data_releases
+               (id,schema_version,profile,asset_class,market,universe,benchmark,coverage_start,coverage_end,
+                as_of_time,identity_sha256,manifest_sha256,manifest_path,status,created_at)
+               values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (release_id, "2.0", "research", "equity", "china", "CSI300", "000300", "2020-01-01", "2020-12-31",
+             "2026-08-14T00:00:00+08:00", "1" * 64, "2" * 64, str(tmp_path / "manifest.json"), "active", "2026-08-14T00:00:00+08:00"),
+        )
+    payload = _payload()
+    model_payload = b'{"model":"release"}'
+    target_payload = json.dumps(
+        {"targets": [{"instrument": "SH600000", "targetWeight": 1.0, "score": 1.0}]},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    files = {}
+    for artifact, raw in zip(payload["artifacts"], (model_payload, target_payload)):
+        path = tmp_path / f"{artifact['artifactId']}.json"
+        path.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        artifact["payloadSha256"] = digest
+        artifact["payloadRef"]["sha256"] = digest
+        files[artifact["payloadRef"]["objectKey"]] = path
+    monkeypatch.setattr(qlib_import_v2.object_store, "get_item_path", files.__getitem__)
+
+    result = qlib_import_v2.import_run(payload)
+
+    with db_module.db() as connection:
+        snapshot = connection.execute(
+            "select target_artifact_id from qlib_signal_snapshots where id=?", (result["signalSnapshotId"],)
+        ).fetchone()
+    assert snapshot["target_artifact_id"] == "target-1"

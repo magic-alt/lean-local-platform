@@ -287,8 +287,8 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
             connection.execute(
                 """insert into qlib_signal_snapshots
                    (id,import_id,research_run_id,model_fingerprint,dataset_fingerprint,signal_date,
-                    trade_date,targets_sha256,target_count,gross_exposure,targets_json,created_at)
-                   values (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    trade_date,targets_sha256,target_count,gross_exposure,targets_json,target_artifact_id,created_at)
+                   values (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     snapshot_id,
                     import_id,
@@ -301,6 +301,7 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
                     len(targets),
                     gross,
                     json_dump(targets),
+                    artifact["artifactId"],
                     now,
                 ),
             )

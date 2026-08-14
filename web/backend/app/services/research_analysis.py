@@ -57,8 +57,9 @@ TEMPLATES = [
     {
         "key": "ml-cross-sectional-ranker",
         "name": "CSI300 横截面机器学习",
-        "description": "PIT 特征、Purged Walk-Forward 与 LightGBM 五档排序研究。",
+        "description": "已冻结的历史兼容模板；新的模型训练与 walk-forward 由 qlib-platform 执行。",
         "category": "machine-learning",
+        "legacy": True,
         "parameterSchema": {
             "universeCode": "CSI300", "startDate": "2015-01-01",
             "endDate": "latest", "horizonTradingDays": 5,
@@ -86,6 +87,11 @@ def template(key: str) -> dict[str, Any]:
     if item is None:
         raise ValueError(f"unknown_research_template:{key}")
     return item
+
+
+def public_templates() -> list[dict[str, Any]]:
+    """Control-center templates; legacy ML runs remain readable but cannot be created."""
+    return [item for item in TEMPLATES if not item.get("legacy")]
 
 
 def is_async_template(key: str) -> bool:

@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import dispatch_task, paged_items
 from ..core.config import RESEARCH_DIR
@@ -22,7 +22,7 @@ from ..lean_engine.research import (
     remove_container,
     stop_container,
 )
-from ..services import ml_research, research_analysis, research_runs
+from ..services import ml_research, qlib_promotion, research_analysis, research_runs
 from ..services import research_snapshots
 from ..services.projects import get_project
 from ..services.tasks import create_task, task_logs
@@ -100,9 +100,16 @@ class QlibImportRequest(BaseModel):
     rootArtifactIds: list[str] = Field(default_factory=list)
 
 
+class QlibLeanValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    leanBacktestRunId: str = Field(min_length=1, max_length=64)
+
+
 @router.get("/templates")
 def templates():
-    return {"items": research_analysis.TEMPLATES, "count": len(research_analysis.TEMPLATES)}
+    items = research_analysis.public_templates()
+    return {"items": items, "count": len(items)}
 
 
 @router.post("/runs/preview")
@@ -147,6 +154,16 @@ def import_qlib_run(request: QlibImportRequest, response: Response):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/lean-validation")
+def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest):
+    try:
+        return qlib_promotion.record_lean_validation(run_id, lean_backtest_run_id=request.leanBacktestRunId)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}")

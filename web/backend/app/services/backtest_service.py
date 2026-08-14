@@ -236,8 +236,8 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             insert into backtest_runs
                 (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
                  parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, created_at,
-                 fingerprint_json, validation_json, experiment_json)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fingerprint_json, validation_json, experiment_json, data_release_id)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -260,6 +260,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 json_dump(fingerprint),
                 json_dump(validation),
                 json_dump(experiment),
+                parameters.get("dataReleaseId"),
             ),
         )
     record_experiment_versions(
