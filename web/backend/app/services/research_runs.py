@@ -8,7 +8,7 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.data_scope import DataScope
-from . import ashare_swing_screen, daily_gap_analysis, data_gateway, ml_research, object_store, research_analysis
+from . import ashare_swing_screen, daily_gap_analysis, data_gateway, ml_research, object_store, qlib_import_v2, research_analysis
 
 
 QLIB_TEMPLATE_KEY = "qlib-cross-sectional-v1"
@@ -19,6 +19,8 @@ def _canonical_json(value: Any) -> str:
 
 
 def _validate_qlib_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("schemaVersion") or "") == "2.0":
+        return qlib_import_v2.validate_payload(payload)
     required = {"schemaVersion", "externalRunId", "runKind", "dataset", "model", "execution", "metrics", "latestTargets"}
     missing = sorted(required - set(payload))
     if missing:
@@ -83,6 +85,8 @@ def _qlib_import_for_run(run_id: str) -> dict[str, Any] | None:
 
 
 def import_qlib_run(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("schemaVersion") or "") == "2.0":
+        return qlib_import_v2.import_run(payload)
     validated = _validate_qlib_payload(payload)
     external_run_id = str(payload["externalRunId"]).strip()
     manifest_json = _canonical_json(payload)

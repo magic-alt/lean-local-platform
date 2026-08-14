@@ -211,7 +211,7 @@ def test_retired_paper_session_api_rejects_same_close_requests(tmp_path, monkeyp
             "executionPolicy": "same_close",
         },
     )
-    assert response.status_code == 405
+    assert response.status_code == 404
 
 
 def test_every_migration_declares_rollback_policy():
