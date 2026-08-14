@@ -3,6 +3,10 @@
 本文档记录用户可见行为、架构、数据和运维变更。自 2026-07-21 起，每次提交必须在 `Unreleased` 中增加一条简明记录；提交自身的 hash 不写入同一提交，Git 历史是 hash 的权威记录。
 
 ## Unreleased
+- Refresh the Longbridge Python SDK lock to 4.4.3 after the previously pinned 4.4.1 distribution became unavailable from PyPI, restoring reproducible hashed CI installs.
+
+- Give retired task-alias and legacy paper-session routes explicit HTTP 404 tombstones across framework versions, make the CSI300 research fixture supply independently effective-dated PIT membership, allow isolated acceptance runs to select their runtime and workspace roots explicitly, and retain US market hours when a minimal mounted Data directory supplies LEAN ResultsAnalyzer SPY data.
+
 - Retire new platform-owned cross-sectional ML runs at the service/API boundary while preserving historical reads, and add profile-aware Qlib research DataRelease inputs including PIT industry classification.
 
 - Continue P4–P7 Research/Execution convergence: freeze new platform ML research jobs, bind Qlib TargetPortfolio artifacts into LEAN backtests, require matching DataRelease/target hashes and execution validation before `LEAN_VALIDATED`, and require that evidence before Paper deployment; retain P8 broker writes and P9 live activation as fail-closed unavailable states.

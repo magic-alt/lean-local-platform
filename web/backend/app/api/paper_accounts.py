@@ -95,6 +95,11 @@ def _call(callback, *args, **kwargs):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("", include_in_schema=False)
+def retired_legacy_paper_session():
+    raise HTTPException(status_code=404, detail="Legacy paper session API not found.")
+
+
 @router.get("/accounts/candidates")
 def account_candidates(projectId: str):
     return _call(queries.trusted_backtest_candidates, projectId)

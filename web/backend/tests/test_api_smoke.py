@@ -145,6 +145,7 @@ def test_api_delete_task_rejects_removed_trailing_slash_alias(tmp_path, monkeypa
     response = client.delete(f"/api/tasks/{task['id']}/")
 
     assert response.status_code == 404
+    assert response.json()["error_code"] == "NOT_FOUND"
 
 
 def test_api_delete_task_accepts_no_trailing_slash(tmp_path, monkeypatch):

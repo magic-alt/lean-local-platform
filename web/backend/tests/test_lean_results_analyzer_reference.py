@@ -1,3 +1,4 @@
+import json
 import zipfile
 
 import pytest
@@ -65,6 +66,11 @@ def test_results_analyzer_reference_reuses_covering_spy_cache(tmp_path, monkeypa
     from app.lean_engine.data_writers import write_lean_daily_zip
 
     write_lean_daily_zip("SPY", _rows("2023-12-20", "2026-07-13"), "test", overwrite=True, market="usa")
+
+    market_hours = json.loads(
+        (data_dir / "market-hours" / "market-hours-database.json").read_text(encoding="utf-8")
+    )
+    assert "Equity-usa-[*]" in market_hours["entries"]
 
     def unexpected_fetch(*args, **kwargs):
         raise AssertionError("covering cache should not fetch")

@@ -212,6 +212,7 @@ def test_retired_paper_session_api_rejects_same_close_requests(tmp_path, monkeyp
         },
     )
     assert response.status_code == 404
+    assert response.json()["error_code"] == "NOT_FOUND"
 
 
 def test_every_migration_declares_rollback_policy():

@@ -119,10 +119,32 @@ def test_csi300_pipeline_imports_core_research_data_without_synthesizing_suspend
         corporate_actions,
         index_weights,
         trade_status_as_of,
+        upsert_security,
+        upsert_universe_membership,
         universe_as_of,
     )
     from app.services.csi300_data_pipeline import PIPELINE_SOURCE, run_csi300_research_import
     from app.services.pit_data import financial_factors_as_of
+
+    # The research importer deliberately refuses to infer PIT membership from
+    # same-day index weights. Seed the independently effective-dated fixture
+    # that a real membership source must publish before the price import runs.
+    upsert_security(
+        symbol="600519",
+        name="贵州茅台",
+        exchange="SSE",
+        listed_date="2001-08-27",
+        industry="Food",
+    )
+    upsert_universe_membership(
+        "CSI300",
+        "600519",
+        "2024-01-02",
+        None,
+        source="unit:pit-membership",
+        announce_date="2024-01-02",
+        effective_date="2024-01-02",
+    )
 
     result = run_csi300_research_import(
         {

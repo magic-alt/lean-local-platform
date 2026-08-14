@@ -7,7 +7,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 WEB_DIR = BACKEND_DIR.parent
 PLATFORM_DIR = WEB_DIR.parent
 WORKSPACE_ROOT = PLATFORM_DIR.parent
-REPO_ROOT = WORKSPACE_ROOT
+REPO_ROOT = Path(os.environ.get("LEAN_WORKSPACE_ROOT", WORKSPACE_ROOT)).expanduser().resolve()
 GIT_ROOT = Path(os.environ.get("LEAN_GIT_ROOT", PLATFORM_DIR)).expanduser().resolve()
 HOST_PLATFORM_DIR = Path(os.environ.get("LEAN_HOST_PLATFORM_DIR", PLATFORM_DIR)).expanduser().resolve()
 
@@ -46,7 +46,7 @@ DATA_DIR = _platform_path(os.environ.get("LEAN_DATA_DIR", PLATFORM_DIR / "data")
 HOST_DATA_DIR = _platform_path(os.environ.get("LEAN_HOST_DATA_DIR", DATA_DIR)).resolve()
 FRONTEND_DIST = WEB_DIR / "frontend" / "dist"
 
-RUNTIME_DIR = WEB_DIR / "runtime"
+RUNTIME_DIR = _platform_path(os.environ.get("LEAN_RUNTIME_DIR", WEB_DIR / "runtime"))
 RUNS_DIR = RUNTIME_DIR / "runs"
 UPLOADS_DIR = RUNTIME_DIR / "uploads"
 PROJECTS_DIR = RUNTIME_DIR / "projects"

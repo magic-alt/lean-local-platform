@@ -9,7 +9,7 @@ duckdb==1.5.5
 efinance==0.5.9
 finnhub-python==2.4.29
 jqdatasdk==1.9.8
-longbridge==4.4.1
+longbridge==4.4.3
 polars==1.43.0
 prometheus-client==0.26.0
 pytdx==1.72
