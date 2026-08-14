@@ -32,7 +32,7 @@ class SPAStaticFiles(StaticFiles):
             raise
 
 
-app = FastAPI(title="Local LEAN Web Platform")
+app = FastAPI(title="Local LEAN Web Platform", redirect_slashes=False)
 app.middleware("http")(metrics_middleware)
 app.add_middleware(
     CORSMiddleware,
