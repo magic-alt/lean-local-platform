@@ -143,6 +143,20 @@ def register_platform_artifact(connection: Any, artifact: Mapping[str, Any]) -> 
            values (?,?,null,?,'platform','lean_validation',?,?)""",
         (str(uuid.uuid4()), artifact_id, artifact["promotionStatus"], json_dump({}), now),
     )
+    for parent in artifact.get("parentArtifactIds") or []:
+        parent_id = str(parent)
+        exists = connection.execute(
+            "select artifact_id from artifact_registry where artifact_id=?", (parent_id,)
+        ).fetchone()
+        if not exists:
+            raise ValueError(f"Artifact parent does not exist: {parent_id}")
+        connection.execute(
+            """insert into artifact_lineage_edges
+               (parent_artifact_id,child_artifact_id,created_at) values (?,?,?)
+               on conflict(parent_artifact_id,child_artifact_id) do update
+               set created_at=artifact_lineage_edges.created_at""",
+            (parent_id, artifact_id, now),
+        )
 
 
 def promote_target_to_platform_stage(

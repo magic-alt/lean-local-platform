@@ -117,6 +117,7 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
         "artifactId": validation_artifact_id,
         "artifactType": "VALIDATION_RESULT",
         "promotionStatus": "LEAN_VALIDATED",
+        "parentArtifactIds": [target["target_artifact_id"]],
         "dataReleaseId": target["data_release_id"],
         "universeReleaseId": target.get("universe_release_id"),
         "modelReleaseId": target["model_fingerprint"],
@@ -132,11 +133,6 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
     }
     with db() as connection:
         artifact_registry.register_platform_artifact(connection, artifact)
-        connection.execute(
-            """insert into artifact_lineage_edges (parent_artifact_id,child_artifact_id,created_at)
-               values (?,?,?) on conflict(parent_artifact_id,child_artifact_id) do nothing""",
-            (target["target_artifact_id"], validation_artifact_id, utc_now()),
-        )
         artifact_registry.promote_target_to_platform_stage(
             connection,
             artifact_id=str(target["target_artifact_id"]),
