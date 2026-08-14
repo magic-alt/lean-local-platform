@@ -9,6 +9,8 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.venv
+mlruns/
 web/backend/.env
 web/backend/.env.*
 !web/backend/.env.example

@@ -311,7 +311,10 @@ def database_backend() -> str:
 def _sqlite_db_path() -> Path:
     parsed = urlparse(DATABASE_URL)
     if parsed.scheme.lower() in SQLITE_SCHEMES and parsed.path:
-        return Path(unquote(parsed.path)).expanduser()
+        raw_path = unquote(parsed.path)
+        if os.name == "nt" and re.match(r"^/[A-Za-z]:[/\\]", raw_path):
+            raw_path = raw_path[1:]
+        return Path(raw_path).expanduser()
     if DB_PATH is not None:
         return DB_PATH
     raise RuntimeError("SQLite test backend requires an explicit sqlite:/// path.")

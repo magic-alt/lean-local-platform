@@ -71,9 +71,20 @@ def sample_ashare_rows():
 
 def import_sample_ashare(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
+    import app.services.backtest_preflight as backtest_preflight
     from app.services.benchmark import import_benchmark_rows
     from app.services.data import import_ashare_research_data
     from app.services.ashare_repository import upsert_trade_status
+
+    monkeypatch.setattr(
+        backtest_preflight,
+        "DATA_PROVIDER_MANAGER",
+        types.SimpleNamespace(
+            availability=lambda providers, **_kwargs: [
+                {"key": source, "available": True} for source in providers
+            ]
+        ),
+    )
 
     asset = {}
     for source in ("akshare", "tushare"):

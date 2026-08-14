@@ -17,6 +17,7 @@ from ..repositories.market_data_repository import (
 )
 from . import paper as paper_runtime
 from . import paper_order_pipeline
+from . import qlib_promotion
 from .alerts import (
     delivery_max_attempts,
     delivery_retry_at,
@@ -837,6 +838,7 @@ def _candidate(project_id: str, source_backtest_id: str) -> dict[str, Any]:
     if not run:
         raise ValueError("Source backtest is unavailable.")
     parameters = dict(run.get("parameters") or {})
+    qlib_promotion.assert_paper_eligible(source_backtest_id, parameters=parameters)
     fingerprint = dict(run.get("fingerprint") or {})
     certification = dict(fingerprint.get("datasetCertification") or {})
     snapshot_dir = run_directory(source_backtest_id, parameters.get("strategySnapshotDir"), relative="strategy")
@@ -1089,6 +1091,7 @@ def create_deployment(account_id: str, payload: dict[str, Any]) -> dict[str, Any
                     account["shadow_session_id"],
                 ),
             )
+    qlib_promotion.mark_paper_started(source_id, deployment_id=deployment_id, parameters=parameters)
     return get_deployment(deployment_id)
 
 

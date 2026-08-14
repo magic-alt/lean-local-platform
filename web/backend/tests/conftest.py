@@ -35,7 +35,24 @@ def use_sqlite_test_backend(tmp_path, monkeypatch, request):
     # isolated lake so it can never mutate the developer's configured Data dir.
     from app.services import market_lake
     from app.services import db_object_store
+    from app.services import data_sync
 
     monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path / "parquet")
     monkeypatch.setattr(db_object_store, "FILE_OBJECT_STORE_DIR", tmp_path / "object-store")
+    monkeypatch.setattr(
+        data_sync,
+        "_disk_metrics",
+        lambda: {
+            "diskFreeBytes": 10 * 1024**3,
+            "diskTotalBytes": 20 * 1024**3,
+            "diskReserveBytes": 1024**3,
+            "diskWritableBytes": 9 * 1024**3,
+            "databaseBytes": 0,
+            "databaseLimitBytes": 0,
+            "databaseUsagePercent": 0.0,
+            "databaseLimitEnforced": False,
+            "onDemandDatabaseLimitBytes": 50 * 1024**3,
+            "databaseSizeSource": "pytest_fixture",
+        },
+    )
     yield
