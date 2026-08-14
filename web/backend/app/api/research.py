@@ -89,13 +89,15 @@ class QlibImportRequest(BaseModel):
     externalRunId: str
     runKind: str
     name: str | None = None
-    dataset: dict[str, Any]
-    model: dict[str, Any]
+    importType: str | None = None
+    dataset: dict[str, Any] | None = None
+    model: dict[str, Any] | None = None
     folds: list[dict[str, Any]] = Field(default_factory=list)
-    execution: dict[str, Any]
-    metrics: dict[str, Any]
-    artifacts: list[QlibArtifactRef] = Field(default_factory=list)
-    latestTargets: QlibLatestTargets
+    execution: dict[str, Any] | None = None
+    metrics: dict[str, Any] | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    latestTargets: QlibLatestTargets | None = None
+    rootArtifactIds: list[str] = Field(default_factory=list)
 
 
 @router.get("/templates")
@@ -132,9 +134,15 @@ def create_run(request: ResearchRunRequest):
 
 
 @router.post("/imports/qlib")
-def import_qlib_run(request: QlibImportRequest):
+def import_qlib_run(request: QlibImportRequest, response: Response):
     try:
-        return research_runs.import_qlib_run(request.model_dump())
+        payload = request.model_dump(exclude_none=True)
+        result = research_runs.import_qlib_run(payload)
+        if request.schemaVersion == "1.0":
+            warning = "Qlib import schema 1.0 is deprecated; emit Artifact Contract v2"
+            response.headers["Warning"] = f'299 - "{warning}"'
+            result = {**result, "schemaVersion": "1.0", "warnings": [warning]}
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:

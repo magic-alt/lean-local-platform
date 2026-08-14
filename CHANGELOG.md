@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 2026-08-14 — establish the Research/Execution boundary: add immutable composite DataRelease v2 publication, a governed artifact registry, dual-version Qlib research imports, architecture freeze checks, shared JSON contracts and GitHub CI while retaining legacy dataset releases and v1 clients.
+
 - Repair local Data Preview and route stability after the Parquet cutover: reconcile missing MySQL control-plane tables plus drifted security-identifier and financial-audit columns without restoring retired quote tables, keep optional SQL enrichment failures from breaking local Preview, replace full-lake preview counts with bounded DuckDB paging and memory/concurrency limits, expose truthful partition coverage, load complete local stock/index charts in one bounded request, and add real-browser regression coverage for Preview plus Data/Backtest/Research navigation.
 
 - Make the repository `data/` lake the sole market-time-series authority: read the existing bronze/silver/gold Parquet hierarchy directly with DuckDB, write incremental date partitions atomically with retained revisions, keep only control metadata in MySQL, retire MySQL/database/local query modes and SQL-to-Parquet export routes, and preserve Qlib as an untouched downstream cache/engine.
