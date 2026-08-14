@@ -93,6 +93,8 @@ def http_error_code(status_code: int) -> tuple[str, str, bool]:
         return ("FORBIDDEN", "auth", False)
     if status_code == 404:
         return ("NOT_FOUND", "not_found", False)
+    if status_code == 405:
+        return ("METHOD_NOT_ALLOWED", "http", False)
     if status_code == 409:
         return ("CONFLICT", "state", False)
     if status_code == 422:
