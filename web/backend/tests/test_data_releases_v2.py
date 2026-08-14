@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from app.services.data_releases import REQUIRED_RESEARCH_COMPONENTS, publish_data_release
+from app.services.data_releases import (
+    QLIB_RESEARCH_PROFILE,
+    REQUIRED_RESEARCH_COMPONENTS,
+    publish_data_release,
+    required_components_for_profile,
+)
 
 
 def _sha(path: Path) -> str:
@@ -26,7 +31,13 @@ def _spec(root: Path) -> dict[str, object]:
                 "datasetKey": role,
                 "schemaVersion": "1",
                 "coverage": {"start": "2020-01-01", "end": "2026-08-13"},
-                "files": [{"path": path.relative_to(root).as_posix(), "sha256": _sha(path), "rowCount": 1}],
+                "files": [
+                    {
+                        "path": path.relative_to(root).as_posix(),
+                        "sha256": _sha(path),
+                        "rowCount": 1,
+                    }
+                ],
             }
         )
     return {
@@ -54,7 +65,9 @@ def test_publish_complete_release_is_deterministic_and_immutable(tmp_path: Path)
     source = tmp_path / "canonical" / f"{first['components'][0]['role']}.json"
     source.write_text("changed", encoding="utf-8")
     assert frozen.read_bytes() == before
-    assert json.loads((release_root / "manifest.json").read_text(encoding="utf-8"))["manifestSha256"]
+    assert json.loads((release_root / "manifest.json").read_text(encoding="utf-8"))[
+        "manifestSha256"
+    ]
 
 
 def test_publish_detects_corrupt_frozen_release(tmp_path: Path):
@@ -84,3 +97,36 @@ def test_publish_rejects_source_outside_shared_root(tmp_path: Path):
     spec["components"][0]["files"][0]["path"] = "../outside.parquet"
     with pytest.raises(ValueError, match="escapes QUANT_DATA_ROOT"):
         publish_data_release(spec, tmp_path, persist=False)
+
+
+def test_qlib_profile_requires_staging_and_pit_industry(tmp_path: Path):
+    spec = _spec(tmp_path)
+    spec["profile"] = QLIB_RESEARCH_PROFILE
+    with pytest.raises(ValueError, match="industry_classification_pit"):
+        publish_data_release(spec, tmp_path, persist=False)
+    for role in sorted(
+        required_components_for_profile(QLIB_RESEARCH_PROFILE)
+        - REQUIRED_RESEARCH_COMPONENTS
+    ):
+        path = tmp_path / "canonical" / f"{role}.json"
+        path.write_text(json.dumps({"role": role}), encoding="utf-8")
+        spec["components"].append(
+            {
+                "role": role,
+                "componentReleaseId": f"component:{role}:1",
+                "datasetKey": role,
+                "schemaVersion": "1",
+                "coverage": spec["coverage"],
+                "files": [
+                    {
+                        "path": path.relative_to(tmp_path).as_posix(),
+                        "sha256": _sha(path),
+                        "rowCount": 1,
+                    }
+                ],
+            }
+        )
+    assert (
+        publish_data_release(spec, tmp_path, persist=False)["profile"]
+        == QLIB_RESEARCH_PROFILE
+    )
