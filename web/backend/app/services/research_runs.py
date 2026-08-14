@@ -8,7 +8,7 @@ from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..domain.data_scope import DataScope
-from . import ashare_swing_screen, daily_gap_analysis, data_gateway, ml_research, object_store, qlib_import_v2, research_analysis
+from . import ashare_swing_screen, daily_gap_analysis, data_gateway, ml_research, object_store, qlib_import_v2, qlib_promotion, research_analysis
 
 
 QLIB_TEMPLATE_KEY = "qlib-cross-sectional-v1"
@@ -435,18 +435,13 @@ def backtest_draft(run_id: str) -> dict[str, Any]:
         if not signal:
             raise ValueError("Qlib signal snapshot is missing")
         return {
-            "sourceResearchRunId": run_id,
-            "dataScope": item["scope"],
+            **qlib_promotion.validation_draft(run_id, data_scope=item["scope"]),
             "dataFingerprint": item.get("data_fingerprint"),
-            "target": "backtest",
-            "strategyRequired": True,
-            "preflightRequired": True,
             "signalSource": {
                 "kind": "qlib_target_snapshot", "snapshotId": signal["id"],
                 "signalDate": signal["signal_date"], "tradeDate": signal["trade_date"],
                 "targetsSha256": signal["targets_sha256"],
             },
-            "note": "Qlib targets are registered research evidence; LEAN execution still requires an admitted strategy and preflight.",
         }
     if item["template_key"] == ml_research.TEMPLATE_KEY:
         raise ValueError("ML_SIGNAL_EXPORT_NOT_IMPLEMENTED")

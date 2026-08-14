@@ -79,12 +79,19 @@ def _shared_scope_payload(request: BacktestRequest) -> dict[str, Any]:
         source = research_runs.get_run(request.sourceResearchRunId)
         if source["status"] != "success":
             raise ValueError("Only a successful research run can seed a backtest.")
-        source_scope_hash = data_gateway.scope_hash(source["scope"])
-        if source_scope_hash != resolved["scopeHash"]:
-            raise ValueError("The submitted dataScope does not match the source research run.")
-        source_fingerprint = source.get("data_fingerprint")
-        if source_fingerprint and source_fingerprint != resolved["dataFingerprint"]:
-            raise ValueError("Research data has changed since the source run; rerun research before backtesting.")
+        if source["template_key"] == research_runs.QLIB_TEMPLATE_KEY:
+            qlib_draft = research_runs.backtest_draft(request.sourceResearchRunId)
+            qlib_bindings = dict(qlib_draft["requiredBindings"])
+        else:
+            qlib_bindings = {}
+            source_scope_hash = data_gateway.scope_hash(source["scope"])
+            if source_scope_hash != resolved["scopeHash"]:
+                raise ValueError("The submitted dataScope does not match the source research run.")
+            source_fingerprint = source.get("data_fingerprint")
+            if source_fingerprint and source_fingerprint != resolved["dataFingerprint"]:
+                raise ValueError("Research data has changed since the source run; rerun research before backtesting.")
+    else:
+        qlib_bindings = {}
     scope = resolved["scope"]
     asset = scope["asset"]
     time = scope["time"]
@@ -104,6 +111,7 @@ def _shared_scope_payload(request: BacktestRequest) -> dict[str, Any]:
     )
     payload["parameters"] = {
         **payload.get("parameters", {}),
+        **qlib_bindings,
         "source": resolved["source"],
         "adjust": scope["price"]["adjust"],
         "allowResearchSource": scope["provider"]["allowResearchSource"],
