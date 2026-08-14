@@ -3,6 +3,8 @@
 本文档记录用户可见行为、架构、数据和运维变更。自 2026-07-21 起，每次提交必须在 `Unreleased` 中增加一条简明记录；提交自身的 hash 不写入同一提交，Git 历史是 hash 的权威记录。
 
 ## Unreleased
+- Retire new platform-owned cross-sectional ML runs at the service/API boundary while preserving historical reads, and add profile-aware Qlib research DataRelease inputs including PIT industry classification.
+
 - Continue P4–P7 Research/Execution convergence: freeze new platform ML research jobs, bind Qlib TargetPortfolio artifacts into LEAN backtests, require matching DataRelease/target hashes and execution validation before `LEAN_VALIDATED`, and require that evidence before Paper deployment; retain P8 broker writes and P9 live activation as fail-closed unavailable states.
 
 - Begin P3 execution-domain migration by moving the loopback-only, GET-only MiniQMT query gateway into `platform`; expose raw account/position/order/fill/quote observations without SQLite, PnL, risk, ledger or broker-write behavior, and add focused gateway boundary tests and operating documentation.

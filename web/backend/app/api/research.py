@@ -26,7 +26,11 @@ from ..services import ml_research, qlib_promotion, research_analysis, research_
 from ..services import research_snapshots
 from ..services.projects import get_project
 from ..services.tasks import create_task, task_logs
-from ..tasks.worker import run_ml_research_task, run_research_analysis_task, start_research_task
+from ..tasks.worker import (
+    run_ml_research_task,
+    run_research_analysis_task,
+    start_research_task,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -34,15 +38,27 @@ router = APIRouter(prefix="/api/research", tags=["research"])
 def _dispatch_async_run(run: dict[str, Any]) -> dict[str, Any]:
     template_key = str(run.get("template_key") or "")
     if template_key == ml_research.TEMPLATE_KEY:
-        task = create_task("ml_research", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+        task = create_task(
+            "ml_research",
+            run["name"],
+            {"researchRunId": run["id"]},
+            related_id=run["id"],
+        )
         signature = run_ml_research_task.s(task["id"], run["id"])
     elif research_analysis.is_async_template(template_key):
-        task = create_task("research_analysis", run["name"], {"researchRunId": run["id"]}, related_id=run["id"])
+        task = create_task(
+            "research_analysis",
+            run["name"],
+            {"researchRunId": run["id"]},
+            related_id=run["id"],
+        )
         signature = run_research_analysis_task.s(task["id"], run["id"])
     else:
         return run
     with db() as connection:
-        connection.execute("update research_runs set task_id=? where id=?", (task["id"], run["id"]))
+        connection.execute(
+            "update research_runs set task_id=? where id=?", (task["id"], run["id"])
+        )
     dispatch_task(signature, task["id"])
     return research_runs.get_run(run["id"])
 
@@ -115,7 +131,9 @@ def templates():
 @router.post("/runs/preview")
 def preview_run(request: ResearchRunRequest):
     try:
-        return research_runs.preview(request.template, request.scope, request.parameters)
+        return research_runs.preview(
+            request.template, request.scope, request.parameters
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -159,7 +177,9 @@ def import_qlib_run(request: QlibImportRequest, response: Response):
 @router.post("/runs/{run_id}/lean-validation")
 def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest):
     try:
-        return qlib_promotion.record_lean_validation(run_id, lean_backtest_run_id=request.leanBacktestRunId)
+        return qlib_promotion.record_lean_validation(
+            run_id, lean_backtest_run_id=request.leanBacktestRunId
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -198,6 +218,8 @@ def retry_run(run_id: str):
         return _dispatch_async_run(run)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/backtest-draft")
@@ -230,7 +252,9 @@ def export_run(run_id: str):
     return Response(
         output.getvalue(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="research-{run_id}.csv"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="research-{run_id}.csv"'
+        },
     )
 
 
@@ -256,11 +280,17 @@ def _workspace_path(workspace_id: str, project: dict[str, Any]) -> Path:
 
 def _workspace_detail(workspace_id: str) -> dict[str, Any]:
     with db() as connection:
-        row = connection.execute("select * from research_workspaces where id=?", (workspace_id,)).fetchone()
+        row = connection.execute(
+            "select * from research_workspaces where id=?", (workspace_id,)
+        ).fetchone()
     item = row_to_dict(row)
     if item is None:
         raise HTTPException(status_code=404, detail="Notebook workspace not found.")
-    if item.get("container_id") and item.get("status") in {"running", "starting", "success"}:
+    if item.get("container_id") and item.get("status") in {
+        "running",
+        "starting",
+        "success",
+    }:
         state = container_state(str(item["container_id"]))
         if state.get("running"):
             item["status"], item["readiness_status"] = "running", "ready"
@@ -274,7 +304,13 @@ def _workspace_detail(workspace_id: str) -> dict[str, Any]:
                 update research_workspaces set status=?, readiness_status=?,
                     container_status=?, last_checked_at=? where id=?
                 """,
-                (item["status"], item.get("readiness_status"), item.get("container_status"), item["last_checked_at"], workspace_id),
+                (
+                    item["status"],
+                    item.get("readiness_status"),
+                    item.get("container_status"),
+                    item["last_checked_at"],
+                    workspace_id,
+                ),
             )
     return item
 
@@ -282,7 +318,9 @@ def _workspace_detail(workspace_id: str) -> dict[str, Any]:
 @router.get("/workspaces")
 def list_workspaces(limit: int = 100, offset: int = 0, paged: bool = True):
     with db() as connection:
-        rows = connection.execute("select * from research_workspaces order by created_at desc").fetchall()
+        rows = connection.execute(
+            "select * from research_workspaces order by created_at desc"
+        ).fetchall()
     return paged_items(rows_to_dicts(rows), limit=limit, offset=offset, paged=paged)
 
 
@@ -303,15 +341,25 @@ def create_workspace(request: WorkspaceRequest):
     try:
         project = get_project(request.projectId)
         snapshot_id = request.snapshotId.strip().lower()
-        if len(snapshot_id) != 64 or any(character not in "0123456789abcdef" for character in snapshot_id):
+        if len(snapshot_id) != 64 or any(
+            character not in "0123456789abcdef" for character in snapshot_id
+        ):
             raise ValueError("Research snapshot ID is invalid.")
         if not (RESEARCH_DIR / "snapshots" / snapshot_id / "manifest.json").is_file():
             raise ValueError("Research snapshot not found.")
         workspace_id = str(uuid.uuid4())
         port = find_available_port(request.port)
         workspace = _workspace_path(workspace_id, project)
-        (workspace / ".lean-research-snapshot-id").write_text(snapshot_id, encoding="utf-8")
-        task = create_task("research", "Start Notebook Workspace", {"port": port}, request.projectId, workspace_id)
+        (workspace / ".lean-research-snapshot-id").write_text(
+            snapshot_id, encoding="utf-8"
+        )
+        task = create_task(
+            "research",
+            "Start Notebook Workspace",
+            {"port": port},
+            request.projectId,
+            workspace_id,
+        )
         with db() as connection:
             connection.execute(
                 """
@@ -320,7 +368,17 @@ def create_workspace(request: WorkspaceRequest):
                      readiness_status, container_status, workspace_path, project_name, snapshot_id)
                 values (?, ?, ?, 'queued', ?, ?, ?, 'pending', 'not_created', ?, ?, ?)
                 """,
-                (workspace_id, task["id"], request.projectId, port, task["log_path"], utc_now(), str(workspace), project.get("display_name") or project.get("name"), snapshot_id),
+                (
+                    workspace_id,
+                    task["id"],
+                    request.projectId,
+                    port,
+                    task["log_path"],
+                    utc_now(),
+                    str(workspace),
+                    project.get("display_name") or project.get("name"),
+                    snapshot_id,
+                ),
             )
         dispatch_task(start_research_task.s(task["id"], workspace_id), task["id"])
         return _workspace_detail(workspace_id)
@@ -338,7 +396,10 @@ def workspace_logs(workspace_id: str):
     item = _workspace_detail(workspace_id)
     worker = task_logs(item["task_id"]) if item.get("task_id") else ""
     docker = container_logs(str(item.get("container_id") or ""))
-    return {"logs": "\n\n".join(part for part in (worker, docker) if part), "workspaceId": workspace_id}
+    return {
+        "logs": "\n\n".join(part for part in (worker, docker) if part),
+        "workspaceId": workspace_id,
+    }
 
 
 @router.post("/workspaces/{workspace_id}/stop")
@@ -364,9 +425,17 @@ def stop_workspace(workspace_id: str):
 def restart_workspace(workspace_id: str):
     item = _workspace_detail(workspace_id)
     if item.get("status") in {"queued", "starting", "running"}:
-        raise HTTPException(status_code=400, detail="Stop the active workspace before restarting it.")
+        raise HTTPException(
+            status_code=400, detail="Stop the active workspace before restarting it."
+        )
     port = find_available_port(int(item["port"]))
-    task = create_task("research", "Restart Notebook Workspace", {"port": port}, item["project_id"], workspace_id)
+    task = create_task(
+        "research",
+        "Restart Notebook Workspace",
+        {"port": port},
+        item["project_id"],
+        workspace_id,
+    )
     with db() as connection:
         connection.execute(
             """
@@ -387,7 +456,9 @@ def delete_workspace(workspace_id: str, purgeWorkspace: bool = False):
         stop_workspace(workspace_id)
     root = RESEARCH_DIR / workspace_id
     with db() as connection:
-        connection.execute("delete from research_workspaces where id=?", (workspace_id,))
+        connection.execute(
+            "delete from research_workspaces where id=?", (workspace_id,)
+        )
     if purgeWorkspace and root.exists():
         shutil.rmtree(root, ignore_errors=True)
     return {"deleted": True, "id": workspace_id, "workspacePurged": purgeWorkspace}

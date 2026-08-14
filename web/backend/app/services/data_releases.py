@@ -12,7 +12,7 @@ from ..db import db, json_dump, row_to_dict, utc_now
 
 
 SCHEMA_VERSION = "2.0"
-REQUIRED_RESEARCH_COMPONENTS = frozenset(
+CORE_RESEARCH_COMPONENTS = frozenset(
     {
         "bars",
         "daily_basic",
@@ -28,10 +28,25 @@ REQUIRED_RESEARCH_COMPONENTS = frozenset(
         "benchmark",
     }
 )
+REQUIRED_RESEARCH_COMPONENTS = CORE_RESEARCH_COMPONENTS
+QLIB_RESEARCH_PROFILE = "ashare_qlib_research_v1"
+DATA_RELEASE_PROFILES = {
+    "cn-equity-daily-research-v2": CORE_RESEARCH_COMPONENTS,
+    QLIB_RESEARCH_PROFILE: CORE_RESEARCH_COMPONENTS
+    | {"qlib_staging", "industry_classification_pit"},
+}
+
+
+def required_components_for_profile(profile: str) -> frozenset[str]:
+    if profile not in DATA_RELEASE_PROFILES:
+        raise ValueError(f"Unknown DataRelease profile: {profile}")
+    return frozenset(DATA_RELEASE_PROFILES[profile])
 
 
 def _canonical_bytes(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
 
 
 def _sha256_file(path: Path) -> str:
@@ -65,14 +80,22 @@ def _coverage(value: object, *, name: str) -> dict[str, str]:
     return {"start": start, "end": end}
 
 
-def _prepare_components(spec: Mapping[str, Any], root: Path) -> list[dict[str, Any]]:
+def _prepare_components(
+    spec: Mapping[str, Any],
+    root: Path,
+    required_components: frozenset[str],
+) -> list[dict[str, Any]]:
     raw_components = spec.get("components")
     if not isinstance(raw_components, list):
         raise ValueError("DataRelease components must be a list")
-    roles = [str(item.get("role") or "") for item in raw_components if isinstance(item, Mapping)]
+    roles = [
+        str(item.get("role") or "")
+        for item in raw_components
+        if isinstance(item, Mapping)
+    ]
     if len(roles) != len(set(roles)):
         raise ValueError("DataRelease component roles must be unique")
-    missing = sorted(REQUIRED_RESEARCH_COMPONENTS - set(roles))
+    missing = sorted(required_components - set(roles))
     if missing:
         raise ValueError(f"DataRelease is missing required components: {missing}")
 
@@ -85,7 +108,9 @@ def _prepare_components(spec: Mapping[str, Any], root: Path) -> list[dict[str, A
         dataset_key = str(raw.get("datasetKey") or "")
         schema_version = str(raw.get("schemaVersion") or "")
         if not role or not release_id or not dataset_key or not schema_version:
-            raise ValueError(f"DataRelease component identity is incomplete: {role or '<unknown>'}")
+            raise ValueError(
+                f"DataRelease component identity is incomplete: {role or '<unknown>'}"
+            )
         coverage = _coverage(raw.get("coverage"), name=role)
         raw_files = raw.get("files")
         if not isinstance(raw_files, list) or not raw_files:
@@ -98,7 +123,9 @@ def _prepare_components(spec: Mapping[str, Any], root: Path) -> list[dict[str, A
             digest = _sha256_file(source)
             expected = str(raw_file.get("sha256") or "").lower()
             if expected and expected != digest:
-                raise ValueError(f"DataRelease source checksum mismatch: {raw_file.get('path')}")
+                raise ValueError(
+                    f"DataRelease source checksum mismatch: {raw_file.get('path')}"
+                )
             suffix = source.suffix.lower() or ".bin"
             # Keep frozen paths short enough for Windows checkout and pytest roots.
             # The full digest remains authoritative in the manifest/checksums file.
@@ -112,7 +139,10 @@ def _prepare_components(spec: Mapping[str, Any], root: Path) -> list[dict[str, A
                     "rowCount": int(raw_file.get("rowCount") or 0),
                 }
             )
-        identity_files = [{key: value for key, value in item.items() if key != "sourcePath"} for item in files]
+        identity_files = [
+            {key: value for key, value in item.items() if key != "sourcePath"}
+            for item in files
+        ]
         identity = {
             "role": role,
             "componentReleaseId": release_id,
@@ -124,7 +154,9 @@ def _prepare_components(spec: Mapping[str, Any], root: Path) -> list[dict[str, A
         components.append(
             {
                 **identity,
-                "componentSha256": hashlib.sha256(_canonical_bytes(identity)).hexdigest(),
+                "componentSha256": hashlib.sha256(
+                    _canonical_bytes(identity)
+                ).hexdigest(),
                 "_files": files,
             }
         )
@@ -144,21 +176,30 @@ def _verify_frozen(release_root: Path, manifest: Mapping[str, Any]) -> None:
             try:
                 frozen.relative_to(resolved_root)
             except ValueError as exc:
-                raise ValueError("DataRelease manifest path escapes its release root") from exc
+                raise ValueError(
+                    "DataRelease manifest path escapes its release root"
+                ) from exc
             if frozen.is_symlink() or not frozen.is_file():
-                raise ValueError(f"Frozen DataRelease file is missing or linked: {item.get('path')}")
+                raise ValueError(
+                    f"Frozen DataRelease file is missing or linked: {item.get('path')}"
+                )
             if _sha256_file(frozen) != str(item.get("sha256") or ""):
-                raise ValueError(f"Frozen DataRelease checksum mismatch: {item.get('path')}")
-
+                raise ValueError(
+                    f"Frozen DataRelease checksum mismatch: {item.get('path')}"
+                )
 
 
 def _persist(manifest: Mapping[str, Any], manifest_path: Path, *, root: Path) -> None:
     release_id = str(manifest["dataReleaseId"])
     with db() as connection:
-        existing = connection.execute("select * from data_releases where id=?", (release_id,)).fetchone()
+        existing = connection.execute(
+            "select * from data_releases where id=?", (release_id,)
+        ).fetchone()
         if existing:
             if str(existing["manifest_sha256"]) != str(manifest["manifestSha256"]):
-                raise ValueError("DataRelease ID already exists with a different manifest")
+                raise ValueError(
+                    "DataRelease ID already exists with a different manifest"
+                )
             return
         coverage = manifest["coverage"]
         connection.execute(
@@ -213,8 +254,9 @@ def publish_data_release(
     root = Path(data_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     coverage = _coverage(spec.get("coverage"), name="release")
+    profile = str(spec.get("profile") or "")
     required = {
-        "profile": str(spec.get("profile") or ""),
+        "profile": profile,
         "assetClass": str(spec.get("assetClass") or ""),
         "market": str(spec.get("market") or ""),
         "universe": str(spec.get("universe") or ""),
@@ -222,14 +264,20 @@ def publish_data_release(
         "asOfTime": str(spec.get("asOfTime") or ""),
     }
     if any(not value for value in required.values()):
-        raise ValueError("DataRelease profile, scope, benchmark and asOfTime are required")
-    components = _prepare_components(spec, root)
-    public_components = [{key: value for key, value in item.items() if key != "_files"} for item in components]
+        raise ValueError(
+            "DataRelease profile, scope, benchmark and asOfTime are required"
+        )
+    required_components = required_components_for_profile(profile)
+    components = _prepare_components(spec, root, required_components)
+    public_components = [
+        {key: value for key, value in item.items() if key != "_files"}
+        for item in components
+    ]
     identity = {
         "schemaVersion": SCHEMA_VERSION,
         **required,
         "coverage": coverage,
-        "requiredComponents": sorted(REQUIRED_RESEARCH_COMPONENTS),
+        "requiredComponents": sorted(required_components),
         "components": public_components,
         "policies": dict(spec.get("policies") or {}),
         "lineage": dict(spec.get("lineage") or {}),
@@ -254,14 +302,18 @@ def publish_data_release(
                 destination = staging / item["path"]
                 _copy_frozen(Path(item["sourcePath"]), destination)
                 if _sha256_file(destination) != item["sha256"]:
-                    raise ValueError(f"Frozen DataRelease checksum mismatch: {item['path']}")
+                    raise ValueError(
+                        f"Frozen DataRelease checksum mismatch: {item['path']}"
+                    )
         manifest: dict[str, Any] = {
             **identity,
             "dataReleaseId": release_id,
             "identitySha256": identity_sha,
             "publishedAt": utc_now(),
         }
-        manifest["manifestSha256"] = hashlib.sha256(_canonical_bytes(manifest)).hexdigest()
+        manifest["manifestSha256"] = hashlib.sha256(
+            _canonical_bytes(manifest)
+        ).hexdigest()
         checksums = {
             "schemaVersion": SCHEMA_VERSION,
             "dataReleaseId": release_id,
@@ -274,13 +326,18 @@ def publish_data_release(
         }
         staging.mkdir(parents=True, exist_ok=True)
         (staging / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
         )
         (staging / "checksums.json").write_text(
-            json.dumps(checksums, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            json.dumps(checksums, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
         )
         (staging / "lineage.json").write_text(
-            json.dumps(manifest["lineage"], ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            json.dumps(
+                manifest["lineage"], ensure_ascii=False, sort_keys=True, indent=2
+            ),
+            encoding="utf-8",
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging, target)
@@ -294,5 +351,7 @@ def publish_data_release(
 
 def get_data_release(release_id: str) -> dict[str, Any] | None:
     with db() as connection:
-        row = connection.execute("select * from data_releases where id=?", (release_id,)).fetchone()
+        row = connection.execute(
+            "select * from data_releases where id=?", (release_id,)
+        ).fetchone()
     return row_to_dict(row)
