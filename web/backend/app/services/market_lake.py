@@ -834,7 +834,7 @@ def _write_native_partition(
     revision_key: str,
     manifest_extra: dict[str, Any] | None = None,
 ) -> tuple[Any, int]:
-    """Merge one date partition, archiving the prior data and manifest."""
+    """Merge one date partition, archiving only a genuinely changed prior version."""
     target.parent.mkdir(parents=True, exist_ok=True)
     existing = pl.read_parquet(target).to_dicts() if target.is_file() else []
     by_symbol = {str(row.get("ts_code") or "").upper(): row for row in existing}
@@ -844,6 +844,12 @@ def _write_native_partition(
         before = dict(by_symbol.get(key) or {})
         by_symbol.setdefault(key, {}).update(patch)
         changed += int(before != by_symbol[key])
+    # TuShare market-wide incremental endpoints may be replayed after a
+    # restarted worker. Do not rewrite an identical published partition: doing
+    # so would create a misleading revision even though no provider correction
+    # occurred.
+    if target.is_file() and changed == 0:
+        return pl.read_parquet(target), 0
     frame = pl.DataFrame(list(by_symbol.values()), infer_schema_length=None)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
