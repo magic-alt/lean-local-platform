@@ -24,7 +24,7 @@ Start the full local app stack:
 
 ```bash
 docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-demand-worker backtest-worker beat
+  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 Run backend tests with `cd web/backend && .venv/bin/python -m pytest -q`. Run the LEAN Docker integration test only when Docker is available: `RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_lean_integration.py`. Build the frontend with `cd web/frontend && npm run build`.
@@ -46,3 +46,4 @@ Every commit must update the `Unreleased` section of `CHANGELOG.md`. Enable the 
 ## Security & Configuration Tips
 
 Do not commit `.env`, provider tokens, MySQL credentials, or downloaded market data. Runtime metadata uses MySQL; DuckDB is only for querying derived Parquet exports. Do not reintroduce SQLite as a runtime default.
+

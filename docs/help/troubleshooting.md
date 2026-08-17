@@ -36,7 +36,7 @@ web/backend/.venv/bin/python scripts/run_paper_accounts_acceptance.py \
 
 ```bash
 docker compose ps
-docker compose logs --tail=200 mysql redis api worker data-worker backtest-worker beat
+docker compose logs --tail=200 mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 curl http://127.0.0.1:8000/api/health/dependencies
 web/backend/.venv/bin/python scripts/db_migrate.py --status
 ```
@@ -141,3 +141,4 @@ web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
 - Experiment batch 根据子任务状态协调，成功项不会重复运行。
 - 报告和运行对象优先从对象归档恢复。
 - 同一阻塞条件反复出现时先保留日志、状态和 migration 信息，再做变更。
+

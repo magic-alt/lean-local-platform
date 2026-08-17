@@ -34,7 +34,7 @@ cp .env.example .env
 
 ```bash
 docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-demand-worker backtest-worker beat
+  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 ## 3. 检查服务
@@ -125,3 +125,4 @@ Dashboard 的 `Manage Local History` 只负责导航到各类历史，不再直�
 - 删除 Project 是级联操作，必须输入项目名，并会明确列出关联范围。
 - 删除 Generated Report 不删除源 Backtest；Backtest 自带报告随 Backtest 管理。
 - 全局维护 API 仍保留给运维，但真实删除需要精确输入 `DELETE ALL LOCAL HISTORY`，页面不会调用这一危险路径。
+

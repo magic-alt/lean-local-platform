@@ -92,7 +92,7 @@ MySQL 仍是平台控制平面的强依赖，配置、连接池、备份和恢�
 FastAPI 不执行长训练、长回测或大规模下载。使用独立 worker 队列：
 
 ```text
-api -> Redis/Celery -> data-worker / data-demand-worker / backtest-worker / ml-worker
+api -> Redis/Celery -> data-worker / data-lineage-worker / data-demand-worker / backtest-worker / ml-worker
 ```
 
 调整并发前先观察 Provider 等待、Parquet 写入、CPU、内存、Docker I/O 和 `data/` 磁盘增长。数据分区写入是原子操作，但同一分区仍应由队列/锁避免并发发布。
@@ -122,3 +122,4 @@ Docker volumes            Redis/ClickHouse/Grafana 等需要保留的服务状�
 - 浏览器不能直接访问 Broker、MySQL 或数据目录。
 - 研究环境不持有实盘权限。
 - Compose 端口默认只绑定回环地址；生产环境使用 secrets 和最小权限账号。
+

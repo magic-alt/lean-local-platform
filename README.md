@@ -186,3 +186,4 @@ web/backend/.venv/bin/python scripts/generate_help_api_reference.py --check
 ```
 
 提交规范、验证命令和运行产物规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+

@@ -35,13 +35,13 @@ Compose startup with the complete application worker split:
 
 ```bash
 cd /Users/kaermax/lean-platform
-docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
+docker compose --profile app up -d --build mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 If a host port is already in use:
 
 ```bash
-LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker data-worker data-demand-worker backtest-worker beat
+LEAN_REDIS_PORT=6380 LEAN_API_PORT=8002 docker compose --profile app up -d --build mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 Useful environment variables:
@@ -76,3 +76,5 @@ curl -X POST http://127.0.0.1:8000/api/data/parquet/consistency \
 ```
 
 Backtest and Paper A-share defaults share `app/services/trading_config.py`, including fees, slippage, calendar, benchmark, max positions, max weight, cash floor, blacklist, and watchlist settings.
+
+
