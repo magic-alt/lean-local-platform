@@ -83,6 +83,8 @@ def test_default_mysql_datasets_are_included_and_on_demand_markets_are_excluded(
     assert "hk_daily" not in {item["dataset_key"] for item in run["items"]}
     assert "us_daily" not in {item["dataset_key"] for item in run["items"]}
     assert "daily_basic" in {item["dataset_key"] for item in run["items"]}
+    assert "moneyflow" in {item["dataset_key"] for item in run["items"]}
+    assert "stock_st" in {item["dataset_key"] for item in run["items"]}
     assert "dividend" in {item["dataset_key"] for item in run["items"]}
     assert "fut_basic" in {item["dataset_key"] for item in run["items"]}
     assert "opt_basic" in {item["dataset_key"] for item in run["items"]}
@@ -1748,6 +1750,19 @@ def test_bronze_frontier_is_used_when_control_plane_watermark_is_stale(tmp_path,
     adapter = Adapter()
     assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (1, 2, 0, 0)
     assert adapter.calls == ["2026-07-17"]
+
+
+def test_bronze_frontier_is_not_skipped_when_control_plane_is_ahead(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync, market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    published = tmp_path / "bronze" / "tushare" / "current" / "stk_limit" / "trade_date=20260812"
+    published.mkdir(parents=True)
+    (published / "data.parquet").touch()
+    (published / "manifest.json").write_text('{"status":"success"}', encoding="utf-8")
+
+    assert data_sync._incremental_start_after("stk_limit", "2026-08-17") == "2026-08-12"
 
 
 def test_adj_factor_date_sync_advances_market_watermarks(tmp_path, monkeypatch):

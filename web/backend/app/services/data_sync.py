@@ -112,8 +112,10 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("daily", "daily", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="daily", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("adj_factor", "adj_factor", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="adj_factor", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("daily_basic", "daily_basic", "A股/行情", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="daily_basic", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
+    DatasetSpec("moneyflow", "moneyflow", "A股/行情", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="market_raw", initial_fetch="by_trade_date", incremental_fetch="by_trade_date"),
     DatasetSpec("suspend_d", "suspend_d", "A股/交易状态", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "suspend_date", "suspend_timing"), date_field="suspend_date", normalizer="suspend_d", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("stk_limit", "stk_limit", "A股/交易状态", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="stk_limit", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
+    DatasetSpec("stock_st", "stock_st", "A股/交易状态", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="market_raw", initial_fetch="by_trade_date", incremental_fetch="by_trade_date"),
     DatasetSpec("dividend", "dividend", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH"}, ("ts_code", "end_date", "ann_date", "div_proc"), "ann_date", normalizer="dividend"),
     DatasetSpec("income", "income", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date", "report_type"), "ann_date", normalizer="financial"),
     DatasetSpec("balancesheet", "balancesheet", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date", "report_type"), "ann_date", normalizer="financial"),
@@ -169,8 +171,10 @@ BULK_DATASET_KEYS = {
     "daily",
     "adj_factor",
     "daily_basic",
+    "moneyflow",
     "suspend_d",
     "stk_limit",
+    "stock_st",
     "dividend",
     "index_basic",
     "index_daily",
@@ -351,7 +355,7 @@ def _database_catalog_payload() -> dict[str, Any]:
             return "etf"
         if dataset_key.startswith("index_"):
             return "index"
-        if dataset_key in {"stock_basic", "namechange", "daily", "adj_factor", "daily_basic", "suspend_d", "stk_limit"}:
+        if dataset_key in {"stock_basic", "namechange", "daily", "adj_factor", "daily_basic", "moneyflow", "suspend_d", "stk_limit", "stock_st"}:
             return "equity"
         return None
 
@@ -2043,10 +2047,77 @@ def _latest_published_bronze_date(dataset_key: str) -> str | None:
     return latest
 
 
+_MARKET_RAW_BRONZE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "moneyflow": (
+        "ts_code", "trade_date", "buy_lg_vol", "buy_lg_amount", "sell_lg_vol", "sell_lg_amount",
+        "buy_elg_vol", "buy_elg_amount", "sell_elg_vol", "sell_elg_amount", "net_mf_vol", "net_mf_amount",
+    ),
+    "stock_st": ("ts_code", "name", "trade_date", "type", "type_name"),
+    "stk_limit": ("ts_code", "trade_date", "pre_close", "up_limit", "down_limit"),
+    "suspend_d": ("ts_code", "trade_date", "suspend_timing", "suspend_type"),
+}
+
+
+def _tushare_code(symbol: str) -> str:
+    suffix = ".SH" if symbol.startswith(("5", "6", "9")) else ".BJ" if symbol.startswith(("4", "8")) else ".SZ"
+    return f"{symbol}{suffix}"
+
+
+def _provider_bronze_rows(spec: DatasetSpec, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover the documented provider shape for normalized status endpoints."""
+    if spec.key == "stk_limit":
+        return [
+            {
+                "ts_code": _tushare_code(str(row["symbol"])),
+                "trade_date": str(row["trade_date"]).replace("-", ""),
+                "pre_close": row.get("prev_close"),
+                "up_limit": row.get("limit_up"),
+                "down_limit": row.get("limit_down"),
+            }
+            for row in rows
+            if row.get("symbol") and row.get("trade_date")
+        ]
+    if spec.key == "suspend_d":
+        return [
+            {
+                "ts_code": _tushare_code(str(row["symbol"])),
+                "trade_date": str(row["suspend_date"]).replace("-", ""),
+                "suspend_timing": row.get("suspend_timing"),
+                "suspend_type": row.get("reason_type") or "S",
+            }
+            for row in rows
+            if row.get("symbol") and row.get("suspend_date")
+        ]
+    return rows
+
+
+def _publish_provider_bronze(
+    spec: DatasetSpec,
+    trade_date: str,
+    rows: list[dict[str, Any]],
+    *,
+    run_id: str,
+) -> None:
+    columns = _MARKET_RAW_BRONZE_COLUMNS.get(spec.key)
+    if not columns:
+        return
+    market_lake.write_tushare_bronze_partition(
+        spec.key,
+        trade_date,
+        _provider_bronze_rows(spec, rows),
+        columns=columns,
+        metadata={
+            "api": spec.api_name,
+            "ingest_run_id": run_id,
+            "params": {"trade_date": trade_date.replace("-", "")},
+        },
+    )
+
+
 def _incremental_start_after(dataset_key: str, persisted_start_after: str | None) -> str | None:
-    """Use the later of the durable Bronze frontier and control-plane watermark."""
+    """Prefer the durable Bronze frontier; use DB metadata only before it exists."""
     published_start_after = _latest_published_bronze_date(dataset_key)
-    return max((value for value in (persisted_start_after, published_start_after) if value), default=None)
+    return published_start_after or persisted_start_after
 
 
 def _latest_bar(symbol: str) -> str | None:
@@ -3868,6 +3939,15 @@ def _sync_instrument_dataset_fast(
         processed = sum(1 for entry in work if statuses.get(str(entry["work_key"])) == "committed")
         session_processed_base = processed
     if not pending_work:
+        if date_mode:
+            published_end = _latest_published_bronze_date(spec.key)
+            if published_end:
+                _advance_sparse_market_watermarks(
+                    spec,
+                    securities,
+                    coverage_end=min(published_end, end_date),
+                    run_id=run_id,
+                )
         _item(
             run_id,
             spec.key,
@@ -3969,6 +4049,8 @@ def _sync_instrument_dataset_fast(
             validation = _validate_dataset_rows(spec, raw_rows)
             validated += len(raw_rows)
             empty_units += int(not rows)
+            if date_mode and spec.key in _MARKET_RAW_BRONZE_COLUMNS:
+                _publish_provider_bronze(spec, str(entry["work_key"]), rows, run_id=run_id)
             all_rows.extend(rows)
             all_raw_rows.extend(raw_rows)
             work_key = str(entry["work_key"])
@@ -4317,6 +4399,103 @@ def _sync_suspend_by_trade_date(
     return processed, inserted, updated, failed
 
 
+def _sync_market_raw_by_trade_date(
+    adapter: TushareAdapter,
+    spec: DatasetSpec,
+    run_id: str,
+    batch_id: str,
+    end_date: str,
+    task_id: str | None,
+) -> tuple[int, int, int, int]:
+    """Increment a provider-shaped market-wide endpoint directly into Bronze."""
+    start_after = _incremental_start_after(spec.key, _latest_raw_date(spec))
+    if not start_after:
+        raise RuntimeError(f"{spec.key} has no published Bronze frontier; initial backfill must be explicit.")
+    with db() as connection:
+        date_rows = connection.execute(
+            """
+            select trade_date from trade_calendar
+            where market='china' and is_open=1 and trade_date>? and trade_date<=?
+            order by trade_date
+            """,
+            (start_after, end_date),
+        ).fetchall()
+    work = [str(row["trade_date"]) for row in date_rows]
+    _ensure_work_items(run_id, spec.key, [(trade_date, sequence) for sequence, trade_date in enumerate(work, start=1)])
+    statuses = _work_status(run_id, spec.key)
+    pending = [trade_date for trade_date in work if statuses.get(trade_date) != "committed"]
+    processed = sum(statuses.get(trade_date) == "committed" for trade_date in work)
+    state = _item_state(run_id, spec.key)
+    inserted = int(state.get("inserted") or 0)
+    updated = int(state.get("updated") or 0)
+    failed = int(state.get("failed") or 0)
+    started = time.monotonic()
+    api_before = _api_snapshot(adapter)
+    downloaded = committed = 0
+    for trade_date in pending:
+        if _cancelled(run_id, task_id):
+            break
+        try:
+            rows = _call_with_retry(lambda: adapter.market_raw_rows_for_date(spec.key, trade_date))
+            raw_rows = [{column: row.get(column) for column in _MARKET_RAW_BRONZE_COLUMNS[spec.key]} for row in rows]
+            validation = _validate_dataset_rows(spec, raw_rows)
+            _publish_provider_bronze(spec, trade_date, raw_rows, run_id=run_id)
+            add, change = _save_raw(spec, raw_rows, batch_id, assume_new=False)
+            endpoint_calls = _api_delta(api_before, _api_snapshot(adapter))
+            _record_ingestion_manifest(
+                run_id=run_id,
+                spec=spec,
+                scope_key=f"trade_date:{trade_date}",
+                request={"tradeDate": trade_date},
+                rows=raw_rows,
+                validation=validation,
+                endpoint_counts=endpoint_calls,
+                coverage_start=trade_date,
+                coverage_end=trade_date,
+            )
+            _set_coverage_watermark(
+                spec,
+                scope_key="global",
+                coverage_start=trade_date,
+                coverage_end=trade_date,
+                rows=raw_rows,
+                run_id=run_id,
+                validation_status=str(validation["status"]),
+            )
+            _mark_work_items(run_id, spec.key, [trade_date], status="committed")
+            inserted += add
+            updated += change
+            downloaded += len(raw_rows)
+            committed += len(raw_rows)
+            processed += 1
+            _item(
+                run_id,
+                spec.key,
+                processed=processed,
+                inserted=inserted,
+                updated=updated,
+                failed=failed,
+                checkpoint={"index": processed, "total": len(work), "symbol": trade_date},
+                metrics=_throughput_metrics(
+                    started,
+                    phase="load",
+                    api_calls=sum(endpoint_calls.values()),
+                    downloaded=downloaded,
+                    committed=committed,
+                    processed_units=processed,
+                    total_units=len(work),
+                    validated=downloaded,
+                    endpoint_calls=endpoint_calls,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve contiguous Bronze coverage.
+            failed += 1
+            _record_sync_failure(spec, None, trade_date, trade_date, exc)
+            _mark_work_items(run_id, spec.key, [trade_date], status="failed", error=str(exc))
+            break
+    return processed, inserted, updated, failed
+
+
 def _sync_generic(
     adapter: TushareAdapter,
     spec: DatasetSpec,
@@ -4327,6 +4506,8 @@ def _sync_generic(
     full_refresh: bool = False,
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
+    if spec.normalizer == "market_raw":
+        return _sync_market_raw_by_trade_date(adapter, spec, run_id, batch_id, end_date, task_id)
     if spec.normalizer == "adj_factor":
         return _sync_adj_factor_fast(
             adapter,
@@ -4689,7 +4870,8 @@ def _sync_completion_evidence(run_id: str, selected_keys: set[str]) -> dict[str,
             issues.append("dataset_item_not_ready")
         if int(item.get("failed") or 0) > 0:
             issues.append("dataset_item_failed_units")
-        if int(manifest.get("manifest_count") or 0) <= 0:
+        no_new_work = item.get("status") == "success" and int(item.get("processed") or 0) == 0
+        if int(manifest.get("manifest_count") or 0) <= 0 and not no_new_work:
             issues.append("ingestion_manifest_missing")
         if int(manifest.get("failed_manifests") or 0) > 0 or int(manifest.get("rejected_rows") or 0) > 0:
             issues.append("ingestion_manifest_failed_or_rejected")

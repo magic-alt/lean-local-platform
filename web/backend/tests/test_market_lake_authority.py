@@ -135,3 +135,31 @@ def test_native_replay_does_not_create_a_revision(tmp_path, monkeypatch):
     revisions = tmp_path / "bronze" / "tushare" / "revisions"
     assert not (revisions / "lean_daily").exists()
     assert not (revisions / "lean_bars").exists()
+
+
+def test_provider_bronze_partition_replay_is_a_noop_and_correction_is_versioned(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    columns = ("ts_code", "trade_date", "net_mf_amount")
+    first = market_lake.write_tushare_bronze_partition(
+        "moneyflow", "2026-08-17",
+        [{"ts_code": "000001.SZ", "trade_date": "20260817", "net_mf_amount": 10.0}],
+        columns=columns,
+    )
+    replay = market_lake.write_tushare_bronze_partition(
+        "moneyflow", "2026-08-17",
+        [{"ts_code": "000001.SZ", "trade_date": "20260817", "net_mf_amount": 10.0}],
+        columns=columns,
+    )
+    corrected = market_lake.write_tushare_bronze_partition(
+        "moneyflow", "2026-08-17",
+        [{"ts_code": "000001.SZ", "trade_date": "20260817", "net_mf_amount": 11.0}],
+        columns=columns,
+    )
+
+    assert first["changed"] is True
+    assert replay["changed"] is False
+    assert corrected["changed"] is True
+    revisions = tmp_path / "bronze" / "tushare" / "revisions" / "moneyflow"
+    assert list(revisions.rglob("data.parquet"))
