@@ -3,6 +3,9 @@
 本文档记录用户可见行为、架构、数据和运维变更。自 2026-07-21 起，每次提交必须在 `Unreleased` 中增加一条简明记录；提交自身的 hash 不写入同一提交，Git 历史是 hash 的权威记录。
 
 ## Unreleased
+
+- Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.
+
 - Retire new platform-owned cross-sectional ML runs at the service/API boundary while preserving historical reads, and add profile-aware Qlib research DataRelease inputs including PIT industry classification.
 
 - Continue P4–P7 Research/Execution convergence: freeze new platform ML research jobs, bind Qlib TargetPortfolio artifacts into LEAN backtests, require matching DataRelease/target hashes and execution validation before `LEAN_VALIDATED`, and require that evidence before Paper deployment; retain P8 broker writes and P9 live activation as fail-closed unavailable states.
@@ -301,3 +304,4 @@
 - 补齐 run fingerprint 字段和失败路径落库。
 - 支持 Paper 多标的和组合约束拒单原因。
 - 增加对应测试覆盖。
+

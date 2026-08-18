@@ -67,7 +67,7 @@ def test_service_refuses_new_and_retried_legacy_ml_jobs():
         )
 
 
-def test_http_api_refuses_preview_create_and_retry_for_legacy_ml():
+def test_http_api_removes_legacy_research_execution_routes():
     init_db()
     client = TestClient(app)
     request = {
@@ -79,18 +79,10 @@ def test_http_api_refuses_preview_create_and_retry_for_legacy_ml():
 
     preview = client.post("/api/research/runs/preview", json=request)
     create = client.post("/api/research/runs", json=request)
-    assert preview.status_code == 400
-    assert create.status_code == 400
-    assert "Legacy platform ML training is retired" in preview.text
-    assert "Legacy platform ML training is retired" in create.text
+    assert preview.status_code == 404
+    assert create.status_code == 404
 
     with db() as connection:
-        assert (
-            connection.execute("select count(*) count from research_runs").fetchone()[
-                "count"
-            ]
-            == 0
-        )
         connection.execute(
             """insert into research_runs
                (id,template_key,name,status,scope_json,parameters_json,cancel_requested,created_at)
@@ -99,8 +91,6 @@ def test_http_api_refuses_preview_create_and_retry_for_legacy_ml():
         )
 
     retry = client.post("/api/research/runs/legacy-api-run/retry")
-    assert retry.status_code == 409
-    assert "Legacy platform ML training is retired" in retry.text
+    assert retry.status_code == 404
     detail = client.get("/api/research/runs/legacy-api-run")
-    assert detail.status_code == 200
-    assert detail.json()["id"] == "legacy-api-run"
+    assert detail.status_code == 404

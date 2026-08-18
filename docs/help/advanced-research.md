@@ -52,7 +52,6 @@ POST /api/insights/ashare-tech/evaluations/refresh
 
 ```text
 POST /api/factors/values
-POST /api/research/runs
 POST /api/data/query
 ```
 
@@ -85,3 +84,4 @@ Level 3+ 路由提供 universe coverage、pipeline run、alert acknowledge/resol
 - 模型输出和因子排名不能绕过服务端风险规则。
 - 所有 Paper handoff 都必须是用户显式操作。
 - 未完成验收的跨资产能力必须在报告中标注限制。
+

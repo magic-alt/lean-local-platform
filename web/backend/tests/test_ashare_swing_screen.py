@@ -12,21 +12,32 @@ def configure(tmp_path, monkeypatch):
     import app.db as db_module
     import app.services.projects as projects_module
     import app.services.research_snapshots as snapshots_module
+    import app.services.market_lake as market_lake
     import app.api.research as research_api
+    import hashlib
 
     db_path = tmp_path / "test.sqlite3"
-    monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setattr(db_module, "DATABASE_URL", "sqlite:///{db_path}".format(db_path=db_path))
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setattr(db_module, "SQLITE_TEST_BACKEND_ENABLED", True)
     monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(db_module, "RESEARCH_DIR", tmp_path / "research")
     monkeypatch.setattr(db_module, "PROJECTS_DIR", tmp_path / "projects")
-    monkeypatch.setattr(projects_module, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", Path(tmp_path.anchor) / "tmp" / "q" / hashlib.md5(str(tmp_path).encode("utf-8")).hexdigest()[:8])
+
+    original_scope = market_lake._scope
+
+    def safe_scope(**kwargs):
+        scope = original_scope(**kwargs)
+        scope["source"] = str(scope.get("source", "")).replace(":", "_")
+        return scope
+
+    monkeypatch.setattr(market_lake, "_scope", safe_scope)
     monkeypatch.setattr(snapshots_module, "RESEARCH_DIR", tmp_path / "research")
-    monkeypatch.setattr(research_api, "RESEARCH_DIR", tmp_path / "research")
+    if hasattr(research_api, "RESEARCH_DIR"):
+        monkeypatch.setattr(research_api, "RESEARCH_DIR", tmp_path / "research")
     db_module.init_db()
     return db_module
-
 
 def orderly_history() -> pd.DataFrame:
     size = 520
@@ -232,15 +243,12 @@ def test_async_screen_run_writes_auditable_artifacts_and_snapshot(tmp_path, monk
     assert snapshot["researchRunId"] == run["id"]
 
 
-def test_research_api_dispatches_swing_screen_asynchronously(tmp_path, monkeypatch):
+def test_research_api_execution_routes_removed_after_contract_convergence(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient
-    from app.api import research as research_api
     from app.main import app
 
-    dispatched = []
-    monkeypatch.setattr(research_api, "dispatch_task", lambda signature, task_id: dispatched.append((signature, task_id)))
-    scope = {
+    payload = {
         "asset": {
             "assetClass": "equity",
             "market": "china",
@@ -256,16 +264,9 @@ def test_research_api_dispatches_swing_screen_asynchronously(tmp_path, monkeypat
 
     response = TestClient(app).post(
         "/api/research/runs",
-        json={"template": "ashare-swing-candidates", "scope": scope, "parameters": {"minHistoryBars": 500}},
+        json={"template": "ashare-swing-candidates", "scope": payload, "parameters": {"minHistoryBars": 500}},
     )
-
-    assert response.status_code == 200
-    run = response.json()
-    assert run["status"] == "queued"
-    assert run["task_id"]
-    assert len(dispatched) == 1
-    assert dispatched[0][1] == run["task_id"]
-
+    assert response.status_code == 404
 
 def test_case_catalog_creates_audit_notebook(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
@@ -397,3 +398,4 @@ def test_screen_backfill_executes_on_demand_and_bounds_provider_history(tmp_path
     basic_result = data_sync.run_sync(basic_run["id"], adapter=adapter)
     assert basic_result["status"] == "success", json.dumps(basic_result, ensure_ascii=False, default=str)
     assert adapter.starts == ["2024-03-23"]
+
