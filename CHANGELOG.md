@@ -6,6 +6,13 @@
 
 - Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.
 
+- Use successfully published TuShare Bronze partitions as incremental cursors, persist market-wide adjustment-factor watermarks, and prevent identical native partition replays from generating misleading revisions.
+
+- Add the `ashare_qlib_research_v2` release profile and deterministic PIT fundamental v2 exporter for Phase 2 alpha research.
+- Refresh the Longbridge Python SDK lock to 4.4.3 after the previously pinned 4.4.1 distribution became unavailable from PyPI, restoring reproducible hashed CI installs.
+
+- Give retired task-alias and legacy paper-session routes explicit HTTP 404 tombstones across framework versions, make the CSI300 research fixture supply independently effective-dated PIT membership, allow isolated acceptance runs to select their runtime and workspace roots explicitly, and retain US market hours when a minimal mounted Data directory supplies LEAN ResultsAnalyzer SPY data.
+
 - Retire new platform-owned cross-sectional ML runs at the service/API boundary while preserving historical reads, and add profile-aware Qlib research DataRelease inputs including PIT industry classification.
 
 - Continue P4–P7 Research/Execution convergence: freeze new platform ML research jobs, bind Qlib TargetPortfolio artifacts into LEAN backtests, require matching DataRelease/target hashes and execution validation before `LEAN_VALIDATED`, and require that evidence before Paper deployment; retain P8 broker writes and P9 live activation as fail-closed unavailable states.
@@ -15,6 +22,15 @@
 - Make GitHub CI hermetic on hosted runners by isolating disk-capacity and provider-availability checks in unit-test fixtures, and disable API trailing-slash redirects so retired mutation routes fail closed instead of being invoked through redirects.
 
 - 2026-08-14 — establish the Research/Execution boundary: add immutable composite DataRelease v2 publication, a governed artifact registry, dual-version Qlib research imports, architecture freeze checks, shared JSON contracts and GitHub CI while retaining legacy dataset releases and v1 clients.
+
+- Remediate the 2026-08-14 full-stack audit P0/P1 findings: make CSV uploads
+  path-safe, preserve known delistings, align raw A-share backtests and price
+  index benchmarks, require authenticated durable Redis and bounded MySQL
+  defaults, add cancellable delegated LEAN runs and crash reconciliation,
+  make run IDs collision-safe, fail closed on missing PIT membership, use
+  next-open A-share template execution, remove task-stored provider secrets,
+  batch and page hot database lists, and expose queue, broker, database and
+  disk metrics while accurately stating the current local DR guarantee.
 
 - Repair local Data Preview and route stability after the Parquet cutover: reconcile missing MySQL control-plane tables plus drifted security-identifier and financial-audit columns without restoring retired quote tables, keep optional SQL enrichment failures from breaking local Preview, replace full-lake preview counts with bounded DuckDB paging and memory/concurrency limits, expose truthful partition coverage, load complete local stock/index charts in one bounded request, and add real-browser regression coverage for Preview plus Data/Backtest/Research navigation.
 

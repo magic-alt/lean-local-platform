@@ -33,6 +33,7 @@ except Exception:  # pragma: no cover
 MANIFEST_NAME = "_active_manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
 KINDS = {"bars", "trade_status", "adjustment_factor", "daily_basic"}
+PARTITION_FILE_NAME = "p.parquet"
 
 BAR_COLUMNS = (
     "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
@@ -73,6 +74,14 @@ def _clean(value: str | None, default: str) -> str:
     return (value or default).strip().lower() or default
 
 
+def _filesystem_segment(value: str) -> str:
+    normalized = (value or "").strip().lower() or "unknown"
+    for char in (":", "/", chr(92), "*", "?", '"', "<", ">", "|"):
+        normalized = normalized.replace(char, "_")
+    if len(normalized) > 10:
+        digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:6]
+        normalized = f"{normalized[:1]}_{digest}"
+    return normalized
 def _scope(
     *,
     kind: str,
@@ -116,7 +125,9 @@ def dataset_key(**scope: str) -> str:
 
 
 def dataset_root(**scope: str) -> Path:
-    return PARQUET_DIR / dataset_key(**scope)
+    safe_scope = dict(scope)
+    safe_scope["source"] = _filesystem_segment(scope["source"])
+    return PARQUET_DIR / dataset_key(**safe_scope)
 
 
 def _native_glob(scope: dict[str, str]) -> str | None:
@@ -304,6 +315,16 @@ def _relative(path: Path) -> str:
         return path.resolve().relative_to(PARQUET_DIR.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def _temp_parquet_path(target: Path) -> Path:
+    """Return a short temporary parquet path to avoid Windows MAX_PATH regressions."""
+    return target.with_name(f"{target.stem}.tmp")
+
+
+def _temp_manifest_path(target: Path) -> Path:
+    """Return a short temporary manifest path to avoid Windows MAX_PATH regressions."""
+    return target.with_name(f"{target.stem}.tmp")
 
 
 def _visible(path: str) -> Path:
@@ -517,18 +538,47 @@ def aggregate(
     return rows[0] if rows else {}
 
 
+def _scope_from_dataset_root(*, prefix: Path, source_dir: Path, kind: str) -> dict[str, str] | None:
+    parts = {}
+    for item in source_dir.relative_to(prefix).parts:
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        parts[key] = value
+    manifest = source_dir / MANIFEST_NAME
+    if manifest.is_file():
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            scope = payload.get("scope")
+            if isinstance(scope, dict):
+                return _scope(
+                    kind=scope.get("kind", kind),
+                    asset_class=str(scope.get("asset_class", "equity")),
+                    market=str(scope.get("market", "china")),
+                    venue=str(scope.get("venue", "china")),
+                    resolution=str(scope.get("resolution", "daily")),
+                    data_type=str(scope.get("data_type", "trade")),
+                    adjust=str(scope.get("adjust", "raw")),
+                    source=str(scope.get("source", "tushare")),
+                )
+        except (OSError, json.JSONDecodeError):
+            pass
+    if "kind" not in parts:
+        parts["kind"] = kind
+    try:
+        return _scope(**parts)
+    except (KeyError, TypeError):
+        return None
+
+
 def all_scopes(*, kind: str = "bars") -> list[dict[str, str]]:
     prefix = PARQUET_DIR if kind == "bars" else PARQUET_DIR / f"kind={kind}"
-    result: list[dict[str, str]] = []
+    result = []
     if prefix.exists():
-        for source_dir in prefix.glob(
-            "asset_class=*/market=*/venue=*/resolution=*/data_type=*/adjust=*/source=*"
-        ):
-            parts = {}
-            for item in source_dir.relative_to(prefix).parts:
-                key, value = item.split("=", 1)
-                parts[key] = value
-            result.append(_scope(kind=kind, **parts))
+        for source_dir in prefix.glob("asset_class=*/market=*/venue=*/resolution=*/data_type=*/adjust=*/source=*"):
+            scope = _scope_from_dataset_root(prefix=prefix, source_dir=source_dir, kind=kind)
+            if scope is not None:
+                result.append(scope)
     native_candidates = {
         "bars": [_scope(kind="bars", source="tushare"), _scope(kind="bars", asset_class="index", source="tushare")],
         "adjustment_factor": [_scope(kind="adjustment_factor", data_type="factor", source="tushare")],
@@ -834,7 +884,7 @@ def _write_native_partition(
     revision_key: str,
     manifest_extra: dict[str, Any] | None = None,
 ) -> tuple[Any, int]:
-    """Merge one date partition, archiving the prior data and manifest."""
+    """Merge one date partition, archiving only a genuinely changed prior version."""
     target.parent.mkdir(parents=True, exist_ok=True)
     existing = pl.read_parquet(target).to_dicts() if target.is_file() else []
     by_symbol = {str(row.get("ts_code") or "").upper(): row for row in existing}
@@ -844,8 +894,14 @@ def _write_native_partition(
         before = dict(by_symbol.get(key) or {})
         by_symbol.setdefault(key, {}).update(patch)
         changed += int(before != by_symbol[key])
+    # TuShare market-wide incremental endpoints may be replayed after a
+    # restarted worker. Do not rewrite an identical published partition: doing
+    # so would create a misleading revision even though no provider correction
+    # occurred.
+    if target.is_file() and changed == 0:
+        return pl.read_parquet(target), 0
     frame = pl.DataFrame(list(by_symbol.values()), infer_schema_length=None)
-    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    temporary = _temp_manifest_path(target)
     frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
     if target.is_file():
         prior_hash = _sha256(target)
@@ -875,7 +931,7 @@ def _write_native_partition(
         **(manifest_extra or {}),
     }
     manifest_path = target.with_name("manifest.json")
-    manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+    manifest_tmp = _temp_manifest_path(manifest_path)
     manifest_tmp.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
     os.replace(manifest_tmp, manifest_path)
     return frame, changed
@@ -943,7 +999,7 @@ def _upsert_native(prepared: list[dict[str, Any]], scope: dict[str, str]) -> dic
 
 def _write_manifest(root: Path, payload: dict[str, Any]) -> None:
     target = _manifest_path(root)
-    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    temporary = _temp_manifest_path(target)
     temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
     os.replace(temporary, target)
 
@@ -997,10 +1053,10 @@ def upsert_rows(
             release_seed = hashlib.sha256(
                 json.dumps(incoming_rows, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
             ).hexdigest()[:16]
-            release_dir = root / f"year={year}" / f"release={release_seed}"
+            release_dir = root / f"r={year}_{release_seed[:8]}"
             release_dir.mkdir(parents=True, exist_ok=True)
-            target = release_dir / "part-00000.parquet"
-            temporary = target.with_suffix(".parquet.tmp")
+            target = release_dir / PARTITION_FILE_NAME
+            temporary = _temp_parquet_path(target)
             frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
             os.replace(temporary, target)
             checksum = _sha256(target)
@@ -1111,7 +1167,7 @@ def delete_snapshot_absences(
             if not archived.exists():
                 shutil.copy2(target, archived)
             updated = pl.DataFrame(kept, schema=frame.schema) if kept else frame.head(0)
-            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+            temporary = _temp_manifest_path(target)
             updated.write_parquet(temporary, compression=PARQUET_COMPRESSION)
             os.replace(temporary, target)
             manifest_path = target.with_name("manifest.json")
@@ -1128,7 +1184,7 @@ def delete_snapshot_absences(
                     "writer": "lean-platform:snapshot-reconcile",
                 }
             )
-            manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+            manifest_tmp = _temp_manifest_path(manifest_path)
             manifest_tmp.write_text(
                 json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
             )
@@ -1197,10 +1253,10 @@ def delete_snapshot_absences(
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()[:16]
-            release_dir = root / f"year={year}" / f"release={revision}"
+            release_dir = root / f"r={year}_{revision[:8]}"
             release_dir.mkdir(parents=True, exist_ok=True)
-            target = release_dir / "part-00000.parquet"
-            temporary = target.with_suffix(".parquet.tmp")
+            target = release_dir / PARTITION_FILE_NAME
+            temporary = _temp_parquet_path(target)
             frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
             os.replace(temporary, target)
             replacements.append(
@@ -1259,3 +1315,5 @@ def integrity_report(**scope: str) -> dict[str, Any]:
         "manifestRows": rows,
         "issues": issues,
     }
+
+

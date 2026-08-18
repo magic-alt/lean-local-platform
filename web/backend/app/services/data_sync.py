@@ -2014,6 +2014,41 @@ def _latest_open_trade_date(end_date: str, market: str = "china") -> str:
     return str(row["trade_date"]) if row and row["trade_date"] else end_date
 
 
+def _latest_published_bronze_date(dataset_key: str) -> str | None:
+    """Return the latest successfully published native TuShare partition.
+
+    Bronze ``current`` is the durable data-plane boundary. It remains a safe
+    incremental cursor if the control-plane database is restored separately or
+    a migration leaves its watermarks behind the published files.
+    """
+    root = market_lake.PARQUET_DIR / "bronze" / "tushare" / "current" / dataset_key
+    if not root.is_dir():
+        return None
+    latest: str | None = None
+    for partition in root.glob("trade_date=*"):
+        if not partition.is_dir() or not (partition / "data.parquet").is_file():
+            continue
+        compact = partition.name.removeprefix("trade_date=")
+        if len(compact) != 8 or not compact.isdigit():
+            continue
+        try:
+            published_date = date(int(compact[:4]), int(compact[4:6]), int(compact[6:8])).isoformat()
+            manifest = json.loads((partition / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or str(manifest.get("status") or "").lower() not in {"success", "empty"}:
+            continue
+        if latest is None or published_date > latest:
+            latest = published_date
+    return latest
+
+
+def _incremental_start_after(dataset_key: str, persisted_start_after: str | None) -> str | None:
+    """Use the later of the durable Bronze frontier and control-plane watermark."""
+    published_start_after = _latest_published_bronze_date(dataset_key)
+    return max((value for value in (persisted_start_after, published_start_after) if value), default=None)
+
+
 def _latest_bar(symbol: str) -> str | None:
     row = market_lake.aggregate(
         kind="bars", asset_class="equity", market="china", venue="china",
@@ -2558,7 +2593,10 @@ def _sync_daily(
         for symbol in active_scope_keys
         if symbol in coverage_by_scope
     }
-    market_start_after = min(active_coverage.values()) if active_coverage else None
+    market_start_after = _incremental_start_after(
+        spec.key,
+        min(active_coverage.values()) if active_coverage else None,
+    )
     uncovered_active = [
         item for item in active_securities if str(item["symbol"]) not in active_coverage
     ]
@@ -2588,7 +2626,11 @@ def _sync_daily(
         and hasattr(adapter, "daily_rows_for_date")
         and active_scope_keys
         and market_start_after
-        and (not uncovered_active or uncovered_started_after_frontier)
+        and (
+            _latest_published_bronze_date(spec.key)
+            or not uncovered_active
+            or uncovered_started_after_frontier
+        )
     ):
         date_mode_start_after = market_start_after
     if date_mode_start_after:
@@ -3271,15 +3313,15 @@ def _sync_adj_factor_fast(
     )
     date_mode = hasattr(adapter, "adjustment_factors_for_date") and not resumed_symbol_work
     if date_mode:
+        securities = _listed_securities()
         if full_refresh or _latest_raw_date(spec) is None:
-            securities = _listed_securities()
             first_date = min(
                 max(str(item.get("listed_date") or "1990-12-19"), minimum_start_date or "1990-12-19")
                 for item in securities
             )
             start_after = (date.fromisoformat(first_date) - timedelta(days=1)).isoformat()
         else:
-            start_after = _latest_raw_date(spec) or "1990-12-18"
+            start_after = _incremental_start_after(spec.key, _latest_raw_date(spec)) or "1990-12-18"
         with db() as connection:
             dates = connection.execute(
                 """
@@ -3340,15 +3382,29 @@ def _sync_adj_factor_fast(
 
     session_processed_base = processed
     if not pending:
+        if date_mode:
+            completed_dates = [key for key, _ in work if statuses.get(key) == "committed"]
+            coverage_end = completed_dates[-1] if completed_dates else _incremental_start_after(
+                spec.key,
+                _latest_raw_date(spec),
+            )
+            if coverage_end:
+                _advance_sparse_market_watermarks(
+                    spec,
+                    securities,
+                    coverage_end=coverage_end,
+                    run_id=run_id,
+                )
         return processed, inserted, updated, failed
 
     entries: list[tuple[str, list[dict[str, Any]]]] = []
     buffered_rows = 0
     batch_units = _sync_batch_units("LEAN_DATA_SYNC_BATCH_UNITS", 16)
     failure_samples: list[dict[str, Any]] = []
+    last_committed_date: str | None = None
 
     def flush() -> None:
-        nonlocal entries, buffered_rows, inserted, updated, processed, committed
+        nonlocal entries, buffered_rows, inserted, updated, processed, committed, last_committed_date
         if not entries:
             return
         _item(
@@ -3423,6 +3479,8 @@ def _sync_adj_factor_fast(
         processed += len(keys)
         committed += written
         last_key = keys[-1]
+        if date_mode:
+            last_committed_date = last_key
         item_error = json_dump({"failed": failed, "samples": failure_samples}) if failed else ""
         _item(
             run_id,
@@ -3528,6 +3586,14 @@ def _sync_adj_factor_fast(
                     futures[next_sequence] = executor.submit(fetcher, next_key)
                     submit_cursor += 1
         flush()
+
+    if date_mode and last_committed_date:
+        _advance_sparse_market_watermarks(
+            spec,
+            securities,
+            coverage_end=last_committed_date,
+            run_id=run_id,
+        )
 
     _item(
         run_id,
@@ -3663,7 +3729,10 @@ def _sync_instrument_dataset_fast(
         for symbol in active_scope_keys
         if symbol in coverage_by_scope
     }
-    market_start_after = min(active_coverage.values()) if active_coverage else None
+    market_start_after = _incremental_start_after(
+        spec.key,
+        min(active_coverage.values()) if active_coverage else None,
+    )
     uncovered_active = [
         item
         for item in active_securities
@@ -3706,7 +3775,11 @@ def _sync_instrument_dataset_fast(
         and not resumed_symbol_work
         and active_scope_keys
         and market_start_after
-        and (not uncovered_active or uncovered_started_after_frontier)
+        and (
+            _latest_published_bronze_date(spec.key)
+            or not uncovered_active
+            or uncovered_started_after_frontier
+        )
         and hasattr(adapter, str(date_fetch_name))
     ):
         date_mode_start_after = market_start_after

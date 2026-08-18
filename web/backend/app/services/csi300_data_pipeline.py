@@ -251,20 +251,15 @@ def _refresh_securities(adapter: TushareAdapter, symbols: list[str], *, dry_run:
 
 
 def _materialize_membership_if_empty(symbols: list[str], as_of_date: str, *, dry_run: bool, batch_id: str, warnings: list[str]) -> None:
-    if dry_run or not symbols or universe_as_of(CSI300_UNIVERSE, as_of_date):
+    if dry_run or universe_as_of(CSI300_UNIVERSE, as_of_date):
         return
-    for symbol in symbols:
-        upsert_universe_membership(
-            CSI300_UNIVERSE,
-            symbol,
-            as_of_date,
-            None,
-            source="tushare:index_weight:current",
-            batch_id=batch_id,
-            announce_date=as_of_date,
-            effective_date=as_of_date,
-        )
-    warnings.append("universe_materialized_from_latest_index_weight")
+    # A current index-weight snapshot is not PIT evidence.  Persisting it as
+    # history makes earlier research silently depend on today's constituents.
+    warnings.append("universe_membership_missing_pit_evidence")
+    raise LeanWebError(
+        "CSI300 PIT membership is missing for the requested date; "
+        "current index weights cannot be materialized as historical membership."
+    )
 
 
 def _fetch_research_dataset(

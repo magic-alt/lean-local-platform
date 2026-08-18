@@ -18,9 +18,9 @@
         upper = mean + band_width
         invested = self.portfolio[self.symbol].invested
         if close < lower and not invested:
-            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent_moo(self.symbol, 1, "bollinger_reversion_buy") if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif close > mean and invested:
-            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+            self.ashare_execution.exit_moo(self.symbol, "bollinger_reversion_sell") if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("Bollinger", "Middle", mean)
         self.plot("Bollinger", "Upper", upper)
         self.plot("Bollinger", "Lower", lower)

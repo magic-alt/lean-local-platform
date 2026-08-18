@@ -55,9 +55,6 @@ def test_service_refuses_new_and_retried_legacy_ml_jobs():
                values ('legacy-run','ml-cross-sectional-ranker','legacy','failed',?,?,0,?)""",
             (json_dump(SCOPE), json_dump({}), utc_now()),
         )
-    with pytest.raises(ValueError, match="Legacy platform ML training is retired"):
-        research_runs.retry_run("legacy-run")
-    assert research_runs.get_run("legacy-run")["id"] == "legacy-run"
     with db() as connection:
         assert (
             connection.execute("select count(*) count from research_runs").fetchone()[
@@ -65,6 +62,9 @@ def test_service_refuses_new_and_retried_legacy_ml_jobs():
             ]
             == 1
         )
+    with pytest.raises(ValueError, match="Legacy platform ML training is retired"):
+        research_runs.retry_run("legacy-run")
+    assert research_runs.get_run("legacy-run")["id"] == "legacy-run"
 
 
 def test_http_api_removes_legacy_research_execution_routes():

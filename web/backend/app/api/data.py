@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
@@ -71,6 +73,21 @@ from ..tasks.worker import (
 )
 
 router = APIRouter(prefix="/api", tags=["data"])
+
+
+_SAFE_UPLOAD_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_upload_name(filename: str | None) -> str:
+    """Return a filesystem-safe upload basename, rejecting ambiguous names."""
+    # Browsers on Windows can submit a backslash-separated name.  Normalize it
+    # before taking the basename so it cannot become a path on either host.
+    raw = str(filename or "").replace("\\", "/")
+    name = Path(raw).name
+    name = _SAFE_UPLOAD_FILENAME.sub("_", name).strip("._")
+    if not name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Upload filename is invalid.")
+    return name[:128]
 
 
 class AlphaVantageRequest(BaseModel):
@@ -337,14 +354,20 @@ def create_on_demand_download(request: OnDemandDatasetDownloadRequest):
             ).fetchone()
         if active:
             raise ValueError("A full data update is active; wait for it to finish before starting an on-demand download.")
-        parameters = request.model_dump()
+        # Credentials must not be retained in the task/control-plane database.
+        # The payload is passed directly to the worker message and is discarded
+        # once consumed; configured provider credentials remain environment-only.
+        parameters = request.model_dump(exclude={"apiParameters"})
         task = create_task(
             "on_demand_download",
             f"Download TuShare {request.dataset}",
             parameters,
             related_id=request.dataset,
         )
-        dispatch_task(download_on_demand_dataset_task.s(task["id"]), task["id"])
+        dispatch_task(
+            download_on_demand_dataset_task.s(task["id"], request.apiParameters),
+            task["id"],
+        )
         return task
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -800,7 +823,6 @@ def fetch_batch(request: BatchDataFetchRequest):
             "resolution": request.resolution,
             "dataType": request.dataType,
             "provider": request.provider,
-            "apiKey": request.apiKey,
             "outputsize": request.outputsize,
             "startDate": request.startDate,
             "endDate": request.endDate,
@@ -808,7 +830,8 @@ def fetch_batch(request: BatchDataFetchRequest):
             "overwrite": request.overwrite,
         },
     )
-    dispatch_task(fetch_data_batch_task.s(task["id"]), task["id"])
+    # Do not serialize a caller-supplied key into ``tasks.parameters_json``.
+    dispatch_task(fetch_data_batch_task.s(task["id"], request.apiKey), task["id"])
     return task
 
 
@@ -844,7 +867,8 @@ async def import_csv(
     file: UploadFile = File(...),
 ):
     try:
-        upload_path = UPLOADS_DIR / f"{utc_now().replace(':', '').replace('.', '')}-{file.filename}"
+        safe_filename = _safe_upload_name(file.filename)
+        upload_path = UPLOADS_DIR / f"{utc_now().replace(':', '').replace('.', '')}-{safe_filename}"
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         upload_path.write_bytes(await file.read())
         put_file("uploads", upload_path.name, upload_path, metadata={"filename": file.filename, "asset_class": assetClass, "symbol": symbol})

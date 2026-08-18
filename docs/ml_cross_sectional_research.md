@@ -8,7 +8,7 @@
 
    ```bash
    docker compose --profile app up -d --build \
-     mysql redis api worker data-worker data-demand-worker backtest-worker mlflow ml-worker beat
+     mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker mlflow ml-worker beat
    ```
 
 2. 在“研究工作台”选择“CSI300 横截面机器学习”，样本开始日保持 `2015-01-01` 或更晚。
@@ -40,3 +40,5 @@
 - 尚未实现组合优化、交易成本回测、Paper、Qlib、Optuna、SHAP、深度学习或新闻/公告文本模型。
 - `index_member_all` 的申万行业只有调入/调出有效区间，没有独立公告时间，因此它是 effective-time PIT 证据，不宣称完整双时态。
 - 数据覆盖门槛是阻断条件；研究表现门槛只是建议状态，不能用于自动晋级生产。
+
+

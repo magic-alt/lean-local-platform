@@ -118,3 +118,20 @@ def test_native_incremental_write_replaces_partition_and_retains_revision(tmp_pa
     assert result["changedRows"] == 1
     assert pl.read_parquet(target).filter(pl.col("ts_code") == "000001.SZ").item(0, "close") == 11.26
     assert list((tmp_path / "bronze" / "tushare" / "revisions" / "lean_bars").rglob("data.parquet"))
+
+
+def test_native_replay_does_not_create_a_revision(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    row = {"symbol": "000001", "trade_date": "2026-08-11", "close": 11.26}
+    (tmp_path / "silver" / "daily" / "current" / "trade_date=20260811").mkdir(parents=True)
+
+    first = market_lake.upsert_rows([row], kind="bars", source="tushare")
+    second = market_lake.upsert_rows([row], kind="bars", source="tushare")
+
+    assert first["changedRows"] == 1
+    assert second["changedRows"] == 0
+    revisions = tmp_path / "bronze" / "tushare" / "revisions"
+    assert not (revisions / "lean_daily").exists()
+    assert not (revisions / "lean_bars").exists()

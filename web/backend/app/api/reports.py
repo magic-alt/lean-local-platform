@@ -106,9 +106,15 @@ def _run_id_from_report_id(report_id: str) -> str:
     return report_id
 
 
-def _backtest_report_from_rows(run: dict[str, Any], result: dict[str, Any] | None) -> dict[str, Any]:
+def _backtest_report_from_rows(
+    run: dict[str, Any],
+    result: dict[str, Any] | None,
+    *,
+    stored_objects: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     result = result or {}
-    stored_objects = _stored_objects_for_run(run["id"], result)
+    if stored_objects is None:
+        stored_objects = _stored_objects_for_run(run["id"], result)
     return {
         "id": _backtest_report_id(run["id"]),
         "source": "backtest_run",
@@ -135,6 +141,48 @@ def _backtest_report_from_rows(run: dict[str, Any], result: dict[str, Any] | Non
         "created_at": run.get("created_at"),
         "finished_at": run.get("finished_at"),
     }
+
+
+def _stored_objects_for_runs(run_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Load report artifacts for a page of backtests in one query."""
+    unique_ids = list(dict.fromkeys(run_ids))
+    grouped = {run_id: [] for run_id in unique_ids}
+    if not unique_ids:
+        return grouped
+    clauses = " or ".join("object_key like ?" for _ in unique_ids)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select id, namespace, object_key, content_type, encoding, size, sha256,
+                   storage_mode, source_path, metadata_json, created_at, updated_at
+            from stored_objects
+            where namespace=? and ({clauses})
+            order by object_key asc, updated_at desc
+            """,
+            ["backtest-results", *[f"{run_id}/%" for run_id in unique_ids]],
+        ).fetchall()
+    for item in rows_to_dicts(rows):
+        run_id = str(item.get("object_key") or "").split("/", 1)[0]
+        if run_id in grouped:
+            grouped[run_id].append(item)
+    return grouped
+
+
+def _stored_objects_by_ids(object_ids: list[str]) -> dict[str, dict[str, Any]]:
+    unique_ids = list(dict.fromkeys(item for item in object_ids if item))
+    if not unique_ids:
+        return {}
+    placeholders = ",".join("?" for _ in unique_ids)
+    with db() as connection:
+        rows = connection.execute(
+            f"""
+            select id, namespace, object_key, content_type, encoding, size, sha256,
+                   storage_mode, source_path, metadata_json, created_at, updated_at
+            from stored_objects where id in ({placeholders})
+            """,
+            unique_ids,
+        ).fetchall()
+    return {str(item["id"]): item for item in rows_to_dicts(rows)}
 
 
 def _light_report(item: dict[str, Any]) -> dict[str, Any]:
@@ -247,6 +295,14 @@ def list_reports(
                 [*backtest_values, scan_limit],
             ).fetchall()
     reports = [{**item, "source": "reports"} for item in rows_to_dicts(report_rows)]
+    object_map = _stored_objects_for_runs([str(row["id"]) for row in backtest_rows])
+    legacy_object_map = _stored_objects_by_ids(
+        [
+            str(row.get(key) or "")
+            for row in rows_to_dicts(backtest_rows)
+            for key in ("raw_result_object_id", "summary_object_id")
+        ]
+    )
     backtests = []
     for row in backtest_rows:
         item = row_to_dict(row) or {}
@@ -268,7 +324,19 @@ def list_reports(
                 "summary_object_id": item.pop("summary_object_id", None),
                 "created_at": item.pop("result_created_at", None),
             }
-        backtests.append(_backtest_report_from_rows(item, result))
+        stored_objects = object_map.get(str(item["id"]), [])
+        if not stored_objects:
+            # The rare legacy rows have object IDs without the canonical
+            # namespace/key layout.  Preserve their compatibility path.
+            stored_objects = [
+                candidate
+                for candidate in (
+                    legacy_object_map.get(str((result or {}).get("raw_result_object_id") or "")),
+                    legacy_object_map.get(str((result or {}).get("summary_object_id") or "")),
+                )
+                if candidate is not None
+            ]
+        backtests.append(_backtest_report_from_rows(item, result, stored_objects=stored_objects))
     items = sorted([*reports, *backtests], key=lambda item: item.get("created_at") or "", reverse=True)
     output_items = items if detail else [_light_report(item) for item in items]
     sliced = output_items[bounded_offset : bounded_offset + bounded_limit]

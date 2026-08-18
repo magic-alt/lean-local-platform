@@ -9,7 +9,7 @@
             return
         invested = self.portfolio[self.symbol].invested
         if self.rsi.current.value < self.buy_below and not invested:
-            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent_moo(self.symbol, 1, "rsi_reversion_buy") if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.rsi.current.value > self.sell_above and invested:
-            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+            self.ashare_execution.exit_moo(self.symbol, "rsi_reversion_sell") if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("RSI", "RSI", self.rsi.current.value)

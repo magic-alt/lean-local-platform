@@ -9,8 +9,8 @@
             return
         invested = self.portfolio[self.symbol].invested
         if self.macd.current.value > self.macd.signal.current.value and not invested:
-            self.ashare_execution.target_percent(self.symbol, 1) if self.ashare_execution else self.set_holdings(self.symbol, 1)
+            self.ashare_execution.target_percent_moo(self.symbol, 1, "macd_buy") if self.ashare_execution else self.set_holdings(self.symbol, 1)
         elif self.macd.current.value < self.macd.signal.current.value and invested:
-            self.ashare_execution.exit(self.symbol) if self.ashare_execution else self.liquidate(self.symbol)
+            self.ashare_execution.exit_moo(self.symbol, "macd_sell") if self.ashare_execution else self.liquidate(self.symbol)
         self.plot("MACD", "MACD", self.macd.current.value)
         self.plot("MACD", "Signal", self.macd.signal.current.value)

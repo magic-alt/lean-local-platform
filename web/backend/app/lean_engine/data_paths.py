@@ -52,8 +52,6 @@ def ensure_future_dirs(venue: str = "comex") -> None:
 
 def ensure_market_database(market: str) -> None:
     market = market_key(market)
-    if market == "usa":
-        return
     config = MARKET_CONFIG[market]
 
     symbol_properties = DATA_DIR / "symbol-properties" / "symbol-properties-database.csv"

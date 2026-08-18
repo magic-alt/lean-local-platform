@@ -46,5 +46,5 @@
             target = 0.95 / len(selected_symbols)
             for symbol_value in selected_symbols:
                 if data.contains_key(symbol_value) and not bool(getattr(data[symbol_value], "is_fill_forward", False)):
-                    self.ashare_execution.target_percent(symbol_value, target) if self.ashare_execution else self.set_holdings(symbol_value, target)
+                    self.ashare_execution.target_percent_moo(symbol_value, target, "dynamic_universe_rebalance") if self.ashare_execution else self.set_holdings(symbol_value, target)
         self.last_rebalance = self.time.date()

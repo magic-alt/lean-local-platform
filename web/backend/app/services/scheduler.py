@@ -100,6 +100,24 @@ def release_scheduler_lease(lease_id: str | None) -> None:
         connection.execute("delete from scheduler_leases where id = ?", (lease_id,))
 
 
+def renew_scheduler_lease(lease_id: str | None, *, ttl_seconds: int) -> bool:
+    """Extend an active lease without extending an orphan indefinitely."""
+    if not lease_id:
+        return False
+    now = _now_dt()
+    now_text = _iso(now)
+    expires_at = _iso(now + timedelta(seconds=max(60, int(ttl_seconds))))
+    with db() as connection:
+        cursor = connection.execute(
+            """
+            update scheduler_leases set expires_at=?
+            where id=? and expires_at>?
+            """,
+            (expires_at, lease_id, now_text),
+        )
+    return bool(cursor.rowcount)
+
+
 def active_scheduler_leases(resource: str | None = None) -> list[dict[str, Any]]:
     now = utc_now()
     clauses = ["expires_at > ?"]

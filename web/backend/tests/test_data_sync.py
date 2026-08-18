@@ -1683,6 +1683,113 @@ def test_daily_increment_fetches_market_once_per_trade_date(tmp_path, monkeypatc
     assert adapter.calls == ["2026-07-17"]
 
 
+def test_bronze_frontier_is_used_when_control_plane_watermark_is_stale(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db, utc_now
+    from app.services import data_sync, market_lake
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03", "status": "listed"},
+            {"symbol": "600000", "listed_date": "1999-11-10", "status": "listed"},
+        ],
+    )
+    monkeypatch.setattr(
+        data_sync,
+        "import_ashare_research_batch",
+        lambda entries, **kwargs: {
+            "rows": sum(len(entry["rows"]) for entry in entries),
+            "updatedRows": 0,
+            "batch_id": "daily-date-batch",
+        },
+    )
+    published = market_lake.PARQUET_DIR / "bronze" / "tushare" / "current" / "daily" / "trade_date=20260716"
+    published.mkdir(parents=True)
+    (published / "data.parquet").touch()
+    (published / "manifest.json").write_text('{"status":"success"}', encoding="utf-8")
+    with db() as connection:
+        connection.executemany(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china',?,1,'test','test')",
+            [("2026-07-16",), ("2026-07-17",)],
+        )
+        connection.executemany(
+            """
+            insert into provider_dataset_watermarks
+                (provider,dataset_key,scope_key,coverage_start,coverage_end,last_run_id,
+                 empty_result,validation_status,updated_at)
+            values ('tushare','daily',?,'1990-01-01','2026-07-15','old',0,'passed',?)
+            """,
+            [("000001", utc_now()), ("600000", utc_now())],
+        )
+
+    class Adapter:
+        def __init__(self):
+            self.calls = []
+
+        def daily_rows_for_date(self, trade_date):
+            self.calls.append(trade_date)
+            return [
+                {
+                    "symbol": symbol,
+                    "date": trade_date,
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.8,
+                    "close": 10.2,
+                    "volume": 100,
+                }
+                for symbol in ("000001", "600000")
+            ]
+
+    adapter = Adapter()
+    assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (1, 2, 0, 0)
+    assert adapter.calls == ["2026-07-17"]
+
+
+def test_adj_factor_date_sync_advances_market_watermarks(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["adj_factor"])
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "adj_factor")
+    monkeypatch.setattr(
+        data_sync,
+        "_listed_securities",
+        lambda: [
+            {"symbol": "000001", "listed_date": "1991-04-03", "status": "listed"},
+            {"symbol": "600000", "listed_date": "1999-11-10", "status": "listed"},
+        ],
+    )
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-17',1,'test','test')"
+        )
+
+    class Adapter:
+        def adjustment_factors_for_date(self, trade_date):
+            return [
+                {"symbol": "000001", "trade_date": trade_date, "adj_factor": 1.0},
+                {"symbol": "600000", "trade_date": trade_date, "adj_factor": 2.0},
+            ]
+
+    assert data_sync._sync_adj_factor_fast(Adapter(), spec, run["id"], run["id"], "2026-07-17", None, full_refresh=False) == (1, 2, 0, 0)
+    with db() as connection:
+        rows = connection.execute(
+            "select scope_key,coverage_end from provider_dataset_watermarks "
+            "where dataset_key='adj_factor' order by scope_key"
+        ).fetchall()
+    assert [(row["scope_key"], row["coverage_end"]) for row in rows] == [
+        ("000001", "2026-07-17"),
+        ("600000", "2026-07-17"),
+    ]
+
+
 def test_dividend_increment_fetches_market_once_per_ex_date(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, utc_now

@@ -126,6 +126,19 @@ CSI300 官方公告与附件已从 2005-04-08 起重建完整 PIT，不使用当
 
 ## 测试
 
+真实的跨仓库 Mini Golden Acceptance 从 `qlib-platform` 启动：
+
+```bash
+cd ../qlib-platform
+.venv/bin/python scripts/run_cross_repo_golden_acceptance.py \
+  --platform-repo ../lean-platform \
+  --work-dir /tmp/qlib-lean-golden
+```
+
+该命令通过本仓库的 `scripts/run_cross_repo_golden_platform_stage.py` 发布 DataRelease、导入 Artifact v2、
+运行真实 Docker LEAN，并由正式 `record_lean_validation()` 状态机推进到 `LEAN_VALIDATED`。所有运行目录均隔离
+在 `--work-dir`，不使用正式 MySQL、`web/runtime` 或正式数据目录。
+
 ```bash
 cd web/backend
 .venv/bin/python -m pytest -q
@@ -173,3 +186,4 @@ web/backend/.venv/bin/python scripts/generate_help_api_reference.py --check
 ```
 
 提交规范、验证命令和运行产物规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+

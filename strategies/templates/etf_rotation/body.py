@@ -38,6 +38,6 @@
         ordered_symbols = [symbol for symbol in self.rotation_symbols if symbol != winner] + [winner]
         for rotation_symbol in ordered_symbols:
             target = 1.0 if rotation_symbol == winner else 0.0
-            self.ashare_execution.target_percent(rotation_symbol, target) if self.ashare_execution else self.set_holdings(rotation_symbol, target)
+            self.ashare_execution.target_percent_moo(rotation_symbol, target, "etf_rotation_rebalance") if self.ashare_execution else self.set_holdings(rotation_symbol, target)
         self.last_rebalance = today
         self.plot("Rotation", "BestMomentum", scores[0][0])

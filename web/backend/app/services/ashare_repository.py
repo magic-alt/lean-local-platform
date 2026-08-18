@@ -193,8 +193,9 @@ def import_security_master(
                               then securities.name else excluded.name end,
                     exchange=excluded.exchange,
                     listed_date=min(securities.listed_date,excluded.listed_date),
-                    delisted_date=excluded.delisted_date,
-                    status=excluded.status,
+                    delisted_date=coalesce(excluded.delisted_date,securities.delisted_date),
+                    status=case when excluded.delisted_date is null and securities.delisted_date is not null
+                                then securities.status else excluded.status end,
                     is_st=excluded.is_st,
                     industry=coalesce(excluded.industry,securities.industry),
                     concepts_json=coalesce(excluded.concepts_json,securities.concepts_json),
@@ -215,8 +216,9 @@ def import_security_master(
                     exchange=excluded.exchange,
                     listed_date=case when instruments.listed_date is null then excluded.listed_date
                                      else min(instruments.listed_date,excluded.listed_date) end,
-                    delisted_date=excluded.delisted_date,
-                    status=excluded.status,
+                    delisted_date=coalesce(excluded.delisted_date,instruments.delisted_date),
+                    status=case when excluded.delisted_date is null and instruments.delisted_date is not null
+                                then instruments.status else excluded.status end,
                     metadata_json=excluded.metadata_json,
                     source=excluded.source,
                     updated_at=excluded.updated_at
@@ -339,8 +341,15 @@ def upsert_security(
                 end,
                 exchange = excluded.exchange,
                 listed_date = min(securities.listed_date, excluded.listed_date),
-                delisted_date = excluded.delisted_date,
-                status = excluded.status,
+                -- A partial source refresh (for example CSI300 PIT materialization)
+                -- has no authority to resurrect a security by erasing its known
+                -- delisting date or status.
+                delisted_date = coalesce(excluded.delisted_date, securities.delisted_date),
+                status = case
+                    when excluded.delisted_date is null and securities.delisted_date is not null
+                    then securities.status
+                    else excluded.status
+                end,
                 is_st = excluded.is_st,
                 industry = coalesce(excluded.industry, securities.industry),
                 concepts_json = coalesce(excluded.concepts_json, securities.concepts_json),
