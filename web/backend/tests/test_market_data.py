@@ -1,3 +1,6 @@
+import hashlib
+import json
+import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -346,3 +349,74 @@ def test_clickhouse_symbol_replace_deletes_then_reloads_canonical(monkeypatch):
     assert result["symbols"] == ["000300", "600519"]
     assert "mutations_sync=2" in commands[0]
     assert [metadata["symbol"] for metadata, _ in mirrored] == ["600519"]
+
+def test_short_temp_file_paths_are_windows_safe(tmp_path):
+    from app.services import market_lake
+
+    target = tmp_path / "p.parquet"
+    manifest_target = tmp_path / "_active_manifest.json"
+
+    assert market_lake._temp_parquet_path(target).name == "p.tmp"
+    assert market_lake._temp_manifest_path(manifest_target).name == "_active_manifest.tmp"
+    assert len(market_lake._temp_parquet_path(target).name) < len(target.with_suffix(".parquet.tmp").name)
+    assert len(market_lake._temp_manifest_path(manifest_target).name) < len(manifest_target.with_name("." + manifest_target.name + "." + "x" * 32 + ".tmp").name)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path-length regression")
+def test_upsert_rows_uses_short_temporary_names_on_windows(tmp_path, monkeypatch):
+    import app.services.market_lake as market_lake
+
+    scope = {
+        "kind": "bars",
+        "asset_class": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "data_type": "trade",
+        "adjust": "raw",
+        "source": "akshare",
+    }
+    rows = [
+        {
+            "symbol": "000001",
+            "trade_date": "2026-07-18",
+            "open": 10,
+            "high": 11,
+            "low": 9,
+            "close": 10.5,
+            "volume": 1000,
+        }
+    ]
+    release_seed = hashlib.sha256(
+        json.dumps(rows, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+
+    base = tmp_path
+    root_candidate = None
+    for depth in range(20, 220):
+        long_root = base / ("x" * depth)
+        dataset_root = long_root / market_lake.dataset_key(**scope)
+        manifest_target = market_lake._manifest_path(dataset_root)
+        short_parquet_target = dataset_root / f"r=2026_{release_seed[:8]}" / "p.parquet"
+        parquet_target = dataset_root / "year=2026" / f"release={release_seed}" / "part-00000.parquet"
+
+        short_manifest_len = len(str(market_lake._temp_manifest_path(manifest_target)))
+        short_parquet_len = len(str(market_lake._temp_parquet_path(short_parquet_target)))
+        long_manifest_len = len(str(manifest_target.with_name("." + manifest_target.name + "." + "x" * 32 + ".tmp")))
+        long_parquet_len = len(str(parquet_target.with_suffix(".parquet.tmp")))
+
+        if (short_manifest_len <= 260 and short_parquet_len <= 260 and
+                long_manifest_len > 260 and long_parquet_len > 260):
+            root_candidate = long_root
+            break
+
+    assert root_candidate is not None, "unable to construct regression-long path window"
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", root_candidate)
+
+    result = market_lake.upsert_rows(rows, **scope)
+
+    assert result["rows"] == 1
+    assert result["changedRows"] == 1
+    assert result["fileCount"] == 1
+
+
