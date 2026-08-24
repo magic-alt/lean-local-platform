@@ -189,7 +189,7 @@ def main() -> int:
     params: list[object] = [args.namespace, _cutoff(args.days)]
     join = ""
     if args.status or not args.include_success:
-        key_expr = "concat(r.id, '/%%')" if database_backend() == "mysql" else "r.id || '/%'"
+        key_expr = "r.id || '/%'"
         join = f"left join backtest_runs r on o.object_key like {key_expr}"
         if args.status:
             clauses.append("r.status = ?")

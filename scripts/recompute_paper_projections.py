@@ -34,8 +34,8 @@ def _account_ids(requested: list[str]) -> list[str]:
 
 
 def run(*, apply: bool, account_ids: list[str]) -> dict[str, Any]:
-    if database_backend() != "mysql":
-        raise RuntimeError("mysql_required")
+    if database_backend() != "postgresql":
+        raise RuntimeError("postgresql_required")
     selected = _account_ids(account_ids)
     if not selected:
         raise RuntimeError("no_paper_accounts_selected")

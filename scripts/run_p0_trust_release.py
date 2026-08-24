@@ -433,7 +433,7 @@ def _run_golden(base_url: str, run_id: str | None = None) -> dict[str, Any]:
                 (run_id,),
             ).fetchone()
         if not row:
-            raise RuntimeError(f"Golden run disappeared from canonical MySQL: {run_id}")
+            raise RuntimeError(f"Golden run disappeared from canonical PostgreSQL: {run_id}")
         run_status = dict(row)
         if run_status.get("status") in {"success", "failed", "cancelled"}:
             final = get_backtest(run_id) or {}

@@ -111,7 +111,6 @@ def test_source_certification_recovery_resumes_orphaned_maintenance_run(tmp_path
         "source_certification",
         lambda *_args, **_kwargs: {"isCertified": False, "isProduction": False},
     )
-    monkeypatch.setattr(worker, "database_backend", lambda: "mysql")
     monkeypatch.setattr(derived_maintenance, "maintenance_lease_active", lambda: False)
     monkeypatch.setattr(
         worker,

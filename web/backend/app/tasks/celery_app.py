@@ -3,19 +3,21 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import before_task_publish, task_postrun, task_prerun
+from kombu import Exchange, Queue
 
 from ..core.config import (
     ASHARE_TECH_REPORT_HOUR,
     ASHARE_TECH_REPORT_MINUTE,
     ASHARE_TECH_EVALUATION_HOUR,
     ASHARE_TECH_EVALUATION_MINUTE,
+    CELERY_BROKER_URL,
+    CELERY_RESULT_BACKEND,
     DERIVED_MAINTENANCE_HOUR,
     DERIVED_MAINTENANCE_MINUTE,
-    MYSQL_BACKUP_HOUR,
-    MYSQL_BACKUP_MINUTE,
+    POSTGRES_BACKUP_HOUR,
+    POSTGRES_BACKUP_MINUTE,
     PAPER_WALKFORWARD_HOUR,
     PAPER_WALKFORWARD_MINUTE,
-    REDIS_URL,
 )
 from ..core.request_context import (
     current_trace_id,
@@ -63,8 +65,8 @@ def clear_request_context(task_id=None, **_kwargs) -> None:
 
 celery_app = Celery(
     "lean_web",
-    broker=REDIS_URL,
-    backend=REDIS_URL,
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND,
     include=["app.tasks.worker"],
 )
 celery_app.conf.update(
@@ -75,6 +77,17 @@ celery_app.conf.update(
     timezone="Asia/Shanghai",
     enable_utc=True,
     task_default_queue="default",
+    task_queues=tuple(
+        Queue(
+            name,
+            Exchange(name, type="direct", durable=True),
+            routing_key=name,
+            durable=True,
+            queue_arguments={"x-queue-type": "classic"},
+        )
+        for name in ("default", "data-bulk", "data-lineage", "data-demand", "backtest", "ml")
+    ),
+    task_default_delivery_mode="persistent",
     task_routes={
         "lean_web.fetch_data_batch": {"queue": "data-demand"},
         "lean_web.download_on_demand_dataset": {"queue": "data-demand"},
@@ -89,7 +102,7 @@ celery_app.conf.update(
         "lean_web.recover_source_certifications": {"queue": "default"},
         "lean_web.redeliver_open_alerts": {"queue": "default"},
         "lean_web.recover_data_sync": {"queue": "default"},
-        "lean_web.backup_mysql": {"queue": "default"},
+        "lean_web.backup_postgres": {"queue": "default"},
         "lean_web.run_backtest": {"queue": "backtest"},
         "lean_web.start_research": {"queue": "backtest"},
         "lean_web.dispatch_experiment_batch": {"queue": "default"},
@@ -101,16 +114,15 @@ celery_app.conf.update(
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
+    broker_heartbeat=30,
+    broker_connection_retry_on_startup=True,
     worker_max_tasks_per_child=_positive_env_int("LEAN_WORKER_MAX_TASKS_PER_CHILD", 50),
     worker_max_memory_per_child=_positive_env_int(
         "LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB",
         1_572_864,
     ),
-    # Bulk sync/materialization tasks can legitimately run for several hours.
-    # Redis' one-hour default visibility timeout redelivers an unacknowledged
-    # acks_late task while the original worker is still processing it.
-    broker_transport_options={"visibility_timeout": 43_200},
-    result_backend_transport_options={"visibility_timeout": 43_200},
+    broker_transport_options={"confirm_publish": True},
+    result_expires=86_400,
     beat_schedule={
         "recover-orphaned-data-sync": {
             "task": "lean_web.recover_data_sync",
@@ -120,11 +132,11 @@ celery_app.conf.update(
             "task": "lean_web.recover_tushare_lineage",
             "schedule": 30.0,
         },
-        "backup-mysql-daily": {
-            "task": "lean_web.backup_mysql",
+        "backup-postgres-daily": {
+            "task": "lean_web.backup_postgres",
             "schedule": crontab(
-                minute=MYSQL_BACKUP_MINUTE,
-                hour=MYSQL_BACKUP_HOUR,
+                minute=POSTGRES_BACKUP_MINUTE,
+                hour=POSTGRES_BACKUP_HOUR,
             ),
         },
         "maintain-derived-layers-after-close": {

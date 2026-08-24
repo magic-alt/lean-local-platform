@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,23 +25,21 @@ from .core.config import (
     UPLOADS_DIR,
 )
 
-try:  # pragma: no cover - optional unless LEAN_DATABASE_URL points at MySQL.
-    import pymysql
-    from pymysql.cursors import DictCursor, SSDictCursor
+try:  # pragma: no cover - optional unless LEAN_DATABASE_URL points at PostgreSQL.
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
 except Exception:  # pragma: no cover
-    pymysql = None
-    DictCursor = None
-    SSDictCursor = None
+    psycopg = None
+    dict_row = None
+    ConnectionPool = None
 
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseUnavailableError(RuntimeError):
-    """Raised after transient MySQL connection failures exhaust bounded retries."""
-
-
-TRANSIENT_MYSQL_CONNECTION_CODES = {1040, 2003, 2006, 2013}
+    """Raised after transient database connection failures exhaust bounded retries."""
 
 
 JSON_COLUMNS = {
@@ -137,174 +136,23 @@ JSON_COLUMNS = {
 }
 
 
-MYSQL_SCHEMES = {"mysql", "mysql+pymysql"}
+POSTGRES_SCHEMES = {"postgres", "postgresql", "postgresql+psycopg"}
 SQLITE_SCHEMES = {"sqlite", "sqlite+pysqlite"}
 SQLITE_TEST_BACKEND_ENABLED = os.environ.get("LEAN_ALLOW_SQLITE_TEST_DB", "").lower() in {"1", "true", "yes", "on"}
 DB_PATH: Path | None = None
-LONG_TEXT_COLUMNS = {
-    "metadata_json",
-    "config_json",
-    "qa_report_json",
-    "parameters_json",
-    "artifacts_json",
-    "statistics_json",
-    "summary_metrics_json",
-    "equity_curve_json",
-    "drawdown_curve_json",
-    "orders_json",
-    "trades_json",
-    "holdings_json",
-    "performance_json",
-    "validation_json",
-    "experiment_json",
-    "failure_json",
-    "reconciliation_json",
-    "event_json",
-    "raw_intent_json",
-    "report_json",
-    "signals_json",
-    "rejects_json",
-    "snapshot_json",
-    "benchmark_json",
-    "qa_json",
-    "result_json",
-    "fields_json",
-    "terms_json",
-    "concepts_json",
-    "symbols_json",
-    "coverage_json",
-    "warnings_json",
-    "errors_json",
-    "provider_coverage_json",
-    "supported_endpoints_json",
-    "affected_symbols_json",
-    "details_json",
-    "scope_json",
-    "context_json",
-    "raw_response_json",
-    "raw_signal_json",
-    "final_signal_json",
-    "guardrail_json",
-    "data_completeness_json",
-    "source_conflicts_json",
-    "source_manifest_json",
-    "pool_snapshot_json",
-    "rule_tags_json",
-    "checkpoint_json",
-    "requested_datasets_json",
-    "requested_layers_json",
-    "derived_status_json",
-    "endpoint_counts_json",
-    "universe_config_json",
-    "projection_json",
-    "evidence_json",
-    "run_ids_json",
-    "constraints_json",
-    "input_fingerprints_json",
-    "manifest_json",
-    "quality_json",
-    "fold_plan_json",
-    "request_scope_json",
-    "batch_snapshot_json",
-    "project_snapshot_json",
-    "selection_inputs_json",
-    "selection_outputs_json",
-    "contract_json",
-    "certificate_json",
-    "error",
-    "error_message",
-    "response_body",
-}
-PATH_TEXT_COLUMNS = {
-    "lean_file",
-    "file_path",
-    "local_path",
-    "project_path",
-    "main_file",
-    "log_path",
-    "work_dir",
-    "results_dir",
-    "result_json_path",
-    "summary_json_path",
-    "report_html_path",
-    "report_path",
-    "raw_result_path",
-    "source_path",
-    "root_path",
-    "strategy_path",
-    "workspace_path",
-}
-MYSQL_RESERVED_COLUMNS = {"rows", "key"}
-ID_TEXT_COLUMNS = {
-    "id",
-    "instrument_id",
-    "object_id",
-    "job_id",
-    "task_id",
-    "project_id",
-    "batch_id",
-    "session_id",
-    "signal_id",
-    "run_id",
-    "related_id",
-    "celery_task_id",
-}
-CODE_TEXT_COLUMNS = {
-    "symbol",
-    "normalized_symbol",
-    "underlying_symbol",
-    "stock_symbol",
-    "bond_code",
-    "contract_code",
-    "product",
-    "universe_code",
-    "index_code",
-    "exchange",
-    "market",
-    "venue",
-    "asset_class",
-    "resolution",
-    "frequency",
-    "data_type",
-    "source",
-    "status",
-    "severity",
-    "dataset",
-    "kind",
-    "side",
-    "rule_type",
-    "action_type",
-    "statement_type",
-    "field_name",
-    "factor_name",
-    "adjust",
-    "currency",
-    "base_currency",
-    "quote_currency",
-    "encoding",
-    "storage_mode",
-    "content_type",
-    "parser_version",
-    "parse_status",
-    "provider",
-    "main_symbol",
-    "continuous_symbol",
-}
-
-
 def database_url() -> str:
     return DATABASE_URL
 
 
 def database_backend() -> str:
     scheme = urlparse(DATABASE_URL).scheme.lower()
-    if scheme in MYSQL_SCHEMES:
-        return "mysql"
+    if scheme in POSTGRES_SCHEMES:
+        return "postgresql"
     if scheme in SQLITE_SCHEMES and SQLITE_TEST_BACKEND_ENABLED:
         return "sqlite"
     if scheme in SQLITE_SCHEMES:
         raise RuntimeError(
-            "SQLite is disabled for runtime database use. Configure LEAN_DATABASE_URL with mysql+pymysql; "
+            "SQLite is disabled for runtime database use. Configure LEAN_DATABASE_URL with postgresql; "
             "use DuckDB only through the Parquet research layer."
         )
     raise RuntimeError(f"Unsupported database backend: {scheme or 'empty'}")
@@ -323,14 +171,14 @@ def _sqlite_db_path() -> Path:
 
 
 def database_descriptor() -> dict[str, Any]:
-    if database_backend() == "mysql":
+    if database_backend() == "postgresql":
         parsed = urlparse(DATABASE_URL)
         return {
-            "engine": "mysql",
+            "engine": "postgresql",
             "host": parsed.hostname or "127.0.0.1",
-            "port": parsed.port or 3306,
+            "port": parsed.port or 5432,
             "database": (parsed.path or "/lean_platform").lstrip("/"),
-            "user": unquote(parsed.username or "lean"),
+            "user": unquote(parsed.username or "lean_app"),
         }
     return {"engine": "sqlite", "mode": "test_only", "path": str(_sqlite_db_path())}
 
@@ -352,61 +200,53 @@ def init_storage() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-class MySQLConnection:
-    def __init__(
-        self,
-        database_url: str | None = None,
-        *,
-        local_infile: bool = False,
-    ) -> None:
-        if pymysql is None or DictCursor is None:
-            raise RuntimeError("pymysql is required when LEAN_DATABASE_URL uses mysql+pymysql.")
-        parsed = urlparse(database_url or DATABASE_URL)
-        database = (parsed.path or "/lean_platform").lstrip("/")
-        if not database:
-            raise RuntimeError("MySQL database name is required in LEAN_DATABASE_URL.")
-        self._connection = pymysql.connect(
-            host=parsed.hostname or "127.0.0.1",
-            port=parsed.port or 3306,
-            user=unquote(parsed.username or "lean"),
-            password=unquote(parsed.password or "lean"),
-            database=database,
-            charset="utf8mb4",
-            autocommit=False,
-            cursorclass=DictCursor,
-            connect_timeout=5,
-            local_infile=local_infile,
+_POSTGRES_POOLS: dict[tuple[int, str], Any] = {}
+
+
+def _postgres_conninfo(database_url: str) -> str:
+    parsed = urlparse(database_url)
+    scheme = "postgresql"
+    return parsed._replace(scheme=scheme).geturl()
+
+
+def _postgres_pool(database_url: str | None = None):
+    if ConnectionPool is None or dict_row is None:
+        raise RuntimeError(
+            "psycopg and psycopg_pool are required when LEAN_DATABASE_URL uses PostgreSQL."
         )
+    url = _postgres_conninfo(database_url or DATABASE_URL)
+    key = (os.getpid(), url)
+    pool = _POSTGRES_POOLS.get(key)
+    if pool is None:
+        pool = ConnectionPool(
+            conninfo=url,
+            min_size=max(1, int(os.environ.get("LEAN_POSTGRES_POOL_MIN_SIZE", "1"))),
+            max_size=max(2, int(os.environ.get("LEAN_POSTGRES_POOL_MAX_SIZE", "10"))),
+            timeout=max(1.0, float(os.environ.get("LEAN_POSTGRES_POOL_TIMEOUT_SECONDS", "5"))),
+            kwargs={"autocommit": False, "row_factory": dict_row},
+            open=False,
+            name=f"lean-platform-{os.getpid()}",
+        )
+        pool.open(wait=True)
+        _POSTGRES_POOLS[key] = pool
+    return pool
+
+
+class PostgresConnection:
+    """SQLite-shaped connection facade backed by a process-local psycopg pool."""
+
+    def __init__(self, database_url: str | None = None) -> None:
+        self._pool = _postgres_pool(database_url)
+        self._connection = self._pool.getconn()
 
     def execute(self, sql: str, parameters: Iterable[Any] | dict[str, Any] | None = None):
-        translated = _translate_mysql_sql(_strip_leading_sql_comments(sql))
-        add_column_info = _parse_alter_table_add_column(translated)
-        if add_column_info:
-            table_name, column_name = add_column_info
-            with self._connection.cursor() as cursor:
-                cursor.execute("show columns from `%s` like %%s" % table_name, (column_name,))
-                if cursor.fetchone():
-                    return cursor
-        index_info = _parse_create_index_if_not_exists(translated)
-        if index_info:
-            index_name, table_name = index_info
-            with self._connection.cursor() as cursor:
-                cursor.execute("show index from `%s` where Key_name = %%s" % table_name, (index_name,))
-                if cursor.fetchone():
-                    return cursor
-            translated = re.sub(
-                r"\bcreate\s+(unique\s+)?index\s+if\s+not\s+exists\b",
-                lambda match: f"create {match.group(1) or ''}index",
-                translated,
-                flags=re.IGNORECASE,
-            )
         cursor = self._connection.cursor()
-        cursor.execute(translated, parameters)
+        cursor.execute(_translate_postgres_sql(_strip_leading_sql_comments(sql)), parameters)
         return cursor
 
     def executemany(self, sql: str, parameters: Iterable[Iterable[Any] | dict[str, Any]]):
         cursor = self._connection.cursor()
-        cursor.executemany(_translate_mysql_sql(sql), parameters)
+        cursor.executemany(_translate_postgres_sql(sql), parameters)
         return cursor
 
     def iter_batches(
@@ -416,12 +256,9 @@ class MySQLConnection:
         *,
         batch_size: int = 100_000,
     ) -> Iterable[list[dict[str, Any]]]:
-        """Stream large read-only result sets without buffering them in Python."""
-        if SSDictCursor is None:  # pragma: no cover - guarded by MySQL dependency.
-            raise RuntimeError("PyMySQL SSDictCursor is required for streaming queries.")
-        cursor = self._connection.cursor(SSDictCursor)
+        cursor = self._connection.cursor(name=f"platform_stream_{uuid.uuid4().hex}")
         try:
-            cursor.execute(_translate_mysql_sql(sql), parameters)
+            cursor.execute(_translate_postgres_sql(sql), parameters)
             while True:
                 rows = cursor.fetchmany(max(1, int(batch_size)))
                 if not rows:
@@ -443,40 +280,36 @@ class MySQLConnection:
         self._connection.rollback()
 
     def close(self) -> None:
-        self._connection.close()
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            self._pool.putconn(connection)
 
 
-def _transient_mysql_connection_error(exc: Exception) -> bool:
-    try:
-        return int(exc.args[0]) in TRANSIENT_MYSQL_CONNECTION_CODES
-    except (IndexError, TypeError, ValueError):
-        return False
+def _transient_postgres_connection_error(exc: Exception) -> bool:
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    operational = bool(psycopg is not None and isinstance(exc, psycopg.OperationalError))
+    return operational or sqlstate.startswith("08") or sqlstate in {"53300", "57P01", "57P02", "57P03"}
 
 
-def _connect_mysql(
-    database_url: str | None = None,
-    *,
-    local_infile: bool = False,
-) -> MySQLConnection:
-    attempts = max(1, min(int(os.environ.get("LEAN_MYSQL_CONNECT_ATTEMPTS", "5")), 10))
-    base_delay = max(0.0, min(float(os.environ.get("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0.5")), 5.0))
+def _connect_postgres(database_url: str | None = None) -> PostgresConnection:
+    attempts = max(1, min(int(os.environ.get("LEAN_POSTGRES_CONNECT_ATTEMPTS", "5")), 10))
+    base_delay = max(
+        0.0,
+        min(float(os.environ.get("LEAN_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "0.5")), 5.0),
+    )
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return (
-                MySQLConnection(database_url, local_infile=True)
-                if local_infile
-                else MySQLConnection(database_url)
-            )
+            return PostgresConnection(database_url)
         except Exception as exc:
-            if not _transient_mysql_connection_error(exc):
+            if not _transient_postgres_connection_error(exc):
                 raise
             last_error = exc
             if attempt >= attempts:
                 break
             delay = min(base_delay * (2 ** (attempt - 1)), 5.0)
             logger.warning(
-                "MySQL connection unavailable (attempt %s/%s); retrying in %.1fs: %s",
+                "PostgreSQL connection unavailable (attempt %s/%s); retrying in %.1fs: %s",
                 attempt,
                 attempts,
                 delay,
@@ -484,18 +317,18 @@ def _connect_mysql(
             )
             time.sleep(delay)
     raise DatabaseUnavailableError(
-        f"MySQL is temporarily unavailable after {attempts} connection attempts."
+        f"PostgreSQL is temporarily unavailable after {attempts} connection attempts."
     ) from last_error
 
 
-def _rollback_quietly(connection: sqlite3.Connection | MySQLConnection) -> None:
+def _rollback_quietly(connection: sqlite3.Connection | PostgresConnection) -> None:
     try:
         connection.rollback()
     except Exception:
         logger.warning("Database rollback failed after the original operation error", exc_info=True)
 
 
-def _close_quietly(connection: sqlite3.Connection | MySQLConnection) -> None:
+def _close_quietly(connection: sqlite3.Connection | PostgresConnection) -> None:
     try:
         connection.close()
     except Exception:
@@ -550,114 +383,47 @@ def _strip_leading_sql_comments(sql: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _parse_create_index_if_not_exists(sql: str) -> tuple[str, str] | None:
-    match = re.match(r"\s*create\s+(?:unique\s+)?index\s+if\s+not\s+exists\s+`?([A-Za-z0-9_]+)`?\s+on\s+`?([A-Za-z0-9_]+)`?", sql, flags=re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1), match.group(2)
+def _translate_postgres_sql(sql: str) -> str:
+    """Translate the repository's portable SQLite-shaped SQL to PostgreSQL."""
 
-
-def _parse_alter_table_add_column(sql: str) -> tuple[str, str] | None:
-    match = re.match(
-        r"\s*alter\s+table\s+`?([A-Za-z0-9_]+)`?\s+add\s+column\s+`?([A-Za-z0-9_]+)`?",
-        sql,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return match.group(1), match.group(2)
-
-
-def _mysql_text_type(column: str) -> str:
-    column = column.strip("`").lower()
-    if column in ID_TEXT_COLUMNS or column.endswith("_id"):
-        return "varchar(64)"
-    if column.endswith("_sha256"):
-        return "varchar(64)"
-    if column in {"profile_name", "profile_version", "sample_set", "current_stage", "stage"}:
-        return "varchar(64)"
-    if column in CODE_TEXT_COLUMNS:
-        return "varchar(96)"
-    if column.endswith("_date") or column.endswith("_at") or column in {"date", "timestamp", "start_time", "end_time", "fiscal_period", "delivery_month", "maturity_date"}:
-        return "varchar(32)"
-    if column in LONG_TEXT_COLUMNS or column.endswith("_json"):
-        return "longtext"
-    if column == "raw_file_hash" or column.endswith("_hash"):
-        return "varchar(128)"
-    if column in PATH_TEXT_COLUMNS:
-        return "varchar(1024)"
-    if column.endswith("_url"):
-        return "varchar(255)"
-    if column in {"index_code", "universe_code", "symbol", "key", "id", "job_id", "task_id", "project_id"}:
-        return "varchar(191)"
-    return "varchar(255)"
-
-
-def _translate_mysql_create_table(sql: str) -> str:
-    sql = re.sub(r"\binteger\s+primary\s+key\s+autoincrement\b", "integer primary key auto_increment", sql, flags=re.IGNORECASE)
-    sql = re.sub(r"\bblob\b", "longblob", sql, flags=re.IGNORECASE)
-    lines = []
-    for raw_line in sql.splitlines():
-        line = raw_line
-        match = re.match(r"(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s+)text(\b.*)", line, flags=re.IGNORECASE)
-        if match:
-            indent, column, spacer, suffix = match.groups()
-            column_name = f"`{column}`" if column.lower() in MYSQL_RESERVED_COLUMNS else column
-            line = f"{indent}{column_name}{spacer}{_mysql_text_type(column)}{suffix}"
-        else:
-            reserved_match = re.match(r"(\s*)(rows|key)(\s+)", line, flags=re.IGNORECASE)
-            if reserved_match:
-                indent, column, spacer = reserved_match.groups()
-                line = f"{indent}`{column}`{spacer}{line[reserved_match.end():]}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _translate_mysql_upsert(sql: str) -> str:
-    match = re.search(r"\bon\s+conflict\s*\((?P<cols>[^)]+)\)\s*do\s+update\s+set\s*(?P<updates>.*)$", sql, flags=re.IGNORECASE | re.DOTALL)
-    if not match:
-        return sql
-    updates = match.group("updates").strip().rstrip(";")
-    updates = re.sub(r"\bexcluded\.([A-Za-z_][A-Za-z0-9_]*)", r"values(\1)", updates, flags=re.IGNORECASE)
-    updates = re.sub(r"\bmin\s*\(", "least(", updates, flags=re.IGNORECASE)
-    return sql[: match.start()].rstrip() + "\n            on duplicate key update " + updates
-
-
-def _translate_mysql_sql(sql: str) -> str:
     translated = sql.strip()
     translated = re.sub(r"\?", "%s", translated)
-    if re.match(r"create\s+view\s+if\s+not\s+exists", translated, flags=re.IGNORECASE):
-        translated = re.sub(r"create\s+view\s+if\s+not\s+exists", "create or replace view", translated, count=1, flags=re.IGNORECASE)
-    if re.match(r"create\s+table", translated, flags=re.IGNORECASE):
-        translated = _translate_mysql_create_table(translated)
-    alter_text = re.match(
-        r"(?P<prefix>alter\s+table\s+`?[A-Za-z0-9_]+`?\s+add\s+column\s+`?(?P<column>[A-Za-z0-9_]+)`?\s+)text(?P<suffix>\b.*)",
+    translated = translated.replace("`", '"')
+    translated = re.sub(
+        r"\binteger\s+primary\s+key\s+autoincrement\b",
+        "bigserial primary key",
         translated,
-        flags=re.IGNORECASE | re.DOTALL,
+        flags=re.IGNORECASE,
     )
-    if alter_text:
-        column = alter_text.group("column")
-        translated = f"{alter_text.group('prefix')}{_mysql_text_type(column)}{alter_text.group('suffix')}"
-    translated = _translate_mysql_upsert(translated)
-    translated = re.sub(r"(?<![\w`])rows(?![\w`])", "`rows`", translated, flags=re.IGNORECASE)
-    translated = re.sub(r"(?<![\w`])key(?![\w`])", "`key`", translated, flags=re.IGNORECASE)
-    translated = re.sub(r"\bprimary\s+`key`", "primary key", translated, flags=re.IGNORECASE)
-    translated = re.sub(r"\bforeign\s+`key`", "foreign key", translated, flags=re.IGNORECASE)
-    translated = re.sub(r"\bduplicate\s+`key`", "duplicate key", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\blongtext\b", "text", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\bdatetime\s*\(\s*6\s*\)", "text", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\blongblob\b|\bblob\b", "bytea", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\bdouble\b(?!\s+precision)", "double precision", translated, flags=re.IGNORECASE)
+    if re.match(r"create\s+view\s+if\s+not\s+exists", translated, flags=re.IGNORECASE):
+        translated = re.sub(
+            r"create\s+view\s+if\s+not\s+exists",
+            "create or replace view",
+            translated,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    translated = re.sub(r'(?<![\w"])(rows|key)(?![\w"])', r'"\1"', translated, flags=re.IGNORECASE)
+    translated = re.sub(r'\bprimary\s+"key"', "primary key", translated, flags=re.IGNORECASE)
+    translated = re.sub(r'\bforeign\s+"key"', "foreign key", translated, flags=re.IGNORECASE)
     return translated
 
 
-def connect() -> sqlite3.Connection | MySQLConnection:
+def connect() -> sqlite3.Connection | PostgresConnection:
     init_storage()
-    if database_backend() == "mysql":
-        return _connect_mysql()
+    if database_backend() == "postgresql":
+        return _connect_postgres()
     connection = sqlite3.connect(_sqlite_db_path())
     connection.row_factory = sqlite3.Row
     return connection
 
 
 @contextmanager
-def db() -> Iterable[sqlite3.Connection | MySQLConnection]:
+def db() -> Iterable[sqlite3.Connection | PostgresConnection]:
     connection = connect()
     try:
         yield connection
@@ -670,64 +436,65 @@ def db() -> Iterable[sqlite3.Connection | MySQLConnection]:
 
 
 @contextmanager
-def bulk_db() -> Iterable[sqlite3.Connection | MySQLConnection]:
-    """Connection used only for rebuildable provider data bulk ingestion.
-
-    A dedicated loader URL may hold the restricted session-variable privilege
-    required for ``sql_log_bin=0``.  Business/API connections continue using
-    the normal URL and retain binary logging.
-    """
-    if database_backend() != "mysql":
-        with db() as connection:
-            yield connection
-        return
-    loader_url = os.environ.get("LEAN_LOADER_DATABASE_URL") or DATABASE_URL
-    disable_binlog = os.environ.get("LEAN_MYSQL_BULK_DISABLE_BINLOG", "0").lower() in {"1", "true", "yes", "on"}
-    require_loader = os.environ.get("LEAN_REQUIRE_LOADER_DATABASE", "0").lower() in {"1", "true", "yes", "on"}
-    connection: MySQLConnection | None = None
-    try:
-        local_infile = os.environ.get("LEAN_MYSQL_LOCAL_INFILE", "0").lower() in {
-            "1", "true", "yes", "on",
-        }
-        connection = _connect_mysql(loader_url, local_infile=local_infile)
-        if disable_binlog:
-            connection.execute("set session sql_log_bin=0")
-    except Exception as exc:
-        if connection is not None:
-            connection.close()
-        if require_loader or loader_url == DATABASE_URL:
-            raise
-        # Direct ``docker compose up`` does not provision the restricted loader
-        # user created by start_web_single_instance.sh.  Keep that path usable
-        # and retain normal business-session binlogging instead of failing a run.
-        logger.warning("Bulk loader session unavailable; falling back to the normal database connection: %s", exc)
-        connection = _connect_mysql(DATABASE_URL)
-    try:
+def bulk_db() -> Iterable[sqlite3.Connection | PostgresConnection]:
+    """Use the same transactional PostgreSQL pool for control-plane bulk writes."""
+    with db() as connection:
         yield connection
-        connection.commit()
-    except Exception:
-        _rollback_quietly(connection)
-        raise
-    finally:
-        _close_quietly(connection)
 
 
-def _columns(connection: sqlite3.Connection | MySQLConnection, table: str) -> set[str]:
-    if database_backend() == "mysql":
-        rows = connection.execute(f"show columns from `{table}`").fetchall()
-        return {row["Field"] for row in rows}
+def _columns(
+    connection: sqlite3.Connection | PostgresConnection,
+    table: str,
+) -> set[str]:
+    if database_backend() == "postgresql":
+        rows = connection.execute(
+            """
+            select column_name
+            from information_schema.columns
+            where table_schema = current_schema() and table_name = ?
+            """,
+            (table,),
+        ).fetchall()
+        return {str(row["column_name"]) for row in rows}
     return {row["name"] for row in connection.execute(f"pragma table_info({table})")}
 
 
-def _add_column(connection: sqlite3.Connection | MySQLConnection, table: str, column: str, definition: str) -> None:
+def _add_column(
+    connection: sqlite3.Connection | PostgresConnection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
     if column not in _columns(connection, table):
-        if database_backend() == "mysql":
-            definition = _translate_mysql_create_table(f"{column} {definition}").split(" ", 1)[1]
         connection.execute(f"alter table {table} add column {column} {definition}")
 
 
-def init_db() -> None:
+def init_db(*, apply_migrations: bool = False) -> None:
     init_storage()
+    if database_backend() == "postgresql":
+        from .migrations.runner import (
+            run_postgres_migrations,
+            verify_postgres_migrations_read_only,
+        )
+        from .services.database_invariants import assert_control_plane_schema
+
+        with db() as connection:
+            if apply_migrations:
+                run_postgres_migrations(connection, utc_now)
+            else:
+                verification = verify_postgres_migrations_read_only(connection)
+                incomplete = [
+                    item["revision"]
+                    for item in verification
+                    if item["status"] != "applied"
+                ]
+                if incomplete:
+                    raise RuntimeError(
+                        "PostgreSQL migrations must be applied by platformctl/migration service: "
+                        + ", ".join(incomplete)
+                    )
+            assert_control_plane_schema(connection)
+        return
     with db() as connection:
         connection.executescript(
             """
@@ -1910,6 +1677,42 @@ def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
 
 def json_dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+
+
+def try_advisory_lock(connection: Any, name: str) -> bool:
+    """Acquire a session-scoped deployment-neutral advisory lock."""
+
+    backend = database_backend()
+    if backend == "postgresql":
+        row = connection.execute(
+            "select pg_try_advisory_lock(hashtext(?)) as acquired", (name,)
+        ).fetchone()
+        return bool(row and row["acquired"])
+    return True
+
+
+def release_advisory_lock(connection: Any, name: str) -> None:
+    backend = database_backend()
+    if backend == "postgresql":
+        connection.execute("select pg_advisory_unlock(hashtext(?))", (name,))
+
+
+def advisory_lock_in_use(name: str) -> bool:
+    """Probe a lock using an independent session without stealing ownership."""
+
+    if database_backend() == "sqlite":
+        return False
+    with db() as connection:
+        if try_advisory_lock(connection, name):
+            release_advisory_lock(connection, name)
+            return False
+        return True
+
+
+def for_update_clause(*, skip_locked: bool = False) -> str:
+    if database_backend() != "postgresql":
+        return ""
+    return " for update skip locked" if skip_locked else " for update"
 
 
 def _json_default(value: Any) -> Any:

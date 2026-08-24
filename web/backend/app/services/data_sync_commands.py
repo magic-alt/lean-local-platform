@@ -13,7 +13,7 @@ def _dispatch(signature: Any, task_id: str) -> None:
     try:
         result = signature.apply_async()
     except (KombuError, OSError, ConnectionError):
-        update_task(task_id, status="failed", error="Redis/Celery unavailable")
+        update_task(task_id, status="failed", error="RabbitMQ/Celery unavailable")
         raise
     update_task(task_id, celery_task_id=result.id, status="queued")
 

@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Request
-from redis import Redis
 
-from ..core.config import REDIS_URL
-from ..services.dependencies import check_alert_channel, check_database, dependency_health
+from ..services.broker import check_broker
+from ..core.config import LEAN_EXECUTION_BACKEND, PARQUET_DIR
+from ..services.dependencies import (
+    check_alert_channel,
+    check_database,
+    check_lean_runner,
+    dependency_health,
+)
 from ..services.release_identity import runtime_release_identity
 
 router = APIRouter(prefix="/api", tags=["health"])
@@ -10,17 +15,40 @@ router = APIRouter(prefix="/api", tags=["health"])
 
 @router.get("/health")
 def health(request: Request):
-    redis_ok = False
+    database = check_database()
+    broker_ok = False
     try:
-        redis_ok = bool(Redis.from_url(REDIS_URL, socket_connect_timeout=0.3).ping())
+        broker_ok = bool(check_broker()["ok"])
     except Exception:
-        redis_ok = False
+        broker_ok = False
     release = runtime_release_identity(request.app.openapi())
     notifications = check_alert_channel()
-    healthy = bool(release["schema"]["aligned"] and redis_ok and notifications["ok"])
+    execution = check_lean_runner()
+    healthy = bool(
+        release["schema"]["aligned"]
+        and database["ok"]
+        and broker_ok
+        and execution["ok"]
+        and notifications["ok"]
+    )
     return {
         "status": "ok" if healthy else "degraded",
-        "redis": redis_ok,
+        "database": {
+            "engine": "postgresql",
+            "status": "ready" if database["ok"] else "unavailable",
+            "detail": database["detail"],
+        },
+        "broker": {"engine": "rabbitmq", "status": "ready" if broker_ok else "unavailable"},
+        "execution": {
+            "backend": LEAN_EXECUTION_BACKEND,
+            "status": "ready" if execution["ok"] else "unavailable",
+            "detail": execution["detail"],
+        },
+        "storage": {
+            "marketData": "parquet",
+            "queryEngine": "duckdb",
+            "path": str(PARQUET_DIR),
+        },
         "notifications": notifications["detail"],
         "release": release,
     }

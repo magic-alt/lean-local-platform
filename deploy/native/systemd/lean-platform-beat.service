@@ -1,6 +1,6 @@
 [Unit]
 Description=LEAN Platform Celery Beat
-After=network.target mysql.service redis.service
+After=network.target postgresql.service rabbitmq-server.service
 
 [Service]
 Type=simple

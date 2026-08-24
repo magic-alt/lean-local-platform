@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "sourceSchemaVersion": "0056_runtime_neutral_execution",
+  "legacyMigrationRootSha256": "a3855051850765ff0638a9802c0274bf58def97f658ef9d7ddd7dc229e96ee66",
+  "migrations": [
+    {
+      "revision": "0001_backtest_child_run_indexes",
+      "path": "web/backend/app/migrations/versions/0001_backtest_child_run_indexes.sql",
+      "sha256": "6245bab9d1ebb562cc6b1b078ba74f28d00165705b38ce5148df249dedf4dcfa"
+    },
+    {
+      "revision": "0002_level3_source_certification",
+      "path": "web/backend/app/migrations/versions/0002_level3_source_certification.sql",
+      "sha256": "b65d8d404b83fa03f3d88fecd45bb504cbeb1509b10ef1ea708bb4699f485a1c"
+    },
+    {
+      "revision": "0003_level3plus_governance",
+      "path": "web/backend/app/migrations/versions/0003_level3plus_governance.sql",
+      "sha256": "f4f170217f0c7e9573ca2dfd1deb4735c40e6bb3a3503acfa3ed5ec895d12d72"
+    },
+    {
+      "revision": "0004_insights",
+      "path": "web/backend/app/migrations/versions/0004_insights.sql",
+      "sha256": "e8965f533a1761d2c72f589d173b474ce40c7811c8376e6003c39b513edaa50b"
+    },
+    {
+      "revision": "0005_ashare_tech_reports",
+      "path": "web/backend/app/migrations/versions/0005_ashare_tech_reports.sql",
+      "sha256": "d9be16087f63a71ec3833dbec231a015442b2ec10a943aa3010750132876649d"
+    },
+    {
+      "revision": "0006_ashare_tech_watchlist",
+      "path": "web/backend/app/migrations/versions/0006_ashare_tech_watchlist.sql",
+      "sha256": "e4af279138b1ce53db28538b0ba1ad8ffc3b8406b82d027285f6d20947e9b547"
+    },
+    {
+      "revision": "0007_web_end_date_default",
+      "path": "web/backend/app/migrations/versions/0007_web_end_date_default.sql",
+      "sha256": "6c08c97860e244284398708aba932bd05e201bde4aea47bfeef4cdfeca95e1b6"
+    },
+    {
+      "revision": "0008_strategy_admission",
+      "path": "web/backend/app/migrations/versions/0008_strategy_admission.sql",
+      "sha256": "242c476642d276653a058ba2b48ab03c936584aa6cc1ff5a58b47fe55f6fb2d9"
+    },
+    {
+      "revision": "0009_backtest_failure_metadata",
+      "path": "web/backend/app/migrations/versions/0009_backtest_failure_metadata.sql",
+      "sha256": "d38574b8bcbec3d4b09b5f168baa6aa0863216015666734f6a614593db1af75d"
+    },
+    {
+      "revision": "0010_lean_paper_walkforward",
+      "path": "web/backend/app/migrations/versions/0010_lean_paper_walkforward.sql",
+      "sha256": "d91a71b72d2f9598dbf65a1557c335a1bbdb9d7e9444cd09c99f5b54fe8a6856"
+    },
+    {
+      "revision": "0011_data_sync_and_research_lifecycle",
+      "path": "web/backend/app/migrations/versions/0011_data_sync_and_research_lifecycle.sql",
+      "sha256": "1e070913114a8e3e66db816150f4d279911cc18ba33e6709e0bbe84f9396c491"
+    },
+    {
+      "revision": "0012_workflow_verification_and_data_gaps",
+      "path": "web/backend/app/migrations/versions/0012_workflow_verification_and_data_gaps.sql",
+      "sha256": "80bcb9d24171d3c1c88aed47e4392b64e32c62a3cdf48eb5badbe4c29f95ec5a"
+    },
+    {
+      "revision": "0013_provider_raw_instrument_watermark_index",
+      "path": "web/backend/app/migrations/versions/0013_provider_raw_instrument_watermark_index.sql",
+      "sha256": "de89c71bafc0296dcbacf00ad435716bcaddedb3e84b956d26a2f9283974cb04"
+    },
+    {
+      "revision": "0014_data_sync_throughput_and_policy",
+      "path": "web/backend/app/migrations/versions/0014_data_sync_throughput_and_policy.sql",
+      "sha256": "da29673c5c4e0accd503e0e487e114f2929159e5682d0807c10e05a273f464a9"
+    },
+    {
+      "revision": "0015_ingestion_validation_and_watermarks",
+      "path": "web/backend/app/migrations/versions/0015_ingestion_validation_and_watermarks.sql",
+      "sha256": "3c05d1fdcd919178d356f8e00574b9112142edd074d565199c3d8d64c69c3fc1"
+    },
+    {
+      "revision": "0016_data_sync_heartbeat",
+      "path": "web/backend/app/migrations/versions/0016_data_sync_heartbeat.sql",
+      "sha256": "1182ba95873799b9cbf79efef18eeffa3996faef1018610bf393dcf9e9c27731"
+    },
+    {
+      "revision": "0017_provider_raw_batch_archives",
+      "path": "web/backend/app/migrations/versions/0017_provider_raw_batch_archives.sql",
+      "sha256": "b65958d9ab55ba78b843646e31814bf63c82883908a652b7e386779129839ac1"
+    },
+    {
+      "revision": "0018_experiment_batches",
+      "path": "web/backend/app/migrations/versions/0018_experiment_batches.sql",
+      "sha256": "62c212d1725c40c53c05151338c70da3d310bb49f50510d7da301b13efb6c56c"
+    },
+    {
+      "revision": "0019_source_and_object_integrity",
+      "path": "web/backend/app/migrations/versions/0019_source_and_object_integrity.sql",
+      "sha256": "276d5e6152dd29fe864aa4736694da73aae1ad1d202fc295138b68aa097d71c5"
+    },
+    {
+      "revision": "0020_quarantine_orphan_raw_archives",
+      "path": "web/backend/app/migrations/versions/0020_quarantine_orphan_raw_archives.sql",
+      "sha256": "9ee05d3c4701046b1f5254ff1a9dc936a20f7a97de8ad68d4233788b24be8b83"
+    },
+    {
+      "revision": "0021_alert_delivery_tracking",
+      "path": "web/backend/app/migrations/versions/0021_alert_delivery_tracking.sql",
+      "sha256": "0fa013f13eb30480b79e82dede1440dcde873ecb3c244539e335fa9df4fd6d75"
+    },
+    {
+      "revision": "0022_paper_order_pipeline_v2",
+      "path": "web/backend/app/migrations/versions/0022_paper_order_pipeline_v2.sql",
+      "sha256": "362da17747bc98cec6ac4e5f5d35fb4774609c967abeca21efe9438ec0f719d4"
+    },
+    {
+      "revision": "0023_walk_forward_validation_oos",
+      "path": "web/backend/app/migrations/versions/0023_walk_forward_validation_oos.sql",
+      "sha256": "3345106dc9f65dbb602456e640c6de1ba512fe4881294ce411ff97fe4d082a13"
+    },
+    {
+      "revision": "0024_paper_constraint_matching_reconciliation",
+      "path": "web/backend/app/migrations/versions/0024_paper_constraint_matching_reconciliation.sql",
+      "sha256": "52ff77dd4de824169b5503b30b4b027ea4db9f5c818afff27f00a9a5dcfe7f62"
+    },
+    {
+      "revision": "0025_paper_daily_scheduler",
+      "path": "web/backend/app/migrations/versions/0025_paper_daily_scheduler.sql",
+      "sha256": "9c8f0ed85d37fc594cf4862156da3c7e630cdb9b8e798d91c690bf820fda15e6"
+    },
+    {
+      "revision": "0026_restricted_runner_jobs",
+      "path": "web/backend/app/migrations/versions/0026_restricted_runner_jobs.sql",
+      "sha256": "ab2eab7aa4df69655911042604dc434f5e90578bf218ee439ee2cfcfe3b03eae"
+    },
+    {
+      "revision": "0027_provider_archive_reconciliation",
+      "path": "web/backend/app/migrations/versions/0027_provider_archive_reconciliation.sql",
+      "sha256": "d2bea9095622319c16141cf60aa0195fed9e2ab20c7f5f3e3c9046b3920b9a10"
+    },
+    {
+      "revision": "0028_futures_continuous_attribution",
+      "path": "web/backend/app/migrations/versions/0028_futures_continuous_attribution.sql",
+      "sha256": "91bce01deafe11d21c60f114e4d486bbdc71b270dd9cb956e7270eadd9bac4ab"
+    },
+    {
+      "revision": "0029_paper_accounts",
+      "path": "web/backend/app/migrations/versions/0029_paper_accounts.sql",
+      "sha256": "c06e2c8056c6a96b1998635d866340583154caab4b593d69dceba652dd3d955f"
+    },
+    {
+      "revision": "0030_level4_data_governance",
+      "path": "web/backend/app/migrations/versions/0030_level4_data_governance.sql",
+      "sha256": "518e8d1e4ac36178c0c2a582d5a0358d021619af4c132b2fea8bf8c4026fe06f"
+    },
+    {
+      "revision": "0031_paper_ledger_integrity",
+      "path": "web/backend/app/migrations/versions/0031_paper_ledger_integrity.sql",
+      "sha256": "ec35d3c50eced9c8c93735387d706b61bb29d2e34d7fa62d96841c52155434d5"
+    },
+    {
+      "revision": "0032_api_idempotency_keys",
+      "path": "web/backend/app/migrations/versions/0032_api_idempotency_keys.sql",
+      "sha256": "dd9798401ea035d780ca9942a0c4597f48fb6a40c6ab91e712ef84f60a43a701"
+    },
+    {
+      "revision": "0033_retire_legacy_paper_sessions",
+      "path": "web/backend/app/migrations/versions/0033_retire_legacy_paper_sessions.sql",
+      "sha256": "36ccafbc92205d96da38b8086db2c347497176a2ca44c7dc7bd700157bd01018"
+    },
+    {
+      "revision": "0034_unify_research_workflow",
+      "path": "web/backend/app/migrations/versions/0034_unify_research_workflow.sql",
+      "sha256": "0d93d02fe7a892e26fa6a2530e0d5a7ed1fb943519c30d849f81e18c84f21763"
+    },
+    {
+      "revision": "0035_unify_optimization_workflow",
+      "path": "web/backend/app/migrations/versions/0035_unify_optimization_workflow.sql",
+      "sha256": "e237427a83dd52b711250df84bcf1f21d185bd351dd1e613af530ef62f97c80a"
+    },
+    {
+      "revision": "0036_ashare_tech_agents",
+      "path": "web/backend/app/migrations/versions/0036_ashare_tech_agents.sql",
+      "sha256": "3a5281740e1b4a51b216cd2a7a6ea6a5f8e78eb269475b248eb663e65976c30d"
+    },
+    {
+      "revision": "0037_merge_structured_insights",
+      "path": "web/backend/app/migrations/versions/0037_merge_structured_insights.sql",
+      "sha256": "66fc2f8940d149b9df0f673b41f22ac1ed4e9d07aeba38256685ff0ed42db74b"
+    },
+    {
+      "revision": "0038_ml_cross_sectional_research",
+      "path": "web/backend/app/migrations/versions/0038_ml_cross_sectional_research.sql",
+      "sha256": "f318f1ae47fdb44a168e736970e4329bb71ac73367fdd2cce566b00b6b516e9f"
+    },
+    {
+      "revision": "0039_p0_lineage_and_run_convergence",
+      "path": "web/backend/app/migrations/versions/0039_p0_lineage_and_run_convergence.sql",
+      "sha256": "f1a04936f7c3c24d43f658363463355c0ac656b87abce7e89ed9de422657b0f6"
+    },
+    {
+      "revision": "0040_p1_trust_and_reproducibility",
+      "path": "web/backend/app/migrations/versions/0040_p1_trust_and_reproducibility.sql",
+      "sha256": "4518d7d4f189a918d65e06e7af5ec5e3e67311db75f14f161a266196a82eb989"
+    },
+    {
+      "revision": "0041_p0_terminal_trust_and_release_identity",
+      "path": "web/backend/app/migrations/versions/0041_p0_terminal_trust_and_release_identity.sql",
+      "sha256": "293418844c628d96569ffc2df4e0ac3866b4a1bc0ae03bfcde06d2169cccd611"
+    },
+    {
+      "revision": "0042_p1_notification_capacity_controls",
+      "path": "web/backend/app/migrations/versions/0042_p1_notification_capacity_controls.sql",
+      "sha256": "e7cb185d0afcc965a134bf09d3a75692d69c3d5684a6b1e1de7a0f088f350642"
+    },
+    {
+      "revision": "0043_p1_lineage_query_index",
+      "path": "web/backend/app/migrations/versions/0043_p1_lineage_query_index.sql",
+      "sha256": "c952713b58792f8530b531d2a3458457ab1e392e3a4c6d69b455bcfa2702e86b"
+    },
+    {
+      "revision": "0044_qlib_research_imports",
+      "path": "web/backend/app/migrations/versions/0044_qlib_research_imports.sql",
+      "sha256": "bfe6d8efb74825becf4526252d9833d146e691ebadff40a34359bcd4d66f83f4"
+    },
+    {
+      "revision": "0045_daily_basic_wide_storage",
+      "path": "web/backend/app/migrations/versions/0045_daily_basic_wide_storage.sql",
+      "sha256": "5f0d3e31d0806100c89c177aac3a4d13a57c67f019d2489fe93349442157ab97"
+    },
+    {
+      "revision": "0046_commercial_market_data_v2",
+      "path": "web/backend/app/migrations/versions/0046_commercial_market_data_v2.sql",
+      "sha256": "736ee4902e72a6bf8e4ad06ad07dd1d89e2052f2b6ed1667df34034c8d87ac93"
+    },
+    {
+      "revision": "0047_tushare_typed_source_tables",
+      "path": "web/backend/app/migrations/versions/0047_tushare_typed_source_tables.sql",
+      "sha256": "09f758e69dd4bc79d1d9e87eb65b302aa19220f4d42748d56ff80ea68b27135b"
+    },
+    {
+      "revision": "0048_project_archival",
+      "path": "web/backend/app/migrations/versions/0048_project_archival.sql",
+      "sha256": "2699d2b26f63c4628c5c909ab889535cecd8b6eb547803c28ed99fd3779ffb17"
+    },
+    {
+      "revision": "0049_async_tushare_lineage",
+      "path": "web/backend/app/migrations/versions/0049_async_tushare_lineage.sql",
+      "sha256": "cc6e5c744e3b17ae3dab7122e14797ba8962ee9a0636e0c08725a24d698c045d"
+    },
+    {
+      "revision": "0050_daily_reconciliation_indexes",
+      "path": "web/backend/app/migrations/versions/0050_daily_reconciliation_indexes.sql",
+      "sha256": "c0258dbcc35f2979647a9abcf32729393eea5d71712d34b0a374dea5c33ee687"
+    },
+    {
+      "revision": "0051_market_lake_authority",
+      "path": "web/backend/app/migrations/versions/0051_market_lake_authority.sql",
+      "sha256": "4a3cc77e9227bf751748eb00a396d2c767691ae2345505e211be56f28b3b4a0d"
+    },
+    {
+      "revision": "0052_reconcile_market_lake_control_plane",
+      "path": "web/backend/app/migrations/versions/0052_reconcile_market_lake_control_plane.sql",
+      "sha256": "b2cd034700a0e360473b543607540cbd56f5ca0bbfe5e6f9163675927b18edfc"
+    },
+    {
+      "revision": "0053_reconcile_instrument_identifier_columns",
+      "path": "web/backend/app/migrations/versions/0053_reconcile_instrument_identifier_columns.sql",
+      "sha256": "c77c58aea6a93d87792e1a488cd01edd9a7fd1aaeaa3c7d0cfaf511eff88fb4c"
+    },
+    {
+      "revision": "0054_data_release_and_artifact_contract_v2",
+      "path": "web/backend/app/migrations/versions/0054_data_release_and_artifact_contract_v2.sql",
+      "sha256": "14f97ede0d84bd909c185aa3a62bb6be54f588dc998717d161b8d8d38b792af6"
+    },
+    {
+      "revision": "0055_qlib_lean_promotion_gates",
+      "path": "web/backend/app/migrations/versions/0055_qlib_lean_promotion_gates.sql",
+      "sha256": "0f54aa8a93a91f09ba159233eda64e9196edd45afa2cb7529f017b62ea8cda27"
+    },
+    {
+      "revision": "0056_runtime_neutral_execution",
+      "path": "web/backend/app/migrations/versions/0056_runtime_neutral_execution.sql",
+      "sha256": "6be779bc46af4c3e5c7e2367c57711d898f4f76f1be48a20c2b4c8f1357aeea0"
+    }
+  ]
+}

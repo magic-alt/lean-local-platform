@@ -1,4 +1,4 @@
-def test_mysql_iter_batches_uses_unbuffered_cursor(monkeypatch):
+def test_postgres_iter_batches_uses_named_server_cursor():
     import app.db as db_module
 
     class Cursor:
@@ -20,11 +20,11 @@ def test_mysql_iter_batches_uses_unbuffered_cursor(monkeypatch):
     cursor = Cursor()
 
     class RawConnection:
-        def cursor(self, cursor_class):
-            assert cursor_class is db_module.SSDictCursor
+        def cursor(self, *, name):
+            assert name.startswith("platform_stream_")
             return cursor
 
-    connection = object.__new__(db_module.MySQLConnection)
+    connection = object.__new__(db_module.PostgresConnection)
     connection._connection = RawConnection()
 
     batches = list(connection.iter_batches("select * from sample where id=?", (1,), batch_size=1))

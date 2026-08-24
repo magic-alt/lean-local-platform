@@ -7,11 +7,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import uuid
 
 from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, level3plus, maintenance, object_store, observability, optimization, paper_accounts, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
-from .core.config import API_AUTH_REQUIRED, API_TOKEN, FRONTEND_DIST, MAINTENANCE_READ_ONLY
+from .core.config import (
+    API_AUTH_REQUIRED,
+    API_TOKEN,
+    FRONTEND_DIST,
+    MAINTENANCE_READ_ONLY,
+    assert_runtime_v2_environment,
+)
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .core.request_context import reset_request_context, set_request_context
 from .db import DatabaseUnavailableError, init_db
@@ -266,6 +273,8 @@ async def trace_workflow_middleware(request: Request, call_next):
 
 @app.on_event("startup")
 def startup() -> None:
+    if os.environ.get("LEAN_STRICT_RUNTIME_V2", "0").lower() in {"1", "true", "yes", "on"}:
+        assert_runtime_v2_environment()
     try:
         init_db()
         trust = reconcile_backtest_trust()

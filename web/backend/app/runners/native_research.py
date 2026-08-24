@@ -15,6 +15,10 @@ from typing import Any, Callable
 
 from ..core.config import BACKEND_DIR, DATA_DIR, PARQUET_DIR, RESEARCH_DIR
 from ..lean_engine.errors import LeanPlatformError
+from .windows_sandbox import WindowsJobObject, WindowsSandboxVerifier
+
+
+_WINDOWS_RESEARCH_JOBS: dict[str, WindowsJobObject] = {}
 
 
 class NativeResearchBackend:
@@ -56,8 +60,13 @@ class NativeResearchBackend:
         port: int,
         output_callback: Callable[[str], None],
     ) -> dict[str, Any]:
-        if os.environ.get("LEAN_DEPLOYMENT_PROFILE", "dev").strip().lower() != "dev":
-            raise LeanPlatformError("native_research_workstation_only")
+        profile = os.environ.get("LEAN_DEPLOYMENT_PROFILE", "dev").strip().lower()
+        if profile != "dev":
+            if os.name != "nt":
+                raise LeanPlatformError("native_research_workstation_only")
+            status = WindowsSandboxVerifier().verify()
+            if not status.ready:
+                raise LeanPlatformError(status.detail)
         project = project_dir.resolve()
         if not project.is_dir():
             raise LeanPlatformError("native_research_project_missing")
@@ -103,6 +112,23 @@ class NativeResearchBackend:
                 start_new_session=os.name != "nt",
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
+        if os.name == "nt":
+            try:
+                job = WindowsJobObject(
+                    memory_bytes=max(
+                        512, int(os.environ.get("LEAN_WINDOWS_RESEARCH_MEMORY_MB", "4096"))
+                    )
+                    * 1024**2,
+                    active_process_limit=max(
+                        1, int(os.environ.get("LEAN_WINDOWS_RESEARCH_PROCESS_LIMIT", "16"))
+                    ),
+                )
+                job.assign(int(process._handle))  # type: ignore[attr-defined]
+                _WINDOWS_RESEARCH_JOBS[session_id] = job
+            except Exception:
+                process.kill()
+                process.wait(timeout=10)
+                raise LeanPlatformError("LEAN_RUNNER_UNSAFE:research_job_object")
         metadata = {
             "schemaVersion": 1,
             "sessionId": session_id,
@@ -148,7 +174,11 @@ class NativeResearchBackend:
         pid = int(metadata.get("pid") or 0)
         if pid and self._running(pid):
             if os.name == "nt":
-                os.kill(pid, signal.SIGTERM)
+                job = _WINDOWS_RESEARCH_JOBS.pop(session_id, None)
+                if job is None:
+                    raise LeanPlatformError("LEAN_RUNNER_UNSAFE:research_job_handle_missing")
+                job.terminate()
+                job.close()
             else:
                 os.killpg(pid, signal.SIGTERM)
         if metadata:

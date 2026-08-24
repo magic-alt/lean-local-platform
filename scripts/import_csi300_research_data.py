@@ -16,7 +16,7 @@ from app.services.csi300_data_pipeline import run_csi300_research_import  # noqa
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Import CSI300 TuShare Pro research data into MySQL canonical tables and rebuildable LEAN cache files.")
+    parser = argparse.ArgumentParser(description="Import CSI300 TuShare Pro reference metadata into PostgreSQL and rebuildable market data into Parquet/LEAN files.")
     parser.add_argument("--mode", default="daily", choices=["daily", "incremental", "backfill"])
     parser.add_argument("--start", help="Start date, YYYY-MM-DD. Required for backfill unless startDate is configured.")
     parser.add_argument("--end", help="End date, YYYY-MM-DD. Defaults to today for daily/incremental.")

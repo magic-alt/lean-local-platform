@@ -5,7 +5,7 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends default-mysql-client git libgomp1 \
+    && apt-get install -y --no-install-recommends postgresql-client git libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

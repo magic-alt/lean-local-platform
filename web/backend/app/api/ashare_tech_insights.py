@@ -149,7 +149,7 @@ def create_report(request: AshareTechReportRequest):
         try:
             dispatch_task(generate_ashare_tech_report_task.s(task["id"], report["id"]), task["id"])
         except HTTPException:
-            service.fail_report(report["id"], "Redis/Celery unavailable; report was not dispatched.")
+            service.fail_report(report["id"], "RabbitMQ/Celery unavailable; report was not dispatched.")
             raise
         return {"id": report["id"], "taskId": task["id"], "status": "queued", "reused": False}
     except service.AshareTechReportError as exc:
@@ -234,7 +234,7 @@ def refresh_prediction_evaluations():
     try:
         dispatch_task(refresh_ashare_tech_evaluations_task.s(task["id"]), task["id"])
     except HTTPException:
-        update_task(task["id"], status="failed", error="Redis/Celery unavailable.", finished_at=utc_now())
+        update_task(task["id"], status="failed", error="RabbitMQ/Celery unavailable.", finished_at=utc_now())
         raise
     return {"taskId": task["id"], "status": "queued"}
 

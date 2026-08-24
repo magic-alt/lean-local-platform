@@ -210,12 +210,12 @@ def test_level3_audit_redacts_compose_secrets():
     module = _load_script("audit_level3_redaction", "scripts/run_level3_shadow_audit.py")
     rendered = module._redact_text(
         "  TUSHARE_TOKEN: provider-secret\n"
-        "  LEAN_DATABASE_URL: mysql://secret\n"
+        "  LEAN_DATABASE_URL: postgresql://secret\n"
         "  NORMAL_SETTING: visible\n"
     )
 
     assert "provider-secret" not in rendered
-    assert "mysql://secret" not in rendered
+    assert "postgresql://secret" not in rendered
     assert rendered.count("<redacted>") == 2
     assert "NORMAL_SETTING: visible" in rendered
 
@@ -900,7 +900,7 @@ def test_maintenance_stability_acceptance_passes_when_no_resume_candidate(monkey
     assert result["runWindow"]["checkpointResumePassed"] is True
 
 
-def test_maintenance_stability_acceptance_fails_for_multiple_active_and_mysql_failure(monkeypatch):
+def test_maintenance_stability_acceptance_fails_for_multiple_active_and_database_failure(monkeypatch):
     module = _load_script(
         "maintenance_stability_acceptance_contract_fail",
         "scripts/run_maintenance_stability_acceptance.py",
@@ -936,7 +936,7 @@ def test_maintenance_stability_acceptance_fails_for_multiple_active_and_mysql_fa
                 "max_attempts": 5,
                 "checkpoint_json": None,
                 "summary_json": {},
-                "error": "server closed unexpectedly due mysql 2013",
+                "error": "PostgreSQL server closed unexpectedly",
             },
         ]
 
@@ -946,5 +946,5 @@ def test_maintenance_stability_acceptance_fails_for_multiple_active_and_mysql_fa
     assert result["passed"] is False
     assert result["status"] == "MAINTENANCE_STABILITY_FAIL"
     assert result["runWindow"]["activeRunCount"] == 2
-    assert result["runWindow"]["criticalNoMysqlOrOrphanFailure"] is False
+    assert result["runWindow"]["criticalNoDatabaseOrOrphanFailure"] is False
     assert len(result["runWindow"]["failureTraces"]) == 1

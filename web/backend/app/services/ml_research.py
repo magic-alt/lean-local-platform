@@ -346,7 +346,7 @@ def _coverage(panel: pl.DataFrame, start_date: str) -> dict[str, Any]:
 
 
 def materialize_feature_set(training_id: str, config: dict[str, Any], log: Callable[[str], None]) -> tuple[str, Path, dict[str, Any]]:
-    log("Loading PIT CSI300 panel from canonical MySQL tables.")
+    log("Loading PIT CSI300 panel from the canonical PostgreSQL control plane.")
     panel, benchmark, source_manifest = _load_panel(config["startDate"], config["endDate"])
     log("Calculating causal price, valuation, financial and five-day excess-return labels.")
     panel = add_valuation_features(build_price_features(panel))

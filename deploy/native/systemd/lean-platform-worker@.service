@@ -1,6 +1,6 @@
 [Unit]
 Description=LEAN Platform Celery worker (%i)
-After=network.target mysql.service redis.service lean-platform-runner.service
+After=network.target postgresql.service rabbitmq-server.service lean-platform-runner.service
 
 [Service]
 Type=simple

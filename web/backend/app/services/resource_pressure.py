@@ -163,24 +163,23 @@ def _cpu_metrics() -> dict[str, Any]:
 
 def _queue_metrics() -> dict[str, Any]:
     try:
-        from ..core.config import REDIS_URL
-        from redis import Redis
+        from .broker import queue_depths
 
-        client = Redis.from_url(REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
-        queue_names = ("default", "backtest", "data", "data-bulk", "data-demand", "ml")
-        depths = {name: int(client.llen(name)) for name in queue_names}
+        depths = queue_depths()
         return {
             "depths": depths,
             "maxDepth": max(depths.values(), default=0),
             "totalDepth": sum(depths.values()),
-            "redisReachable": True,
+            "brokerReachable": True,
+            "brokerEngine": "rabbitmq",
         }
     except Exception as exc:
         return {
             "depths": {},
             "maxDepth": None,
             "totalDepth": None,
-            "redisReachable": False,
+            "brokerReachable": False,
+            "brokerEngine": "rabbitmq",
             "error": exc.__class__.__name__,
         }
 

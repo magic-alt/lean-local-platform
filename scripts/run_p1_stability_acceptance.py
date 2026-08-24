@@ -236,7 +236,7 @@ def _run_service_fault_matrix(
         "--api-url",
         api_url,
         "--services",
-        "worker,redis,mysql",
+        "worker,rabbitmq,postgres",
         "--timeout",
         str(timeout),
         "--confirm",

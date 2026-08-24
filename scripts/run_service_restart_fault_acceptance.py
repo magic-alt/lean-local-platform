@@ -121,7 +121,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", default="lean-platform")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--services", default="worker,redis,mysql")
+    parser.add_argument("--services", default="worker,rabbitmq,postgres")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--confirm", required=True)
     parser.add_argument("--output")

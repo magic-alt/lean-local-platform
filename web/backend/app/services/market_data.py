@@ -110,7 +110,7 @@ def enabled() -> bool:
 def clear_market_bars() -> dict[str, Any]:
     """Remove the disposable ClickHouse market mirror during a full rebuild.
 
-    The canonical MySQL reset calls this before it clears source tables so an
+    The canonical control-plane reset calls this before it clears source tables so an
     enabled mirror cannot continue serving stale quotes.  A disabled mirror is
     reported rather than contacted.
     """

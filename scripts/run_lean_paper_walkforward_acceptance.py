@@ -549,7 +549,7 @@ def main() -> int:
     parser.add_argument(
         "--fault-service",
         default="",
-        help="Deprecated compatibility alias: one restart service for --fault-at-day (worker, redis, mysql).",
+        help="Deprecated compatibility alias: one restart service for --fault-at-day (worker, rabbitmq, postgres).",
     )
     parser.add_argument(
         "--fault-phase",

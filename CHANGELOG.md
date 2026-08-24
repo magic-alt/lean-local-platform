@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Replace the production MySQL/Redis runtime with PostgreSQL 17 and RabbitMQ
+  4.3.5; add a fresh PostgreSQL baseline, separate platform/Celery/MLflow
+  databases, PostgreSQL backup and isolated restore drills, RabbitMQ durability
+  settings, row-lock hardening for Paper and scheduler workflows, runtime-neutral
+  health, Docker migration gates, Windows solo-worker supervision, native
+  LEAN/Research sandbox checks, and a host-bound Windows production
+  certification gate. Market time series remain exclusively in Parquet/DuckDB;
+  SQLite remains test-only and legacy MySQL migrations remain immutable history.
+
 - Add runtime-neutral LEAN execution with preserved Docker behavior, a signed
   fail-closed Native runtime/Runner path, Docker/native deployment profiles and
   `platformctl`, Linux systemd sandboxing, workstation Native Research,

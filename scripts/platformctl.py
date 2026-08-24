@@ -27,11 +27,11 @@ LOG_DIR = RUNTIME / "logs"
 MODES = {"docker", "native"}
 PROFILES = {"core", "ml", "observability", "full", "dev"}
 DOCKER_PROFILE_SERVICES = {
-    "core": ["mysql", "redis", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner"],
-    "ml": ["mysql", "redis", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "mlflow-db-init", "mlflow", "ml-worker"],
-    "observability": ["mysql", "redis", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "prometheus", "grafana"],
-    "full": ["mysql", "redis", "clickhouse", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "mlflow-db-init", "mlflow", "ml-worker", "prometheus", "grafana"],
-    "dev": ["mysql", "redis", "api", "worker", "backtest-worker", "lean-runner"],
+    "core": ["postgres", "rabbitmq", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner"],
+    "ml": ["postgres", "rabbitmq", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "mlflow", "ml-worker"],
+    "observability": ["postgres", "rabbitmq", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "prometheus", "grafana"],
+    "full": ["postgres", "rabbitmq", "clickhouse", "api", "worker", "data-worker", "data-lineage-worker", "data-demand-worker", "backtest-worker", "beat", "lean-runner", "mlflow", "ml-worker", "prometheus", "grafana"],
+    "dev": ["postgres", "rabbitmq", "api", "worker", "backtest-worker", "lean-runner"],
 }
 NATIVE_QUEUES = ("default", "data-bulk", "data-lineage", "data-demand", "backtest")
 
@@ -122,6 +122,19 @@ def _http_ready(url: str, *, token_file: Path | None = None) -> bool:
         return False
 
 
+def _windows_production_requested() -> bool:
+    return os.environ.get("LEAN_WINDOWS_PRODUCTION_MODE", "0").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _windows_certification() -> dict[str, Any]:
+    sys.path.insert(0, str(BACKEND))
+    from app.services.windows_certification import verify_windows_certificate
+
+    return verify_windows_certificate()
+
+
 def doctor(selection: Selection) -> int:
     required_commands = ["node", "npm"]
     if selection.mode == "docker":
@@ -135,8 +148,8 @@ def doctor(selection: Selection) -> int:
         checks.append((name, shutil.which(name) is not None, "command"))
     checks.extend(
         [
-            ("mysql", _tcp_ready(os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1"), int(os.environ.get("LEAN_MYSQL_PORT", "3306"))), "tcp"),
-            ("redis", _tcp_ready("127.0.0.1", int(os.environ.get("LEAN_REDIS_PORT", "6379"))), "tcp"),
+            ("postgresql", _tcp_ready("127.0.0.1", int(os.environ.get("LEAN_POSTGRES_PORT", "5432"))), "tcp"),
+            ("rabbitmq", _tcp_ready("127.0.0.1", int(os.environ.get("LEAN_RABBITMQ_PORT", "5672"))), "tcp"),
         ]
     )
     if selection.mode == "native":
@@ -149,6 +162,26 @@ def doctor(selection: Selection) -> int:
         except Exception:
             runtime_ready = False
         checks.append(("lean-runtime", runtime_ready, "pinned/signed"))
+        if os.name == "nt":
+            try:
+                from app.runners.windows_sandbox import WindowsSandboxVerifier
+
+                sandbox = WindowsSandboxVerifier().verify(require_current_account=False)
+                sandbox_ready = sandbox.ready
+                sandbox_detail = sandbox.detail
+            except Exception as exc:
+                sandbox_ready = False
+                sandbox_detail = str(exc)
+            checks.append(("windows-sandbox", sandbox_ready, sandbox_detail))
+            if _windows_production_requested():
+                certification = _windows_certification()
+                checks.append(
+                    (
+                        "windows-certification",
+                        bool(certification["ready"]),
+                        ",".join(certification["errors"]) or certification["status"],
+                    )
+                )
     print(f"Deployment: {selection.mode} ({selection.profile})")
     for name, ready, detail in checks:
         print(f"{name:<18} {'READY' if ready else 'MISSING':<8} {detail}")
@@ -217,10 +250,11 @@ def _native_commands(selection: Selection) -> list[tuple[str, list[str], Path, b
         ("runner", [python, "-m", "uvicorn", "app.runner_service:app", "--host", "127.0.0.1", "--port", "8010"], BACKEND, False),
     ]
     for queue in NATIVE_QUEUES:
+        pool_options = ["--pool=solo", "--concurrency=1"] if os.name == "nt" else []
         commands.append(
             (
                 f"worker-{queue}",
-                [python, "-m", "celery", "-A", "app.tasks.celery_app:celery_app", "worker", "-Q", queue, "-n", f"{queue}@%h", "--loglevel=INFO"],
+                [python, "-m", "celery", "-A", "app.tasks.celery_app:celery_app", "worker", *pool_options, "-Q", queue, "-n", f"{queue}@%h", "--loglevel=INFO"],
                 BACKEND,
                 False,
             )
@@ -243,10 +277,23 @@ def start(selection: Selection) -> int:
         compose_env = dict(os.environ)
         compose_env["LEAN_DEPLOYMENT_PROFILE"] = selection.profile
         compose_env["CLICKHOUSE_ENABLED"] = "1" if selection.profile == "full" else "0"
-        compose_env["LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES"] = "lean_mlflow" if selection.profile in {"ml", "full"} else ""
         code = _run(command, env=compose_env)
         if code == 0:
             _write_state({"schemaVersion": 1, "mode": selection.mode, "profile": selection.profile, "manager": "compose"})
+        return code
+    if os.name == "nt":
+        if _windows_production_requested():
+            certification = _windows_certification()
+            if not certification["ready"]:
+                raise PlatformCtlError(
+                    "windows_production_certification_required:"
+                    + ",".join(certification["errors"])
+                )
+        code = _run(["sc.exe", "start", "LeanRestrictedRunner"])
+        if code == 0:
+            code = _run(["sc.exe", "start", "LeanPlatformSupervisor"])
+        if code == 0:
+            _write_state({"schemaVersion": 1, "mode": selection.mode, "profile": selection.profile, "manager": "windows-scm"})
         return code
     if sys.platform.startswith("linux") and shutil.which("systemctl") and os.environ.get("LEAN_NATIVE_MANAGER", "").lower() == "systemd":
         code = _run(["systemctl", "start", "lean-platform.target"])
@@ -307,6 +354,10 @@ def stop(selection: Selection) -> int:
     manager = state.get("manager")
     if selection.mode == "docker" or manager == "compose":
         return _run(["docker", "compose", "stop", *DOCKER_PROFILE_SERVICES[selection.profile]])
+    if manager == "windows-scm" or os.name == "nt":
+        platform_code = _run(["sc.exe", "stop", "LeanPlatformSupervisor"])
+        runner_code = _run(["sc.exe", "stop", "LeanRestrictedRunner"])
+        return platform_code or runner_code
     if manager == "systemd":
         return _run(["systemctl", "stop", "lean-platform.target"])
     processes = state.get("processes") or []
@@ -325,6 +376,10 @@ def status(selection: Selection) -> int:
     if selection.mode == "docker":
         return _run(["docker", "compose", "ps", *DOCKER_PROFILE_SERVICES[selection.profile]])
     manager = state.get("manager")
+    if manager == "windows-scm" or os.name == "nt":
+        platform_code = _run(["sc.exe", "query", "LeanPlatformSupervisor"])
+        runner_code = _run(["sc.exe", "query", "LeanRestrictedRunner"])
+        return platform_code or runner_code
     if manager == "systemd":
         return _run(["systemctl", "--no-pager", "status", "lean-platform.target"])
     failed = False
@@ -360,9 +415,30 @@ def logs(selection: Selection, service: str | None) -> int:
     return 0
 
 
-def install_system() -> int:
+def install_system(selection: Selection, *, uninstall: bool = False) -> int:
+    if os.name == "nt":
+        action = "remove" if uninstall else "install"
+        startup = [] if uninstall else ["--startup", "auto"]
+        script = str(ROOT / "scripts" / "windows_supervisor.py")
+        for service in ("runner", "platform"):
+            credentials: list[str] = []
+            if not uninstall:
+                prefix = "LEAN_WINDOWS_RUNNER" if service == "runner" else "LEAN_WINDOWS_PLATFORM"
+                account = os.environ.get(f"{prefix}_ACCOUNT", "").strip()
+                password = os.environ.get(f"{prefix}_PASSWORD", "")
+                if not account or not password:
+                    raise PlatformCtlError(f"{prefix.lower()}_credentials_required")
+                credentials = ["--username", account, "--password", password]
+            code = _run(
+                [str(_python()), script, service, action, *startup, *credentials]
+            )
+            if code:
+                return code
+        return 0
     if not sys.platform.startswith("linux"):
-        raise PlatformCtlError("system_install_supported_on_linux_only")
+        raise PlatformCtlError("system_install_unsupported")
+    if uninstall:
+        raise PlatformCtlError("system_uninstall_not_implemented_for_systemd")
     source = ROOT / "deploy" / "native" / "systemd"
     destination = Path("/etc/systemd/system")
     for unit in source.glob("lean-platform*"):
@@ -372,7 +448,7 @@ def install_system() -> int:
 
 def database_command(command: str) -> int:
     if command == "init":
-        code = _run([str(_python()), str(ROOT / "scripts" / "init_native_database.py")], cwd=ROOT)
+        code = _run([str(_python()), str(ROOT / "scripts" / "init_postgres_databases.py")], cwd=ROOT)
         if code:
             return code
         return _run([str(_python()), str(ROOT / "scripts" / "db_migrate.py"), "apply"], cwd=ROOT)
@@ -383,7 +459,7 @@ def database_command(command: str) -> int:
 
 def backup(output: str | None) -> int:
     sys.path.insert(0, str(BACKEND))
-    from app.services.mysql_backup import create_backup
+    from app.services.postgres_backup import create_backup
 
     result = create_backup(Path(output).resolve() if output else None)
     print(json.dumps({key: value for key, value in result.items() if key not in {"databases"}}, indent=2))
@@ -401,6 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument("--skip-frontend", action="store_true")
     install_parser = sub.add_parser("install")
     install_parser.add_argument("--system", action="store_true", required=True)
+    uninstall_parser = sub.add_parser("uninstall")
+    uninstall_parser.add_argument("--system", action="store_true", required=True)
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -413,9 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
     backup_parser.add_argument("--output")
     restore_parser = sub.add_parser("restore")
     restore_parser.add_argument("--backup", required=True)
-    restore_parser.add_argument("--source-database", default="lean_market")
-    restore_parser.add_argument("--target-database", required=True)
-    restore_parser.add_argument("--confirm", required=True)
+    restore_parser.add_argument("--target-prefix", default="lean_restore_v2")
     runtime_parser = sub.add_parser("runtime")
     runtime_parser.add_argument("action", choices=("install", "status"))
     return parser
@@ -430,7 +506,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "bootstrap":
             return bootstrap(selection, install_deps=args.install_deps, build_frontend=not args.skip_frontend)
         if args.command == "install":
-            return install_system()
+            return install_system(selection)
+        if args.command == "uninstall":
+            return install_system(selection, uninstall=True)
         if args.command == "start":
             return start(selection)
         if args.command == "stop":
@@ -450,15 +528,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run(
                 [
                     sys.executable,
-                    str(ROOT / "scripts" / "restore_mysql.py"),
-                    "--backup",
+                    str(ROOT / "scripts" / "restore_postgres.py"),
                     args.backup,
-                    "--source-database",
-                    args.source_database,
-                    "--target-database",
-                    args.target_database,
-                    "--confirm",
-                    args.confirm,
+                    "--target-prefix",
+                    args.target_prefix,
                 ]
             )
         if args.command == "runtime":

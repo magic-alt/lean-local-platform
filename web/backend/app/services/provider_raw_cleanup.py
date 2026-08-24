@@ -124,7 +124,7 @@ def _archive_and_clear_dataset(
         range_id = hashlib.sha256(f"{dataset}:{first_key}:{last_key}".encode("utf-8")).hexdigest()[:32]
         run_id = f"legacy:{dataset}:{range_id}"
         if len(run_id) > 64:
-            raise RuntimeError(f"Legacy archive run id exceeds MySQL limit: {run_id}")
+            raise RuntimeError(f"Legacy archive run id exceeds the control-plane identifier limit: {run_id}")
         archive = _archive_raw_batch(spec, payloads, run_id)
         if not archive or int(archive.get("rowCount") or 0) != len(records):
             raise RuntimeError(f"Legacy archive was not persisted for {dataset}:{first_key}-{last_key}")

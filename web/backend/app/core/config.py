@@ -53,8 +53,8 @@ PROJECTS_DIR = RUNTIME_DIR / "projects"
 RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
 LEAN_RUNTIME_ROOT = _platform_path(os.environ.get("LEAN_NATIVE_RUNTIME_ROOT", RUNTIME_DIR / "lean"))
-# Binary/provider payloads live beside the configured Data directory. MySQL
-# stores only their metadata and hashes.
+# Binary/provider payloads live beside the configured Data directory. PostgreSQL
+# stores only their control-plane metadata and hashes.
 OBJECT_STORE_MODE = os.environ.get("LEAN_OBJECT_STORE_MODE", "filesystem").strip().lower()
 FILE_OBJECT_STORE_DIR = _platform_path(
     os.environ.get("LEAN_FILE_OBJECT_STORE_DIR", DATA_DIR / "object-store")
@@ -65,15 +65,22 @@ PARQUET_DIR = _platform_path(os.environ.get("LEAN_PARQUET_DIR", DATA_DIR / "outp
 HOST_PARQUET_DIR = _platform_path(os.environ.get("LEAN_HOST_PARQUET_DIR", PARQUET_DIR)).resolve()
 PARQUET_COMPRESSION = os.environ.get("LEAN_PARQUET_COMPRESSION", "zstd")
 PARQUET_PARTITION_ROWS = max(50_000, int(os.environ.get("LEAN_PARQUET_PARTITION_ROWS", "100000")))
-MYSQL_HOST = os.environ.get("LEAN_MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.environ.get("LEAN_MYSQL_PORT", "3306"))
-MYSQL_DATABASE = os.environ.get("LEAN_MYSQL_DATABASE", "lean_market")
-MYSQL_USER = os.environ.get("LEAN_MYSQL_USER", "lean")
-MYSQL_PASSWORD = os.environ.get("LEAN_MYSQL_PASSWORD", "lean")
-DEFAULT_MYSQL_DATABASE_URL = (
-    f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
+DEFAULT_POSTGRES_DATABASE_URL = "postgresql://lean_app:lean@127.0.0.1:5432/lean_platform"
+DATABASE_URL = (
+    os.environ.get("LEAN_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or DEFAULT_POSTGRES_DATABASE_URL
 )
-DATABASE_URL = os.environ.get("LEAN_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_MYSQL_DATABASE_URL
+POSTGRES_BIN = Path(os.environ.get("LEAN_POSTGRES_BIN", "")).expanduser() if os.environ.get("LEAN_POSTGRES_BIN") else None
+POSTGRES_BACKUP_DIR = _platform_path(
+    os.environ.get("LEAN_POSTGRES_BACKUP_DIR", RUNTIME_DIR / "backups" / "postgres")
+)
+POSTGRES_BACKUP_RETENTION_DAYS = max(
+    1, int(os.environ.get("LEAN_POSTGRES_BACKUP_RETENTION_DAYS", "14"))
+)
+POSTGRES_BACKUP_MAX_FILES = max(
+    1, int(os.environ.get("LEAN_POSTGRES_BACKUP_MAX_FILES", "30"))
+)
 DB_OBJECT_CHUNK_BYTES = int(os.environ.get("LEAN_DB_OBJECT_CHUNK_BYTES", str(1024 * 1024)))
 DB_OBJECT_STORE_ENABLED = os.environ.get("LEAN_DB_OBJECT_STORE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
 
@@ -117,7 +124,39 @@ LEAN_DOCKER_READ_ONLY = os.environ.get("LEAN_DOCKER_READ_ONLY", "1").lower() not
 RESEARCH_DOCKER_CPUS = os.environ.get("LEAN_RESEARCH_CPUS", "2").strip() or "2"
 RESEARCH_DOCKER_MEMORY = os.environ.get("LEAN_RESEARCH_MEMORY", "4g").strip() or "4g"
 RESEARCH_DOCKER_PIDS_LIMIT = int(os.environ.get("LEAN_RESEARCH_PIDS_LIMIT", "512"))
-REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = os.environ.get(
+    "CELERY_BROKER_URL", "amqp://lean_worker:lean@127.0.0.1:5672/lean"
+)
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND",
+    "db+postgresql+psycopg://lean_celery:lean@127.0.0.1:5432/lean_celery",
+)
+MLFLOW_DATABASE_URL = os.environ.get(
+    "LEAN_MLFLOW_DATABASE_URL",
+    "postgresql+psycopg://lean_mlflow:lean@127.0.0.1:5432/lean_mlflow",
+)
+LEGACY_RUNTIME_ENV_VARS = frozenset(
+    {
+        "REDIS_URL",
+        "LEAN_MYSQL_HOST",
+        "LEAN_MYSQL_PORT",
+        "LEAN_MYSQL_DATABASE",
+        "LEAN_MYSQL_USER",
+        "LEAN_MYSQL_PASSWORD",
+        "LEAN_MYSQL_ROOT_PASSWORD",
+        "LEAN_MYSQL_LOADER_PASSWORD",
+    }
+)
+
+
+def configured_legacy_runtime_variables() -> list[str]:
+    return sorted(name for name in LEGACY_RUNTIME_ENV_VARS if os.environ.get(name) is not None)
+
+
+def assert_runtime_v2_environment() -> None:
+    legacy = configured_legacy_runtime_variables()
+    if legacy:
+        raise RuntimeError("Legacy MySQL/Redis runtime variables are forbidden: " + ", ".join(legacy))
 JOB_TIMEOUT_SECONDS = int(os.environ.get("BACKTEST_JOB_TIMEOUT_SECONDS", "7200"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("BACKTEST_MAX_CONCURRENT_JOBS", "1"))
 LOG_LEVEL = os.environ.get("LEAN_WEB_LOG_LEVEL", "INFO")
@@ -150,11 +189,11 @@ LEAN_NATIVE_SANDBOX = os.environ.get(
 ).strip().lower()
 LEAN_RESEARCH_BACKEND = os.environ.get(
     "LEAN_RESEARCH_BACKEND",
-    "native" if LEAN_DEPLOYMENT_MODE == "native" and LEAN_DEPLOYMENT_PROFILE == "dev" else "docker",
+    "native" if LEAN_DEPLOYMENT_MODE == "native" else "docker",
 ).strip().lower()
 
-if LEAN_DEPLOYMENT_MODE not in {"docker", "native"}:
-    raise RuntimeError("LEAN_DEPLOYMENT_MODE must be docker or native.")
+if LEAN_DEPLOYMENT_MODE not in {"docker", "native", "windows-native"}:
+    raise RuntimeError("LEAN_DEPLOYMENT_MODE must be docker, native, or windows-native.")
 if LEAN_EXECUTION_BACKEND not in {"docker", "native"}:
     raise RuntimeError("LEAN_EXECUTION_BACKEND must be docker or native.")
 if LEAN_DEPLOYMENT_PROFILE not in {"core", "ml", "observability", "full", "dev"}:
@@ -164,7 +203,7 @@ if LEAN_NATIVE_SANDBOX not in {"required", "bwrap", "process"}:
 if LEAN_RESEARCH_BACKEND not in {"docker", "native"}:
     raise RuntimeError("LEAN_RESEARCH_BACKEND must be docker or native.")
 
-CLICKHOUSE_ENABLED = os.environ.get("CLICKHOUSE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
+CLICKHOUSE_ENABLED = os.environ.get("CLICKHOUSE_ENABLED", "0").lower() not in {"0", "false", "no", "off"}
 CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "127.0.0.1")
 CLICKHOUSE_PORT = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
 CLICKHOUSE_USERNAME = os.environ.get("CLICKHOUSE_USERNAME", "lean")
@@ -335,8 +374,8 @@ PAPER_WALKFORWARD_HOUR = int(os.environ.get("LEAN_PAPER_WALKFORWARD_HOUR", "18")
 PAPER_WALKFORWARD_MINUTE = int(os.environ.get("LEAN_PAPER_WALKFORWARD_MINUTE", "45"))
 DERIVED_MAINTENANCE_HOUR = int(os.environ.get("LEAN_DERIVED_MAINTENANCE_HOUR", "19"))
 DERIVED_MAINTENANCE_MINUTE = int(os.environ.get("LEAN_DERIVED_MAINTENANCE_MINUTE", "30"))
-MYSQL_BACKUP_HOUR = int(os.environ.get("LEAN_MYSQL_BACKUP_HOUR", "3"))
-MYSQL_BACKUP_MINUTE = int(os.environ.get("LEAN_MYSQL_BACKUP_MINUTE", "0"))
+POSTGRES_BACKUP_HOUR = int(os.environ.get("LEAN_POSTGRES_BACKUP_HOUR", "3"))
+POSTGRES_BACKUP_MINUTE = int(os.environ.get("LEAN_POSTGRES_BACKUP_MINUTE", "0"))
 SCHEDULED_AUTOMATION_ENABLED = os.environ.get(
     "LEAN_SCHEDULED_AUTOMATION_ENABLED",
     "1",

@@ -1,7 +1,7 @@
 from app.services import dependencies
 
 
-def test_mysql_readiness_counts_use_information_schema_estimates(monkeypatch):
+def test_postgres_readiness_counts_are_exact(monkeypatch):
     statements = []
 
     class Connection:
@@ -9,17 +9,16 @@ def test_mysql_readiness_counts_use_information_schema_estimates(monkeypatch):
             statements.append((" ".join(sql.split()), parameters))
             return self
 
-        def fetchall(self):
-            return [{"readiness_table_name": "market_daily_bars", "readiness_table_rows": 4_000_000}]
+        def fetchone(self):
+            return {"count": 42}
 
-    monkeypatch.setattr(dependencies, "database_backend", lambda: "mysql")
+    monkeypatch.setattr(dependencies, "database_backend", lambda: "postgresql")
 
-    counts, source = dependencies._database_table_counts(Connection(), ["market_daily_bars"])
+    counts, source = dependencies._database_table_counts(Connection(), ["instruments"])
 
-    assert counts == {"market_daily_bars": 4_000_000}
-    assert source == "information_schema_estimate"
-    assert "count(*)" not in statements[0][0].lower()
-    assert "table_name as readiness_table_name" in statements[0][0].lower()
+    assert counts == {"instruments": 42}
+    assert source == "exact"
+    assert "count(*)" in statements[0][0].lower()
 
 
 def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeypatch):
@@ -31,8 +30,8 @@ def test_api_health_uses_delegated_backtest_worker_without_docker_socket(monkeyp
     )
     monkeypatch.setattr(
         dependencies,
-        "check_redis",
-        lambda: {"service": "redis", "ok": True, "detail": {}},
+        "check_broker",
+        lambda: {"service": "broker", "engine": "rabbitmq", "ok": True, "detail": {}},
     )
     monkeypatch.setattr(
         dependencies.market_data,
@@ -126,7 +125,7 @@ def test_failed_alert_delivery_degrades_dependency_health(monkeypatch):
 def test_missing_alert_channel_does_not_degrade_interactive_execution():
     checks = [
         {"service": "database", "ok": True},
-        {"service": "redis", "ok": True},
+        {"service": "broker", "ok": True},
         {"service": "external_alert_channel", "ok": False},
     ]
 
@@ -157,7 +156,7 @@ def test_missing_alert_channel_does_not_degrade_interactive_execution():
 def test_source_certification_is_reported_as_the_exact_execution_blocker():
     checks = [
         {"service": "database", "ok": True},
-        {"service": "redis", "ok": True},
+        {"service": "broker", "ok": True},
         {"service": "source_certification", "ok": False},
         {"service": "external_alert_channel", "ok": False},
     ]

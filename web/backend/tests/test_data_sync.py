@@ -195,7 +195,7 @@ def test_rolling_throughput_reports_zero_after_stall(monkeypatch):
     assert stalled["rollingEtaSeconds"] is None
 
 
-def test_mysql_2013_pauses_sync_before_next_dataset(tmp_path, monkeypatch):
+def test_postgres_connection_loss_pauses_sync_before_next_dataset(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db
     from app.services import data_sync
@@ -211,12 +211,13 @@ def test_mysql_2013_pauses_sync_before_next_dataset(tmp_path, monkeypatch):
     monkeypatch.setattr(data_sync, "_latest_open_trade_date", lambda end_date: end_date)
     calls = []
 
-    def lose_mysql(*args, **kwargs):
+    def lose_database(*args, **kwargs):
         calls.append("stock_basic")
-        error = RuntimeError(2013, "Lost connection to MySQL server during query")
+        error = RuntimeError("PostgreSQL connection reset by peer")
+        error.sqlstate = "08006"
         raise error
 
-    monkeypatch.setattr(data_sync, "_sync_stock_basic", lose_mysql)
+    monkeypatch.setattr(data_sync, "_sync_stock_basic", lose_database)
     monkeypatch.setattr(
         data_sync,
         "_sync_calendar",
@@ -227,7 +228,7 @@ def test_mysql_2013_pauses_sync_before_next_dataset(tmp_path, monkeypatch):
     stored = data_sync.sync_run(run["id"])
 
     assert result["status"] == "paused"
-    assert result["infrastructureFailure"]["code"] == "MYSQL_CONNECTION_LOST"
+    assert result["infrastructureFailure"]["code"] == "DATABASE_CONNECTION_LOST"
     assert calls == ["stock_basic"]
     assert stored["status"] == "paused"
     assert next(item for item in stored["items"] if item["dataset_key"] == "stock_basic")["failed"] == 0
@@ -265,7 +266,7 @@ def test_paused_daily_resume_preserves_committed_checkpoint(tmp_path, monkeypatc
     assert daily["failed"] == 0
 
 
-def test_cancelled_legacy_mysql_2013_run_preserves_daily_and_adj_factor_checkpoints(tmp_path, monkeypatch):
+def test_cancelled_connection_loss_run_preserves_daily_and_adj_factor_checkpoints(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, json_dump
     from app.services import data_sync
@@ -279,7 +280,7 @@ def test_cancelled_legacy_mysql_2013_run_preserves_daily_and_adj_factor_checkpoi
             "update data_sync_items set status='failed',failed=1,error=?,checkpoint_json=? "
             "where run_id=? and dataset_key='daily'",
             (
-                "(2013, 'Lost connection to MySQL server during query')",
+                "PostgreSQL connection reset by peer",
                 json_dump(daily_checkpoint),
                 run["id"],
             ),
@@ -785,15 +786,15 @@ def test_throughput_api_rate_is_capped_at_configured_quota(monkeypatch):
     assert metrics["apiCallsPerMinute"] == metrics["apiQuotaPerMinute"]
 
 
-def test_mysql_storage_metrics_prefer_physical_observer_directory(tmp_path, monkeypatch):
+def test_postgres_storage_metrics_prefer_physical_observer_directory(tmp_path, monkeypatch):
     from app.services import data_sync
 
-    observer = tmp_path / "mysql"
+    observer = tmp_path / "postgres"
     observer.mkdir()
     (observer / "ibdata1").write_bytes(b"x" * 8192)
-    monkeypatch.setattr(data_sync, "database_backend", lambda: "mysql")
-    monkeypatch.setenv("LEAN_MYSQL_DATA_OBSERVER_DIR", str(observer))
-    monkeypatch.setenv("LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB", "50")
+    monkeypatch.setattr(data_sync, "database_backend", lambda: "postgresql")
+    monkeypatch.setenv("LEAN_POSTGRES_DATA_OBSERVER_DIR", str(observer))
+    monkeypatch.setenv("LEAN_POSTGRES_ON_DEMAND_MAX_DATABASE_GB", "50")
     monkeypatch.setattr(data_sync, "_DATABASE_SIZE_CACHE", (0.0, {}))
 
     metrics = data_sync._database_storage_metrics()
@@ -2810,15 +2811,7 @@ def test_adj_factor_resume_retries_failed_work_item_without_restarting(tmp_path,
 
 def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     from app.tasks.celery_app import celery_app
-    from app.tasks.worker import (
-        _broker_contains_sync_run,
-        _broker_ready_contains_sync_run,
-        _broker_ready_contains_materialization,
-        _broker_unacked_materialization_tags,
-        _broker_unacked_maintenance_tags,
-        _broker_unacked_sync_tags,
-        sync_all_data_task,
-    )
+    from app.tasks.worker import sync_all_data_task
 
     routes = celery_app.conf.task_routes
     assert routes["lean_web.sync_all_data"]["queue"] == "data-bulk"
@@ -2830,46 +2823,19 @@ def test_celery_routes_keep_data_and_backtests_on_separate_queues():
     assert "lean_web.optimize" not in routes
     assert sync_all_data_task.acks_late is True
     assert sync_all_data_task.reject_on_worker_lost is True
-    assert celery_app.conf.broker_transport_options["visibility_timeout"] == 43_200
-
-    class FakeRedis:
-        def lrange(self, queue, start, end):
-            if queue == "data-bulk":
-                return [b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-123"}}']
-            if queue == "data-demand":
-                return [b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived"}}']
-            return []
-
-        def hvals(self, key):
-            return [
-                b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}',
-                b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived-unacked"}}',
-            ]
-
-        def hgetall(self, key):
-            return {
-                b"delivery-run-unacked": b'{"headers":{"task":"lean_web.sync_all_data","argsrepr":"run-unacked"}}',
-                b"delivery-derived-unacked": b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"run-derived-unacked"}}',
-                b"delivery-maintenance-unacked": b'{"headers":{"task":"lean_web.maintain_derived_layers","argsrepr":"run-maintenance-unacked"}}',
-            }
-
-    assert _broker_contains_sync_run(FakeRedis(), "run-123") is True
-    assert _broker_contains_sync_run(FakeRedis(), "run-unacked") is True
-    assert _broker_contains_sync_run(FakeRedis(), "run-456") is False
-    assert _broker_ready_contains_sync_run(FakeRedis(), "run-123") is True
-    assert _broker_ready_contains_sync_run(FakeRedis(), "run-unacked") is False
-    assert _broker_unacked_sync_tags(FakeRedis(), "run-unacked") == ["delivery-run-unacked"]
-    assert _broker_ready_contains_materialization(FakeRedis(), "run-derived") is True
-    assert _broker_ready_contains_materialization(FakeRedis(), "run-derived-unacked") is False
-    assert _broker_unacked_materialization_tags(FakeRedis(), "run-derived-unacked") == ["delivery-derived-unacked"]
-    assert _broker_unacked_maintenance_tags(FakeRedis(), "run-maintenance-unacked") == [
-        "delivery-maintenance-unacked"
-    ]
+    assert celery_app.conf.broker_url.startswith("amqp://")
+    assert str(celery_app.conf.result_backend).startswith("db+postgresql+psycopg://")
+    assert celery_app.conf.broker_transport_options["confirm_publish"] is True
+    assert celery_app.conf.task_default_delivery_mode == "persistent"
+    assert celery_app.conf.worker_prefetch_multiplier == 1
+    assert {queue.name for queue in celery_app.conf.task_queues} == {
+        "default", "data-bulk", "data-lineage", "data-demand", "backtest", "ml"
+    }
+    assert all(queue.durable for queue in celery_app.conf.task_queues)
 
 
 def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
-    import redis
 
     from app.db import db, json_dump
     from app.services import data_sync
@@ -2889,34 +2855,6 @@ def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):
             ("2000-01-01T00:00:00+00:00", json_dump(payload), run["id"]),
         )
 
-    removed: list[tuple[str, ...]] = []
-
-    class FakeRedis:
-        def ping(self):
-            return True
-
-        def lrange(self, queue, start, end):
-            return []
-
-        def hvals(self, key):
-            return []
-
-        def hgetall(self, key):
-            return {
-                b"delivery-derived": (
-                    b'{"headers":{"task":"lean_web.materialize_sync_data","argsrepr":"'
-                    + run["id"].encode("utf-8")
-                    + b'"}}'
-                )
-            }
-
-        def hdel(self, key, *tags):
-            removed.append((key, *tags))
-
-        def zrem(self, key, *tags):
-            removed.append((key, *tags))
-
-    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *args, **kwargs: FakeRedis()))
     monkeypatch.setattr(worker, "_materialization_lease_active", lambda run_id: False)
     queued: list[tuple[list[str], str]] = []
     monkeypatch.setattr(
@@ -2929,17 +2867,12 @@ def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):
 
     assert result["recoveredDerived"] == [run["id"]]
     assert queued == [([run["id"]], "data-demand")]
-    assert removed == [
-        ("unacked", "delivery-derived"),
-        ("unacked_index", "delivery-derived"),
-    ]
     assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "queued"
     assert data_sync.sync_run(run["id"])["derivedStatus"]["recoveryReason"] == "stale_derived_heartbeat"
 
 
 def test_recovery_preserves_stale_derived_materialization_with_live_lease(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
-    import redis
 
     from app.db import db, json_dump
     from app.services import data_sync
@@ -2959,20 +2892,6 @@ def test_recovery_preserves_stale_derived_materialization_with_live_lease(tmp_pa
             ("2000-01-01T00:00:00+00:00", json_dump(payload), run["id"]),
         )
 
-    class FakeRedis:
-        def ping(self):
-            return True
-
-        def lrange(self, queue, start, end):
-            return []
-
-        def hvals(self, key):
-            return []
-
-        def hgetall(self, key):
-            return {}
-
-    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *args, **kwargs: FakeRedis()))
     monkeypatch.setattr(worker, "_materialization_lease_active", lambda run_id: True)
     queued = []
     monkeypatch.setattr(
@@ -3006,7 +2925,7 @@ def test_partial_data_sync_never_marks_outer_task_success(monkeypatch):
     assert updates[-1]["error"] == "One or more datasets require retry."
 
 
-def test_mysql_infrastructure_pause_marks_task_retryable_and_alerts(monkeypatch):
+def test_database_infrastructure_pause_marks_task_retryable_and_alerts(monkeypatch):
     from app.tasks import worker
 
     updates = []

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "minimumSoakSeconds": 43200,
+  "maximumCertificateAgeDays": 90,
+  "requiredVersionPrefixes": {
+    "postgresql": "17.",
+    "rabbitmq": "4.3.5",
+    "celery": "5.6.",
+    "python": "3.12."
+  },
+  "requiredScenarios": [
+    "real_postgresql",
+    "real_rabbitmq",
+    "multiple_solo_workers",
+    "worker_kill_redelivery",
+    "broker_restart_recovery",
+    "api_restart_recovery",
+    "beat_restart_recovery",
+    "late_ack_redelivery",
+    "paper_cycle_idempotency",
+    "backtest_execution",
+    "ml_task_execution",
+    "native_lean_sandbox",
+    "native_research_sandbox"
+  ]
+}

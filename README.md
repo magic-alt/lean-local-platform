@@ -1,18 +1,18 @@
 # LEAN Local Platform
 
 本项目是基于 QuantConnect LEAN 的本地量化研究平台，正式入口是 FastAPI、
-React、Celery、MySQL 和可替换 LEAN 执行后端组成的 Web 工作台。Docker Compose
-与 Linux Native 是并列部署适配器；平台不依赖 Lean
+React、Celery、PostgreSQL、RabbitMQ 和可替换 LEAN 执行后端组成的 Web 工作台。Docker Compose
+与 Windows/Linux Native 是并列部署适配器；平台不依赖 Lean
 CLI；回测、优化、Research 和 Paper Replay 均以版本化项目策略运行。
 
 ## 当前能力
 
-- `data/` 下的 Parquet 是股票行情事实层；MySQL 是任务、注册、质量、账户和审计控制平面；SQLite 仅用于隔离测试。
+- `data/` 下的 Parquet 是股票行情事实层；PostgreSQL 是任务、注册、质量、账户和审计控制平面；SQLite 仅用于隔离测试。
 - Data 页支持十个 TuShare 数据集首次全量建库、后续增量更新，并通过版本化契约目录覆盖
   当前官方股票、指数、期货和期权专题的 139 个数据集；其他
   数据集的按需下载和可选存储目标。
 - Provider 数据经过标准化、来源判优、质量检查和隔离后原子发布到 Bronze/Silver Parquet；
-  旧分区保留为内容哈希修订，MySQL 只记录 manifest、血缘和状态。
+  旧分区保留为内容哈希修订，PostgreSQL 只记录 manifest、血缘和状态。
 - Backtests、Optimization 和 Research 提供策略案例、批量实验、参数网格、
   滚动窗口和动态 PIT 股票池工作流。
 - 报告使用统一的 `report-layout-v2` HTML/Markdown/PDF/CSV/JSON 格式，并保留运行指纹、
@@ -42,23 +42,16 @@ python scripts/platformctl.py --mode native doctor
 python scripts/platformctl.py --mode native --profile core start
 ```
 
-`./scripts/start_web_single_instance.sh` 继续作为兼容入口；当
-`LEAN_DEPLOYMENT_MODE=native` 时转交给 `platformctl`。
+`./scripts/start_web_single_instance.sh` 是 `platformctl` 的轻量前台入口。
 
 启动脚本会在 `web/runtime/secrets/` 生成并复用本地 API Token，由前端代理
 自动携带。直接调用 API 时必须发送 Bearer Token；正式配置不得关闭认证。
-
-只有 Dockerfile、依赖或镜像构建内容发生变化时才需要：
-
-```bash
-./scripts/start_web_single_instance.sh --build
-```
 
 也可以直接使用 Compose：
 
 ```bash
 docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
+  postgres rabbitmq postgres-init migration api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
 ```
 
 ## 数据与运行目录
@@ -68,7 +61,7 @@ web/runtime/                  本地运行产物、项目副本、报告、上�
 $LEAN_DATA_DIR                数据湖与 LEAN 缓存；默认是仓库内 data
 $LEAN_DATA_DIR/silver/daily/current  A 股日行情权威 Parquet 分区
 $LEAN_DATA_DIR/output/parquet       平台生成的派生 Parquet
-Docker volumes                MySQL、Redis、ClickHouse、Grafana 等服务数据
+Docker volumes                PostgreSQL、RabbitMQ、ClickHouse、Grafana 等服务数据
 web/runtime/lean/             校验通过的 Native LEAN runtime
 config/data-sources/          可移植的数据来源 manifest；纳入版本控制
 ```
@@ -150,7 +143,7 @@ cd ../qlib-platform
 
 该命令通过本仓库的 `scripts/run_cross_repo_golden_platform_stage.py` 发布 DataRelease、导入 Artifact v2、
 运行真实 Docker LEAN，并由正式 `record_lean_validation()` 状态机推进到 `LEAN_VALIDATED`。所有运行目录均隔离
-在 `--work-dir`，不使用正式 MySQL、`web/runtime` 或正式数据目录。
+在 `--work-dir`，不使用正式 PostgreSQL、`web/runtime` 或正式数据目录。
 
 ```bash
 cd web/backend

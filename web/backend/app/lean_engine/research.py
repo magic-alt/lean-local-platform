@@ -127,6 +127,20 @@ def run_detached_research(
     image: str = DEFAULT_RESEARCH_IMAGE,
 ) -> dict[str, Any]:
     if LEAN_RESEARCH_BACKEND == "native":
+        if _runner_url():
+            result = _remote_request(
+                "POST",
+                "/v1/research/start",
+                {
+                    "sessionId": session_id,
+                    "image": image,
+                    "projectDir": str(_host_platform_path(project_dir)),
+                    "port": port,
+                },
+            )
+            for line in result.pop("output", []) or []:
+                output_callback(str(line))
+            return result
         return NativeResearchBackend().start(session_id, project_dir, port, output_callback)
     image = validate_research_docker_image(image)
     host_project_dir = _host_platform_path(project_dir)

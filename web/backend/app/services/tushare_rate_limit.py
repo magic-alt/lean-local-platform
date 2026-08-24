@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Callable
 
-from ..core.config import REDIS_URL
+from ..db import database_backend, db
 
 
 DEFAULT_CALLS_PER_MINUTE = max(1, int(os.environ.get("LEAN_TUSHARE_CALLS_PER_MINUTE", "500")))
@@ -17,74 +17,64 @@ DEFAULT_CALLS_PER_MINUTE = max(1, int(os.environ.get("LEAN_TUSHARE_CALLS_PER_MIN
 class TushareRateLimiter:
     """A token-wide rolling-window limiter shared by every TuShare caller.
 
-    Redis provides cross-process coordination.  The in-process deque is a safe
-    fallback for tests and for a temporarily unavailable Redis instance.
+    PostgreSQL provides cross-process coordination. The in-process deque is
+    retained only for the explicit SQLite unit-test backend.
     """
-
-    _LUA = """
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local member = ARGV[4]
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
-local count = redis.call('ZCARD', key)
-if count < limit then
-  redis.call('ZADD', key, now, member)
-  redis.call('PEXPIRE', key, math.ceil(window * 2))
-  return {1, 0, count + 1}
-end
-local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-local wait = window
-if oldest[2] then wait = math.max(1, tonumber(oldest[2]) + window - now) end
-return {0, wait, count}
-"""
-    _STATUS_LUA = """
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
-local count = redis.call('ZCARD', key)
-local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-local wait = 0
-if count >= limit and oldest[2] then wait = math.max(1, tonumber(oldest[2]) + window - now) end
-return {count, wait}
-"""
 
     def __init__(self, *, calls_per_minute: int = DEFAULT_CALLS_PER_MINUTE) -> None:
         self.calls_per_minute = max(1, calls_per_minute)
         self._local: deque[float] = deque()
         self._endpoint_local: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
-        self._redis: Any | None = None
-        try:
-            import redis
-
-            client = redis.Redis.from_url(REDIS_URL, socket_connect_timeout=0.5, socket_timeout=1)
-            client.ping()
-            self._redis = client
-        except Exception:
-            self._redis = None
-
-    def _redis_wait(self) -> float | None:
-        if self._redis is None:
+    def _database_window(
+        self,
+        bucket: str,
+        *,
+        window_ms: int,
+        limit: int,
+        consume: bool,
+    ) -> tuple[int, int] | None:
+        if database_backend() != "postgresql":
             return None
         now_ms = int(time.time() * 1000)
-        try:
-            allowed, wait_ms, _ = self._redis.eval(
-                self._LUA,
-                1,
-                "lean:tushare:rate:global",
-                now_ms,
-                60_000,
-                self.calls_per_minute,
-                f"{now_ms}:{uuid.uuid4().hex}",
+        with db() as connection:
+            connection.execute(
+                "select pg_advisory_xact_lock(hashtext(?))",
+                (f"lean:tushare:rate:{bucket}",),
             )
-            return 0.0 if int(allowed) else max(0.001, int(wait_ms) / 1000.0)
-        except Exception:
-            self._redis = None
+            connection.execute(
+                "delete from provider_rate_limit_events where bucket_key=? and occurred_at_ms<=?",
+                (bucket, now_ms - window_ms),
+            )
+            row = connection.execute(
+                "select count(*) as count,min(occurred_at_ms) as oldest from provider_rate_limit_events where bucket_key=?",
+                (bucket,),
+            ).fetchone()
+            count = int(row["count"] or 0)
+            oldest = int(row["oldest"] or now_ms)
+            admitted = False
+            if consume and count < limit:
+                connection.execute(
+                    "insert into provider_rate_limit_events(bucket_key,event_id,occurred_at_ms) values (?,?,?)",
+                    (bucket, uuid.uuid4().hex, now_ms),
+                )
+                count += 1
+                admitted = True
+            wait_ms = (
+                0
+                if admitted
+                else max(1, oldest + window_ms - now_ms) if count >= limit else 0
+            )
+        return count, wait_ms
+
+    def _database_wait(self) -> float | None:
+        result = self._database_window(
+            "global", window_ms=60_000, limit=self.calls_per_minute, consume=True
+        )
+        if result is None:
             return None
+        count, wait_ms = result
+        return max(0.001, wait_ms / 1000.0) if count >= self.calls_per_minute and wait_ms else 0.0
 
     def _local_wait(self) -> float:
         now = time.monotonic()
@@ -98,7 +88,7 @@ return {count, wait}
 
     def acquire(self) -> None:
         while True:
-            wait = self._redis_wait()
+            wait = self._database_wait()
             if wait is None:
                 wait = self._local_wait()
             if wait <= 0:
@@ -110,21 +100,12 @@ return {count, wait}
         now_ms = int(time.time() * 1000)
         count = 0
         wait_ms = 0
-        if self._redis is not None:
-            try:
-                count, wait_ms = self._redis.eval(
-                    self._STATUS_LUA,
-                    1,
-                    "lean:tushare:rate:global",
-                    now_ms,
-                    60_000,
-                    self.calls_per_minute,
-                )
-                count = int(count)
-                wait_ms = int(wait_ms)
-            except Exception:
-                self._redis = None
-        if self._redis is None:
+        shared = self._database_window(
+            "global", window_ms=60_000, limit=self.calls_per_minute, consume=False
+        )
+        if shared is not None:
+            count, wait_ms = shared
+        else:
             now = time.monotonic()
             with self._lock:
                 while self._local and self._local[0] <= now - 60.0:
@@ -145,24 +126,19 @@ return {count, wait}
         }
 
     def acquire_endpoint(self, endpoint: str, *, calls: int, period_seconds: int, wait: bool) -> None:
-        key = f"lean:tushare:rate:endpoint:{endpoint}"
+        key = f"endpoint:{endpoint}"
         while True:
-            wait_seconds: float | None = None
-            if self._redis is not None:
-                now_ms = int(time.time() * 1000)
-                try:
-                    allowed, wait_ms, _ = self._redis.eval(
-                        self._LUA,
-                        1,
-                        key,
-                        now_ms,
-                        period_seconds * 1000,
-                        calls,
-                        f"{now_ms}:{uuid.uuid4().hex}",
-                    )
-                    wait_seconds = 0.0 if int(allowed) else max(0.001, int(wait_ms) / 1000.0)
-                except Exception:
-                    self._redis = None
+            shared = self._database_window(
+                key,
+                window_ms=period_seconds * 1000,
+                limit=calls,
+                consume=True,
+            )
+            wait_seconds = (
+                None
+                if shared is None
+                else (max(0.001, shared[1] / 1000.0) if shared[0] >= calls and shared[1] else 0.0)
+            )
             if wait_seconds is None:
                 now = time.monotonic()
                 with self._lock:

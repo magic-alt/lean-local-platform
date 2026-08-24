@@ -17,7 +17,7 @@ from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 ALERT_TYPES = {
     "api_down",
     "worker_down",
-    "mysql_down",
+    "database_down",
     "migration_mismatch",
     "provider_unavailable",
     "qa_critical",
@@ -36,7 +36,7 @@ ALERT_TYPES = {
     "resource_memory_pressure",
     "resource_queue_pressure",
     "source_certification_revoked",
-    "mysql_backup_failed",
+    "postgres_backup_failed",
 }
 
 _SEVERITY_RANK = {

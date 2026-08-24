@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Callable
 
 from .base import ExecutionResult
+from .windows_sandbox import WindowsJobObject
 
 
 class ProcessRunner:
     def __init__(self, timeout_seconds: int | None = None):
         self.timeout_seconds = timeout_seconds
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._jobs: dict[str, WindowsJobObject] = {}
 
     @staticmethod
     def _stop_process(process: subprocess.Popen[str]) -> None:
@@ -37,7 +39,11 @@ class ProcessRunner:
         process = self._processes.get(execution_id)
         if process is None:
             return False
-        self._stop_process(process)
+        job = self._jobs.get(execution_id)
+        if job is not None:
+            job.terminate()
+        else:
+            self._stop_process(process)
         return True
 
     def run(
@@ -62,6 +68,21 @@ class ProcessRunner:
             start_new_session=os.name != "nt",
             creationflags=creationflags,
         )
+        job: WindowsJobObject | None = None
+        if os.name == "nt":
+            try:
+                memory_mb = max(256, int(os.environ.get("LEAN_WINDOWS_JOB_MEMORY_MB", "4096")))
+                process_limit = max(1, int(os.environ.get("LEAN_WINDOWS_JOB_PROCESS_LIMIT", "8")))
+                job = WindowsJobObject(
+                    memory_bytes=memory_mb * 1024**2,
+                    active_process_limit=process_limit,
+                )
+                job.assign(int(process._handle))  # type: ignore[attr-defined]
+                self._jobs[execution_id] = job
+            except Exception:
+                process.kill()
+                process.wait(timeout=10)
+                raise
         self._processes[execution_id] = process
         assert process.stdout is not None
         output_queue: queue.Queue[str | None] = queue.Queue()
@@ -95,6 +116,9 @@ class ProcessRunner:
             reader.join(timeout=2)
             process.stdout.close()
             self._processes.pop(execution_id, None)
+            active_job = self._jobs.pop(execution_id, None)
+            if active_job is not None:
+                active_job.close()
         exit_code = process.wait()
         return ExecutionResult(
             exit_code=exit_code,

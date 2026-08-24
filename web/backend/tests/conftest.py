@@ -21,8 +21,8 @@ def use_sqlite_test_backend(tmp_path, monkeypatch, request):
     import app.db as db_module
 
     if (
-        request.node.get_closest_marker("integration_mysql")
-        and os.environ.get("RUN_MYSQL_INTEGRATION") == "1"
+        request.node.get_closest_marker("integration_postgres")
+        and os.environ.get("RUN_POSTGRES_INTEGRATION") == "1"
     ):
         yield
         return

@@ -11,6 +11,7 @@ from .base import BackendHealth, ExecutionPlan, ExecutionResult, ExecutionSpec, 
 from .process import ProcessRunner
 from .runtime_registry import NativeRuntime, RuntimeRegistry
 from .runner_client import RestrictedRunnerClient
+from .windows_sandbox import WindowsSandboxVerifier
 
 
 class NativeLeanBackend:
@@ -57,6 +58,11 @@ class NativeLeanBackend:
             raise LeanPlatformError("native_dotnet_runtime_missing")
         direct = [dotnet, str(runtime.launcher), "--config", str(spec.config_path)]
         requested = LEAN_NATIVE_SANDBOX
+        if os.name == "nt":
+            status = WindowsSandboxVerifier().verify()
+            if not status.ready:
+                raise LeanPlatformError(status.detail)
+            return direct, "windows-restricted-job"
         if requested == "process":
             return direct, "process"
         bwrap = shutil.which("bwrap")
@@ -165,7 +171,13 @@ class NativeLeanBackend:
                 return BackendHealth(backend="native", ready=False, detail=str(exc))
         try:
             runtime = self.registry.resolve()
-            sandbox = "process" if LEAN_NATIVE_SANDBOX == "process" else "bwrap"
+            if os.name == "nt":
+                status = WindowsSandboxVerifier().verify()
+                if not status.ready:
+                    raise LeanPlatformError(status.detail)
+                sandbox = "windows-restricted-job"
+            else:
+                sandbox = "process" if LEAN_NATIVE_SANDBOX == "process" else "bwrap"
             if sandbox == "bwrap" and shutil.which("bwrap") is None:
                 raise LeanPlatformError("native_sandbox_unavailable")
             if shutil.which("dotnet") is None:

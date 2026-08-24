@@ -194,10 +194,7 @@ def require_source_allowed(source: str | None, *, allow_research_source: bool = 
 
 def source_certification(source: str | None, *, asset_class: str = "equity", market: str = "china", venue: str | None = "china") -> dict[str, Any]:
     normalized = normalize_source(source)
-    if (
-        database_backend() == "mysql"
-        and os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database"
-    ):
+    if os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database":
         local = _local_lake_certification(
             normalized,
             asset_class=asset_class,
@@ -279,7 +276,7 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
                 and release.get("is_certified")
                 and release.get("file_manifest_sha256") == file_manifest_sha256
             )
-        elif certification_valid and database_backend() == "mysql":
+        elif certification_valid and database_backend() == "postgresql":
             # Production never accepts the pre-0040 split authority. SQLite is
             # retained only for legacy unit fixtures that do not model QA rows.
             certification_valid = False
@@ -363,7 +360,7 @@ def _local_lake_certification(
 ) -> dict[str, Any]:
     """Describe a readable local Parquet scope without requiring SQL metadata.
 
-    The lake is the market-data authority.  MySQL stores optional application
+    The lake is the market-data authority. PostgreSQL stores optional application
     governance metadata, so a missing database must not make already-present
     local quotes unavailable to chart, research, or backtest read paths.
     """

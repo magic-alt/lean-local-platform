@@ -9,6 +9,7 @@ from typing import Any
 
 
 VERSIONS_DIR = Path(__file__).parent / "versions"
+POSTGRES_VERSIONS_DIR = Path(__file__).parent / "postgres"
 OBSOLETE_MARKET_INDEX_MIGRATIONS = {
     "0043_p1_lineage_query_index",
     "0050_daily_reconciliation_indexes",
@@ -33,6 +34,16 @@ def _checksum(script: str) -> str:
 
 
 def _columns(connection: Any, table: str) -> set[str]:
+    if _is_postgres(connection):
+        rows = connection.execute(
+            """
+            select column_name
+            from information_schema.columns
+            where table_schema = current_schema() and table_name = ?
+            """,
+            (table,),
+        ).fetchall()
+        return {str(row["column_name"]) for row in rows}
     try:
         rows = connection.execute(f"show columns from `{table}`").fetchall()
         return {row["Field"] for row in rows}
@@ -77,9 +88,9 @@ def _ensure_schema_migrations_columns(connection: Any) -> None:
         connection.execute("alter table schema_migrations add column execution_time_ms integer")
 
 
-def migration_files() -> list[dict[str, Any]]:
+def migration_files(versions_dir: Path = VERSIONS_DIR) -> list[dict[str, Any]]:
     items = []
-    for path in sorted(VERSIONS_DIR.glob("*.sql")):
+    for path in sorted(versions_dir.glob("*.sql")):
         script = path.read_text(encoding="utf-8")
         items.append(
             {
@@ -91,6 +102,14 @@ def migration_files() -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def _is_postgres(connection: Any) -> bool:
+    return connection.__class__.__name__ == "PostgresConnection"
+
+
+def _migration_files_for(connection: Any) -> list[dict[str, Any]]:
+    return migration_files(POSTGRES_VERSIONS_DIR if _is_postgres(connection) else VERSIONS_DIR)
 
 
 def migration_status(connection: Any) -> list[dict[str, Any]]:
@@ -107,7 +126,7 @@ def migration_status(connection: Any) -> list[dict[str, Any]]:
     rows = connection.execute("select * from schema_migrations").fetchall()
     applied = {row["revision"]: dict(row) for row in rows}
     result = []
-    for item in migration_files():
+    for item in _migration_files_for(connection):
         row = applied.get(item["revision"])
         if not row:
             result.append({**{key: item[key] for key in ("revision", "description", "checksum", "path")}, "status": "pending"})
@@ -133,6 +152,50 @@ def verify_migrations(connection: Any) -> list[dict[str, Any]]:
         revisions = ", ".join(item["revision"] for item in mismatches)
         raise RuntimeError(f"Migration checksum mismatch: {revisions}")
     return status
+
+
+def verify_postgres_migrations_read_only(connection: Any) -> list[dict[str, Any]]:
+    """Verify the PostgreSQL chain without creating or altering metadata."""
+
+    items = migration_files(POSTGRES_VERSIONS_DIR)
+    if not _table_exists(connection, "schema_migrations"):
+        return [
+            {
+                **{
+                    key: item[key]
+                    for key in ("revision", "description", "checksum", "path")
+                },
+                "status": "pending",
+            }
+            for item in items
+        ]
+    rows = connection.execute("select * from schema_migrations").fetchall()
+    applied = {str(row["revision"]): dict(row) for row in rows}
+    result: list[dict[str, Any]] = []
+    for item in items:
+        row = applied.get(item["revision"])
+        stored = row.get("checksum") if row else None
+        status = (
+            "pending"
+            if not row
+            else "applied"
+            if stored == item["checksum"]
+            else "checksum_mismatch"
+        )
+        result.append(
+            {
+                **{
+                    key: item[key]
+                    for key in ("revision", "description", "checksum", "path")
+                },
+                "status": status,
+                "storedChecksum": stored,
+            }
+        )
+    mismatches = [item["revision"] for item in result if item["status"] == "checksum_mismatch"]
+    if mismatches:
+        raise RuntimeError("Migration checksum mismatch: " + ", ".join(mismatches))
+    return result
 
 
 def run_migrations(connection: Any, now: Callable[[], str]) -> None:
@@ -172,6 +235,46 @@ def run_migrations(connection: Any, now: Callable[[], str]) -> None:
                 _run_idempotent_reconciliation(connection, script)
             else:
                 connection.executescript(script)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        connection.execute(
+            """
+            insert into schema_migrations
+                (revision, description, applied_at, checksum, execution_time_ms)
+            values (?, ?, ?, ?, ?)
+            """,
+            (revision, item["description"], now(), item["checksum"], elapsed_ms),
+        )
+
+
+def run_postgres_migrations(connection: Any, now: Callable[[], str]) -> None:
+    """Apply PostgreSQL-native migrations under a transaction-scoped lock."""
+
+    connection.execute(
+        "select pg_advisory_xact_lock(hashtext(?))",
+        ("lean_platform_schema_migrations",),
+    )
+    connection.executescript(
+        """
+        create table if not exists schema_migrations (
+            revision text primary key,
+            description text not null,
+            applied_at text not null,
+            checksum text not null,
+            execution_time_ms integer not null default 0
+        );
+        """
+    )
+    applied_rows = connection.execute("select * from schema_migrations").fetchall()
+    applied = {row["revision"]: dict(row) for row in applied_rows}
+    for item in migration_files(POSTGRES_VERSIONS_DIR):
+        revision = item["revision"]
+        row = applied.get(revision)
+        if row:
+            if row.get("checksum") != item["checksum"]:
+                raise RuntimeError(f"Migration checksum mismatch: {revision}")
+            continue
+        started = time.perf_counter()
+        connection.executescript(item["script"])
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         connection.execute(
             """

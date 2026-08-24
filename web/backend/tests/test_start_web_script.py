@@ -13,7 +13,19 @@ ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "start_web_single_instance.sh"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+def _bash_available() -> bool:
+    bash = shutil.which("bash")
+    if not bash:
+        return False
+    try:
+        return subprocess.run(
+            [bash, "--version"], capture_output=True, timeout=2, check=False
+        ).returncode == 0
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _bash_available(), reason="a functional bash is required")
 def test_start_web_script_is_valid_bash() -> None:
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
@@ -26,7 +38,7 @@ def test_start_web_script_is_valid_bash() -> None:
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.skipif(not _bash_available(), reason="a functional bash is required")
 def test_shutdown_terminates_tracked_log_process_without_waiting_forever(tmp_path: Path) -> None:
     lock_dir = tmp_path / "launcher.lock"
     command = f"""
@@ -55,7 +67,7 @@ def test_shutdown_terminates_tracked_log_process_without_waiting_forever(tmp_pat
     assert not lock_dir.exists()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.skipif(not _bash_available(), reason="a functional bash is required")
 def test_sigint_exits_launcher_once_and_releases_lock(tmp_path: Path) -> None:
     lock_dir = tmp_path / "signal.lock"
     command = f"""

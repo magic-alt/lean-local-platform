@@ -10,4 +10,4 @@ Every migration change must document:
 - data migration requirements;
 - affected tests.
 
-MySQL is the canonical runtime metadata store. Do not reintroduce SQLite as a runtime default. Keep migration verification isolated from persistent environments.
+PostgreSQL is the canonical runtime metadata store. Legacy migrations are immutable lineage evidence and are not replayed on fresh PostgreSQL databases. Do not reintroduce SQLite as a runtime default. Keep migration verification isolated from persistent environments.

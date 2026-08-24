@@ -1,92 +1,102 @@
-# Docker and Native deployment
+# Native deployment
 
-The application and task model are runtime-neutral. Deployment orchestration
-and LEAN execution are selected independently:
+Last reviewed: 2026-08-25.
 
-```text
-LEAN_DEPLOYMENT_MODE=docker|native
-LEAN_EXECUTION_BACKEND=docker|native
-LEAN_DEPLOYMENT_PROFILE=core|ml|observability|full|dev
-```
+Native mode uses the same PostgreSQL/RabbitMQ/control-plane architecture as
+Docker Compose. Only the service manager and LEAN/Research execution adapter
+change. Node is a build-time dependency; FastAPI serves `web/frontend/dist`.
 
-Precedence is command line, environment configuration, then persisted
-`web/runtime/deployment/state.json`. `--mode auto` fails when these sources
-are absent or disagree; it never silently changes execution semantics.
+## Common prerequisites
 
-## Profiles
+- Python 3.12 and the locked backend environments
+- PostgreSQL 17 with `lean_platform`, `lean_celery` and `lean_mlflow`
+- RabbitMQ 4.3.5 with the `lean` vhost and a dedicated worker user
+- .NET and the pinned, signed native LEAN artifact
+- Node/npm to build the frontend
+- `pg_dump` and `pg_restore` on `PATH` or under `LEAN_POSTGRES_BIN`
 
-Native defaults to `core`: external localhost MySQL and Redis, API, separate
-Celery workers for `default`, `data-bulk`, `data-lineage`,
-`data-demand`, and `backtest`, Beat, and the restricted Runner. `ml` adds
-the isolated ML venv, worker and MLflow; `observability` adds Prometheus and
-Grafana; `full` enables all optional services including ClickHouse. `dev`
-uses local processes, Vite, and workstation-only native Jupyter.
-
-Docker defaults to the legacy-compatible `full` topology. Compose images,
-Dockerfiles, the Docker Runner security policy, and the Docker CI lane remain
-first-class.
-
-## Native bootstrap
+Copy `config/deployment/native.env.example` into a private environment file,
+replace every placeholder and keep credentials out of Git.
 
 ```bash
-cp config/deployment/native.env.example .env
 python scripts/platformctl.py --mode native --profile core doctor
 python scripts/platformctl.py --mode native --profile core bootstrap --install-deps
-python scripts/platformctl.py --mode native runtime install
 python scripts/platformctl.py --mode native db init
+python scripts/platformctl.py --mode native runtime install
+python scripts/platformctl.py --mode native --profile core start
 ```
 
-Bootstrap only changes user-space repository/runtime directories. It never
-invokes a system package manager. MySQL, Redis, dotnet, Node/npm and, for
-Linux production, bubblewrap must be installed by the operator.
+`platformctl db migrate` is the only platform migration executor. API, beat and
+workers verify the current PostgreSQL baseline but never apply migrations.
 
-The checked-in native runtime lock intentionally has `supported=false` until
-release engineering publishes an exact LEAN commit build for each supported
-RID with immutable HTTPS URLs, SHA-256, detached signature, and CycloneDX
-SBOM. Native execution fails closed before that release is configured.
+## Linux
 
-## Linux production
+Production LEAN uses the native backend with the repository's fail-closed
+sandbox requirements. Systemd unit templates are under
+`deploy/native/systemd/` and depend on `postgresql.service` and
+`rabbitmq-server.service`. Docker remains available as a separate deployment
+mode; native mode does not silently fall back to it.
 
-Review `deploy/native/systemd`, create the `lean-platform` and
-`lean-runner` users and private `/etc/lean-platform/platform.env`, then:
+## Windows
 
-```bash
-python scripts/platformctl.py --mode native install --system
-systemctl enable --now lean-platform.target
+Windows is a project-certified deployment lane because Celery upstream does not
+provide official Windows support. Install PostgreSQL and RabbitMQ as Windows
+services, then follow [the Windows runbook](../deploy/windows/README.md).
+
+The service topology is:
+
+```text
+PostgreSQL service
+RabbitMQ service
+LeanPlatformSupervisor
+  FastAPI
+  Celery beat
+  worker-default-1       --pool=solo
+  worker-data-bulk-1     --pool=solo
+  worker-data-lineage-1  --pool=solo
+  worker-data-demand-N   --pool=solo
+  worker-backtest-1      --pool=solo
+  optional worker-ml-1 and MLflow
+LeanRestrictedRunner
+  native LEAN process tree
+  native Jupyter/Research process tree
 ```
 
-The runner is an independent service. API and workers never receive arbitrary
-process execution permission. Each job is reconstructed from a structured v2
-request, checked against runtime and path allowlists, and executed through
-bubblewrap with no network, read-only runtime/data/project/support inputs and
-only results/object-store writable. Missing sandbox capability blocks the
-runner.
+The runner binds only to `127.0.0.1`, validates the signed runtime, account,
+policy, firewall and ACL configuration, and assigns each execution to a bounded
+kill-on-close Job Object. Any failed check returns `LEAN_RUNNER_UNSAFE`; the
+request is rejected rather than downgraded to an ordinary subprocess.
 
-macOS native is a workstation target using the local process manager. Windows
-is experimental. Native Research is available only in the `dev` profile and
-uses `.venv-research`; its token is stored in a 0600 credential file while
-`session.json` contains only the hash.
+For formal production startup, collect the real broker/database fault matrix
+and at least 12 hours of soak evidence, then issue a host-bound certificate:
+
+```powershell
+python scripts/windows_certification.py issue --evidence C:\evidence\windows-celery.json
+python scripts/windows_certification.py verify
+$env:LEAN_WINDOWS_PRODUCTION_MODE = "1"
+python scripts/platformctl.py --mode native --profile core start
+```
+
+Changing the Python lock, native runtime lock, certification policy, certified
+host or version family invalidates the certificate.
+
+## Research
+
+Docker mode uses `DockerResearchBackend`; native mode uses
+`WindowsNativeResearchBackend` or the native workstation backend. Native
+Research binds Jupyter to loopback with a random token, an allowlisted
+environment, bounded process tree and read-only market data. Platform remains
+the execution-validation boundary and does not grow into a second model
+training platform.
 
 ## Operations
 
 ```bash
 python scripts/platformctl.py --mode native status
-python scripts/platformctl.py --mode native logs runner
+python scripts/platformctl.py --mode native logs
 python scripts/platformctl.py --mode native backup
-python scripts/platformctl.py --mode native restore \
-  --backup web/runtime/backups/lean_market-....sql \
-  --target-database lean_restore_drill \
-  --confirm RESTORE_ISOLATED_DATABASE
+python scripts/platformctl.py --mode native stop
 ```
 
-Backup and restore use MySQL TCP clients for both deployment modes. Restore
-refuses the primary database and an existing target.
-
-## Certification gate
-
-Native remains experimental until a clean Linux host with no `docker` in
-`PATH` passes bootstrap, migrations, data task, fixed Python LEAN backtest,
-report, cancellation/restart recovery, Paper isolation, backup/restore, and
-Docker/native parity. Parity requires exact result schema, order sequence,
-fills/trade count and Artifact Contract bindings; ending equity, Sharpe and
-drawdown use absolute tolerance `1e-8`.
+Use [deployment.md](deployment.md) for backup, isolated restore and real
+PostgreSQL integration validation.

@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import db, for_update_clause, json_dump, row_to_dict, rows_to_dicts, utc_now
 from ..repositories.backtest_repository import get_backtest
 from ..repositories.market_data_repository import (
     MarketDataUnavailable,
@@ -1348,7 +1348,10 @@ def transition_cycle(
         raise ValueError("Unknown Paper execution cycle status.")
     with db() as connection:
         current = row_to_dict(
-            connection.execute("select * from paper_execution_cycles where id=?", (cycle_id,)).fetchone()
+            connection.execute(
+                "select * from paper_execution_cycles where id=?" + for_update_clause(),
+                (cycle_id,),
+            ).fetchone()
         )
         if not current:
             raise KeyError("Paper execution cycle not found.")

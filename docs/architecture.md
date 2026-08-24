@@ -1,8 +1,8 @@
 # Architecture
 
-Last reviewed: 2026-08-04.
+Last reviewed: 2026-08-25.
 
-This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. Parquet under `data/` is the market-time-series fact layer; MySQL is the control-plane fact store. SQLite is allowed only as an isolated test backend.
+This is a local QuantConnect/LEAN research, backtesting and paper-replay platform. LEAN is the only production backtest engine. Parquet under `data/` is the market-time-series fact layer; PostgreSQL is the control-plane fact store. RabbitMQ is the Celery dispatch transport. SQLite is allowed only as an isolated test backend.
 
 The sealed production topology is one local machine and A-share daily data only. Research, LEAN Backtest, Optimization, Reports and Paper Account are the only production surfaces. Cross-asset workflows are `research_only` or `preview_only`; live execution and minute/Tick execution are disabled; incomplete point-in-time windows fail closed; scheduled unattended operation is not ready unless an external alert channel has persisted a successful delivery. These are deployment boundaries, not invitations to add fallback engines or synthetic data.
 
@@ -10,7 +10,7 @@ The sealed production topology is one local machine and A-share daily data only.
 
 The main chains are implemented. The 2026-08-04 final-seal run accepts Level 3
 and the existing two-account, 23-session Paper cohort, but rejects the overall
-release because the real Level 4 run encountered repeated MySQL restarts, the
+release because the historical real Level 4 run encountered repeated database restarts, the
 external Webhook has no persisted 2xx/24-hour window, the capacity and data
 stability windows are reset, and no controllable Browser instance was available.
 The authoritative decision and evidence mapping are in
@@ -36,16 +36,16 @@ Browser
        API schemas and request validation
   -> Domain services and repositories
        backtests, data sync, experiments, reports, paper, research
-  -> MySQL control-plane fact store
+  -> PostgreSQL control-plane fact store
        metadata, registries, PIT/control data, results, accounts and audit
   -> Parquet market lake
        Bronze/Silver/Gold market facts and immutable revisions
-  -> Celery / Redis
+  -> Celery / RabbitMQ
        default, data, data-demand and backtest queues; beat coordination
   -> restricted lean-runner
-       structure-only jobs, pinned images and allowlisted mount roots
-  -> LEAN / Research Docker containers
-       digest allowlists, bounded resources, reduced mounts and isolated runs
+       pinned runtime/image identity and allowlisted mount roots
+  -> Docker or Windows-native LEAN / Research backend
+       bounded resources, reduced mounts and isolated process trees
 
 Derived and optional stores
   Parquet -> LEAN Data cache
@@ -78,11 +78,13 @@ web/backend/app/reporting/
 web/backend/app/tasks/
   Celery task definitions, recovery and batch coordination.
 
+web/backend/app/migrations/postgres/
+  Fresh PostgreSQL baseline and all new production migrations. The migration
+  service is the sole executor; API/workers verify read-only at startup.
+
 web/backend/app/migrations/versions/
-  Ordered MySQL schema migrations. The current revision is derived from the
-  ordered migration files and verified against `schema_migrations` at runtime;
-  every migration has a compensating or explicit irreversible recovery policy
-  in `migrations/rollback_policy.json`. Applied SQL files remain checksum-immutable.
+  Immutable legacy migration lineage and checksums. These files are preserved
+  for audit but are never replayed on fresh PostgreSQL databases.
 
 web/backend/tests/
   Unit and opt-in Docker/LEAN integration tests.
@@ -227,14 +229,16 @@ index, futures and options datasets; registration and current account
 permission are reported independently from structural coverage. Provider-typed
 revision tables preserve source evidence before provider-neutral canonical
 selection. Minute/Tick facts belong in ClickHouse/Parquet, with only their
-contracts, partitions, hashes and watermarks in MySQL. See
+contracts, partitions, hashes and watermarks in PostgreSQL. See
 [tushare-commercial-schema.md](operations/tushare-commercial-schema.md).
 
 ## Storage Ownership
 
 - `data/`: authoritative market time series, Bronze revisions, Silver normalization, Gold/PIT/features and derived cache roots.
-- MySQL: authoritative control metadata, dataset registry, PIT/control membership, task state, accounts, reports and audit records.
-- `stored_objects`: durable object catalog; payloads are either compatibility MySQL chunks or checksum-verified files under the externally backed `LEAN_DATA_DIR/object-store` root.
+- PostgreSQL `lean_platform`: authoritative control metadata, dataset registry, PIT/control membership, task state, accounts, reports and audit records.
+- PostgreSQL `lean_celery`: non-authoritative Celery result metadata with independent retention.
+- PostgreSQL `lean_mlflow`: MLflow-owned schema and metadata lifecycle.
+- `stored_objects`: durable object catalog; payloads are checksum-verified files under the externally backed `LEAN_DATA_DIR/object-store` root.
 - `web/runtime`: local execution/debug cache; safe to prune only after verifying required objects are archived.
 - `data/lean`: LEAN-readable cache generated or restored from authoritative Parquet.
 - DuckDB: direct query engine over Parquet; not a separate database authority.
@@ -244,8 +248,8 @@ contracts, partitions, hashes and watermarks in MySQL. See
 
 ## Failure and Recovery Boundaries
 
-- MySQL connection establishment retries transient 1040/2003/2006/2013 errors a bounded number of times.
-- API requests return HTTP 503 with `DATABASE_UNAVAILABLE` while MySQL is temporarily unavailable; periodic Celery coordinators retry.
+- PostgreSQL connection establishment retries transient SQLSTATE class 08, overload and shutdown errors a bounded number of times.
+- API requests return HTTP 503 with `DATABASE_UNAVAILABLE` while PostgreSQL is temporarily unavailable; periodic Celery coordinators retry.
 - Sync runs persist heartbeat and checkpoint state. Recovery only takes over orphaned work and replays an idempotent small batch at most.
 - Experiment batches are reconciled from database child state after restarts.
 - Report and dataset preview failures are contained to their feature area and must not blank the whole application.
@@ -253,7 +257,7 @@ contracts, partitions, hashes and watermarks in MySQL. See
 ## Architectural Rules
 
 - LEAN remains the only production backtest executor.
-- Parquet remains the market-time-series authority; MySQL remains the control-plane fact store.
+- Parquet remains the market-time-series authority; PostgreSQL remains the control-plane fact store; RabbitMQ is never a business source of truth.
 - API routes delegate orchestration to services/runners.
 - Every run uses an isolated workspace and preserves raw artifacts before parsing.
 - Trusted runs persist fingerprint, validation, experiment and normalized version links.

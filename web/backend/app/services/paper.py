@@ -1434,7 +1434,7 @@ def finalize_walkforward_run(paper_run_id: str) -> dict[str, Any]:
     if not paper_run:
         raise KeyError("Paper run not found.")
     # A worker killed after committing the terminal checkpoint can leave its
-    # Redis message invisible until the broker timeout. Recovery dispatches a
+    # RabbitMQ message can remain unacknowledged until broker redelivery. Recovery dispatches a
     # replacement immediately; a later broker redelivery must be a no-op.
     if paper_run.get("status") == "success":
         return paper_run

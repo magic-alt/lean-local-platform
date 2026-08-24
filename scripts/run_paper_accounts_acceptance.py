@@ -372,8 +372,8 @@ def _existing_scope(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    if database_backend() != "mysql":
-        raise RuntimeError("mysql_required")
+    if database_backend() != "postgresql":
+        raise RuntimeError("postgresql_required")
     health = _expect(*_api(args.base_url, "GET", "/api/health"), {200}, "health")
     dependencies = _expect(
         *_api(args.base_url, "GET", "/api/health/dependencies"),
@@ -669,7 +669,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "testTimestamp": datetime.now(timezone.utc).isoformat(),
         "gitCommit": _git_commit(),
-        "databaseBackend": "mysql",
+        "databaseBackend": "postgresql",
         "resourceMode": "existing" if existing_mode else "created",
         "health": health,
         "dependencies": dependencies,

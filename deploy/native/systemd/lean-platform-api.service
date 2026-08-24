@@ -1,6 +1,6 @@
 [Unit]
 Description=LEAN Platform API
-After=network.target mysql.service redis.service
+After=network.target postgresql.service rabbitmq-server.service
 
 [Service]
 Type=simple
