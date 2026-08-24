@@ -305,20 +305,8 @@ POST   /api/portfolio-optimizations/preview
 GET    /api/portfolio-optimizations
 POST   /api/portfolio-optimizations
 
-GET    /api/research/runs
-POST   /api/research/runs
-GET    /api/research/runs/{run_id}
-POST   /api/research/runs/{run_id}/cancel
-POST   /api/research/runs/{run_id}/retry
-DELETE /api/research/runs/{run_id}
-
-GET    /api/research/workspaces
-POST   /api/research/workspaces
-GET    /api/research/workspaces/{workspace_id}
-POST   /api/research/workspaces/{workspace_id}/stop
-POST   /api/research/workspaces/{workspace_id}/restart
-GET    /api/research/workspaces/{workspace_id}/logs
-DELETE /api/research/workspaces/{workspace_id}
+POST   /api/research/imports/qlib
+POST   /api/research/runs/{run_id}/lean-validation
 
 GET    /api/factors/engines
 POST   /api/factors/values
@@ -328,9 +316,8 @@ POST   /api/factors/evaluate-batch
 GET    /api/factors/evaluations
 ```
 
-The removed `/api/research` session routes are not compatibility aliases; use
-the run or workspace resource explicitly. The complete generated endpoint and
-schema index is [API Reference](help/api-reference.md).
+The exported research execution surface is now scoped to artifact import and Lean validation verification.
+The complete generated endpoint and schema index is [API Reference](help/api-reference.md).
 
 ## Paper Trading
 
@@ -513,3 +500,5 @@ stops polling after the resource becomes terminal:
 GET /api/backtests/{id}/logs?cursor=<byte_offset>&limit=65536
 -> {logs, offset, nextOffset, cursor, nextCursor, limit, total, hasMore}
 ```
+
+

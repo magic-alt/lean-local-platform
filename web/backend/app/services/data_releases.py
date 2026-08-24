@@ -33,11 +33,10 @@ QLIB_RESEARCH_PROFILE = "ashare_qlib_research_v1"
 QLIB_RESEARCH_PROFILE_V2 = "ashare_qlib_research_v2"
 DATA_RELEASE_PROFILES = {
     "cn-equity-daily-research-v2": CORE_RESEARCH_COMPONENTS,
-    QLIB_RESEARCH_PROFILE: CORE_RESEARCH_COMPONENTS
-    | {"qlib_staging", "industry_classification_pit"},
-    QLIB_RESEARCH_PROFILE_V2: CORE_RESEARCH_COMPONENTS
-    | {"qlib_staging", "industry_classification_pit"},
+    QLIB_RESEARCH_PROFILE: CORE_RESEARCH_COMPONENTS | {"qlib_staging", "industry_classification_pit"},
+    QLIB_RESEARCH_PROFILE_V2: CORE_RESEARCH_COMPONENTS | {"qlib_staging", "industry_classification_pit"},
 }
+
 PROFILE_COMPONENT_SCHEMAS = {
     QLIB_RESEARCH_PROFILE_V2: {
         "pit_fundamentals": "2",
@@ -45,8 +44,6 @@ PROFILE_COMPONENT_SCHEMAS = {
         "qlib_staging": "qlib-staging-v2",
     }
 }
-
-
 def required_components_for_profile(profile: str) -> frozenset[str]:
     if profile not in DATA_RELEASE_PROFILES:
         raise ValueError(f"Unknown DataRelease profile: {profile}")
@@ -287,7 +284,7 @@ def publish_data_release(
         }
         for component in components
         if str(component["role"]) in expected_schemas
-        and str(component["schemaVersion"]) != expected_schemas[str(component["role"])]
+        and str(component["schemaVersion"]) != expected_schemas[str(component["role"]) ]
     }
     if schema_drift:
         raise ValueError(f"DataRelease profile component schema mismatch: {schema_drift}")
@@ -377,3 +374,5 @@ def get_data_release(release_id: str) -> dict[str, Any] | None:
             "select * from data_releases where id=?", (release_id,)
         ).fetchone()
     return row_to_dict(row)
+
+

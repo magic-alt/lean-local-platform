@@ -6,9 +6,7 @@ import pytest
 
 def configure_temp_platform(tmp_path, monkeypatch):
     import app.db as db_module
-    import app.services.projects as projects_module
     import app.services.research_snapshots as snapshots_module
-    import app.api.research as research_api
 
     monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test.sqlite3")
     monkeypatch.setattr(db_module, "RUNTIME_DIR", tmp_path)
@@ -18,46 +16,55 @@ def configure_temp_platform(tmp_path, monkeypatch):
     monkeypatch.setattr(db_module, "RESEARCH_DIR", tmp_path / "research")
     monkeypatch.setattr(db_module, "OBJECT_STORE_DIR", tmp_path / "object-store")
     monkeypatch.setattr(db_module, "REPORTS_DIR", tmp_path / "reports")
-    monkeypatch.setattr(projects_module, "PROJECTS_DIR", tmp_path / "projects")
-    monkeypatch.setattr(research_api, "RESEARCH_DIR", tmp_path / "research")
     monkeypatch.setattr(snapshots_module, "RESEARCH_DIR", tmp_path / "research")
     db_module.init_db()
 
 
-def test_research_api_allocates_port_copies_workspace_and_deletes_record(tmp_path, monkeypatch):
+def test_research_execution_interfaces_are_not_exposed(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from fastapi.testclient import TestClient
-    from app.api import research as research_api
     from app.main import app
-    from app.services.projects import create_project
 
-    project = create_project("Research Unit", market="china")
-    monkeypatch.setattr(research_api, "find_available_port", lambda preferred=None: preferred or 8891)
-    monkeypatch.setattr(research_api, "dispatch_task", lambda *args, **kwargs: None)
     client = TestClient(app)
 
-    snapshot_id = "a" * 64
-    snapshot_dir = tmp_path / "research" / "snapshots" / snapshot_id
-    snapshot_dir.mkdir(parents=True)
-    (snapshot_dir / "manifest.json").write_text("{}", encoding="utf-8")
-    created = client.post(
-        "/api/research/workspaces",
-        json={"projectId": project["id"], "snapshotId": snapshot_id},
-    )
-    assert created.status_code == 200
-    session = created.json()
-    assert session["status"] == "queued"
-    assert session["port"] == 8891
-    assert session["project_name"] == "Research Unit"
-    assert (Path(session["workspace_path"]) / "main.py").exists()
-    assert (Path(session["workspace_path"]) / ".lean-research-snapshot-id").read_text() == snapshot_id
+    assert client.get("/api/research/runs").status_code == 404
+    assert client.post("/api/research/runs").status_code == 404
+    assert client.post("/api/research/runs/preview").status_code == 404
+    assert client.get("/api/research/runs/legacy-api-run").status_code == 404
+    assert client.post("/api/research/runs/legacy-api-run/retry").status_code == 404
+    assert client.delete("/api/research/runs/legacy-api-run").status_code == 404
+    assert client.post("/api/research/runs/legacy-api-run/cancel").status_code == 404
+    assert client.post("/api/research/runs/legacy-api-run/backtest").status_code == 404
 
-    logs = client.get(f"/api/research/workspaces/{session['id']}/logs")
-    assert logs.status_code == 200
-    deleted = client.delete(f"/api/research/workspaces/{session['id']}")
-    assert deleted.status_code == 200
-    assert deleted.json()["workspacePurged"] is False
-    assert client.get(f"/api/research/workspaces/{session['id']}").status_code == 404
+    assert client.get("/api/research/workspaces").status_code == 404
+    assert client.post("/api/research/workspaces", json={"projectId": "project", "snapshotId": "a"*64}).status_code == 404
+    assert client.get("/api/research/workspaces/abc").status_code == 404
+    assert client.get("/api/research/workspaces/abc/logs").status_code == 404
+    assert client.post("/api/research/workspaces/abc/stop").status_code == 404
+    assert client.post("/api/research/workspaces/abc/restart").status_code == 404
+    assert client.delete("/api/research/workspaces/abc").status_code == 404
+    assert client.post("/api/research/workspaces/snapshots", json={"scope": {}}).status_code == 404
+
+    paths = app.openapi()["paths"]
+    assert "/api/research/templates" not in paths
+    assert "/api/research/runs/{run_id}" not in paths
+    assert "/api/research/workspaces/{workspace_id}" not in paths
+    assert "/api/research/imports/qlib" in paths
+    assert "/api/research/runs/{run_id}/lean-validation" in paths
+
+
+def test_research_imports_contract_only_accepts_v2_payload():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    response = TestClient(app).post(
+        "/api/research/imports/qlib",
+        json={"schemaVersion": "1.0", "importType": "LEGACY_RESEARCH_BUNDLE", "externalRunId": "legacy", "runKind": "walk_forward"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Only Artifact Contract v2 is supported: schemaVersion=2.0, importType=QLIB_RESEARCH_BUNDLE"
+    )
 
 
 def test_research_runner_waits_for_container_port_inside_container(monkeypatch, tmp_path):
@@ -91,53 +98,6 @@ def test_research_runner_waits_for_container_port_inside_container(monkeypatch, 
     assert "no-new-privileges:true" in run_command
     assert "host.docker.internal:host-gateway" not in run_command
     assert all("/Lean/Launcher/bin/Debug/storage" not in value for value in run_command)
-
-
-def test_research_run_uses_shared_data_scope_and_old_analysis_routes_are_absent(tmp_path, monkeypatch):
-    configure_temp_platform(tmp_path, monkeypatch)
-    from fastapi.testclient import TestClient
-    from app.services import market_lake
-    from app.main import app
-
-    market_lake.upsert_rows(
-        [{"symbol": "000001", "trade_date": "2026-01-05", "open": 10, "high": 11,
-          "low": 9, "close": 10.5, "volume": 1000}],
-        kind="bars", source="tushare",
-    )
-    client = TestClient(app)
-    scope = {
-        "asset": {"assetClass": "equity", "market": "china", "venue": "china", "resolution": "daily", "dataType": "trade"},
-        "selection": {"type": "symbols", "values": ["000001.SZ"]},
-        "time": {"startDate": "2026-01-01", "endDate": "2026-01-31", "asOfDate": "2026-01-31"},
-        "price": {"adjust": "raw"},
-        "provider": {"source": "tushare", "mode": "strict", "allowResearchSource": False},
-    }
-
-    resolved = client.post("/api/data/resolve", json=scope)
-    assert resolved.status_code == 200
-    preview = client.post("/api/research/runs/preview", json={"template": "data-quality", "scope": scope, "parameters": {}})
-    assert preview.status_code == 200
-    assert preview.json()["scopeHash"] == resolved.json()["scopeHash"]
-    assert preview.json()["dataFingerprint"] == resolved.json()["dataFingerprint"]
-
-    run = client.post("/api/research/runs", json={"template": "data-quality", "scope": scope, "parameters": {}})
-    assert run.status_code == 200
-    assert run.json()["status"] == "success"
-    assert run.json()["result"]["dataFingerprint"] == resolved.json()["dataFingerprint"]
-
-    snapshot = client.post("/api/research/workspaces/snapshots", json={"scope": scope})
-    assert snapshot.status_code == 200
-    snapshot_id = snapshot.json()["snapshotId"]
-    snapshot_root = tmp_path / "research" / "snapshots" / snapshot_id
-    assert (snapshot_root / "manifest.json").is_file()
-    assert (snapshot_root / "bars.parquet").is_file()
-    assert (snapshot_root / "lean_research.py").is_file()
-
-    paths = app.openapi()["paths"]
-    assert "/api/research" not in paths
-    assert "/api/factors/evaluate" not in paths
-    assert "/api/cbond/double-low" not in paths
-    assert "/api/futures/continuous-contracts" not in paths
 
 
 def test_research_runner_rejects_unpinned_image(monkeypatch, tmp_path):

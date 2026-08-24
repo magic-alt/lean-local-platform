@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.
+
 - Use successfully published TuShare Bronze partitions as incremental cursors, persist market-wide adjustment-factor watermarks, and prevent identical native partition replays from generating misleading revisions.
 
 - Add the `ashare_qlib_research_v2` release profile and deterministic PIT fundamental v2 exporter for Phase 2 alpha research.
@@ -318,3 +320,4 @@
 - 补齐 run fingerprint 字段和失败路径落库。
 - 支持 Paper 多标的和组合约束拒单原因。
 - 增加对应测试覆盖。
+

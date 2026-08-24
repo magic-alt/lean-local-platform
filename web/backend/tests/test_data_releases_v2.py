@@ -152,12 +152,21 @@ def test_phase2_qlib_profile_requires_staging_and_pit_industry(tmp_path: Path):
                 "datasetKey": role,
                 "schemaVersion": schema_version,
                 "coverage": spec["coverage"],
-                "files": [{"path": path.relative_to(tmp_path).as_posix(), "sha256": _sha(path)}],
+                "files": [
+                    {
+                        "path": path.relative_to(tmp_path).as_posix(),
+                        "sha256": _sha(path),
+                        "rowCount": 1,
+                    }
+                ],
             }
         )
     pit = next(item for item in spec["components"] if item["role"] == "pit_fundamentals")
     pit["schemaVersion"] = "2"
-    assert publish_data_release(spec, tmp_path, persist=False)["profile"] == QLIB_RESEARCH_PROFILE_V2
+    assert (
+        publish_data_release(spec, tmp_path, persist=False)["profile"]
+        == QLIB_RESEARCH_PROFILE_V2
+    )
 
 
 def test_phase2_profile_rejects_legacy_pit_component_schema(tmp_path: Path):
@@ -173,7 +182,13 @@ def test_phase2_profile_rejects_legacy_pit_component_schema(tmp_path: Path):
                 "datasetKey": role,
                 "schemaVersion": "1",
                 "coverage": spec["coverage"],
-                "files": [{"path": path.relative_to(tmp_path).as_posix(), "sha256": _sha(path)}],
+                "files": [
+                    {
+                        "path": path.relative_to(tmp_path).as_posix(),
+                        "sha256": _sha(path),
+                        "rowCount": 1,
+                    }
+                ],
             }
         )
     with pytest.raises(ValueError, match="component schema mismatch"):
