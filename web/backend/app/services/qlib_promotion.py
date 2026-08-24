@@ -93,6 +93,21 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
     if target["promotion_status"] != "RESEARCH_PROMOTED":
         raise ValueError("Qlib TargetPortfolio must be RESEARCH_PROMOTED before LEAN validation")
     backtest = _assert_lean_backtest(target, lean_backtest_run_id)
+    fingerprint = backtest.get("fingerprint") or {}
+    runtime_identity = fingerprint.get("runtimeIdentity") or {}
+    runtime_digest = str(runtime_identity.get("artifactSha256") or "").removeprefix("sha256:")
+    execution_backend = str(fingerprint.get("executionBackend") or backtest.get("execution_backend") or "docker")
+    if len(runtime_digest) != 64:
+        docker_image = str(backtest.get("docker_image") or "")
+        runtime_digest = docker_image.split("@sha256:", 1)[1] if "@sha256:" in docker_image else ""
+        runtime_identity = {
+            "backend": "docker",
+            "runtimeId": docker_image,
+            "artifactSha256": runtime_digest,
+            "dockerImage": docker_image,
+        }
+    if len(runtime_digest) != 64:
+        raise ValueError("lean_validation_runtime_digest_required")
     validation_id = str(uuid.uuid4())
     validation_artifact_id = f"lean_validation_{validation_id}"
     evidence = {
@@ -106,7 +121,9 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
         "modelReleaseId": target["model_fingerprint"],
         "targetsSha256": target["targets_sha256"],
         "executionValidation": backtest.get("validation") or {},
-        "backtestFingerprint": backtest.get("fingerprint") or {},
+        "backtestFingerprint": fingerprint,
+        "executionBackend": execution_backend,
+        "runtimeIdentity": runtime_identity,
     }
     raw = _canonical_json(evidence).encode("utf-8")
     payload_sha256 = hashlib.sha256(raw).hexdigest()
@@ -122,14 +139,23 @@ def record_lean_validation(research_run_id: str, *, lean_backtest_run_id: str) -
         "universeReleaseId": target.get("universe_release_id"),
         "modelReleaseId": target["model_fingerprint"],
         "strategyPolicyId": target.get("strategy_policy_id"),
-        "gitCommit": str((backtest.get("fingerprint") or {}).get("gitCommit") or "platform-control-plane"),
-        "containerDigest": str(backtest.get("docker_image") or "lean-container-unresolved"),
+        "gitCommit": str(fingerprint.get("gitCommit") or fingerprint.get("git_commit") or "platform-control-plane"),
+        "containerDigest": (
+            str(backtest.get("docker_image"))
+            if execution_backend == "docker" and backtest.get("docker_image")
+            else f"sha256:{runtime_digest}"
+        ),
         "asOfTime": utc_now(),
         "timezone": "Asia/Shanghai",
         "currency": "CNY",
         "payloadSha256": payload_sha256,
         "payloadRef": {"objectKey": object_key, "sha256": payload_sha256, "mediaType": "application/json", "rows": 1},
-        "metadata": {"leanBacktestRunId": lean_backtest_run_id, "targetsSha256": target["targets_sha256"]},
+        "metadata": {
+            "leanBacktestRunId": lean_backtest_run_id,
+            "targetsSha256": target["targets_sha256"],
+            "executionBackend": execution_backend,
+            "runtimeIdentity": runtime_identity,
+        },
     }
     with db() as connection:
         artifact_registry.register_platform_artifact(connection, artifact)

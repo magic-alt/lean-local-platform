@@ -327,6 +327,9 @@ export interface AppSettings {
   maxBatchRuns: number;
   jobTimeoutSeconds: number;
   logLevel: string;
+  deploymentMode: "docker" | "native";
+  deploymentProfile: "core" | "ml" | "observability" | "full" | "dev";
+  executionBackend: "docker" | "native";
 }
 
 export interface WorkflowExample {

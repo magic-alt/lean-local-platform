@@ -19,7 +19,10 @@ export const defaultSettings: AppSettings = {
   maxConcurrentJobs: 1,
   maxBatchRuns: 5000,
   jobTimeoutSeconds: 7200,
-  logLevel: "INFO"
+  logLevel: "INFO",
+  deploymentMode: "docker",
+  deploymentProfile: "full",
+  executionBackend: "docker"
 };
 
 export const defaultBarPreviewValues = {

@@ -15,7 +15,7 @@ SCREENING_REPORT_NAME = "screening-report.json"
 
 
 def load_json(path):
-    with Path(path).open() as file:
+    with Path(path).open(encoding="utf-8") as file:
         return json.load(file)
 
 

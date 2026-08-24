@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "supported": false,
+  "runtimeId": "configure-a-signed-native-runtime",
+  "leanCommit": "0000000000000000000000000000000000000000",
+  "dotnetRuntime": "10.0",
+  "pythonRuntime": "3.11.11",
+  "launcher": "Launcher/bin/Release/QuantConnect.Lean.Launcher.dll",
+  "pythonHome": "python",
+  "pythonLibrary": "python/lib/libpython3.11.so",
+  "artifacts": {}
+}

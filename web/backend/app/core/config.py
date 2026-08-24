@@ -52,6 +52,7 @@ UPLOADS_DIR = RUNTIME_DIR / "uploads"
 PROJECTS_DIR = RUNTIME_DIR / "projects"
 RESEARCH_DIR = RUNTIME_DIR / "research"
 OBJECT_STORE_DIR = RUNTIME_DIR / "object-store"
+LEAN_RUNTIME_ROOT = _platform_path(os.environ.get("LEAN_NATIVE_RUNTIME_ROOT", RUNTIME_DIR / "lean"))
 # Binary/provider payloads live beside the configured Data directory. MySQL
 # stores only their metadata and hashes.
 OBJECT_STORE_MODE = os.environ.get("LEAN_OBJECT_STORE_MODE", "filesystem").strip().lower()
@@ -133,6 +134,35 @@ except OSError:
     _api_token_from_file = ""
 API_TOKEN = os.environ.get("LEAN_API_TOKEN", "").strip() or _api_token_from_file
 BACKTEST_EXECUTION_DELEGATED = os.environ.get("LEAN_BACKTEST_EXECUTION_DELEGATED", "0").lower() in {"1", "true", "yes", "on"}
+LEAN_DEPLOYMENT_MODE = os.environ.get("LEAN_DEPLOYMENT_MODE", "docker").strip().lower()
+LEAN_EXECUTION_BACKEND = os.environ.get("LEAN_EXECUTION_BACKEND", "docker").strip().lower()
+LEAN_DEPLOYMENT_PROFILE = os.environ.get(
+    "LEAN_DEPLOYMENT_PROFILE",
+    "full" if LEAN_DEPLOYMENT_MODE == "docker" else "core",
+).strip().lower()
+LEAN_NATIVE_RUNTIME_ID = os.environ.get("LEAN_NATIVE_RUNTIME_ID", "").strip()
+LEAN_NATIVE_LOCK_PATH = _platform_path(
+    os.environ.get("LEAN_NATIVE_LOCK_PATH", PLATFORM_DIR / "config" / "runtime" / "lean-native.lock.json")
+)
+LEAN_NATIVE_SANDBOX = os.environ.get(
+    "LEAN_NATIVE_SANDBOX",
+    "process" if LEAN_DEPLOYMENT_PROFILE == "dev" else "required",
+).strip().lower()
+LEAN_RESEARCH_BACKEND = os.environ.get(
+    "LEAN_RESEARCH_BACKEND",
+    "native" if LEAN_DEPLOYMENT_MODE == "native" and LEAN_DEPLOYMENT_PROFILE == "dev" else "docker",
+).strip().lower()
+
+if LEAN_DEPLOYMENT_MODE not in {"docker", "native"}:
+    raise RuntimeError("LEAN_DEPLOYMENT_MODE must be docker or native.")
+if LEAN_EXECUTION_BACKEND not in {"docker", "native"}:
+    raise RuntimeError("LEAN_EXECUTION_BACKEND must be docker or native.")
+if LEAN_DEPLOYMENT_PROFILE not in {"core", "ml", "observability", "full", "dev"}:
+    raise RuntimeError("LEAN_DEPLOYMENT_PROFILE is invalid.")
+if LEAN_NATIVE_SANDBOX not in {"required", "bwrap", "process"}:
+    raise RuntimeError("LEAN_NATIVE_SANDBOX must be required, bwrap, or process.")
+if LEAN_RESEARCH_BACKEND not in {"docker", "native"}:
+    raise RuntimeError("LEAN_RESEARCH_BACKEND must be docker or native.")
 
 CLICKHOUSE_ENABLED = os.environ.get("CLICKHOUSE_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
 CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "127.0.0.1")

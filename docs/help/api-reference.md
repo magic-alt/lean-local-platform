@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **273** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **254** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -347,8 +347,9 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/research/imports/qlib` | Import Qlib Bundle | body `QlibImportRequest` | `200` - |
+| `POST` | `/api/research/imports/qlib` | Import Qlib Run | body `QlibImportRequest` | `200` - |
 | `POST` | `/api/research/runs/{run_id}/lean-validation` | Record Qlib Lean Validation | `run_id` (path, required)<br>body `QlibLeanValidationRequest` | `200` - |
+
 ## settings
 
 | Method | Path | Summary | Input | Success |
@@ -397,4 +398,3 @@
 | `GET` | `/api/verifications/{run_id}` | Verification | `run_id` (path, required) | `200` - |
 | `GET` | `/api/workflows` | Workflows | `limit` (query)<br>`offset` (query)<br>`status` (query) | `200` `PageEnvelope` |
 | `GET` | `/api/workflows/{workflow_id}` | Workflow | `workflow_id` (path, required) | `200` - |
-

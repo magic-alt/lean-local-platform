@@ -155,8 +155,8 @@ def record_experiment_versions(
             insert into experiments
                 (id, run_id, strategy_version_id, dataset_version_id, parameter_hash, docker_image,
                  docker_image_digest, git_commit, fingerprint_json, validation_json, experiment_json,
-                 created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, updated_at, execution_backend, runtime_identity_json, canonical_config_sha256)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(run_id) do update set
                 strategy_version_id = excluded.strategy_version_id,
                 dataset_version_id = excluded.dataset_version_id,
@@ -167,6 +167,9 @@ def record_experiment_versions(
                 fingerprint_json = excluded.fingerprint_json,
                 validation_json = excluded.validation_json,
                 experiment_json = excluded.experiment_json,
+                execution_backend = excluded.execution_backend,
+                runtime_identity_json = excluded.runtime_identity_json,
+                canonical_config_sha256 = excluded.canonical_config_sha256,
                 updated_at = excluded.updated_at
             """,
             (
@@ -183,6 +186,9 @@ def record_experiment_versions(
                 json_dump(experiment),
                 now,
                 now,
+                fingerprint.get("executionBackend") or "docker",
+                json_dump(fingerprint.get("runtimeIdentity")),
+                fingerprint.get("canonicalConfigSha256"),
             ),
         )
     return {

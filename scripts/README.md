@@ -9,6 +9,11 @@ churn. Their filename prefixes define the supported categories:
 - `run_*`: acceptance, replay and scheduled workflow entrypoints.
 - `check_*`, `compare_*`: read-only diagnostics and validation.
 - `db_migrate.py`: schema migration control.
+- `platformctl.py`: Docker/native bootstrap, lifecycle, doctor, logs, migration,
+  backup/restore and pinned runtime control.
+- `install_lean_runtime.py`: HTTPS download plus SHA-256, signature and SBOM
+  verification for native LEAN.
+- `check_lean_backend_parity.py`: compare certified Docker/native result artifacts.
 - `install_git_hooks.sh`: enable repository commit policy.
 
 Runtime output must go to `web/runtime/`, `LEAN_DATA_DIR`, database volumes or an

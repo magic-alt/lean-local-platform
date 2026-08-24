@@ -102,7 +102,17 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
     fills = _fills(result_path, orders)
     equity = _equity(payload)
     artifact_manifest = _artifact_manifest(result_path)
+    runtime_identity = fingerprint.get("runtimeIdentity") or {
+        "backend": "docker",
+        "runtimeId": fingerprint.get("docker_image"),
+        "artifactSha256": str(fingerprint.get("docker_image_digest") or "").removeprefix("sha256:"),
+        "dockerImage": fingerprint.get("docker_image"),
+    }
+    runtime_digest = str((runtime_identity or {}).get("artifactSha256") or "").removeprefix("sha256:")
     components = {
+        "executionBackend": fingerprint.get("executionBackend") or "docker",
+        "runtimeIdentity": runtime_identity,
+        "runtimeArtifactSha256": runtime_digest,
         "dockerImageDigest": fingerprint.get("docker_image_digest") or (fingerprint.get("docker") or {}).get("digest"),
         "projectSnapshot": {
             "strategyFileSha256": fingerprint.get("strategyFileHash"),
@@ -136,7 +146,7 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
         "artifactManifestSha256": _hash(artifact_manifest),
     }
     required = (
-        components.get("dockerImageDigest"),
+        components.get("runtimeArtifactSha256"),
         (components.get("projectSnapshot") or {}).get("strategyFileSha256"),
         (components.get("leanCache") or {}).get("manifestSha256"),
         components.get("configSha256"),
@@ -148,12 +158,17 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
     )
     if any(not value for value in required):
         raise ValueError("reproducibility_component_digest_missing")
-    input_fingerprint = str(fingerprint.get("inputFingerprint") or "")
-    if not input_fingerprint:
+    execution_fingerprint = str(
+        fingerprint.get("executionFingerprint") or fingerprint.get("inputFingerprint") or ""
+    )
+    logical_input_fingerprint = str(
+        fingerprint.get("logicalInputFingerprint") or execution_fingerprint
+    )
+    if not execution_fingerprint or not logical_input_fingerprint:
         raise ValueError("input_fingerprint_missing")
     equivalence_digest = _hash(
         {
-            "inputFingerprint": input_fingerprint,
+            "logicalInputFingerprint": logical_input_fingerprint,
             "datasetReleaseId": release_id,
             "canonicalResultSha256": components["canonicalResultSha256"],
             "ordersSha256": components["ordersSha256"],
@@ -164,11 +179,14 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
     certificate_id = f"repro:{uuid.uuid4()}"
     created_at = utc_now()
     certificate = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": certificate_id,
         "runId": run_id,
         "createdAt": created_at,
-        "inputFingerprint": input_fingerprint,
+        "inputFingerprint": execution_fingerprint,
+        "logicalInputFingerprint": logical_input_fingerprint,
+        "executionFingerprint": execution_fingerprint,
+        "runtimeIdentity": runtime_identity,
         "equivalenceDigest": equivalence_digest,
         "components": components,
         "artifacts": artifact_manifest,
@@ -185,14 +203,18 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
         connection.execute(
             """
             insert into reproducibility_certificates
-                (id,run_id,dataset_release_id,input_fingerprint,equivalence_digest,
+                (id,run_id,dataset_release_id,input_fingerprint,logical_input_fingerprint,
+                 execution_fingerprint,runtime_identity_json,equivalence_digest,
                  certificate_sha256,canonical_result_sha256,orders_sha256,fills_sha256,
                  equity_sha256,artifact_manifest_sha256,stored_object_id,status,
                  certificate_json,created_at)
-            values (?,?,?,?,?,?,?,?,?,?,?,?, 'valid',?,?)
+            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'valid',?,?)
             on conflict(run_id) do update set
                 dataset_release_id=excluded.dataset_release_id,
                 input_fingerprint=excluded.input_fingerprint,
+                logical_input_fingerprint=excluded.logical_input_fingerprint,
+                execution_fingerprint=excluded.execution_fingerprint,
+                runtime_identity_json=excluded.runtime_identity_json,
                 equivalence_digest=excluded.equivalence_digest,
                 certificate_sha256=excluded.certificate_sha256,
                 canonical_result_sha256=excluded.canonical_result_sha256,
@@ -206,7 +228,9 @@ def issue_certificate(run_id: str, *, allow_nonterminal: bool = False) -> dict[s
                 created_at=excluded.created_at
             """,
             (
-                certificate_id, run_id, release_id, input_fingerprint, equivalence_digest,
+                certificate_id, run_id, release_id, execution_fingerprint,
+                logical_input_fingerprint, execution_fingerprint, json_dump(runtime_identity),
+                equivalence_digest,
                 certificate_sha256, components["canonicalResultSha256"], components["ordersSha256"],
                 components["fillsSha256"], components["equitySha256"],
                 components["artifactManifestSha256"], stored.get("id"), json_dump(certificate), created_at,
@@ -235,10 +259,10 @@ def certificate_for_run(run_id: str) -> dict[str, Any] | None:
         matches = connection.execute(
             """
             select run_id from reproducibility_certificates
-            where input_fingerprint=? and equivalence_digest=? and status='valid'
+            where coalesce(logical_input_fingerprint,input_fingerprint)=? and equivalence_digest=? and status='valid'
             order by created_at
             """,
-            (row["input_fingerprint"], row["equivalence_digest"]),
+            (row["logical_input_fingerprint"] or row["input_fingerprint"], row["equivalence_digest"]),
         ).fetchall()
     item = row_to_dict(row) or {}
     item["matchingRunIds"] = [str(match["run_id"]) for match in matches]
@@ -251,10 +275,11 @@ def golden_pairs(limit: int = 100) -> dict[str, Any]:
     with db() as connection:
         rows = connection.execute(
             """
-            select input_fingerprint,equivalence_digest,count(*) as run_count,
+            select coalesce(logical_input_fingerprint,input_fingerprint) as logical_input_fingerprint,
+                   equivalence_digest,count(*) as run_count,
                    min(created_at) as first_created_at,max(created_at) as last_created_at
             from reproducibility_certificates where status='valid'
-            group by input_fingerprint,equivalence_digest having count(*)>=2
+            group by coalesce(logical_input_fingerprint,input_fingerprint),equivalence_digest having count(*)>=2
             order by last_created_at desc limit ?
             """,
             (bounded,),

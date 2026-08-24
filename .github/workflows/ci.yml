@@ -34,3 +34,55 @@ jobs:
           cache-dependency-path: web/frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  native-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements.lock
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: python scripts/platformctl.py --help
+      - run: python -m pytest -q tests/test_native_execution.py tests/test_platformctl.py tests/test_restricted_runner.py
+        working-directory: web/backend
+
+  docker-backtest:
+    if: ${{ vars.RUN_LEAN_DOCKER_INTEGRATION == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: RUN_LEAN_DOCKER_INTEGRATION=1 python -m pytest -q tests/test_ashare_lean_integration.py
+        working-directory: web/backend
+
+  native-backtest:
+    if: ${{ vars.RUN_LEAN_NATIVE_INTEGRATION == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: python scripts/install_lean_runtime.py install
+      - run: RUN_LEAN_NATIVE_INTEGRATION=1 python -m pytest -q tests/test_ashare_native_integration.py
+        working-directory: web/backend
+
+  backend-parity:
+    if: ${{ vars.RUN_LEAN_BACKEND_PARITY == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: RUN_LEAN_BACKEND_PARITY=1 python -m pytest -q tests/test_ashare_backend_parity.py
+        working-directory: web/backend

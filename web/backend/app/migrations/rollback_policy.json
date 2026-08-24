@@ -28,6 +28,7 @@
     "0024_paper_constraint_matching_reconciliation": {"mode": "compensating", "action": "Use the rollback procedure declared in the migration header after archiving evidence."},
     "0025_paper_daily_scheduler": {"mode": "compensating", "action": "Use the rollback procedure declared in the migration header after stopping scheduling."},
     "0026_restricted_runner_jobs": {"mode": "compensating", "action": "Use the rollback procedure declared in the migration header after stopping delegated workers."},
+    "0056_runtime_neutral_execution": {"mode": "compensating", "action": "Disable native dispatch and preserve backend-neutral execution evidence; remove fields only through a reviewed forward migration."},
     "0027_provider_archive_reconciliation": {"mode": "irreversible", "action": "Correct reconciliation evidence with a reviewed forward migration."},
     "0028_futures_continuous_attribution": {"mode": "compensating", "action": "Archive attribution evidence and drop added tables in reverse dependency order."},
     "0029_paper_accounts": {"mode": "compensating", "action": "Use the rollback procedure declared in the migration header after pausing account scheduling."},

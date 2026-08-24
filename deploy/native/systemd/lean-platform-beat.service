@@ -1,0 +1,20 @@
+[Unit]
+Description=LEAN Platform Celery Beat
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=lean-platform
+Group=lean-platform
+WorkingDirectory=/opt/lean-platform/web/backend
+EnvironmentFile=/etc/lean-platform/platform.env
+ExecStart=/opt/lean-platform/web/backend/.venv/bin/python -m celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/lean-platform
+
+[Install]
+WantedBy=lean-platform.target

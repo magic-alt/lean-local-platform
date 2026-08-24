@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..runners.base import LeanPathLayout
+
 from ..domain.assets import (
     AssetRequest,
     asset_class_key,
@@ -32,8 +34,12 @@ def base_config(
     algorithm_class: str,
     algorithm_location: str,
     language: str,
+    path_layout: LeanPathLayout | None = None,
 ) -> dict[str, Any]:
-    python_paths = ["/Lean/Run"] if parameters.get("ashareRules") or parameters.get("hkRules") else []
+    layout = path_layout or LeanPathLayout.docker(
+        include_support=bool(parameters.get("ashareRules") or parameters.get("hkRules"))
+    )
+    python_paths = [str(layout.support_dir)] if layout.support_dir is not None else []
     return {
         "environment": "backtesting",
         "algorithm-id": algorithm_id,
@@ -41,8 +47,8 @@ def base_config(
         "algorithm-type-name": algorithm_class,
         "algorithm-language": language,
         "algorithm-location": algorithm_location,
-        "data-folder": "/Lean/Data",
-        "results-destination-folder": "/Lean/Results",
+        "data-folder": str(layout.data_dir),
+        "results-destination-folder": str(layout.results_dir),
         "close-automatically": True,
         "debugging": False,
         "debugging-method": "LocalCmdline",
@@ -55,6 +61,7 @@ def base_config(
         "data-provider": "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider",
         "data-channel-provider": "DataChannelProvider",
         "object-store": "QuantConnect.Lean.Engine.Storage.LocalObjectStore",
+        "object-store-root": str(layout.storage_dir),
         "data-aggregator": "QuantConnect.Lean.Engine.DataFeeds.AggregationManager",
         "symbol-minute-limit": 10000,
         "symbol-second-limit": 10000,

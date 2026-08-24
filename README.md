@@ -1,7 +1,8 @@
 # LEAN Local Platform
 
 本项目是基于 QuantConnect LEAN 的本地量化研究平台，正式入口是 FastAPI、
-React、Celery、MySQL 和 Docker LEAN 组成的 Web 工作台。平台不依赖 Lean
+React、Celery、MySQL 和可替换 LEAN 执行后端组成的 Web 工作台。Docker Compose
+与 Linux Native 是并列部署适配器；平台不依赖 Lean
 CLI；回测、优化、Research 和 Paper Replay 均以版本化项目策略运行。
 
 ## 当前能力
@@ -27,11 +28,22 @@ cp .env.example .env
 # 编辑 .env，至少配置需要使用的 provider 凭据，例如 TUSHARE_TOKEN
 ```
 
-启动完整本地栈：
+启动完整 Docker 栈：
 
 ```bash
-./scripts/start_web_single_instance.sh
+python scripts/platformctl.py --mode docker --profile full start
 ```
+
+Native 主机先按 [Native Deployment](docs/native-deployment.md) 配置固定 runtime，
+然后使用：
+
+```bash
+python scripts/platformctl.py --mode native doctor
+python scripts/platformctl.py --mode native --profile core start
+```
+
+`./scripts/start_web_single_instance.sh` 继续作为兼容入口；当
+`LEAN_DEPLOYMENT_MODE=native` 时转交给 `platformctl`。
 
 启动脚本会在 `web/runtime/secrets/` 生成并复用本地 API Token，由前端代理
 自动携带。直接调用 API 时必须发送 Bearer Token；正式配置不得关闭认证。
@@ -57,6 +69,7 @@ $LEAN_DATA_DIR                数据湖与 LEAN 缓存；默认是仓库内 data
 $LEAN_DATA_DIR/silver/daily/current  A 股日行情权威 Parquet 分区
 $LEAN_DATA_DIR/output/parquet       平台生成的派生 Parquet
 Docker volumes                MySQL、Redis、ClickHouse、Grafana 等服务数据
+web/runtime/lean/             校验通过的 Native LEAN runtime
 config/data-sources/          可移植的数据来源 manifest；纳入版本控制
 ```
 

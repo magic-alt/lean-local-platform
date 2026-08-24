@@ -12,6 +12,7 @@ from ..core.config import (
     DATA_DIR,
     DEFAULT_DOCKER_IMAGE,
     GRAFANA_URL,
+    LEAN_EXECUTION_BACKEND,
     PAPER_ORDER_PIPELINE_V2_ENABLED,
     PROMETHEUS_URL,
     REDIS_URL,
@@ -23,6 +24,7 @@ from ..observability.metrics import set_dependency_status
 from . import market_data
 from .alerts import external_alert_channel_configured, notification_delivery_health
 from .source_gate import source_certification
+from ..runners.native_runner import NativeLeanBackend
 
 
 EXECUTION_CRITICAL_SERVICES = frozenset(
@@ -57,7 +59,7 @@ def _timed(service: str, check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 
 def check_redis() -> dict[str, Any]:
     ok = bool(Redis.from_url(REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5).ping())
-    return {"service": "redis", "ok": ok, "detail": REDIS_URL}
+    return {"service": "redis", "ok": ok, "detail": "configured Redis endpoint"}
 
 
 def check_docker() -> dict[str, Any]:
@@ -178,6 +180,20 @@ def check_source_certifications() -> dict[str, Any]:
 
 
 def check_lean_runner() -> dict[str, Any]:
+    if LEAN_EXECUTION_BACKEND == "native":
+        status = NativeLeanBackend(3600).health()
+        return {
+            "service": "lean_runner",
+            "ok": status.ready,
+            "detail": {
+                "backend": "native",
+                "sandbox": status.sandbox,
+                "runtimeIdentity": (
+                    status.runtime_identity.as_dict() if status.runtime_identity is not None else None
+                ),
+                "status": status.detail,
+            },
+        }
     docker = check_docker()
     image = check_lean_image() if docker.get("ok") else {"ok": False, "detail": "docker unavailable"}
     data_dir = check_data_dir()
@@ -388,14 +404,21 @@ def dependency_health() -> dict[str, Any]:
         _timed("redis", check_redis),
         _timed("clickhouse", market_data.ping),
     ]
-    if BACKTEST_EXECUTION_DELEGATED:
+    if BACKTEST_EXECUTION_DELEGATED and LEAN_EXECUTION_BACKEND == "docker":
         worker = _timed("backtest_worker", check_backtest_worker)
         checks.extend([worker, *_delegated_runner_checks(worker)])
-    else:
+    elif LEAN_EXECUTION_BACKEND == "docker":
         checks.extend(
             [
                 _timed("docker", check_docker),
                 _timed("lean_image", check_lean_image),
+                _timed("lean_runner", check_lean_runner),
+            ]
+        )
+    else:
+        checks.extend(
+            [
+                _timed("backtest_worker", check_backtest_worker),
                 _timed("lean_runner", check_lean_runner),
             ]
         )

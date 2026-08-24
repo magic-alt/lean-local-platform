@@ -44,6 +44,10 @@ BACKTEST_UPDATE_COLUMNS = {
     "trust_status",
     "trust_reason",
     "trust_evaluated_at",
+    "execution_backend",
+    "execution_id",
+    "runtime_identity_json",
+    "canonical_config_sha256",
 }
 
 
@@ -77,7 +81,8 @@ def list_backtests(filters: dict[str, Any] | None = None) -> list[dict[str, Any]
                parameters_json,status,docker_image,exit_code,error,error_message,failure_json,
                created_at,queued_at,started_at,finished_at,duration_seconds,validation_json,
                dataset_release_id,reproducibility_certificate_id,trust_status,trust_reason,
-               trust_evaluated_at
+               trust_evaluated_at,execution_backend,execution_id,runtime_identity_json,
+               canonical_config_sha256
         from backtest_runs
     """
     if clauses:

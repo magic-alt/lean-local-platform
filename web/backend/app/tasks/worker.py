@@ -1310,6 +1310,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
     run_dir = RUNS_DIR / run_id
     lean_cache: dict[str, Any] = {}
     strategy_path = Path(project["project_path"]) / project["main_file"]
+    execution_backend = "docker"
+    runtime_identity: dict[str, Any] | None = None
 
     def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> dict[str, Any]:
         fingerprint = build_run_fingerprint(
@@ -1319,6 +1321,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
             lean_cache=lean_cache,
             strategy_path=strategy_path,
             config_path=run_dir / "config.json",
+            execution_backend=execution_backend,
+            runtime_identity=runtime_identity,
         )
         validation = build_backtest_validation(parameters, fingerprint)
         if execution_validation is not None:
@@ -1339,6 +1343,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
             fingerprint_json=fingerprint,
             validation_json=validation,
             experiment_json=experiment,
+            execution_backend=execution_backend,
+            runtime_identity_json=runtime_identity,
+            canonical_config_sha256=fingerprint.get("canonicalConfigSha256"),
         )
         record_experiment_versions(
             run_id=run_id,
@@ -1351,8 +1358,14 @@ def run_backtest_task(self, task_id: str, run_id: str):
 
     try:
         runner = LeanRunner(timeout_seconds=timeout_seconds)
-        container_name = runner.container_name_for(run_id)
-        update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
+        execution_backend = runner.backend.name
+        update_backtest(
+            run_id,
+            execution_backend=execution_backend,
+            container_name=runner.container_name_for(run_id) if execution_backend == "docker" else None,
+            work_dir=str(run_dir),
+            results_dir=str(run_dir / "results"),
+        )
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
             universe_symbols = [str(value).upper() for value in parameters.get("universeSymbols") or []]
             gate_symbols = list(dict.fromkeys([str(parameters["ticker"]).upper(), *universe_symbols]))
@@ -1401,6 +1414,25 @@ def run_backtest_task(self, task_id: str, run_id: str):
             parameters["start"],
             parameters["end"],
         )
+        project_path = Path(project["project_path"])
+        workspace = runner.prepare(
+            run_id,
+            parameters,
+            run_dir,
+            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+            algorithm_path=project_path / project["main_file"],
+            algorithm_class=project["algorithm_class"],
+            language=project["language"],
+            project_dir=project_path,
+        )
+        runtime_identity = workspace.plan.runtime_identity.as_dict()
+        update_backtest(
+            run_id,
+            execution_backend=workspace.execution_backend,
+            execution_id=workspace.execution_id,
+            runtime_identity_json=runtime_identity,
+            container_name=workspace.container_name or None,
+        )
         pre_execution_validation = update_fingerprint()
         if not pre_execution_validation.get("passed"):
             failed_gates = ",".join(
@@ -1409,18 +1441,11 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 if not gate.get("passed")
             )
             raise LeanPlatformError(f"pre_execution_gate_failed:{failed_gates or 'unknown'}")
-        project_path = Path(project["project_path"])
-        output = runner.run_backtest(
-            run_id,
-            parameters,
-            run_dir=run_dir,
+        execution = runner.execute(
+            workspace,
             output_callback=lambda line: append_log(task_id, line),
-            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-            algorithm_path=project_path / project["main_file"],
-            algorithm_class=project["algorithm_class"],
-            language=project["language"],
-            project_dir=project_path,
         )
+        output = runner.result_payload(execution)
 
         latest_run = get_backtest(run_id)
         if latest_run and latest_run.get("status") == CANCELLED:
@@ -1473,6 +1498,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 )
             ),
             container_name=output.get("container_name"),
+            execution_backend=output.get("execution_backend"),
+            execution_id=output.get("execution_id"),
+            runtime_identity_json=output.get("runtime_identity"),
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
         )
@@ -1606,6 +1634,9 @@ def start_research_task(task_id: str, session_id: str):
             url=output["url"],
             readiness_status=output.get("readiness_status") or "ready",
             container_status=output.get("container_status") or "running",
+            execution_backend=output.get("executionBackend") or "docker",
+            execution_id=output.get("executionId") or output.get("container_id"),
+            runtime_identity_json=output.get("runtimeIdentity"),
             last_checked_at=utc_now(),
             finished_at=None,
         )

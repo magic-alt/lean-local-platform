@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add runtime-neutral LEAN execution with preserved Docker behavior, a signed
+  fail-closed Native runtime/Runner path, Docker/native deployment profiles and
+  `platformctl`, Linux systemd sandboxing, workstation Native Research,
+  backend-neutral fingerprints/certificates, TCP MySQL operations, and opt-in
+  native/parity CI gates.
+
 - Add repository-scoped Codex production-control-plane safety guidance, specialized skills, read-only reviewers, approval defaults, and destructive-command guardrails for DataRelease, Qlib handoff, LEAN, Paper, and broker work.
 
 - Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.

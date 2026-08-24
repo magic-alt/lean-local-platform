@@ -1,0 +1,3 @@
+# Workstation-only Jupyter environment; isolated from API and ML workers.
+jupyterlab==4.4.10
+ipykernel==7.1.0

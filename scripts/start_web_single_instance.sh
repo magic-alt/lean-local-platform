@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${LEAN_DEPLOYMENT_MODE:-}" == "native" && "${BASH_SOURCE[0]}" == "$0" ]]; then
+  exec "${PYTHON:-python3}" "${ROOT_DIR}/scripts/platformctl.py" --mode native start
+fi
 BACKEND_DIR="${ROOT_DIR}/web/backend"
 FRONTEND_DIR="${ROOT_DIR}/web/frontend"
 COMPOSE_PROJECT_DIR="${ROOT_DIR}"
@@ -425,7 +428,7 @@ bound_docker_build_cache() {
 
 start_backend() {
   log "启动后端: ${LEAN_WEB_HOST}:${LEAN_WEB_PORT}"
-  log "数据库配置: ${LEAN_DATABASE_URL}"
+  log "数据库配置: 已设置（凭据已隐藏）"
   (
     cd "${BACKEND_DIR}"
     LEAN_DATABASE_URL="${LEAN_DATABASE_URL}" \

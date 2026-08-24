@@ -64,6 +64,30 @@ def _file_hash(path: Path | str | None) -> str | None:
     return digest.hexdigest()
 
 
+def canonical_config_hash(path: Path | str | None) -> str | None:
+    if not path:
+        return None
+    config_path = Path(path)
+    if not config_path.is_file():
+        return None
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    canonical = dict(payload)
+    replacements = {
+        "data-folder": "<LEAN_DATA>",
+        "results-destination-folder": "<LEAN_RESULTS>",
+        "object-store-root": "<LEAN_STORAGE>",
+    }
+    canonical.update(replacements)
+    algorithm = str(canonical.get("algorithm-location") or "")
+    canonical["algorithm-location"] = f"<LEAN_PROJECT>/{Path(algorithm).name}" if algorithm else None
+    python_paths = canonical.get("python-additional-paths") or []
+    canonical["python-additional-paths"] = ["<LEAN_SUPPORT>"] if python_paths else []
+    return _json_hash(canonical)
+
+
 def _run_git(args: list[str]) -> str | None:
     try:
         completed = subprocess.run(
@@ -341,6 +365,8 @@ def build_run_fingerprint(
     lean_cache: dict[str, Any] | None = None,
     strategy_path: str | Path | None = None,
     config_path: str | Path | None = None,
+    execution_backend: str = "docker",
+    runtime_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     created_at = utc_now()
     git = git_state()
@@ -352,6 +378,14 @@ def build_run_fingerprint(
         venue=str((data.get("scope") or {}).get("venue") or "china"),
     )
     docker = docker_image_digest(docker_image)
+    if runtime_identity is None and execution_backend == "docker":
+        raw_digest = str(docker.get("digest") or "")
+        runtime_identity = {
+            "backend": "docker",
+            "runtimeId": docker.get("image"),
+            "artifactSha256": raw_digest.removeprefix("sha256:"),
+            "dockerImage": docker.get("image"),
+        }
     if lean_cache is None:
         lean_cache = _local_ashare_cache(parameters)
     daily_cache = _first_cache_file(lean_cache, "daily")
@@ -365,8 +399,9 @@ def build_run_fingerprint(
     canonical_params = canonical_parameters(parameters)
     strategy_sha256 = _file_hash(strategy_path)
     requirements_sha256 = _requirements_hash()
-    identity_payload = {
-        "schemaVersion": 1,
+    canonical_config_sha256 = canonical_config_hash(config_path)
+    logical_identity = {
+        "schemaVersion": 2,
         "parameters": canonical_params,
         "strategyFileSha256": strategy_sha256,
         "gitCommit": git.get("commit"),
@@ -412,15 +447,22 @@ def build_run_fingerprint(
             "factorSha256": factor_cache.get("sha256"),
             "manifestSha256": lean_cache_manifest_sha256,
         },
-        "dockerImage": docker.get("image"),
-        "dockerImageDigest": docker.get("digest"),
+        "canonicalConfigSha256": canonical_config_sha256,
     }
-    input_fingerprint = _json_hash(identity_payload)
+    logical_input_fingerprint = _json_hash(logical_identity)
     parameters_hash = _json_hash(canonical_params)
     config_file_hash = _file_hash(config_path)
+    execution_identity = {
+        "schemaVersion": 1,
+        "logicalInputFingerprint": logical_input_fingerprint,
+        "executionBackend": execution_backend,
+        "runtimeIdentity": runtime_identity,
+        "configFileSha256": config_file_hash,
+    }
+    execution_fingerprint = _json_hash(execution_identity)
     dataset_version = certification.get("datasetVersion")
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "runId": run_id,
         "createdAt": created_at,
         "run_start_time": created_at,
@@ -435,10 +477,16 @@ def build_run_fingerprint(
         "parametersHash": parameters_hash,
         "parameters": parameters,
         "canonicalParameters": canonical_params,
-        "inputFingerprint": input_fingerprint,
-        "inputIdentity": identity_payload,
+        "logicalInputFingerprint": logical_input_fingerprint,
+        "executionFingerprint": execution_fingerprint,
+        "inputFingerprint": execution_fingerprint,
+        "inputIdentity": execution_identity,
+        "logicalInputIdentity": logical_identity,
+        "executionBackend": execution_backend,
+        "runtimeIdentity": runtime_identity,
         "strategyFileHash": strategy_sha256,
         "configFileHash": config_file_hash,
+        "canonicalConfigSha256": canonical_config_sha256,
         "data": data,
         "source": certification.get("source"),
         "datasetVersion": dataset_version,
@@ -446,7 +494,7 @@ def build_run_fingerprint(
         "datasetCertification": certification,
         "legacyAliases": {
             "parameters_sha256": parameters_hash,
-            "input_fingerprint": input_fingerprint,
+            "input_fingerprint": execution_fingerprint,
             "strategy_file_sha256": strategy_sha256,
             "config_file_sha256": config_file_hash,
             "dataset_version": dataset_version,

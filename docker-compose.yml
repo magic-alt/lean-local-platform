@@ -7,6 +7,10 @@ x-logging: &bounded-logging
 x-release-environment: &release-environment
   LEAN_RELEASE_SHA: ${LEAN_RELEASE_SHA:-unknown}
   LEAN_RELEASE_ID: ${LEAN_RELEASE_ID:-local-unversioned}
+  LEAN_DEPLOYMENT_MODE: docker
+  LEAN_EXECUTION_BACKEND: docker
+  LEAN_DEPLOYMENT_PROFILE: ${LEAN_DEPLOYMENT_PROFILE:-full}
+  CLICKHOUSE_ENABLED: ${CLICKHOUSE_ENABLED:-1}
 
 services:
   redis:
@@ -306,22 +310,6 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
-      worker:
-        condition: service_started
-      data-worker:
-        condition: service_started
-      data-lineage-worker:
-        condition: service_started
-      data-demand-worker:
-        condition: service_started
-      backtest-worker:
-        condition: service_started
-      ml-worker:
-        condition: service_started
-      lean-runner:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"]
       interval: 10s
@@ -349,7 +337,7 @@ services:
       LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
       LEAN_MYSQL_LOCAL_INFILE: ${LEAN_MYSQL_LOCAL_INFILE:-1}
       LEAN_TUSHARE_LINEAGE_ASYNC: ${LEAN_TUSHARE_LINEAGE_ASYNC:-1}
-      LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: lean_mlflow
+      LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: ${LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES:-}
       LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
       LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
       LEAN_DAILY_BASIC_FETCH_CONCURRENCY: ${LEAN_DAILY_BASIC_FETCH_CONCURRENCY:-32}
@@ -446,8 +434,6 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
     cpus: "${LEAN_DEFAULT_WORKER_CPUS:-2.0}"
     mem_limit: ${LEAN_DEFAULT_WORKER_MEMORY:-3g}
 

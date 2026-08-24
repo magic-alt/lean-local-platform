@@ -94,6 +94,8 @@ JSON_COLUMNS = {
     "context_json": "context",
     "raw_response_json": "rawResponse",
     "raw_signal_json": "rawSignal",
+    "runtime_identity_json": "runtimeIdentity",
+    "sandbox_json": "sandbox",
     "final_signal_json": "finalSignal",
     "guardrail_json": "guardrail",
     "data_completeness_json": "dataCompleteness",

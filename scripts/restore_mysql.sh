@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "${PYTHON:-python3}" "${ROOT_DIR}/scripts/restore_mysql.py" "$@"
+
 COMPOSE_PROJECT_NAME="${LEAN_COMPOSE_PROJECT_NAME:-lean-platform}"
 MYSQL_SERVICE="${LEAN_MYSQL_SERVICE:-mysql}"
 MYSQL_USER="${LEAN_MYSQL_USER:-root}"
