@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Add repository-scoped Codex production-control-plane safety guidance, specialized skills, read-only reviewers, approval defaults, and destructive-command guardrails for DataRelease, Qlib handoff, LEAN, Paper, and broker work.
+
 - Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.
 
 - Use successfully published TuShare Bronze partitions as incremental cursors, persist market-wide adjustment-factor watermarks, and prevent identical native partition replays from generating misleading revisions.

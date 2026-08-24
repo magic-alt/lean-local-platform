@@ -47,3 +47,68 @@ Every commit must update the `Unreleased` section of `CHANGELOG.md`. Enable the 
 
 Do not commit `.env`, provider tokens, MySQL credentials, or downloaded market data. Runtime metadata uses MySQL; DuckDB is only for querying derived Parquet exports. Do not reintroduce SQLite as a runtime default.
 
+## Platform Invariants
+
+This repository is the production data and execution control plane.
+
+`platform` owns:
+
+- canonical market-data ingestion and immutable DataRelease publication;
+- authoritative LEAN validation;
+- portfolio construction and execution validation;
+- hard-risk enforcement;
+- the Paper lifecycle;
+- OMS, broker integration, fills, and ledgers;
+- lifecycle states after `RESEARCH_PROMOTED`.
+
+`qlib-platform` owns:
+
+- Qlib materialization;
+- feature and factor research;
+- model training and selection;
+- walk-forward research;
+- research-only portfolio screening.
+
+Do not grow `platform` into a second model-training or feature-research platform.
+
+## Cross-Repository Contract
+
+The `qlib-platform` -> `platform` boundary is:
+
+```text
+DataRelease
++ Artifact Contract v2
++ content-addressed TARGET_PORTFOLIO
+```
+
+Preserve `artifactId`, `DataReleaseId`, target-weight SHA-256, lineage, lifecycle state, and fail-closed validation. Never silently repair or reinterpret an invalid imported artifact.
+
+## Current Live-Execution Boundary
+
+P9 is not enabled.
+
+Do not introduce during ordinary feature work:
+
+- `PAPER -> PRODUCTION` API transitions;
+- live broker order endpoints;
+- broker cancel/replace endpoints;
+- OMS live-write endpoints;
+- QMT write methods;
+- automatic live activation.
+
+Any deliberate change to this boundary is an architecture and security project, not an incidental implementation detail.
+
+## Side-Effect Discipline
+
+Before changing code, classify the affected path as one of:
+
+- `READ_ONLY`
+- `LOCAL_TEST_WRITE`
+- `DATA_CONTROL_PLANE_WRITE`
+- `PAPER_STATE_WRITE`
+- `BROKER_OBSERVATION`
+- `BROKER_WRITE`
+- `LIVE_ACTIVATION`
+
+Anything at `BROKER_WRITE` or `LIVE_ACTIVATION` requires an explicit architecture change and must never be exercised by normal agent verification.
+

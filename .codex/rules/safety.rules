@@ -1,0 +1,35 @@
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Force-push is prohibited for agent workflows; publish a new commit instead."
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "prompt",
+    justification = "This may destroy uncommitted work."
+)
+
+prefix_rule(
+    pattern = ["docker", "compose", "down"],
+    decision = "prompt",
+    justification = "Stopping the platform stack may affect persistent state."
+)
+
+prefix_rule(
+    pattern = ["docker", "compose", "rm"],
+    decision = "prompt",
+    justification = "Container removal may destroy local runtime state."
+)
+
+prefix_rule(
+    pattern = ["docker", "volume", "rm"],
+    decision = "forbidden",
+    justification = "Volume deletion can destroy persistent platform data; use a reviewed, backup-aware maintenance procedure instead."
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "prompt",
+    justification = "Recursive destructive deletion requires review."
+)
