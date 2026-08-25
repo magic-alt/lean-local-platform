@@ -4,11 +4,17 @@ param(
     [Parameter(Mandatory = $true)][string]$RuntimeId,
     [Parameter(Mandatory = $true)][string]$PythonRoot,
     [string]$OutputDir = "$PSScriptRoot\..\..\web\runtime\release",
-    [string]$WorkDir = "$env:RUNNER_TEMP\lean-native-build"
+    [string]$WorkDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+if (-not $WorkDir) {
+    $tempRoot = $env:RUNNER_TEMP
+    if (-not $tempRoot) { $tempRoot = $env:TEMP }
+    if (-not $tempRoot) { $tempRoot = Join-Path $root "web\runtime\tmp" }
+    $WorkDir = Join-Path $tempRoot "lean-native-build"
+}
 $output = [IO.Path]::GetFullPath($OutputDir)
 $work = [IO.Path]::GetFullPath($WorkDir)
 $pythonRootResolved = [IO.Path]::GetFullPath($PythonRoot)
