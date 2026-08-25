@@ -5,7 +5,7 @@ from ..core.config import LEAN_EXECUTION_BACKEND, PARQUET_DIR
 from ..services.dependencies import (
     check_alert_channel,
     check_database,
-    check_lean_runner,
+    check_execution_runtime,
     dependency_health,
 )
 from ..services.release_identity import runtime_release_identity
@@ -23,7 +23,7 @@ def health(request: Request):
         broker_ok = False
     release = runtime_release_identity(request.app.openapi())
     notifications = check_alert_channel()
-    execution = check_lean_runner()
+    execution = check_execution_runtime()
     healthy = bool(
         release["schema"]["aligned"]
         and database["ok"]

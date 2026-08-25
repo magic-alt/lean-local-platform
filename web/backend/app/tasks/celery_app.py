@@ -114,6 +114,8 @@ celery_app.conf.update(
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
+    control_queue_durable=True,
+    event_queue_exclusive=True,
     broker_heartbeat=30,
     broker_connection_retry_on_startup=True,
     worker_max_tasks_per_child=_positive_env_int("LEAN_WORKER_MAX_TASKS_PER_CHILD", 50),

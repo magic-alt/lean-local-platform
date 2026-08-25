@@ -22,7 +22,7 @@ x-platform-environment: &platform-environment
   CLICKHOUSE_PASSWORD: ${LEAN_CLICKHOUSE_PASSWORD:-lean}
   CLICKHOUSE_DATABASE: lean_market
   LEAN_DATA_DIR: /workspace/data
-  LEAN_PARQUET_DIR: /workspace/parquet
+  LEAN_PARQUET_DIR: /workspace/data/output/parquet
   LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
   LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
   LEAN_TUSHARE_TYPED_SOURCE_WRITES: "0"
@@ -70,7 +70,7 @@ x-backend-service: &backend-service
     - .:/workspace:ro
     - ./web/runtime:/workspace/web/runtime
     - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
-    - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
+    - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/data/output/parquet
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=128m
     - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700

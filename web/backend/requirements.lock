@@ -8,6 +8,12 @@ akshare==1.18.78 \
     --hash=sha256:a5853a6de7c119e856cd15e5daa93ad70003391ba5c5f5c487c53beb97026718 \
     --hash=sha256:d9a047c296b64282495e3d0fdda5db1aecf3cdf55fadcf07bcb40dc226440a92
     # via -r requirements.txt
+akracer==0.0.14 \
+    --hash=sha256:629eaccd0e1d18366804b797eb2692ed47bed0028f55b5a5af3cc277d521df04 \
+    --hash=sha256:e084c14bf6d9a02d5da375e3af1cba3d46f103aa1cf3a2010593b3e95bf1c29a
+    # via
+    #   -r requirements.txt
+    #   akshare
 amqp==5.3.1 \
     --hash=sha256:43b3319e1b4e7d1251833a93d672b4af1e40f3d632d479b98661a95f117880a2 \
     --hash=sha256:cddc00c725449522023bad949f70fff7b48f0b1ade74d170a6f10ab044739432
@@ -1618,7 +1624,7 @@ pytz==2026.3.post1 \
     # via
     #   clickhouse-connect
     #   yfinance
-pywin32==311 \
+pywin32==311 ; sys_platform == "win32" \
     --hash=sha256:0502d1facf1fed4839a9a51ccbcc63d952cf318f78ffc00a7e78528ac27d7a2b \
     --hash=sha256:184eb5e436dea364dcd3d2316d577d625c0351bf237c4e9a5fabbcfa5a58b151 \
     --hash=sha256:3aca44c046bd2ed8c90de9cb8427f581c479e594e99b5c0bb19b29c10fd6cb87 \

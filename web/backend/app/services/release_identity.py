@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import FRONTEND_DIST
-from ..db import db
-from ..migrations.runner import migration_files
+from ..db import database_backend, db
+from ..migrations.runner import POSTGRES_VERSIONS_DIR, migration_files
 
 
 def _digest(value: Any) -> str:
@@ -37,22 +37,33 @@ def _frontend_digest(root: Path = FRONTEND_DIST) -> str | None:
 
 
 def _schema_identity() -> dict[str, Any]:
-    source = migration_files()
+    versions_dir = POSTGRES_VERSIONS_DIR if database_backend() == "postgresql" else None
+    source = migration_files(versions_dir) if versions_dir is not None else migration_files()
     latest_source = source[-1]["revision"] if source else None
     source_checksum = source[-1]["checksum"] if source else None
     latest_applied = None
     stored_checksum = None
+    aligned = False
     try:
         with db() as connection:
-            row = connection.execute(
-                """
-                select revision,checksum from schema_migrations
-                order by revision desc limit 1
-                """
-            ).fetchone()
-        if row:
-            latest_applied = str(row["revision"])
-            stored_checksum = row["checksum"]
+            rows = connection.execute(
+                "select revision,checksum from schema_migrations"
+            ).fetchall()
+        applied = {str(row["revision"]): row["checksum"] for row in rows}
+        applied_source = [item for item in source if item["revision"] in applied]
+        if applied_source:
+            latest = applied_source[-1]
+            latest_applied = latest["revision"]
+            stored_checksum = applied[latest_applied]
+        aligned = bool(
+            source
+            and len(applied_source) == len(source)
+            and all(
+                not applied[item["revision"]]
+                or applied[item["revision"]] == item["checksum"]
+                for item in source
+            )
+        )
     except Exception:
         pass
     return {
@@ -60,7 +71,7 @@ def _schema_identity() -> dict[str, Any]:
         "latestAppliedMigration": latest_applied,
         "latestSourceMigrationChecksum": source_checksum,
         "latestAppliedMigrationChecksum": stored_checksum,
-        "aligned": bool(latest_source and latest_source == latest_applied),
+        "aligned": aligned,
     }
 
 
