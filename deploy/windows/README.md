@@ -8,9 +8,22 @@ two project-owned services:
 - `LeanRestrictedRunner` exposes the loopback-only runner API and owns the
   native LEAN/Research process trees.
 
-Run `platformctl doctor --mode native`, apply database migrations explicitly,
+Current support status:
+
+```text
+Windows Native Architecture      COMPLETE
+Windows Native Implementation    FEATURE COMPLETE
+Windows Dockerless Functional    NOT YET ACCEPTED
+Windows Native Production        NOT CERTIFIED
+```
+
+Start from `config/deployment/windows-native.env.example`; Windows services
+must not use the relative workstation paths in `native.env.example`. Run
+`platformctl doctor --mode native`, apply database migrations explicitly,
 configure the sandbox with `configure_windows_sandbox.ps1`, and only then
-install the services. The runner health endpoint returns `LEAN_RUNNER_UNSAFE`
+install the services. The policy defaults to
+`C:\ProgramData\LeanPlatform\sandbox-policy.json`, exactly matching the Windows
+environment template and verifier. The runner health endpoint returns `LEAN_RUNNER_UNSAFE`
 when the policy file, service account, ACL, firewall rule, Job Object APIs, or
 signed runtime identity cannot be verified.
 
@@ -34,3 +47,27 @@ Do not run either service as an interactive desktop user. The runner account
 must have read access only to data, project snapshots, support inputs, and the
 runtime; it receives write access only to run results, object storage, and its
 research workspace.
+
+## Dockerless Golden Acceptance
+
+After a real signed `windows-x64` runtime has been published and locked, run the
+acceptance script from an elevated PowerShell session on a clean host. It fails
+immediately if `where.exe docker` finds Docker, then bootstraps the application,
+installs and verifies the runtime/sandbox, initializes PostgreSQL, starts the
+Windows services, executes the pinned Native LEAN integration backtest, and
+performs a backup plus isolated restore:
+
+```powershell
+.\deploy\windows\run_dockerless_golden_acceptance.ps1 `
+  -AcceptanceSpec C:\acceptance\lean-windows-x64.json `
+  -RunnerAccount .\LeanRunner `
+  -DotnetPath C:\ProgramData\LeanPlatform\lean\<runtime-id>\dotnet.exe
+```
+
+Its evidence intentionally records `productionCertified=false`. Golden
+functional acceptance cannot substitute for the separate 12-hour fault matrix
+and host-bound production certificate.
+
+The `windows-native-contract` GitHub Actions job runs on every push and pull
+request. Repository branch protection must also mark that job as a required
+check; workflow YAML cannot enforce branch-protection settings by itself.

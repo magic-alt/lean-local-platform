@@ -15,8 +15,9 @@ change. Node is a build-time dependency; FastAPI serves `web/frontend/dist`.
 - Node/npm to build the frontend
 - `pg_dump` and `pg_restore` on `PATH` or under `LEAN_POSTGRES_BIN`
 
-Copy `config/deployment/native.env.example` into a private environment file,
-replace every placeholder and keep credentials out of Git.
+Copy `config/deployment/native.env.example` into a private environment file
+(`config/deployment/windows-native.env.example` for Windows), replace every
+placeholder and keep credentials out of Git.
 
 ```bash
 python scripts/platformctl.py --mode native --profile core doctor
@@ -42,6 +43,8 @@ mode; native mode does not silently fall back to it.
 Windows is a project-certified deployment lane because Celery upstream does not
 provide official Windows support. Install PostgreSQL and RabbitMQ as Windows
 services, then follow [the Windows runbook](../deploy/windows/README.md).
+SCM deployments require absolute data/runtime paths; the Windows template and
+sandbox configurator share the same policy/work defaults.
 
 The service topology is:
 

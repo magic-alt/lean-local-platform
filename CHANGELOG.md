@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add Windows Dockerless Core acceptance plumbing: an absolute-path Windows
+  production environment template, consistent configurable sandbox policy/work
+  paths, an always-on Windows Native contract CI lane, Windows-specific sandbox
+  and supervisor tests, and a clean-host Golden Acceptance script covering
+  Docker absence, Native LEAN, service health, backup and isolated restore.
+
 - Repair Windows validation regressions in the PostgreSQL/RabbitMQ runtime
   refactor: keep SQLite fixtures on explicit database-backed test paths,
   preserve canonical provider identifiers when DuckDB reads partitioned

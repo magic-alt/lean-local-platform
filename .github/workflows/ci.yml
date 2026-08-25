@@ -49,6 +49,43 @@ jobs:
       - run: python -m pytest -q tests/test_native_execution.py tests/test_platformctl.py tests/test_restricted_runner.py
         working-directory: web/backend
 
+  windows-native-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements.lock
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: python scripts/platformctl.py --help
+      - name: Validate Windows deployment PowerShell
+        shell: pwsh
+        run: |
+          $errors = @()
+          foreach ($path in @(
+            "deploy/windows/configure_windows_sandbox.ps1",
+            "deploy/windows/run_dockerless_golden_acceptance.ps1"
+          )) {
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$null, [ref]$errors
+            ) | Out-Null
+          }
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+      - name: Validate Windows native contracts
+        run: >-
+          python -m pytest -q
+          tests/test_native_execution.py
+          tests/test_platformctl.py
+          tests/test_restricted_runner.py
+          tests/test_windows_native_contract.py
+          tests/test_windows_certification.py
+        working-directory: web/backend
+
   docker-backtest:
     if: ${{ vars.RUN_LEAN_DOCKER_INTEGRATION == '1' }}
     runs-on: ubuntu-latest
