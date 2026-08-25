@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Document complete `.env` provisioning for Docker and Windows Native hosts,
+  including required-variable classification, independent secret generation,
+  PostgreSQL/RabbitMQ account bootstrap, API versus provider tokens, URL
+  encoding, Windows service identities, signed runtime boundaries, and
+  fail-closed verification steps; align the root and Windows templates with
+  the native PostgreSQL initializer and restricted runner authentication.
+
 - Harden Windows Dockerless preflight with one LEAN_DOTNET_PATH resolver,
   deployment-host .NET 10 runtime versus release-host SDK checks, a frozen
   deterministic Native LEAN smoke qualification, strict Docker installation
