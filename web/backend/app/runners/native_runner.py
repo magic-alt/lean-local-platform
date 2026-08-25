@@ -8,6 +8,7 @@ from typing import Callable
 from ..core.config import LEAN_NATIVE_SANDBOX
 from ..lean_engine.errors import LeanPlatformError
 from .base import BackendHealth, ExecutionPlan, ExecutionResult, ExecutionSpec, LeanPathLayout
+from .dotnet import dotnet_major_available, resolve_dotnet
 from .process import ProcessRunner
 from .runtime_registry import NativeRuntime, RuntimeRegistry
 from .runner_client import RestrictedRunnerClient
@@ -53,10 +54,12 @@ class NativeLeanBackend:
         return allowed
 
     def _sandbox_command(self, spec: ExecutionSpec, runtime: NativeRuntime) -> tuple[list[str], str]:
-        dotnet = shutil.which("dotnet")
+        dotnet = resolve_dotnet()
         if not dotnet:
             raise LeanPlatformError("native_dotnet_runtime_missing")
-        direct = [dotnet, str(runtime.launcher), "--config", str(spec.config_path)]
+        if not dotnet_major_available(dotnet):
+            raise LeanPlatformError("native_dotnet_runtime_incompatible:requires_10.x")
+        direct = [str(dotnet), str(runtime.launcher), "--config", str(spec.config_path)]
         requested = LEAN_NATIVE_SANDBOX
         if os.name == "nt":
             status = WindowsSandboxVerifier().verify()
@@ -180,8 +183,11 @@ class NativeLeanBackend:
                 sandbox = "process" if LEAN_NATIVE_SANDBOX == "process" else "bwrap"
             if sandbox == "bwrap" and shutil.which("bwrap") is None:
                 raise LeanPlatformError("native_sandbox_unavailable")
-            if shutil.which("dotnet") is None:
+            dotnet = resolve_dotnet()
+            if dotnet is None:
                 raise LeanPlatformError("native_dotnet_runtime_missing")
+            if not dotnet_major_available(dotnet):
+                raise LeanPlatformError("native_dotnet_runtime_incompatible:requires_10.x")
             return BackendHealth(
                 backend="native",
                 ready=True,

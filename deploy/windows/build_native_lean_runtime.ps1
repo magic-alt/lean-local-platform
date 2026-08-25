@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$LeanCommit,
     [Parameter(Mandatory = $true)][string]$RuntimeId,
     [Parameter(Mandatory = $true)][string]$PythonRoot,
+    [string]$DotnetPath = "",
     [string]$OutputDir = "$PSScriptRoot\..\..\web\runtime\release",
     [string]$WorkDir = ""
 )
@@ -23,11 +24,24 @@ $stage = Join-Path $work "stage"
 $archive = Join-Path $output "$RuntimeId-windows-x64.zip"
 $sbom = Join-Path $output "$RuntimeId-windows-x64.cyclonedx.json"
 
-foreach ($command in @("git", "dotnet", "python")) {
+foreach ($command in @("git", "python")) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
         throw "Required command is missing: $command"
     }
 }
+$dotnetResolverArgs = @(
+    (Join-Path $root "scripts\resolve_dotnet.py"),
+    "--require",
+    "sdk"
+)
+if ($DotnetPath) { $dotnetResolverArgs += @("--path", $DotnetPath) }
+$dotnetOutput = & python @dotnetResolverArgs
+if ($LASTEXITCODE) {
+    throw ".NET SDK 10.x is required on the native runtime build host."
+}
+$resolvedDotnet = [IO.Path]::GetFullPath(
+    [string]($dotnetOutput | Select-Object -Last 1)
+)
 if (-not (Test-Path -LiteralPath $pythonRootResolved -PathType Container)) {
     throw "PythonRoot does not exist: $pythonRootResolved"
 }
@@ -55,9 +69,9 @@ try {
         # Upstream LEAN does not publish a repository-level packages.lock.json;
         # reproducibility is anchored to the exact Git commit plus the emitted
         # archive/SBOM digests rather than a non-existent NuGet lock file.
-        dotnet restore Launcher/QuantConnect.Lean.Launcher.csproj
+        & $resolvedDotnet restore Launcher/QuantConnect.Lean.Launcher.csproj
         if ($LASTEXITCODE) { throw "dotnet restore failed: $LASTEXITCODE" }
-        dotnet build Launcher/QuantConnect.Lean.Launcher.csproj -c Release --no-restore
+        & $resolvedDotnet build Launcher/QuantConnect.Lean.Launcher.csproj -c Release --no-restore
         if ($LASTEXITCODE) { throw "dotnet build failed: $LASTEXITCODE" }
     } finally {
         Pop-Location

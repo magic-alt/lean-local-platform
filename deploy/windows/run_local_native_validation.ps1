@@ -113,7 +113,8 @@ try {
     Invoke-ValidationStep "json_contracts" {
         foreach ($path in @(
             "config/runtime/lean-native.lock.json",
-            "config/runtime/windows-celery-certification.json"
+            "config/runtime/windows-celery-certification.json",
+            "config/acceptance/windows-native-core.v1.json"
         )) {
             Get-Content -LiteralPath $path -Raw | ConvertFrom-Json | Out-Null
         }
@@ -144,6 +145,8 @@ try {
         if ($LASTEXITCODE) { throw "repository hygiene failed: $LASTEXITCODE" }
         & git diff --check main...HEAD
         if ($LASTEXITCODE) { throw "git diff --check failed: $LASTEXITCODE" }
+        & git diff --check
+        if ($LASTEXITCODE) { throw "working tree git diff --check failed: $LASTEXITCODE" }
     }
 
     Write-ValidationEvidence -Passed $true

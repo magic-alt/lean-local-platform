@@ -9,6 +9,7 @@ import pytest
 from app.lean_engine.config import base_config
 from app.lean_engine.errors import LeanPlatformError
 from app.runners.base import LeanPathLayout
+from app.runners.dotnet import dotnet_major_available, resolve_dotnet
 from app.runners.runtime_registry import RuntimeRegistry
 from app.services.backend_parity import compare_results
 from app.services.run_fingerprint import canonical_config_hash
@@ -19,6 +20,52 @@ def test_docker_layout_is_posix_even_on_windows():
 
     assert str(layout.data_dir) == "/Lean/Data"
     assert str(layout.support_dir) == "/Lean/Run"
+
+
+def test_dotnet_resolver_prefers_explicit_path(tmp_path):
+    configured = tmp_path / "configured-dotnet"
+    configured.write_bytes(b"dotnet")
+    configured.chmod(0o755)
+
+    resolved = resolve_dotnet(
+        environment={"LEAN_DOTNET_PATH": str(configured)},
+        which=lambda _name: str(tmp_path / "path-dotnet"),
+        windows=True,
+    )
+
+    assert resolved == configured.resolve()
+
+
+def test_dotnet_resolver_falls_back_to_path_when_explicit_path_is_invalid(tmp_path):
+    discovered = tmp_path / "path-dotnet"
+    discovered.write_bytes(b"dotnet")
+    discovered.chmod(0o755)
+
+    resolved = resolve_dotnet(
+        environment={"LEAN_DOTNET_PATH": str(tmp_path / "missing")},
+        which=lambda _name: str(discovered),
+        windows=False,
+    )
+
+    assert resolved == discovered.resolve()
+
+
+def test_dotnet_runtime_and_sdk_major_checks_are_distinct(tmp_path):
+    executable = tmp_path / "dotnet"
+    executable.write_bytes(b"dotnet")
+
+    def runtime_runner(command, **_kwargs):
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(
+            command,
+            0,
+            stdout="Microsoft.NETCore.App 10.0.1 [runtime]",
+            stderr="",
+        )
+
+    assert dotnet_major_available(executable, runner=runtime_runner) is True
+    assert dotnet_major_available(executable, sdk=True, runner=runtime_runner) is False
 
 
 def test_canonical_config_hash_ignores_backend_paths(tmp_path):
