@@ -5,6 +5,7 @@ pywin32==311; sys_platform == "win32"
 fastapi==0.140.0
 httpx2==2.9.1
 akshare==1.18.78
+akracer==0.0.14
 adata==2.9.5
 baostock==0.9.3
 clickhouse-connect==0.15.1

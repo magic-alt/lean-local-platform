@@ -263,6 +263,13 @@ def _delegated_runner_checks(worker: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def check_execution_runtime() -> dict[str, Any]:
+    if BACKTEST_EXECUTION_DELEGATED and LEAN_EXECUTION_BACKEND == "docker":
+        worker = _timed("backtest_worker", check_backtest_worker)
+        return _delegated_runner_checks(worker)[-1]
+    return check_lean_runner()
+
+
 def _database_objects(connection) -> set[str]:
     if database_backend() == "postgresql":
         rows = connection.execute(

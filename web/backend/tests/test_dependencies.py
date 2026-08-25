@@ -108,6 +108,33 @@ def test_delegated_runner_checks_preserve_worker_failure_without_crashing():
     assert all(item["detail"]["workerError"] == "celery ping timed out" for item in checks)
 
 
+def test_execution_runtime_uses_delegated_backtest_worker(monkeypatch):
+    monkeypatch.setattr(dependencies, "BACKTEST_EXECUTION_DELEGATED", True)
+    monkeypatch.setattr(dependencies, "LEAN_EXECUTION_BACKEND", "docker")
+    monkeypatch.setattr(
+        dependencies,
+        "check_backtest_worker",
+        lambda: {
+            "service": "backtest_worker",
+            "ok": True,
+            "detail": {"mode": "delegated", "workers": ["backtest@worker"]},
+        },
+    )
+
+    result = dependencies.check_execution_runtime()
+
+    assert result["service"] == "lean_runner"
+    assert result["ok"] is True
+    assert result["detail"]["mode"] == "delegated_to_backtest_worker"
+
+
+def test_celery_control_queues_are_durable_for_rabbitmq_43():
+    from app.tasks.celery_app import celery_app
+
+    assert celery_app.conf.control_queue_durable is True
+    assert celery_app.conf.event_queue_exclusive is True
+
+
 def test_scheduled_automation_without_alert_channel_is_degraded(monkeypatch):
     monkeypatch.setattr(dependencies, "SCHEDULED_AUTOMATION_ENABLED", True)
     monkeypatch.setattr(dependencies, "external_alert_channel_configured", lambda: False)

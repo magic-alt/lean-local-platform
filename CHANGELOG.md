@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Restore Linux Docker image builds by preserving the Windows-only marker on
+  `pywin32`, pinning Akshare's `akracer` and MLflow's `gunicorn` dependencies
+  with hashes, and excluding nested pytest caches from Docker build contexts;
+  compile source-only Python dependencies in disposable builder stages so
+  runtime images stay compiler-free, and mount Parquet under the supported
+  writable data tree; use durable Celery control queues and exclusive event
+  queues for RabbitMQ 4.3, report delegated Runner health correctly, and
+  compare PostgreSQL migrations against the PostgreSQL migration chain.
+
 - Document complete `.env` provisioning for Docker and Windows Native hosts,
   including required-variable classification, independent secret generation,
   PostgreSQL/RabbitMQ account bootstrap, API versus provider tokens, URL
