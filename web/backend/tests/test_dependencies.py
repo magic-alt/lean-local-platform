@@ -1,6 +1,21 @@
 from app.services import dependencies
 
 
+def test_docker_checks_degrade_when_cli_is_missing(monkeypatch):
+    def missing_cli(*_args, **_kwargs):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(dependencies.subprocess, "run", missing_cli)
+
+    docker = dependencies.check_docker()
+    image = dependencies.check_lean_image()
+
+    assert docker == {"service": "docker", "ok": False, "detail": "docker command not found"}
+    assert image["service"] == "lean_image"
+    assert image["ok"] is False
+    assert image["detail"]["error"] == "docker command not found"
+
+
 def test_postgres_readiness_counts_are_exact(monkeypatch):
     statements = []
 

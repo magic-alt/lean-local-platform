@@ -8,6 +8,7 @@ from typing import Any
 
 from ..db import (
     advisory_lock_in_use,
+    database_backend,
     db,
     json_dump,
     release_advisory_lock,
@@ -757,7 +758,10 @@ def maintenance_lease_active() -> bool:
 
 
 def watermarks() -> dict[str, Any]:
-    if os.environ.get("LEAN_DERIVED_WATERMARK_BACKEND", "local_parquet").strip().lower() != "database":
+    if (
+        database_backend() == "postgresql"
+        and os.environ.get("LEAN_DERIVED_WATERMARK_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
         items = []
         for scope in market_lake.all_scopes(kind="bars"):
             summary = market_lake.native_partition_summary(**scope)

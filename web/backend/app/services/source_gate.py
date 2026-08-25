@@ -194,7 +194,10 @@ def require_source_allowed(source: str | None, *, allow_research_source: bool = 
 
 def source_certification(source: str | None, *, asset_class: str = "equity", market: str = "china", venue: str | None = "china") -> dict[str, Any]:
     normalized = normalize_source(source)
-    if os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database":
+    if (
+        database_backend() == "postgresql"
+        and os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
         local = _local_lake_certification(
             normalized,
             asset_class=asset_class,

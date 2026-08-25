@@ -56,13 +56,20 @@ def _timed(service: str, check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 
 
 def check_docker() -> dict[str, Any]:
-    result = subprocess.run(
-        ["docker", "info", "--format", "{{.ServerVersion}}"],
-        capture_output=True,
-        text=True,
-        timeout=2,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"service": "docker", "ok": False, "detail": "docker command not found"}
+    except subprocess.TimeoutExpired:
+        return {"service": "docker", "ok": False, "detail": "docker info timed out"}
+    except OSError as exc:
+        return {"service": "docker", "ok": False, "detail": f"docker unavailable: {exc}"}
     ok = result.returncode == 0
     detail = result.stdout.strip() if ok else (result.stderr.strip() or "docker info failed")
     return {"service": "docker", "ok": ok, "detail": detail}
@@ -74,13 +81,32 @@ def check_data_dir() -> dict[str, Any]:
 
 
 def check_lean_image() -> dict[str, Any]:
-    result = subprocess.run(
-        ["docker", "image", "inspect", DEFAULT_DOCKER_IMAGE, "--format", "{{.Id}}"],
-        capture_output=True,
-        text=True,
-        timeout=3,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", DEFAULT_DOCKER_IMAGE, "--format", "{{.Id}}"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "service": "lean_image",
+            "ok": False,
+            "detail": {"image": DEFAULT_DOCKER_IMAGE, "id": None, "error": "docker command not found"},
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "service": "lean_image",
+            "ok": False,
+            "detail": {"image": DEFAULT_DOCKER_IMAGE, "id": None, "error": "docker image inspect timed out"},
+        }
+    except OSError as exc:
+        return {
+            "service": "lean_image",
+            "ok": False,
+            "detail": {"image": DEFAULT_DOCKER_IMAGE, "id": None, "error": f"docker unavailable: {exc}"},
+        }
     ok = result.returncode == 0
     detail = {
         "image": DEFAULT_DOCKER_IMAGE,
