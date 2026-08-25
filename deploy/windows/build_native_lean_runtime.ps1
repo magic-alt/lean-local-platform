@@ -46,7 +46,10 @@ try {
         if ($actualCommit -ne $LeanCommit.ToLowerInvariant()) {
             throw "LEAN checkout mismatch: $actualCommit"
         }
-        dotnet restore Launcher/QuantConnect.Lean.Launcher.csproj --locked-mode
+        # Upstream LEAN does not publish a repository-level packages.lock.json;
+        # reproducibility is anchored to the exact Git commit plus the emitted
+        # archive/SBOM digests rather than a non-existent NuGet lock file.
+        dotnet restore Launcher/QuantConnect.Lean.Launcher.csproj
         if ($LASTEXITCODE) { throw "dotnet restore failed: $LASTEXITCODE" }
         dotnet build Launcher/QuantConnect.Lean.Launcher.csproj -c Release --no-restore
         if ($LASTEXITCODE) { throw "dotnet build failed: $LASTEXITCODE" }
