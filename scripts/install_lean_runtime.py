@@ -39,7 +39,13 @@ def _sha256(path: Path) -> str:
 def _download(url: str, destination: Path) -> None:
     if not url.startswith("https://"):
         raise RuntimeError("runtime_download_requires_https")
-    request = urllib.request.Request(url, headers={"User-Agent": "magic-alt-platform-runtime-installer/1"})
+    headers = {"User-Agent": "magic-alt-platform-runtime-installer/1"}
+    token = os.environ.get("LEAN_RUNTIME_DOWNLOAD_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/octet-stream"
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         shutil.copyfileobj(response, output)
 
@@ -170,7 +176,7 @@ def install() -> int:
         staging = LEAN_RUNTIME_ROOT / f".{runtime_id}.{os.getpid()}.staging"
         try:
             _extract(archive, staging)
-            launcher_relative = Path(str(lock["launcher"]))
+            launcher_relative = Path(artifact_meta.get("launcher") or str(lock["launcher"]))
             launcher = (staging / launcher_relative).resolve()
             if not launcher.is_relative_to(staging.resolve()) or not launcher.is_file():
                 raise RuntimeError("runtime_launcher_missing")

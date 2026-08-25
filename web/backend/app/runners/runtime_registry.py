@@ -73,7 +73,26 @@ class RuntimeRegistry:
             raise LeanPlatformError("native_runtime_artifact_sha256_invalid")
         if any(not str(artifact[name]).startswith("https://") for name in ("url", "signatureUrl", "sbomUrl")):
             raise LeanPlatformError("native_runtime_artifact_url_must_use_https")
-        return {name: str(artifact[name]) for name in required}
+        result = {name: str(artifact[name]) for name in required}
+        for name in ("launcher", "pythonHome", "pythonLibrary"):
+            if artifact.get(name) is not None:
+                result[name] = str(artifact[name])
+        return result
+
+    @staticmethod
+    def _relative_path(
+        payload: dict[str, Any], artifact: dict[str, str], name: str
+    ) -> Path | None:
+        value = artifact.get(name)
+        if value is None:
+            raw = payload.get(name)
+            value = str(raw) if raw is not None else None
+        if not value:
+            return None
+        relative = Path(value)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise LeanPlatformError(f"native_runtime_{name.lower()}_path_invalid")
+        return relative
 
     def resolve(self) -> NativeRuntime:
         payload = self.read_lock()
@@ -96,8 +115,8 @@ class RuntimeRegistry:
             or marker.get("sbomVerified") is not True
         ):
             raise LeanPlatformError("native_runtime_ready_marker_invalid")
-        launcher_relative = Path(str(payload.get("launcher") or ""))
-        if launcher_relative.is_absolute() or ".." in launcher_relative.parts:
+        launcher_relative = self._relative_path(payload, artifact, "launcher")
+        if launcher_relative is None:
             raise LeanPlatformError("native_runtime_launcher_path_invalid")
         launcher = (root / launcher_relative).resolve()
         if not launcher.is_relative_to(root) or not launcher.is_file():
@@ -108,12 +127,14 @@ class RuntimeRegistry:
         actual_launcher_sha = hashlib.sha256(launcher.read_bytes()).hexdigest()
         if actual_launcher_sha != launcher_sha:
             raise LeanPlatformError("native_runtime_launcher_digest_mismatch")
-        python_relative = payload.get("pythonHome")
-        python_home = (root / str(python_relative)).resolve() if python_relative else None
-        if python_home is not None and not python_home.is_relative_to(root):
+        python_relative = self._relative_path(payload, artifact, "pythonHome")
+        python_home = (root / python_relative).resolve() if python_relative else None
+        if python_home is not None and (
+            not python_home.is_relative_to(root) or not python_home.exists()
+        ):
             raise LeanPlatformError("native_runtime_python_path_invalid")
-        library_relative = payload.get("pythonLibrary")
-        python_library = (root / str(library_relative)).resolve() if library_relative else None
+        library_relative = self._relative_path(payload, artifact, "pythonLibrary")
+        python_library = (root / library_relative).resolve() if library_relative else None
         if python_library is not None and (
             not python_library.is_relative_to(root) or not python_library.is_file()
         ):
