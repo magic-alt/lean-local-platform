@@ -29,6 +29,7 @@ def test_windows_native_template_uses_absolute_consistent_paths():
 
     for name in (
         "LEAN_NATIVE_RUNTIME_ROOT",
+        "LEAN_DOTNET_PATH",
         "LEAN_DATA_DIR",
         "LEAN_RUNTIME_DIR",
         "LEAN_PARQUET_DIR",
@@ -38,6 +39,7 @@ def test_windows_native_template_uses_absolute_consistent_paths():
     assert values["LEAN_WINDOWS_SANDBOX_POLICY_FILE"] == (
         r"C:\ProgramData\LeanPlatform\sandbox-policy.json"
     )
+    assert values["LEAN_DOTNET_PATH"] == r"C:\Program Files\dotnet\dotnet.exe"
     assert values["LEAN_RUNTIME_DIR"] == r"C:\ProgramData\LeanPlatform\runtime"
 
 
@@ -50,6 +52,75 @@ def test_windows_sandbox_script_defaults_match_environment_template():
     assert 'Join-Path $resolvedProgramData "runtime"' in script
     assert "LEAN_WINDOWS_SANDBOX_POLICY_FILE=$resolvedPolicy" in script
     assert "LEAN_RUNTIME_DIR=$runtimeWork" in script
+    assert "scripts\\resolve_dotnet.py" in script
+    assert '"runtime"' in script
+    assert ".NET runtime 10.x is required on the deployment host." in script
+
+
+def test_windows_runtime_builder_requires_sdk_10_but_deployment_does_not():
+    builder = (ROOT / "deploy" / "windows" / "build_native_lean_runtime.ps1").read_text(
+        encoding="utf-8"
+    )
+    release = (
+        ROOT / "deploy" / "windows" / "run_local_native_runtime_release.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert '[string]$DotnetPath = ""' in builder
+    assert "scripts\\resolve_dotnet.py" in builder
+    assert '"sdk"' in builder
+    assert ".NET SDK 10.x is required on the native runtime build host." in builder
+    assert "-DotnetPath $DotnetPath" in release
+
+
+def test_windows_native_acceptance_spec_and_smoke_project_are_frozen():
+    spec_path = ROOT / "config" / "acceptance" / "windows-native-core.v1.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    project = (spec_path.parent / spec["projectDir"]).resolve()
+
+    assert spec["schemaVersion"] == 1
+    assert spec["qualificationId"] == "windows-native-core-v1"
+    assert (project / spec["mainFile"]).is_file()
+    assert spec["expected"]["minimumOrders"] >= 1
+    assert spec["expected"]["minimumFilledOrders"] >= 1
+    assert len(spec["fixture"]["rows"]) >= 2
+    assert spec["parameters"]["ticker"] == spec["fixture"]["symbol"]
+    assert spec["parameters"]["market"] == spec["fixture"]["market"]
+
+
+def test_windows_golden_preflight_is_strict_and_precedes_system_mutation():
+    script = (
+        ROOT / "deploy" / "windows" / "run_dockerless_golden_acceptance.ps1"
+    ).read_text(encoding="utf-8")
+
+    for check in (
+        "cliAbsent",
+        "serviceAbsent",
+        "desktopAbsent",
+        "wslDistrosAbsent",
+        "installationAbsent",
+    ):
+        assert check in script
+    assert "signedRuntimeLockReady" in script
+    assert "dotnetRuntime10Available" in script
+    assert "acceptanceSpecSha256" in script
+    assert "acceptanceAlgorithmSha256" in script
+    assert "serviceAccountsReady" in script
+    assert "serviceCredentialVariablesPresent" in script
+    assert "Test-Path Env:LEAN_WINDOWS_RUNNER_PASSWORD" in script
+    assert "rabbitmq_cli_cookie_not_core_gated" in script
+    assert script.index('steps["preflight"]') < script.index(
+        'Invoke-CheckedStep "sandbox_configure"'
+    )
+
+
+def test_native_runtime_lock_remains_fail_closed_until_release():
+    lock = json.loads(
+        (ROOT / "config" / "runtime" / "lean-native.lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert lock["supported"] is False
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows contract")

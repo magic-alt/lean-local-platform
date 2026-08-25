@@ -140,12 +140,24 @@ def doctor(selection: Selection) -> int:
     if selection.mode == "docker":
         required_commands.append("docker")
     else:
-        required_commands.extend(["dotnet"])
         if selection.profile != "dev" and sys.platform.startswith("linux"):
             required_commands.append("bwrap")
     checks: list[tuple[str, bool, str]] = []
     for name in required_commands:
         checks.append((name, shutil.which(name) is not None, "command"))
+    if selection.mode == "native":
+        sys.path.insert(0, str(BACKEND))
+        from app.runners.dotnet import dotnet_major_available, resolve_dotnet
+
+        dotnet = resolve_dotnet()
+        dotnet_ready = bool(dotnet and dotnet_major_available(dotnet))
+        checks.append(
+            (
+                "dotnet-runtime",
+                dotnet_ready,
+                f".NET 10.x runtime via {dotnet}" if dotnet_ready else ".NET 10.x runtime",
+            )
+        )
     checks.extend(
         [
             ("postgresql", _tcp_ready("127.0.0.1", int(os.environ.get("LEAN_POSTGRES_PORT", "5432"))), "tcp"),
@@ -153,7 +165,6 @@ def doctor(selection: Selection) -> int:
         ]
     )
     if selection.mode == "native":
-        sys.path.insert(0, str(BACKEND))
         try:
             from app.runners.runtime_registry import RuntimeRegistry
 

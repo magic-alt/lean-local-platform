@@ -20,7 +20,10 @@ def test_native_lean_runs_pinned_acceptance_spec(tmp_path):
     if not spec_path.is_file():
         pytest.fail("LEAN_NATIVE_ACCEPTANCE_SPEC must identify the fixed certified acceptance JSON")
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
-    project_dir = Path(spec["projectDir"]).resolve()
+    project_dir = Path(spec["projectDir"])
+    if not project_dir.is_absolute():
+        project_dir = spec_path.parent / project_dir
+    project_dir = project_dir.resolve()
     algorithm_path = (project_dir / spec["mainFile"]).resolve()
     output = LeanRunner(timeout_seconds=int(spec.get("timeoutSeconds") or 300)).run_backtest(
         str(spec["runId"]),
@@ -38,3 +41,13 @@ def test_native_lean_runs_pinned_acceptance_spec(tmp_path):
     assert output["timed_out"] is False
     assert output["result_json_path"]
     assert output["runtime_identity"]["artifactSha256"]
+    expected = dict(spec.get("expected") or {})
+    result = json.loads(Path(output["result_json_path"]).read_text(encoding="utf-8"))
+    orders = result.get("orders") or {}
+    assert len(orders) >= int(expected.get("minimumOrders") or 1)
+    events_path = Path(output["results_dir"]) / f"{spec['runId']}-order-events.json"
+    events = json.loads(events_path.read_text(encoding="utf-8"))
+    if isinstance(events, dict):
+        events = list(events.values())
+    filled = [event for event in events if str(event.get("status")).lower() == "filled"]
+    assert len(filled) >= int(expected.get("minimumFilledOrders") or 1)

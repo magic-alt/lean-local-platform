@@ -3,16 +3,30 @@ param(
     [Parameter(Mandatory = $true)][string]$RunnerAccount,
     [string]$ProgramDataRoot = "C:\ProgramData\LeanPlatform",
     [Parameter(Mandatory = $true)][string]$RuntimeRoot,
-    [Parameter(Mandatory = $true)][string]$DotnetPath,
+    [string]$DotnetPath = "",
     [Parameter(Mandatory = $true)][string]$DataRoot,
     [string]$WorkRoot = "",
-    [string]$PolicyPath = ""
+    [string]$PolicyPath = "",
+    [string]$Python = "python"
 )
 
 $ErrorActionPreference = "Stop"
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $resolvedProgramData = [IO.Path]::GetFullPath($ProgramDataRoot)
 $resolvedRuntime = [IO.Path]::GetFullPath($RuntimeRoot)
-$resolvedDotnet = [IO.Path]::GetFullPath($DotnetPath)
+$dotnetResolverArgs = @(
+    (Join-Path $root "scripts\resolve_dotnet.py"),
+    "--require",
+    "runtime"
+)
+if ($DotnetPath) { $dotnetResolverArgs += @("--path", $DotnetPath) }
+$dotnetOutput = & $Python @dotnetResolverArgs
+if ($LASTEXITCODE) {
+    throw ".NET runtime 10.x is required on the deployment host."
+}
+$resolvedDotnet = [IO.Path]::GetFullPath(
+    [string]($dotnetOutput | Select-Object -Last 1)
+)
 $resolvedData = [IO.Path]::GetFullPath($DataRoot)
 $resolvedWork = if ($WorkRoot) {
     [IO.Path]::GetFullPath($WorkRoot)
@@ -30,10 +44,6 @@ if (-not $resolvedProgramData.StartsWith("C:\ProgramData\", [StringComparison]::
 if (-not $resolvedPolicy.StartsWith(($resolvedProgramData.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
     throw "PolicyPath must be below ProgramDataRoot."
 }
-if (-not (Test-Path -LiteralPath $resolvedDotnet -PathType Leaf)) {
-    throw "Pinned runtime dotnet executable is missing."
-}
-
 $runtimeWork = $resolvedWork
 $results = Join-Path $runtimeWork "runs"
 $research = Join-Path $runtimeWork "research"

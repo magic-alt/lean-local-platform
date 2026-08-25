@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Harden Windows Dockerless preflight with one LEAN_DOTNET_PATH resolver,
+  deployment-host .NET 10 runtime versus release-host SDK checks, a frozen
+  deterministic Native LEAN smoke qualification, strict Docker installation
+  residue detection, pre-mutation Golden evidence, and non-blocking RabbitMQ
+  CLI cookie operations warnings while the signed runtime lock stays
+  fail-closed.
+
 - Make local Windows Native validation and signed runtime release the
   authoritative fallback while hosted GitHub Actions quota is unavailable,
   retaining Dockerless Golden Acceptance, backend parity, and production

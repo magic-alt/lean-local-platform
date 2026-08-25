@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RuntimeId,
     [Parameter(Mandatory = $true)][string]$PythonRoot,
     [Parameter(Mandatory = $true)][string]$SigningPrivateKeyPath,
+    [string]$DotnetPath = "",
     [string]$Repository = "magic-alt/platform",
     [string]$OutputDir = "$PSScriptRoot\..\..\web\runtime\release",
     [switch]$PublishDraft
@@ -16,7 +17,7 @@ $key = [IO.Path]::GetFullPath($SigningPrivateKeyPath)
 $publicKey = Join-Path $root "config\release-signing-public.pem"
 $tag = "native-$RuntimeId"
 
-foreach ($command in @("python", "git", "dotnet", "openssl")) {
+foreach ($command in @("python", "git", "openssl")) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
         throw "Required command is missing: $command"
     }
@@ -34,6 +35,7 @@ $buildJson = & (Join-Path $PSScriptRoot "build_native_lean_runtime.ps1") `
     -LeanCommit $LeanCommit `
     -RuntimeId $RuntimeId `
     -PythonRoot $PythonRoot `
+    -DotnetPath $DotnetPath `
     -OutputDir $output
 if ($LASTEXITCODE) { throw "native runtime build failed: $LASTEXITCODE" }
 $build = ($buildJson | Out-String) | ConvertFrom-Json

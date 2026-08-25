@@ -13,6 +13,7 @@ Current support status:
 ```text
 Windows Native Architecture      COMPLETE
 Windows Native Implementation    FEATURE COMPLETE
+Windows Local Contract Gate      PASSED
 Windows Dockerless Functional    NOT YET ACCEPTED
 Windows Native Production        NOT CERTIFIED
 ```
@@ -26,6 +27,14 @@ install the services. The policy defaults to
 environment template and verifier. The runner health endpoint returns `LEAN_RUNNER_UNSAFE`
 when the policy file, service account, ACL, firewall rule, Job Object APIs, or
 signed runtime identity cannot be verified.
+
+Set LEAN_DOTNET_PATH to an absolute host executable when dotnet.exe is not on
+PATH. Resolution is shared by platformctl doctor, the Native backend,
+restricted runner health, sandbox configuration, and Golden Acceptance:
+LEAN_DOTNET_PATH, then PATH, then C:\Program Files\dotnet\dotnet.exe.
+Deployment hosts require the .NET 10 runtime only. Runtime build/release hosts
+separately require the .NET 10 SDK, Python 3.11, and the private signing key;
+the private key must not be present on deployment hosts.
 
 ## Local validation gate
 
@@ -56,6 +65,7 @@ Windows runtime release can also be completed without GitHub Actions:
   -LeanCommit 81a62a1eb4d4e0a96bb7c3d183b4083c47d2b600 `
   -RuntimeId lean-81a62a1-windows-x64-r1 `
   -PythonRoot C:\path\to\Python311 `
+  -DotnetPath "C:\Program Files\dotnet\dotnet.exe" `
   -SigningPrivateKeyPath C:\secure\lean-runtime-signing.pem `
   -PublishDraft
 ```
@@ -70,22 +80,31 @@ sequence.
 ## Dockerless Golden Acceptance
 
 After a real signed `windows-x64` runtime has been published and locked, run the
-acceptance script from an elevated PowerShell session on a clean host. It fails
-immediately if `where.exe docker` finds Docker, then bootstraps the application,
-installs and verifies the runtime/sandbox, initializes PostgreSQL, starts the
-Windows services, executes the pinned Native LEAN integration backtest, and
-performs a backup plus isolated restore:
+acceptance script from an elevated PowerShell session on a clean host. Before
+any ACL, firewall, or SCM mutation it emits a preflight summary and fails closed
+unless the Docker CLI, service, Desktop executable, WSL distributions, install
+directory, and uninstall registration are all absent. It also requires the
+signed Windows runtime lock, .NET 10 runtime, service identity, frozen
+acceptance spec, PostgreSQL, and AMQP readiness. It then bootstraps the
+application, stages the four-bar deterministic fixture, installs and verifies
+the runtime/sandbox, initializes PostgreSQL, starts the Windows services,
+executes the Native LEAN smoke backtest, and performs a backup plus isolated
+restore:
 
 ```powershell
 .\deploy\windows\run_dockerless_golden_acceptance.ps1 `
-  -AcceptanceSpec C:\acceptance\lean-windows-x64.json `
   -RunnerAccount .\LeanRunner `
-  -DotnetPath C:\ProgramData\LeanPlatform\lean\<runtime-id>\dotnet.exe
+  -DotnetPath "C:\Program Files\dotnet\dotnet.exe"
 ```
 
 Its evidence intentionally records `productionCertified=false`. Golden
 functional acceptance cannot substitute for the separate 12-hour fault matrix
 and host-bound production certificate.
+
+RabbitMQ AMQP readiness is a Core Golden gate. Erlang-cookie-backed
+rabbitmqctl/rabbitmq-diagnostics access is recorded as a
+production-ops-warning and remains mandatory for the later fault
+certification, but it does not block Core Golden.
 
 ## Production certification
 
