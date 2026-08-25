@@ -10,27 +10,65 @@ The checked-in runtime lock is intentionally fail-closed. `supported` must remai
 `false` until the immutable artifact, detached signature, SBOM, and SHA-256 have
 all been produced and independently reviewed.
 
-## Windows x64 candidate flow
+## Validation policy
 
-The repository provides a manual GitHub Actions workflow:
+GitHub Actions are optional evidence only. Repository or Actions quota limits
+must not block Windows Native development or release acceptance. A change may be
+merged when the equivalent local Windows validation passes and its JSON evidence
+is retained with the review notes.
 
-```text
-.github/workflows/native-runtime-release.yml
+Run the local contract gate from Windows PowerShell:
+
+```powershell
+.\deploy\windows\run_local_native_validation.ps1
 ```
 
-It requires the repository secret `LEAN_RUNTIME_SIGNING_PRIVATE_KEY`, which must
-contain the Ed25519 private key corresponding to
-`config/release-signing-public.pem`. The workflow:
+The local gate validates locked Python dependencies, `pip check`, `platformctl`,
+PowerShell syntax, JSON contracts, Python compilation, RuntimeRegistry,
+Restricted Runner, Windows sandbox/Job Object/Supervisor contracts,
+certification contracts, repository hygiene, and `git diff --check`. It writes
+host/commit-bound evidence to:
+
+```text
+C:\ProgramData\LeanPlatform\evidence\windows-native-local-validation.json
+```
+
+A green GitHub Actions run may supplement this evidence but is not required.
+This relaxation changes the execution venue only; it does not relax runtime
+signature, Dockerless Golden Acceptance, backend parity, or production
+certification gates.
+
+## Windows x64 candidate flow
+
+The preferred release path is local Windows release engineering:
+
+```powershell
+.\deploy\windows\run_local_native_runtime_release.ps1 `
+  -LeanCommit 81a62a1eb4d4e0a96bb7c3d183b4083c47d2b600 `
+  -RuntimeId lean-81a62a1-windows-x64-r1 `
+  -PythonRoot C:\path\to\Python311 `
+  -SigningPrivateKeyPath C:\secure\lean-runtime-signing.pem `
+  -PublishDraft
+```
+
+This path requires local `git`, .NET 10, Python 3.11.11, OpenSSL, and, only when
+`-PublishDraft` is used, an authenticated GitHub CLI. The script:
 
 1. checks out the exact requested QuantConnect/Lean commit;
-2. builds `Launcher/QuantConnect.Lean.Launcher.csproj` in Release mode on
-   `windows-latest` with .NET 10;
+2. builds `Launcher/QuantConnect.Lean.Launcher.csproj` in Release mode;
 3. packages the complete launcher output plus Python 3.11.11;
 4. computes the archive SHA-256;
 5. generates a file-level CycloneDX 1.5 SBOM;
-6. creates an Ed25519 detached signature with OpenSSL;
-7. publishes all files to a **draft** GitHub release; and
-8. emits `lean-native.lock.generated.json` for review.
+6. creates an Ed25519 detached signature and verifies it against the checked-in
+   public key;
+7. optionally publishes all files to a **draft** GitHub release; and
+8. emits `lean-native.lock.generated.json` for review when the draft release is
+   published.
+
+The repository also keeps `.github/workflows/native-runtime-release.yml` as an
+optional convenience path for environments with Actions quota. Its output and
+trust requirements are equivalent to the local release path; it is not a
+required merge or release gate.
 
 The default candidate is currently pinned to QuantConnect/Lean commit
 `81a62a1eb4d4e0a96bb7c3d183b4083c47d2b600`. This is a release candidate
@@ -58,6 +96,7 @@ lean.runtime.sha256=<archive sha256>
 Do not copy the generated lock into `config/runtime/lean-native.lock.json` until
 all of the following are true:
 
+- local Windows Native validation passed for the candidate commit;
 - the draft release assets and hashes were reviewed;
 - the detached signature verifies against the checked-in public key;
 - the Windows clean-host Dockerless Golden Acceptance passes using that exact
