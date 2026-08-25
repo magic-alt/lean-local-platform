@@ -281,7 +281,7 @@
     {
       "revision": "0056_runtime_neutral_execution",
       "path": "web/backend/app/migrations/versions/0056_runtime_neutral_execution.sql",
-      "sha256": "6be779bc46af4c3e5c7e2367c57711d898f4f76f1be48a20c2b4c8f1357aeea0"
+      "sha256": "cf9c3dc206253f323a85851b4d255570baf5561afb0db9915b9ec8272fd40aac"
     }
   ]
 }

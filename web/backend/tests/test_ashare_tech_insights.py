@@ -121,7 +121,7 @@ def test_full_run_persists_all_26_stocks_and_source_metadata(tmp_path, monkeypat
     from app.services import ashare_tech_insights as service
     from app.services.tasks import create_task
 
-    report = service.create_report("2026-07-14")
+    report = service.create_report("2026-07-14", analysis_mode="deterministic")
     task = create_task("ashare_tech_report", "fixture", {}, related_id=report["id"])
     service.attach_task(report["id"], task["id"])
     result = service.run_report(

@@ -4,7 +4,7 @@ import os
 import uuid
 from typing import Any
 
-from ..db import db, json_dump, rows_to_dicts, utc_now
+from ..db import database_backend, db, json_dump, rows_to_dicts, utc_now
 from . import market_lake
 
 
@@ -94,7 +94,10 @@ def _local_lake_capabilities() -> list[dict[str, Any]]:
 
 
 def refresh_capabilities() -> list[dict[str, Any]]:
-    if os.environ.get("LEAN_CAPABILITY_BACKEND", "local_parquet").strip().lower() != "database":
+    if (
+        database_backend() == "postgresql"
+        and os.environ.get("LEAN_CAPABILITY_BACKEND", "local_parquet").strip().lower() != "database"
+    ):
         return _local_lake_capabilities()
     now = utc_now()
     with db() as connection:

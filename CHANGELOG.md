@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Repair Windows validation regressions in the PostgreSQL/RabbitMQ runtime
+  refactor: keep SQLite fixtures on explicit database-backed test paths,
+  preserve canonical provider identifiers when DuckDB reads partitioned
+  Parquet, degrade health checks when Docker CLI is absent, align maintenance
+  recovery tests with database lease/CAS semantics, keep the 26-stock report
+  fixture provider-hermetic, pin the new legacy SQL file to LF, and keep
+  unknown API paths out of the SPA fallback.
+
 - Replace the production MySQL/Redis runtime with PostgreSQL 17 and RabbitMQ
   4.3.5; add a fresh PostgreSQL baseline, separate platform/Celery/MLflow
   databases, PostgreSQL backup and isolated restore drills, RabbitMQ durability

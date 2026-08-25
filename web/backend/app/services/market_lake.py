@@ -507,7 +507,10 @@ def query_rows(
     relation = (
         _native_relation(scope, native_pattern, files=selected_native_files)
         if native_pattern
-        else f"read_parquet([{_sql_paths(files)}], union_by_name=true)"
+        # These files already contain canonical scope columns. Disable DuckDB's
+        # automatic Hive parsing so filesystem-safe partition segments do not
+        # overwrite values such as the original provider/source identifier.
+        else f"read_parquet([{_sql_paths(files)}], union_by_name=true, hive_partitioning=false)"
     )
     sql = f"select {columns} from {relation}{where}{grouping}{ordering}{bounded}{skipped}"
     with _duckdb_connection() as connection:
