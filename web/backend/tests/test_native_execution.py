@@ -125,6 +125,66 @@ def test_runtime_registry_verifies_ready_launcher(tmp_path, monkeypatch):
     assert runtime.launcher == launcher
 
 
+def test_runtime_registry_uses_platform_specific_python_library(tmp_path, monkeypatch):
+    from app.runners import runtime_registry
+
+    launcher_bytes = b"launcher"
+    launcher_sha = hashlib.sha256(launcher_bytes).hexdigest()
+    artifact_sha = "c" * 64
+    lock = tmp_path / "lock.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "supported": True,
+                "runtimeId": "lean-windows-unit",
+                "leanCommit": "d" * 40,
+                "launcher": "Launcher/bin/Release/QuantConnect.Lean.Launcher.dll",
+                "pythonHome": "python",
+                "pythonLibrary": "python/lib/libpython3.11.so",
+                "artifacts": {
+                    "windows-x64": {
+                        "url": "https://example.invalid/runtime.zip",
+                        "sha256": artifact_sha,
+                        "signatureUrl": "https://example.invalid/runtime.zip.sig",
+                        "sbomUrl": "https://example.invalid/runtime.cdx.json",
+                        "pythonHome": "python",
+                        "pythonLibrary": "python/python311.dll",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    root = tmp_path / "runtimes" / "lean-windows-unit"
+    launcher = root / "Launcher" / "bin" / "Release" / "QuantConnect.Lean.Launcher.dll"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(launcher_bytes)
+    python_home = root / "python"
+    python_home.mkdir()
+    python_library = python_home / "python311.dll"
+    python_library.write_bytes(b"python")
+    (root / ".ready.json").write_text(
+        json.dumps(
+            {
+                "runtimeId": "lean-windows-unit",
+                "platform": "windows-x64",
+                "artifactSha256": artifact_sha,
+                "launcherSha256": launcher_sha,
+                "signatureVerified": True,
+                "sbomVerified": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_registry, "native_platform_key", lambda: "windows-x64")
+
+    runtime = RuntimeRegistry(lock, tmp_path / "runtimes").resolve()
+
+    assert runtime.python_home == python_home
+    assert runtime.python_library == python_library
+
+
 def test_backend_parity_requires_exact_orders_and_tolerant_metrics(tmp_path):
     left = tmp_path / "docker.json"
     right = tmp_path / "native.json"
