@@ -1,5 +1,8 @@
 name: Native Runtime Release
 
+# Optional convenience path only. The authoritative release path may be run
+# locally with deploy/windows/run_local_native_runtime_release.ps1 when hosted
+# GitHub Actions quota is unavailable.
 on:
   workflow_dispatch:
     inputs:
@@ -63,6 +66,8 @@ jobs:
           $signature = "$($archive.FullName).sig"
           openssl pkeyutl -sign -rawin -inkey $env:LEAN_SIGNING_KEY -in $archive.FullName -out $signature
           if ($LASTEXITCODE) { throw "runtime signing failed: $LASTEXITCODE" }
+          openssl pkeyutl -verify -rawin -pubin -inkey config/release-signing-public.pem -in $archive.FullName -sigfile $signature
+          if ($LASTEXITCODE) { throw "runtime signature verification failed: $LASTEXITCODE" }
       - name: Publish draft release and render lock candidate
         shell: pwsh
         env:
@@ -76,7 +81,7 @@ jobs:
           $signature = Get-Item "$($archive.FullName).sig"
           $sbom = Get-ChildItem $releaseDir -Filter '*.cyclonedx.json' | Select-Object -First 1
           $sha = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          gh release create $tag --draft --title "Native LEAN $runtimeId" --notes "Pinned LEAN $leanCommit Windows x64 native runtime. Promote only after Dockerless Golden Acceptance." $archive.FullName $signature.FullName $sbom.FullName
+          gh release create $tag --draft --title "Native LEAN $runtimeId" --notes "Pinned LEAN $leanCommit Windows x64 native runtime. Promote only after local validation, Dockerless Golden Acceptance, and backend parity." $archive.FullName $signature.FullName $sbom.FullName
           if ($LASTEXITCODE) { throw "draft release creation failed: $LASTEXITCODE" }
           $base = "https://github.com/${{ github.repository }}/releases/download/$tag"
           python scripts/render_native_runtime_lock.py `
