@@ -46,6 +46,20 @@ services, then follow [the Windows runbook](../deploy/windows/README.md).
 SCM deployments require absolute data/runtime paths; the Windows template and
 sandbox configurator share the same policy/work defaults.
 
+On a Dockerless development workstation, restart the complete Core process set
+with the PowerShell entry point below. It forces the local process manager and
+therefore does not require pre-installed `LeanPlatformSupervisor` or
+`LeanRestrictedRunner` services. Restarting also reloads repository `.env`
+configuration, which is read once when each Python process imports the backend.
+
+```powershell
+.\scripts\start_windows_native.ps1
+```
+
+Use `-Profile dev` when the Vite development server is also required. Formal
+SCM deployments must set `LEAN_NATIVE_MANAGER=windows-scm`; production mode
+selects SCM automatically and retains the certification gate.
+
 The service topology is:
 
 ```text

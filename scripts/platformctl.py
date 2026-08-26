@@ -128,6 +128,15 @@ def _windows_production_requested() -> bool:
     }
 
 
+def _windows_scm_requested() -> bool:
+    manager = os.environ.get("LEAN_NATIVE_MANAGER", "").strip().lower()
+    if manager in {"local", "process"}:
+        return False
+    if manager in {"windows-scm", "scm"}:
+        return True
+    return _windows_production_requested()
+
+
 def _windows_certification() -> dict[str, Any]:
     sys.path.insert(0, str(BACKEND))
     from app.services.windows_certification import verify_windows_certificate
@@ -292,7 +301,7 @@ def start(selection: Selection) -> int:
         if code == 0:
             _write_state({"schemaVersion": 1, "mode": selection.mode, "profile": selection.profile, "manager": "compose"})
         return code
-    if os.name == "nt":
+    if os.name == "nt" and _windows_scm_requested():
         if _windows_production_requested():
             certification = _windows_certification()
             if not certification["ready"]:
@@ -317,7 +326,7 @@ def start(selection: Selection) -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     processes: list[dict[str, Any]] = []
     child_env = dict(os.environ)
-    child_env["LEAN_DEPLOYMENT_MODE"] = "native"
+    child_env["LEAN_DEPLOYMENT_MODE"] = "windows-native" if os.name == "nt" else "native"
     child_env.setdefault("LEAN_EXECUTION_BACKEND", "native")
     child_env["LEAN_DEPLOYMENT_PROFILE"] = selection.profile
     child_env.setdefault("CLICKHOUSE_ENABLED", "0" if selection.profile in {"core", "dev", "ml"} else "1")
@@ -365,7 +374,7 @@ def stop(selection: Selection) -> int:
     manager = state.get("manager")
     if selection.mode == "docker" or manager == "compose":
         return _run(["docker", "compose", "stop", *DOCKER_PROFILE_SERVICES[selection.profile]])
-    if manager == "windows-scm" or os.name == "nt":
+    if manager == "windows-scm":
         platform_code = _run(["sc.exe", "stop", "LeanPlatformSupervisor"])
         runner_code = _run(["sc.exe", "stop", "LeanRestrictedRunner"])
         return platform_code or runner_code
@@ -387,7 +396,7 @@ def status(selection: Selection) -> int:
     if selection.mode == "docker":
         return _run(["docker", "compose", "ps", *DOCKER_PROFILE_SERVICES[selection.profile]])
     manager = state.get("manager")
-    if manager == "windows-scm" or os.name == "nt":
+    if manager == "windows-scm":
         platform_code = _run(["sc.exe", "query", "LeanPlatformSupervisor"])
         runner_code = _run(["sc.exe", "query", "LeanRestrictedRunner"])
         return platform_code or runner_code

@@ -18,6 +18,10 @@
   replacement tool, and redundant local launch/history helpers; document the
   retention policy for supported scripts.
 
+- Make Dockerless Windows one-click startup use local managed processes by
+  default, reload `.env` through a full restart, preserve explicit certified
+  SCM deployments, and add a PowerShell launcher with matching lifecycle tests.
+
 - Document complete `.env` provisioning for Docker and Windows Native hosts,
   including required-variable classification, independent secret generation,
   PostgreSQL/RabbitMQ account bootstrap, API versus provider tokens, URL

@@ -42,6 +42,16 @@ python scripts/platformctl.py --mode native doctor
 python scripts/platformctl.py --mode native --profile core start
 ```
 
+Windows 无 Docker 的开发机可直接运行一键入口；它会以用户态进程模式重启
+API、restricted runner、Celery workers 和 beat，确保最新 `.env` 在进程启动时加载：
+
+```powershell
+.\scripts\start_windows_native.ps1
+```
+
+Windows SCM 仅用于显式配置的服务部署；设置
+`LEAN_NATIVE_MANAGER=windows-scm` 或启用生产模式后，`platformctl` 才会操作 SCM 服务。
+
 `./scripts/start_web_single_instance.sh` 是 `platformctl` 的轻量前台入口。
 
 启动脚本会在 `web/runtime/secrets/` 生成并复用本地 API Token，由前端代理
