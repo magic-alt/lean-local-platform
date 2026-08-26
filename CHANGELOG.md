@@ -13,6 +13,11 @@
   queues for RabbitMQ 4.3, report delegated Runner health correctly, and
   compare PostgreSQL migrations against the PostgreSQL migration chain.
 
+- Remove six unreferenced or superseded scripts: historical P0 release and
+  full-flow verification entrypoints, an unsafe partial-coverage CSI300 PIT
+  replacement tool, and redundant local launch/history helpers; document the
+  retention policy for supported scripts.
+
 - Document complete `.env` provisioning for Docker and Windows Native hosts,
   including required-variable classification, independent secret generation,
   PostgreSQL/RabbitMQ account bootstrap, API versus provider tokens, URL
