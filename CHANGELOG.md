@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Reset the current documentation baseline around Parquet/PostgreSQL/RabbitMQ,
+  external Qlib Research handoff, Windows local-versus-SCM deployment and
+  post-migration certification; historicalize superseded roadmap/schema/research
+  material, remove stale startup and unpinned-image guidance, and add semantic
+  drift checks for active help documents.
+
 - Restore Linux Docker image builds by preserving the Windows-only marker on
   `pywin32`, pinning Akshare's `akracer` and MLflow's `gunicorn` dependencies
   with hashes, and excluding nested pytest caches from Docker build contexts;

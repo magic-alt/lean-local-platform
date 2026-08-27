@@ -17,10 +17,17 @@
 - [2026-07-25 P0 trust and data-coverage release](p0-trust-release-2026-07-25.md)
   记录 production Source/QA/reference 矩阵、官方 CSI300 全历史、release
   golden 双跑与十数据集归档对账证据；不改变 Level 4/5 结论。
+- [2026-08-04 Roadmap](roadmap-2026-08-04.md) 与
+  [2026-08-12 TuShare MySQL schema](tushare-commercial-schema-mysql-era-2026-08-12.md)
+  保留 PostgreSQL/RabbitMQ 迁移前的计划和存储设计。
+- [MySQL schema](mysql-schema-current-era.md) 与
+  [MySQL maintenance](mysql-storage-maintenance-era.md) 保留退役控制平面运维证据。
+- [Platform-owned CSI300 ML](ml-cross-sectional-research-platform-era.md) 保留
+  Research 执行迁出 `platform` 之前的实现说明。
 
 ## 维护规则
 
 1. 新问题记录症状、影响、根因、修复、验证和遗留风险。
 2. 已解决的问题标记 `resolved`，不删除问题正文。
 3. 指标、数据量和测试数量必须注明采集日期，不能当作永久现状。
-4. 当前能力以 [架构](../architecture.md)、[数据管线](../data_pipeline.md)、[部署](../deployment.md) 和 [当前 Roadmap](../roadmap.md) 为准；本目录用于解释演进过程。
+4. 当前能力以 [Current State](../current-state.md)、[架构](../architecture.md)、[数据管线](../data_pipeline.md)、[部署](../deployment.md) 和 [当前 Roadmap](../roadmap.md) 为准；本目录用于解释演进过程。

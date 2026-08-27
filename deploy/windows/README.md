@@ -1,4 +1,14 @@
-# Windows native deployment
+# Windows Native Deployment
+
+Windows Dockerless development defaults to the local process manager:
+
+```powershell
+.\scripts\start_windows_native.ps1
+```
+
+The SCM topology below is explicit deployment/certification mode, selected by
+`LEAN_NATIVE_MANAGER=windows-scm` or production mode. It is not the default
+developer startup path.
 
 Windows native uses PostgreSQL 17 and RabbitMQ 4.3.5 as Windows services, plus
 two project-owned services:

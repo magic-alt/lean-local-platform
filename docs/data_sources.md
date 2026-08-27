@@ -25,10 +25,12 @@ must never appear in source-controlled files.
 
 ## TuShare full-library contract
 
-The Data page manages ten core datasets in the one-click build/update workflow:
-`stock_basic`, `trade_cal`, `daily`, `adj_factor`, `suspend_d`, `stk_limit`,
-`index_basic`, `index_daily`, `fut_basic` and `opt_basic`. `daily_basic` is an
-on-demand canonical dataset and is not part of the ten-dataset one-click scope.
+The Data page one-click build/update workflow is defined by
+`BULK_DATASET_KEYS` in `web/backend/app/services/data_sync.py`. The current
+set is `stock_basic`, `trade_cal`, `daily`, `adj_factor`, `daily_basic`,
+`suspend_d`, `stk_limit`, `dividend`, `index_basic`, `index_daily`,
+`fut_basic` and `opt_basic`. Treat the constant, not this prose count, as the
+source of truth.
 
 - Before the first successful library build, the UI exposes a full update.
 - After the build marker and dataset watermarks exist, the same workflow is an
@@ -51,10 +53,10 @@ TuShare / other providers
         -> rebuildable LEAN cache under LEAN_DATA_DIR
         -> optional ClickHouse serving copy
 
-MySQL  -> jobs / registry / lineage / watermarks / quality / certification
+PostgreSQL -> jobs / registry / lineage / watermarks / quality / certification
 ```
 
-- MySQL is the control-plane store; market time series are Parquet-owned.
+- PostgreSQL is the control-plane store; market time series are Parquet-owned.
 - `web/runtime/` contains local runs, projects, reports, uploads, source caches
   and object-store files. It is excluded from Git.
 - `LEAN_DATA_DIR` defaults to the repository `data` directory. Its bronze,

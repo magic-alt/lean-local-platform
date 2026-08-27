@@ -1,4 +1,7 @@
-# Documentation Audit — 2026-07-21
+# Historical Documentation Audit — 2026-07-21
+
+> Point-in-time evidence for the earlier MySQL/Redis architecture. It is not
+> current operating guidance.
 
 ## Scope
 

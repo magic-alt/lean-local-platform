@@ -1,4 +1,6 @@
-# Current MySQL Schema Boundary
+# Historical MySQL Schema Boundary
+
+> Superseded by the PostgreSQL runtime. Retained only as migration-era evidence.
 
 Last reviewed: 2026-08-13.
 

@@ -55,3 +55,17 @@ def test_generated_api_reference_is_current():
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout)["ok"] is True
+
+
+def test_help_docs_links_and_semantic_baseline_are_current():
+    from app.core.config import PLATFORM_DIR
+
+    result = subprocess.run(
+        [sys.executable, str(PLATFORM_DIR / "scripts" / "check_help_docs.py"), "--json"],
+        cwd=PLATFORM_DIR,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout)["ok"] is True

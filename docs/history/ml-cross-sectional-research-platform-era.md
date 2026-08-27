@@ -1,4 +1,7 @@
-# CSI300 横截面机器学习研究
+# Historical CSI300 Cross-sectional ML — Platform-owned Era
+
+> Historical implementation evidence. Platform no longer starts model-training
+> runs; current research executes in external `qlib-platform`.
 
 首版机器学习能力是研究工作流，不是交易策略。它使用当时可见的 CSI300 成分、证券名称/ST 区间、申万 2021 一级行业、日频行情与公告日对齐财务数据，训练 LightGBM 横截面排序模型。模型结果不会直接进入 LEAN、Paper 或实盘。
 

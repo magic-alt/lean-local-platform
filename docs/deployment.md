@@ -1,6 +1,6 @@
 # Deployment
 
-Last reviewed: 2026-08-25.
+Last reviewed: 2026-08-27. See [Current State](current-state.md).
 
 The production runtime is PostgreSQL 17, RabbitMQ 4.3.5, Celery 5.6, Parquet,
 DuckDB and LEAN. Docker Compose and native hosts are deployment adapters for
@@ -55,12 +55,12 @@ three-node broker deployment.
 
 ## Native and Windows
 
-See [Native deployment](native-deployment.md) and
-[Windows native deployment](../deploy/windows/README.md). Windows uses one
-`--pool=solo --concurrency=1` process per worker slot under
-`LeanPlatformSupervisor`; `LeanRestrictedRunner` owns native LEAN and Research.
-Setting `LEAN_WINDOWS_PRODUCTION_MODE=1` requires a current host-bound
-certification before startup.
+See [Native deployment](native-deployment.md) and the
+[Windows deployment matrix](current-state.md#deployment-matrix). Windows Dockerless
+development defaults to user processes managed by `platformctl`.
+`LEAN_NATIVE_MANAGER=windows-scm` selects `LeanPlatformSupervisor` and
+`LeanRestrictedRunner` services explicitly. Production mode requires SCM and
+a current host-bound certification before startup.
 
 ## Database initialization and migration
 

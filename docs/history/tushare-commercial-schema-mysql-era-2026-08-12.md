@@ -1,4 +1,7 @@
-# TuShare 商业级行情库契约与建库
+# Historical TuShare Commercial Schema — MySQL Era
+
+> Historical storage-design evidence. It must not be used as current operating
+> guidance. See [the current TuShare contract catalog](../operations/tushare-contract-catalog.md).
 
 Last reviewed: 2026-08-12.
 

@@ -42,7 +42,7 @@ mode; native mode does not silently fall back to it.
 
 Windows is a project-certified deployment lane because Celery upstream does not
 provide official Windows support. Install PostgreSQL and RabbitMQ as Windows
-services, then follow [the Windows runbook](../deploy/windows/README.md).
+services, then follow the [Windows deployment matrix](current-state.md#deployment-matrix).
 SCM deployments require absolute data/runtime paths; the Windows template and
 sandbox configurator share the same policy/work defaults.
 
@@ -76,7 +76,6 @@ LeanPlatformSupervisor
   optional worker-ml-1 and MLflow
 LeanRestrictedRunner
   native LEAN process tree
-  native Jupyter/Research process tree
 ```
 
 The runner binds only to `127.0.0.1`, validates the signed runtime, account,
@@ -97,14 +96,12 @@ python scripts/platformctl.py --mode native --profile core start
 Changing the Python lock, native runtime lock, certification policy, certified
 host or version family invalidates the certificate.
 
-## Research
+## Research boundary
 
-Docker mode uses `DockerResearchBackend`; native mode uses
-`WindowsNativeResearchBackend` or the native workstation backend. Native
-Research binds Jupyter to loopback with a random token, an allowlisted
-environment, bounded process tree and read-only market data. Platform remains
-the execution-validation boundary and does not grow into a second model
-training platform.
+Native deployment does not add a platform-owned Research execution path.
+Feature/factor research, model training and walk-forward research run in
+external `qlib-platform`; this runtime imports Artifact Contract v2 and
+performs authoritative LEAN validation.
 
 ## Operations
 

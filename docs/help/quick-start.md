@@ -1,83 +1,61 @@
 # 快速开始
 
-本教程完成一个最小可信闭环：启动本地平台、检查服务、建立数据、创建策略项目、执行 preflight、运行回测并打开报告。
+本教程完成最小可信闭环：启动平台、检查依赖、准备数据、创建项目、执行 preflight、运行回测并核对报告。当前架构矩阵见 [Current State](../current-state.md)。
 
-## 1. 环境要求
+## 1. 准备配置
 
-- Docker Desktop 或 Docker Engine 正常运行，并允许当前用户访问 Docker socket。
-- Python 3.12 和 Node.js/npm 用于本地开发；完整 Compose 使用时由镜像提供运行环境。
-- 本地至少配置 MySQL、Redis、API、worker；LEAN 回测还需要可拉取或已缓存的 LEAN Docker 镜像。
-- 使用 TuShare 数据时在 `.env` 配置 `TUSHARE_TOKEN`，不要把 `.env` 提交到 Git。
+Docker 部署需要 Docker Desktop/Engine；本地开发还需要 Python 3.12 与 Node.js/npm。复制示例配置后，为 PostgreSQL、RabbitMQ、API 和 runner 设置不同的本地密钥，并只配置实际启用的 Provider 凭据：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入需要使用的 Provider 凭据
+python scripts/platformctl.py --mode docker --profile full doctor
 ```
 
-## 2. 启动平台
+不要提交、粘贴或截图 `.env` 内容。
 
-工作站推荐使用单实例启动脚本：
+## 2. 启动
+
+Docker 完整栈：
 
 ```bash
-./scripts/start_web_single_instance.sh
+python scripts/platformctl.py --mode docker --profile full start
 ```
 
-只有 Dockerfile、Python/npm 依赖或前端构建输入发生变化时才需要：
+依赖顺序由平台管理：
 
-```bash
-./scripts/start_web_single_instance.sh --build
+```text
+PostgreSQL healthy -> postgres-init -> migration -> API/workers/beat/runner
+RabbitMQ healthy -------------------------------> API/workers/beat
 ```
 
-普通重启不需要重复构建。脚本会避免多个启动器互相替换，并在活动数据同步期间保护 data worker。
+Windows 无 Docker 开发机使用：
 
-也可以直接启动 Compose：
-
-```bash
-docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
+```powershell
+.\scripts\start_windows_native.ps1
 ```
+
+该入口默认管理用户态本地进程。只有显式设置 `LEAN_NATIVE_MANAGER=windows-scm` 或生产模式时才操作 Windows 服务。
 
 ## 3. 检查服务
 
-打开 Monitoring 页面，或直接请求：
-
 ```bash
+python scripts/platformctl.py --mode docker --profile full status
 curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/health/dependencies
 curl http://127.0.0.1:8000/api/health/database
 ```
 
-至少确认 MySQL、Redis 和 Docker 可用。出现 MySQL 2006/2013、容器退出 137 或依赖降级时，先阅读 [故障排查](troubleshooting.md)，不要直接提交长任务。
+至少确认 PostgreSQL、RabbitMQ、迁移状态、目标 worker 和 LEAN runner 正常。依赖降级时先按 [故障排查](troubleshooting.md) 保存证据，不要直接提交长任务或整体重启。
 
-## 4. 首次建库
+## 4. 准备数据
 
-进入 Data 页面：
+进入 Data 页面，确认 Provider 权限和存储目标，再运行一键全量或增量同步。一键范围以代码中的 `BULK_DATASET_KEYS` 为准；不要依赖文档中的固定数量。完成状态要求 ready item、成功 manifest、水位和可读取的 Bronze/Parquet 归档同时成立。
 
-1. 确认 TuShare 权限探测成功。
-2. 如果系统没有成功全量建库记录，按钮显示“一键全量更新”。
-3. 启动后观察真实 API 调用数、下载/入库/隔离行、工作单元速度和 checkpoint。
-4. 完成后按钮会持久化为“一键增量更新”，重启不会重置。
-5. 在“按数据集预览”检查股票、交易日历、指数、期货和期权数据。
+Parquet 是行情事实层；PostgreSQL 只保存同步、血缘、质量、认证和业务控制状态。详细规则见 [数据教程](data.md)。
 
-一键范围、正确性链路和磁盘规则见 [数据教程](data.md)。
+## 5. 创建项目并回测
 
-## 5. 创建策略项目
-
-进入 Projects：
-
-1. 在紧凑的核心区域填写 Name、Asset Class、Strategy、Market、Venue、Resolution 和 Data Type。
-2. 只有需要覆盖自动生成入口类时才展开 Advanced settings 填写 Algorithm Class；折叠不会清除已输入内容。
-3. 创建项目后在 Strategy Source 编辑代码。
-4. 检查 `project.json` 中的模板、参数、基准、费用和滑点配置。
-5. 保存后，回测会复制不可变项目快照；后续修改不会改变已经提交的运行。
-
-第一次建议使用 Buy & Hold 或 EMA Cross。详细模板和案例见 [策略与模板](strategies.md)。
-
-## 6. 运行首个回测
-
-进入 Backtests，选择刚创建的 Project，填写股票、日期、资金和基准。
-
-页面将标的与行情、周期与执行、动态策略参数分组显示。Docker Image 位于 Runtime environment 高级区；动态策略参数始终可见，不会因高级区折叠而跳过。
+在 Projects 创建项目、保存 Strategy Source，然后在 Backtests 选择项目和数据范围。先执行 preflight；通过后再提交回测。正式示例省略 `dockerImage`，平台会使用已配置、digest-pinned 且在 allowlist 中的默认镜像。
 
 ```json
 {
@@ -95,34 +73,10 @@ curl http://127.0.0.1:8000/api/health/database
 }
 ```
 
-先点击 preflight。A 股 preflight 会检查项目、参数、行情、交易日历、基准和质量门禁。通过后再提交回测，并在 Run Detail 查看状态、日志、曲线、订单、持仓、校验和运行指纹。
+Run Detail 中至少核对状态、日志、指标、订单、基准、Validation、Data Evidence、运行指纹和原始 LEAN 产物。不要只以 `status=success` 判断结果可信。
 
-## 7. 生成并核对报告
+## 6. Research 与 Paper
 
-成功运行可以从 Run Detail 或 Reports 生成统一 HTML/Markdown 报告。至少检查：
+Research 执行、Notebook、训练和 walk-forward research 位于外部 `qlib-platform`。它通过 Artifact Contract v2 与内容寻址的 `TARGET_PORTFOLIO` 交给 platform 导入和 LEAN 验证。可信且已验证的运行才可进入 Paper；P9/live activation 仍禁用。
 
-- 收益、Sharpe、最大回撤和交易次数是否合理；
-- 策略曲线、基准和回撤曲线是否存在；
-- 订单、费用、滑点和最终持仓是否符合策略；
-- Validation、Data Evidence 和 Experiment Fingerprint 是否完整；
-- 原始 LEAN JSON、日志和对象归档是否可访问。
-
-不要只以 `status=success` 判断策略可信。结果说明见 [Reports](reports.md) 和 [结果格式](../backtest_result_format.md)。
-
-## 下一步
-
-- 同一策略覆盖股票池或多个时间窗口：[批量回测](backtests.md)。
-- 寻找稳健参数并做样本外验证：[Optimization](optimization.md)。
-- 使用 Notebook 或标准研究任务继续分析：[Research](research.md)。
-- 使用可信历史运行启动逐日模拟：[Paper](paper.md)。
-
-## 本地历史与安全删除
-
-Dashboard 的 `Manage Local History` 只负责导航到各类历史，不再直接清空所有结果。Backtests 支持单条或勾选后批量删除；Projects、Optimization、Research、Reports、Paper、Tasks 和批次历史在各自页面删除。
-
-- 活动中的 run、task、Research、Paper 或批次必须先取消或停止。
-- 删除 Backtest 会同时删除它的结果、生成报告和受管运行产物；被 Paper 引用时会拒绝删除。
-- 删除 Project 是级联操作，必须输入项目名，并会明确列出关联范围。
-- 删除 Generated Report 不删除源 Backtest；Backtest 自带报告随 Backtest 管理。
-- 全局维护 API 仍保留给运维，但真实删除需要精确输入 `DELETE ALL LOCAL HISTORY`，页面不会调用这一危险路径。
-
+下一步可阅读 [Backtests](backtests.md)、[Research 边界](research.md)、[Paper](paper.md) 和 [Reports](reports.md)。
