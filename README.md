@@ -1,20 +1,21 @@
 # LEAN Local Platform
 
-本项目是基于 QuantConnect LEAN 的本地量化研究平台，正式入口是 FastAPI、
+本项目是基于 QuantConnect LEAN 的本地量化执行与控制平台，正式入口是 FastAPI、
 React、Celery、PostgreSQL、RabbitMQ 和可替换 LEAN 执行后端组成的 Web 工作台。Docker Compose
 与 Windows/Linux Native 是并列部署适配器；平台不依赖 Lean
-CLI；回测、优化、Research 和 Paper Replay 均以版本化项目策略运行。
+CLI；Research 执行由外部 `qlib-platform` 承载，平台负责 Artifact Contract v2 导入、
+LEAN 验证、回测、优化、Paper 和执行控制。
 
 ## 当前能力
 
 - `data/` 下的 Parquet 是股票行情事实层；PostgreSQL 是任务、注册、质量、账户和审计控制平面；SQLite 仅用于隔离测试。
-- Data 页支持十个 TuShare 数据集首次全量建库、后续增量更新，并通过版本化契约目录覆盖
+- Data 页的一键同步范围由代码中的 `BULK_DATASET_KEYS` 定义（当前 12 项），并通过版本化契约目录覆盖
   当前官方股票、指数、期货和期权专题的 139 个数据集；其他
   数据集的按需下载和可选存储目标。
 - Provider 数据经过标准化、来源判优、质量检查和隔离后原子发布到 Bronze/Silver Parquet；
   旧分区保留为内容哈希修订，PostgreSQL 只记录 manifest、血缘和状态。
-- Backtests、Optimization 和 Research 提供策略案例、批量实验、参数网格、
-  滚动窗口和动态 PIT 股票池工作流。
+- Backtests 和 Optimization 提供策略案例、批量实验、参数网格、滚动窗口和动态 PIT 股票池工作流；
+  外部 `qlib-platform` 负责 feature/factor、模型训练、walk-forward research 与 research-only screening。
 - 报告使用统一的 `report-layout-v2` HTML/Markdown/PDF/CSV/JSON 格式，并保留运行指纹、
   原始结果、日志、校验和对象归档。
 - 数据预览覆盖股票、交易日历、指数、期货和期权；应用内 Docs 页面支持搜索。
@@ -174,6 +175,7 @@ RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_le
 
 | 文档 | 内容 |
 | --- | --- |
+| [当前架构快照](docs/current-state.md) | 数据库、broker、存储、Research 边界和部署矩阵的单一当前事实源 |
 | [架构](docs/architecture.md) | 组件边界、主链路、存储与恢复 |
 | [数据源治理](docs/data_sources.md) | Provider、许可、同步范围和正确性验证 |
 | [数据管线](docs/data_pipeline.md) | 全量/增量/按需同步、校验和归档 |

@@ -1,6 +1,6 @@
 # Market Data Lake
 
-`/Users/kaermax/lean-platform/data` is the sole authority for market time series. MySQL remains the control-plane database for instruments, universes, jobs, runs, accounts, orders, risk, and audit metadata; it does not store stock bars, trade status, adjustment factors, or daily-basic time series.
+`$LEAN_DATA_DIR` (default: `<repository>/data`) is the sole authority for market time series. PostgreSQL remains the control-plane database for instruments, universes, jobs, runs, accounts, orders, risk, and audit metadata; it does not store stock bars, trade status, adjustment factors, or daily-basic time series.
 
 The runtime reads the existing hierarchy directly:
 

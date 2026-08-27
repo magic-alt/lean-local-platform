@@ -1,10 +1,10 @@
 # 数据
 
-平台的股票行情事实层是仓库下的 `data/` Parquet 数据湖。MySQL 只保存任务、水位、数据集注册、质量结果、认证、账户与审计等控制平面数据，不保存日线、分钟线、复权因子或每日指标。
+平台的股票行情事实层是仓库下的 `data/` Parquet 数据湖。PostgreSQL 只保存任务、水位、数据集注册、质量结果、认证、账户与审计等控制平面数据，不保存日线、分钟线、复权因子或每日指标。
 
 ## 数据目录与职责
 
-默认根目录是 `/Users/kaermax/lean-platform/data`，也可通过 `LEAN_DATA_DIR` / `LEAN_MARKET_DATA_DIR` 显式覆盖。目录职责如下：
+默认根目录是 `<repository>/data`，也可通过 `LEAN_DATA_DIR` / `LEAN_MARKET_DATA_DIR` 显式覆盖。目录职责如下：
 
 ```text
 data/
@@ -46,10 +46,10 @@ TuShare daily
   -> 旧版本归档到 bronze/tushare/revisions
   -> silver/daily/current/trade_date=YYYYMMDD
   -> 原子替换 data.parquet 和 manifest.json
-  -> MySQL 更新任务、水位、血缘和质量状态
+  -> PostgreSQL 更新任务、水位、血缘和质量状态
 ```
 
-写入使用临时文件加 `os.replace` 发布，读取者不会看到半个分区。股票日线、`adj_factor`、`daily_basic` 和交易状态都直接进入 Parquet 数据层；不会回写已删除的 MySQL 股票表。
+写入使用临时文件加 `os.replace` 发布，读取者不会看到半个分区。股票日线、`adj_factor`、`daily_basic` 和交易状态都直接进入 Parquet 数据层；不会写入 PostgreSQL 行情表。
 
 全量更新用于首次建库或明确重建。增量更新从已保存的交易日水位继续，并允许 Provider 对历史日期做修订。历史分区被改写前必须先保留修订副本，因此同一日期的新版本不会静默覆盖证据。
 
@@ -69,7 +69,7 @@ TuShare daily
 
 对于未纳入规范化模型的 Provider 响应，系统可保存校验过的压缩原始归档。原始归档不能替代 Bronze/Silver 分区，也不能把逐行 JSON 当作新的股票事实表。
 
-`LEAN_TUSHARE_TYPED_SOURCE_WRITES` 默认关闭。它只用于仍需保留的参考类 typed source 兼容表，不得用于重新建立 MySQL 行情或每日指标表。
+`LEAN_TUSHARE_TYPED_SOURCE_WRITES` 默认关闭，不得用于在 PostgreSQL 中建立行情或每日指标表。
 
 ## 后端如何读取
 
@@ -94,7 +94,7 @@ GET /api/data/query?source=parquet&providerSource=tushare&market=china&symbol=60
 
 Qlib 产物是外部派生层。lean-platform 可以参考现有 Qlib 数据层次并读取 `gold/qlib_staging` 中的基准数据，但不能修改 Qlib 仓库、`data/qlib` 或 Qlib 自己的缓存。
 
-LEAN 数据由 Silver/Gold 生成或恢复。回测前的缓存准备、fingerprint 和校验都必须指向同一数据版本；删除 LEAN 缓存不会删除事实数据。平台不再执行“MySQL 导出 Parquet”，旧的 export/rebuild API 已移除；现在的 Parquet registry 操作只负责发现、注册和校验已有数据湖。
+LEAN 数据由 Silver/Gold 生成或恢复。回测前的缓存准备、fingerprint 和校验都必须指向同一数据版本；删除 LEAN 缓存不会删除事实数据。平台不执行“数据库导出 Parquet”；Parquet registry 操作只负责发现、注册和校验已有数据湖。
 
 ## 数据质量和可复现
 
@@ -107,16 +107,16 @@ LEAN 数据由 Silver/Gold 生成或恢复。回测前的缓存准备、fingerpr
 5. 数据集版本、认证状态和撤销原因；
 6. 回测/研究 Run 中保存的数据版本和文件指纹。
 
-任何 current 分区改变都会使旧认证失效，重新完成文件哈希、DuckDB 可读性和质量检查后才能重新认证。MySQL 中的 registry 是目录，不是行情副本；以 Parquet 文件内容和 manifest 校验和为准。
+任何 current 分区改变都会使旧认证失效，重新完成文件哈希、DuckDB 可读性和质量检查后才能重新认证。PostgreSQL 中的 registry 是目录，不是行情副本；以 Parquet 文件内容和 manifest 校验和为准。
 
 ## 备份与恢复
 
-股票数据备份必须覆盖整个 `data/`，至少包含 Bronze current/revisions、Silver、Gold、registry、quality 和需要保留的 LEAN/Qlib 派生产物。MySQL 逻辑备份只覆盖控制平面，不能恢复股票行情。
+股票数据备份必须覆盖整个 `data/`，至少包含 Bronze current/revisions、Silver、Gold、registry、quality 和需要保留的 LEAN/Qlib 派生产物。PostgreSQL 逻辑备份只覆盖控制平面，不能恢复股票行情。
 
 恢复顺序建议为：
 
 1. 恢复 `data/` 并校验 manifest/SHA-256；
-2. 启动 MySQL，恢复任务、注册、账户和审计数据；
+2. 启动 PostgreSQL，恢复任务、注册、账户和审计数据；
 3. 重新发现/注册 Parquet 数据集；
 4. 按需重建 LEAN、ClickHouse 和其他缓存；
 5. 做代码、数据版本、行数、日期和抽样 OHLC 校验。

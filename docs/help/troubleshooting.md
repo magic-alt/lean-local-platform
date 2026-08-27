@@ -1,144 +1,63 @@
 # 任务、监控与故障排查
 
-Tasks 展示 Celery 生命周期和日志；Monitoring 展示依赖健康、指标和最近工作流失败。页面进度来自数据库，浏览器只是读取状态，不负责推动任务。
-
-## Paper Account waiting data、重复运行或 projection 异常
-
-先在账户详情的 Automation 检查 trading date、数据 watermark、QA、checkpoint、
-worker/queue 状态和 failure code。
-
-- `waiting_data`：确认交易日是交易所开放日，并检查 Source certification、daily
-  bar watermark、QA critical、PIT/reference 和 benchmark 覆盖。不要关闭门禁强行成交。
-- `queued`：多账户共享全局 LEAN 并发预算，排队不是失败。检查 backtest worker
-  和 Redis，但不要另起绕过 lease 的 runner。
-- `running/finalizing` 超过 15 分钟未更新：Beat 的 orphan recovery 会检查数据库
-  中的 LEAN run 和六阶段 checkpoint。可安全重投同一 Run now；唯一键返回原 cycle。
-- `duplicate_cycle`：同一 deployment/trading date 已存在正式 cycle。查看原 cycle
-  的 result digest，不要创建第二套订单。
-- projection 数值异常：比较 `source_ledger_sequence` 和
-  `source_checkpoint_digest`，再调用 projection refresh task。projection 是缓存；
-  禁止直接改 cash/positions 来“修复”。
-- 有信号无成交：在 Signals/Orders 查看 constraint 和 13-state transition，常见
-  原因是 `next_session_pending`、停牌、涨跌停、T+1、现金下限或风险上限。
-
-真实验收使用：
-
-```bash
-web/backend/.venv/bin/python scripts/run_paper_accounts_acceptance.py \
-  --project-id <project-id> \
-  --source-backtest-id <trusted-backtest-id>
-```
-
-只有 `PAPER_ACCOUNTS_PASS` 表示真实 MySQL、Redis、Celery、restricted LEAN 和 API
-证据全部满足。缺少可信 candidate 时脚本会 fail closed。
+先保存证据，再确定故障域。不要同时重启全部组件；RabbitMQ 消息、PostgreSQL 业务状态和 Parquet 文件需要分别判断。
 
 ## 首轮检查
 
 ```bash
-docker compose ps
-docker compose logs --tail=200 mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
+python scripts/platformctl.py --mode docker --profile full status
+python scripts/platformctl.py --mode docker --profile full logs
 curl http://127.0.0.1:8000/api/health/dependencies
 web/backend/.venv/bin/python scripts/db_migrate.py --status
 ```
 
-先确定问题属于浏览器、API、数据库、队列、worker、Docker 还是 Provider，不要同时重启所有组件而丢失证据。
+重点记录 trace/workflow ID、任务 ID、队列、worker、最近 heartbeat/checkpoint、数据库错误码和 Parquet manifest。
 
-## 任务长时间 queued
+## PostgreSQL
 
-检查：
-
-1. 对应 queue 的 worker 是否运行并监听正确队列。
-2. Redis 是否可访问。
-3. `maxConcurrentJobs` 和 scheduler lease 是否已用满。
-4. 前序长任务是否仍占用 LEAN 容器。
-5. Tasks 中是否已有 dispatch 或 dependency 错误。
-
-队列等待时不要重复点击提交，否则可能创建多个独立任务。
-
-## 数据同步进度不动
-
-- 先请求 `GET /api/data/sync-runs/{run_id}`，确认数据库状态是否变化。
-- 检查当前 dataset、checkpoint、heartbeat 和最近错误。
-- 工作单元可能正在提交一个大批次；行数变化但股票计数暂时不变不一定是卡死。
-- 大量空结果的数据集应继续推进工作单元；如果 heartbeat 也停止，再检查 worker。
-- 活动同步期间不要替换 data worker。需要停止时使用取消接口，等待干净 checkpoint。
-
-页面重复轮询不应触发 `/api/data/on-demand/storage-targets` 高频请求；该接口只应在按需下载对话框需要时加载。
-
-## MySQL 2006/2013
-
-如果 API、恢复任务和批次协调同时出现 `Lost connection to MySQL server during query`，通常是 MySQL 重启、OOM 或 Docker I/O 压力，不代表每个查询各自有问题。
+连接类 SQLSTATE `08xxx`、`53300`、`57P01`、`57P02`、`57P03` 属于基础设施故障候选。API 在有界重试后返回可重试的 `DATABASE_UNAVAILABLE`；不要把它当作业务校验失败。
 
 ```bash
-docker compose ps mysql
-docker inspect lean-platform-mysql-1 \
-  --format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}'
-docker compose logs --tail=200 mysql
+docker compose ps postgres
+docker compose exec postgres pg_isready -U postgres -d postgres
+docker compose logs --tail=200 postgres migration api
 ```
 
-- `OOMKilled=true` 或退出码 137：停止遗留 LEAN/Research/旧 Compose 容器，检查 Docker 总内存并降低并发。
-- MySQL 正在恢复：API 在有界重试后返回可重试 503 `DATABASE_UNAVAILABLE`，周期协调任务稍后重试。
-- 迁移缺失：检查最新 migration，特别是 sync heartbeat 和 experiment batch 表结构。
-- 不要用无限重试掩盖反复 OOM。
+检查连接数、磁盘、重启/OOM、migration 结果和角色/数据库初始化。恢复后先确认 migration checksum 和关键业务不变量，再恢复调度。
 
-## Unknown column
-
-出现 `Unknown column 'heartbeat_at'` 等错误说明代码和数据库 migration 不一致：
+## RabbitMQ 与 queued 任务
 
 ```bash
-web/backend/.venv/bin/python scripts/db_migrate.py --status --json
+docker compose ps rabbitmq worker data-worker data-lineage-worker data-demand-worker backtest-worker
+docker compose exec rabbitmq rabbitmq-diagnostics -q ping
+docker compose logs --tail=200 rabbitmq worker backtest-worker
 ```
 
-先完成迁移再重启 API、worker 和 beat。不要手工随意增加列而绕过 migration 记录。
+检查 AMQP 认证、vhost `lean`、目标 queue、consumer 数、queue depth、publisher confirm、heartbeat 和 worker 是否监听正确队列。RabbitMQ 恢复后由 PostgreSQL 中的权威非终态任务对账，禁止手工制造第二个业务任务绕过 idempotency/lease。
 
-## LEAN 回测失败
+## 数据同步不推进
 
-在 Run Detail 检查：
+检查 sync run 的 dataset、checkpoint、heartbeat、水位、manifest 和最近错误。活动同步期间不要替换 data worker；取消时等待干净 checkpoint。Parquet 发布必须原子完成，临时文件或不完整分区不能手工改名冒充 current。
 
-- preflight 是否通过；
-- Logs 中的 Python/C#、Docker 和 LEAN 错误；
-- Raw Files 是否包含结果 JSON；
-- Data Evidence 是否覆盖日期、标的和真实基准；
-- 是否超时、取消或因 scheduler lease 延迟。
+## Paper waiting、重复或 projection 异常
 
-没有结果 JSON 时不能生成伪造的成功指标。
+- `waiting_data`：检查交易日、source certification、bar watermark、QA、PIT/reference 和 benchmark。
+- `queued`：检查 backtest worker、RabbitMQ consumer 和全局 LEAN lease。
+- `running/finalizing` 超时：检查六阶段 checkpoint 和 orphan recovery；重投同一幂等请求，不创建第二套订单。
+- projection 异常：比较 ledger sequence/checkpoint digest 后重建 projection，禁止直接改 cash/positions。
 
-## Research 无法启动
+Paper 事实位于 PostgreSQL append-only ledger；RabbitMQ 不拥有资金或持仓。P9/live activation 仍禁用。
 
-- 检查 Docker socket、Research 镜像和可用端口。
-- 查看 worker 与 container logs。
-- 确认宿主机 Project、Data 和 Parquet 路径能被 Docker 挂载。
-- Docker Desktop 文件共享未包含路径时，容器可能启动但看不到数据。
+## LEAN runner 与镜像
 
-## Preview 或文档页白屏
+确认 restricted runner 健康、运行时/镜像 identity 已 pin、镜像在 allowlist、挂载只读且数据目录可见。不要用 `:latest` 排障或临时放宽网络/挂载边界。
 
-- 先记录 dataset/article、URL 和浏览器控制台错误。
-- 单个 Preview/文档错误必须限制在内容区，不能让整个 Web 空白。
-- 确认运行的是最新前端构建；依赖或构建输入变更后需要一次 `--build`。
-- Preview 的未知 Provider 字段应由 JSON-safe formatter 展示，不应直接渲染对象。
+## 恢复顺序
 
-## 报告仍是旧布局
+1. 停止新的调度/提交并保存证据。
+2. 恢复 PostgreSQL，验证迁移和权威业务状态。
+3. 恢复 Parquet/object store 并验证 manifest、hash 和 DuckDB 可读性。
+4. 恢复 RabbitMQ 与 workers，通过对账重投非终态任务。
+5. 恢复 LEAN runner，再解除调度门禁。
 
-旧静态 HTML 不会因代码更新自动变化。确认报告 ID 和生成时间，必要时重建：
-
-```bash
-web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
-```
-
-报告响应已禁用缓存；重建后仍旧时检查实际文件和对象归档版本。
-
-## Worker heartbeat 和时钟漂移
-
-偶发 `missed heartbeat` 可能来自 CPU/I/O 阻塞；持续出现并伴随任务失联时检查容器负载。`Substantial drift` 表示发送和接收时钟差异，先确认宿主机与 Docker VM 时间同步。
-
-## 无法退出启动脚本
-
-单实例脚本应把退出信号转发给子进程并清理服务。第一次 Ctrl+C 后等待清理；重复信号只用于已有清理超时。若仍无法退出，记录脚本 PID、子进程和 Docker Compose 状态，不要直接删除数据卷。
-
-## 恢复原则
-
-- 数据同步从数据库 checkpoint 恢复，最多幂等重放一个小批次。
-- Experiment batch 根据子任务状态协调，成功项不会重复运行。
-- 报告和运行对象优先从对象归档恢复。
-- 同一阻塞条件反复出现时先保留日志、状态和 migration 信息，再做变更。
-
+完整操作见 [Level 5 Runbook](../operations/level5-runbook.md) 和 [Deployment](../deployment.md)。

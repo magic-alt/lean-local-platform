@@ -1,4 +1,7 @@
-# MySQL Storage Maintenance
+# Historical MySQL Storage Maintenance
+
+> Superseded by PostgreSQL backup/restore operations. Do not run these commands
+> against the current runtime.
 
 MySQL maintenance now applies only to the control plane. Stock bars, intraday bars, trade status, adjustment factors and daily-basic facts live in `data/` Parquet and must never be recreated or reset through MySQL maintenance commands.
 

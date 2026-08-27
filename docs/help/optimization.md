@@ -6,15 +6,15 @@ Optimization Center 将参数寻优、运行历史、组合权重和结果比较
 
 ## 推荐流程
 
-Research、Backtest 和 Optimization 是可衔接但不强制的引导流程：
+外部 Research、Backtest 和 Optimization 通过受控 handoff 衔接：
 
-1. Research Run 固化嵌套 `DataScope`、`scopeHash` 和 `dataFingerprint`。
-2. “转回测”从服务端读取 handoff draft；单标的进入单次回测，多标的或股票池进入批量回测。
-3. Backtest 重新选择策略和执行假设，并验证 Research 数据指纹未漂移。
+1. `qlib-platform` 绑定 DataRelease 并产出 Artifact Contract v2 和内容寻址的 `TARGET_PORTFOLIO`。
+2. Platform 导入时校验 artifact、DataRelease、target-weight SHA-256 与 lineage。
+3. Backtest/LEAN validation 重新校验数据和执行假设，任何漂移都 fail closed。
 4. 成功回测可以从详情页进入 Optimization；服务端再次校验项目与数据指纹。
 5. Optimization 的每个候选都是标准子回测。需要组合权重时，只能从已准入的成功回测中选择。
 
-这些阶段也可以独立进入。血缘可通过 `GET /api/lineage/{resource_type}/{resource_id}` 查询。
+Platform 内不运行 Notebook、模型训练或通用 Research Run。血缘可通过 `GET /api/lineage/{resource_type}/{resource_id}` 查询。
 
 ## Create Optimization
 
@@ -47,7 +47,7 @@ Research、Backtest 和 Optimization 是可衔接但不强制的引导流程：
     "benchmarkSymbol": "000300",
     "feeModel": "default",
     "slippageModel": "default",
-    "dockerImage": "quantconnect/lean:latest"
+    "dockerImage": "<configured digest-pinned image>"
   },
   "fixedParametersByProject": {
     "ema-project": {"fast": 10, "slow": 60}

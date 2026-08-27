@@ -10,7 +10,7 @@
 | 当前有效合约筛选 | 支持，按合约生命周期 fail closed | Data → 期权 Preview |
 | 期权日行情 `opt_daily` | 支持按需下载，受 Provider 权限约束 | Data → 其他数据集 |
 | 合约与日行情质量校验 | 支持 | Data 质量报告 |
-| 期权因子、波动率或组合研究 | 可使用下载产物自行研究，尚无专用工作流 | Research / Jupyter |
+| 期权因子、波动率或组合研究 | 可使用下载产物在外部研究平台分析，尚无 platform 内专用工作流 | qlib-platform / external Research |
 | `assetClass=option` Project 和标准 Backtest | 不支持 | 不应绕过资产类型校验 |
 | 期权 Paper、实时订单、保证金、行权与指派 | 不支持 | Paper 仅使用已准入的受支持资产回测 |
 

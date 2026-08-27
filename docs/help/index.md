@@ -1,6 +1,6 @@
 # LEAN Local 文档中心
 
-LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理的 QuantConnect LEAN 工作台。Web、FastAPI、Celery、MySQL 与 Docker LEAN 构成正式运行链路；`data/` Parquet 是股票行情事实层，MySQL 是控制平面，LEAN 与 ClickHouse 是可重建消费层，DuckDB 直接查询 Parquet。
+LEAN Local 是执行与控制平面：Web、FastAPI、Celery、PostgreSQL、RabbitMQ 与 LEAN 构成正式运行链路；`data/` Parquet 是股票行情事实层，PostgreSQL 是控制平面，DuckDB 直接查询 Parquet。Feature/model research 由外部 `qlib-platform` 承载。
 
 > 建议第一次使用时按“数据 → 项目 → 回测 → 报告”的顺序完成最小闭环，再进入批量实验、Optimization、Research 和 Paper。
 
@@ -22,13 +22,13 @@ LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理
 | [数据](data.md) | 全量/增量、按需下载、CSV、Preview、质量与 PIT |
 | [回测](backtests.md) | 单次、批量、动态组合、取消和结果可信度 |
 | [Optimization](optimization.md) | 网格、股票池稳健性、Walk-forward 和多策略 |
-| [Research](research.md) | 快捷研究、因子批量评价和 Jupyter |
+| [Research](research.md) | Artifact Contract v2 导入、lineage 与 LEAN validation 边界 |
 | [期权数据与交易边界](options-trading.md) | 当前合约、研究准备、盈亏风险、到期处理和接入要求 |
 | [Paper](paper.md) | LEAN Walk-forward、信号模拟与每日复盘 |
 | [Reports](reports.md) | 结果详情、比较、报告、归档与导出 |
 | [高级研究能力](advanced-research.md) | Insights、因子、组合、期货、期权和可转债 |
 | [配置与运行资源](configuration.md) | Settings、环境变量、Docker、目录与备份 |
-| [监控与故障排查](troubleshooting.md) | Tasks、Monitoring、MySQL、同步和前端问题 |
+| [监控与故障排查](troubleshooting.md) | PostgreSQL、RabbitMQ、Tasks、同步和恢复 |
 
 ## 技术参考
 
@@ -36,7 +36,7 @@ LEAN Local 是面向本地研究、回测、优化、模拟交易和数据治理
 - [完整 API 端点索引](api-reference.md)：由 OpenAPI 生成的全部公开操作。
 - [架构](../architecture.md)：组件边界、主链路、事实库和恢复边界。
 - [数据管线](../data_pipeline.md) 与 [数据来源](../data_sources.md)：同步、质量、来源和审计。
-- [部署](../deployment.md)：Compose、资源、MySQL、备份和安全。
+- [部署](../deployment.md)：Docker/Native、PostgreSQL、RabbitMQ、备份和安全。
 - [策略模板](../strategy_template.md) 与 [结果格式](../backtest_result_format.md)：扩展和集成契约。
 - [测试](../testing.md)、[仓库目录](../repository_layout.md) 和 [Roadmap](../roadmap.md)：维护与验收规则。
 

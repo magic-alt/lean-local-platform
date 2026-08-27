@@ -1,4 +1,8 @@
-# Final-seal certification — 2026-08-04
+# Historical Final-seal Certification — 2026-08-04
+
+> Applies to the architecture before the PostgreSQL/RabbitMQ migration.
+> Superseded for current-release certification purposes; see
+> [Current Release Status](../release-status.md).
 
 ## Decision
 
