@@ -4,665 +4,380 @@ x-logging: &bounded-logging
     max-size: "20m"
     max-file: "3"
 
-x-release-environment: &release-environment
+x-platform-environment: &platform-environment
   LEAN_RELEASE_SHA: ${LEAN_RELEASE_SHA:-unknown}
   LEAN_RELEASE_ID: ${LEAN_RELEASE_ID:-local-unversioned}
+  LEAN_DEPLOYMENT_MODE: docker
+  LEAN_EXECUTION_BACKEND: docker
+  LEAN_DEPLOYMENT_PROFILE: ${LEAN_DEPLOYMENT_PROFILE:-full}
+  LEAN_STRICT_RUNTIME_V2: "1"
+  LEAN_DATABASE_URL: postgresql+psycopg://lean_app:${LEAN_POSTGRES_APP_PASSWORD:?LEAN_POSTGRES_APP_PASSWORD must be set}@postgres:5432/lean_platform
+  CELERY_BROKER_URL: amqp://lean_worker:${LEAN_RABBITMQ_PASSWORD:?LEAN_RABBITMQ_PASSWORD must be set}@rabbitmq:5672/lean
+  CELERY_RESULT_BACKEND: db+postgresql+psycopg://lean_celery:${LEAN_POSTGRES_CELERY_PASSWORD:?LEAN_POSTGRES_CELERY_PASSWORD must be set}@postgres:5432/lean_celery
+  LEAN_MLFLOW_DATABASE_URL: postgresql+psycopg://lean_mlflow:${LEAN_POSTGRES_MLFLOW_PASSWORD:?LEAN_POSTGRES_MLFLOW_PASSWORD must be set}@postgres:5432/lean_mlflow
+  CLICKHOUSE_ENABLED: ${CLICKHOUSE_ENABLED:-0}
+  CLICKHOUSE_HOST: clickhouse
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USERNAME: lean
+  CLICKHOUSE_PASSWORD: ${LEAN_CLICKHOUSE_PASSWORD:-lean}
+  CLICKHOUSE_DATABASE: lean_market
+  LEAN_DATA_DIR: /workspace/data
+  LEAN_PARQUET_DIR: /workspace/data/output/parquet
+  LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
+  LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
+  LEAN_TUSHARE_TYPED_SOURCE_WRITES: "0"
+  LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
+  LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
+  LEAN_DATA_SYNC_BATCH_UNITS: ${LEAN_DATA_SYNC_BATCH_UNITS:-16}
+  LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-100000}
+  LEAN_DAILY_SYNC_BATCH_UNITS: ${LEAN_DAILY_SYNC_BATCH_UNITS:-16}
+  LEAN_DAILY_SYNC_CHUNK_ROWS: ${LEAN_DAILY_SYNC_CHUNK_ROWS:-100000}
+  LEAN_DAILY_INCREMENT_BATCH_DATES: ${LEAN_DAILY_INCREMENT_BATCH_DATES:-16}
+  LEAN_TUSHARE_LINEAGE_ASYNC: ${LEAN_TUSHARE_LINEAGE_ASYNC:-1}
+  LEAN_RAW_ARCHIVE_GZIP_LEVEL: ${LEAN_RAW_ARCHIVE_GZIP_LEVEL:-1}
+  LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
+  POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
+  TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+  LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
+  LEAN_API_TOKEN_FILE: /run/secrets/lean_api_token
+  LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
+  LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
+  LEAN_ALERT_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_WEBHOOK_BEARER_TOKEN:-}
+  LEAN_ALERT_ESCALATION_WEBHOOK_URL: ${LEAN_ALERT_ESCALATION_WEBHOOK_URL:-}
+  LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN:-}
+  LEAN_POSTGRES_BACKUP_DIR: /workspace/web/runtime/backups/postgres
+  LEAN_POSTGRES_BACKUP_HOUR: ${LEAN_POSTGRES_BACKUP_HOUR:-3}
+  LEAN_POSTGRES_BACKUP_MINUTE: ${LEAN_POSTGRES_BACKUP_MINUTE:-0}
+  LEAN_POSTGRES_BACKUP_RETENTION_DAYS: ${LEAN_POSTGRES_BACKUP_RETENTION_DAYS:-7}
+  LEAN_POSTGRES_BACKUP_MAX_FILES: ${LEAN_POSTGRES_BACKUP_MAX_FILES:-14}
+  LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED: ${LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED:-1}
+  LEAN_SCHEDULED_AUTOMATION_ENABLED: ${LEAN_SCHEDULED_AUTOMATION_ENABLED:-1}
+  LEAN_DERIVED_MAINTENANCE_HOUR: ${LEAN_DERIVED_MAINTENANCE_HOUR:-19}
+  LEAN_DERIVED_MAINTENANCE_MINUTE: ${LEAN_DERIVED_MAINTENANCE_MINUTE:-30}
+  LEAN_PAPER_WALKFORWARD_HOUR: ${LEAN_PAPER_WALKFORWARD_HOUR:-18}
+  LEAN_PAPER_WALKFORWARD_MINUTE: ${LEAN_PAPER_WALKFORWARD_MINUTE:-45}
+
+x-backend-service: &backend-service
+  profiles: ["app"]
+  logging: *bounded-logging
+  restart: unless-stopped
+  build:
+    context: .
+    dockerfile: web/backend/Dockerfile
+  environment:
+    <<: *platform-environment
+  volumes:
+    - .:/workspace:ro
+    - ./web/runtime:/workspace/web/runtime
+    - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
+    - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/data/output/parquet
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m
+    - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
+  depends_on:
+    migration:
+      condition: service_completed_successfully
+    rabbitmq:
+      condition: service_healthy
 
 services:
-  redis:
+  postgres:
+    image: postgres:17.11
     logging: *bounded-logging
-    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-    ports:
-      - "127.0.0.1:${LEAN_REDIS_PORT:-6379}:6379"
-    environment:
-      LEAN_REDIS_PASSWORD: ${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}
-    volumes:
-      - redis-data:/data
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-      - --maxmemory
-      - ${LEAN_REDIS_MAXMEMORY:-256mb}
-      - --maxmemory-policy
-      - noeviction
-      - --requirepass
-      - ${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$LEAN_REDIS_PASSWORD\" ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    cpus: "${LEAN_REDIS_CPUS:-1.0}"
-    mem_limit: ${LEAN_REDIS_MEMORY:-512m}
-
-  mysql:
-    logging: *bounded-logging
-    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${LEAN_MYSQL_ROOT_PASSWORD:?LEAN_MYSQL_ROOT_PASSWORD must be set}
-      MYSQL_DATABASE: lean_market
-      MYSQL_USER: ${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}
-      MYSQL_PASSWORD: ${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}
-      LEAN_MYSQL_USER: ${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}
-      LEAN_MYSQL_PASSWORD: ${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=${LEAN_MYSQL_BUFFER_POOL_SIZE:-1G}
-      - --innodb-redo-log-capacity=${LEAN_MYSQL_REDO_LOG_CAPACITY:-1G}
-      - --local-infile=1
-      - --binlog-expire-logs-seconds=${LEAN_MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
-      - --binlog-row-image=MINIMAL
-      - --log-bin-trust-function-creators=1
-      - --max-allowed-packet=256M
-      - --max-connections=${LEAN_MYSQL_MAX_CONNECTIONS:-150}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LEAN_POSTGRES_ADMIN_PASSWORD:?LEAN_POSTGRES_ADMIN_PASSWORD must be set}
+      POSTGRES_DB: postgres
     ports:
-      - "127.0.0.1:${LEAN_MYSQL_PORT:-3306}:3306"
+      - "127.0.0.1:${LEAN_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$$LEAN_MYSQL_USER\" -p\"$$LEAN_MYSQL_PASSWORD\""]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    stop_grace_period: 2m
+    cpus: "${LEAN_POSTGRES_CPUS:-4.0}"
+    mem_limit: ${LEAN_POSTGRES_MEMORY:-6g}
+
+  rabbitmq:
+    image: rabbitmq:4.3.5-management
+    logging: *bounded-logging
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: lean_worker
+      RABBITMQ_DEFAULT_PASS: ${LEAN_RABBITMQ_PASSWORD:?LEAN_RABBITMQ_PASSWORD must be set}
+      RABBITMQ_DEFAULT_VHOST: lean
+    ports:
+      - "127.0.0.1:${LEAN_RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${LEAN_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
-    stop_grace_period: 2m
-    cpus: "${LEAN_MYSQL_CPUS:-4.0}"
-    mem_limit: ${LEAN_MYSQL_MEMORY:-6g}
+      retries: 18
+      start_period: 20s
+    cpus: "${LEAN_RABBITMQ_CPUS:-1.0}"
+    mem_limit: ${LEAN_RABBITMQ_MEMORY:-1g}
 
-  mysql-integration:
-    profiles: ["test"]
-    logging: *bounded-logging
-    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
-    environment:
-      MYSQL_ROOT_PASSWORD: integration-root-only
-      MYSQL_DATABASE: lean_integration
-      MYSQL_USER: lean_integration
-      MYSQL_PASSWORD: integration-only
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_0900_ai_ci
-      - --innodb-buffer-pool-size=256M
-      - --local-infile=1
-      - --max-connections=50
-    tmpfs:
-      - /var/lib/mysql:size=1g,mode=0700
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ulean_integration", "-pintegration-only"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-      start_period: 10s
-
-  mlflow-db-init:
+  postgres-init:
     profiles: ["app"]
     logging: *bounded-logging
-    image: mysql:8.4@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
-    command:
-      - sh
-      - -c
-      - mysql -hmysql -uroot -p${LEAN_MYSQL_ROOT_PASSWORD:?LEAN_MYSQL_ROOT_PASSWORD must be set} -e "set global log_bin_trust_function_creators=1; create database if not exists lean_mlflow character set utf8mb4 collate utf8mb4_0900_ai_ci; grant all privileges on lean_mlflow.* to '${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}'@'%'; flush privileges;"
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: python /workspace/scripts/init_postgres_databases.py
+    environment:
+      LEAN_POSTGRES_ADMIN_URL: postgresql://postgres:${LEAN_POSTGRES_ADMIN_PASSWORD:?LEAN_POSTGRES_ADMIN_PASSWORD must be set}@postgres:5432/postgres
+      LEAN_POSTGRES_APP_PASSWORD: ${LEAN_POSTGRES_APP_PASSWORD:?LEAN_POSTGRES_APP_PASSWORD must be set}
+      LEAN_POSTGRES_CELERY_PASSWORD: ${LEAN_POSTGRES_CELERY_PASSWORD:?LEAN_POSTGRES_CELERY_PASSWORD must be set}
+      LEAN_POSTGRES_MLFLOW_PASSWORD: ${LEAN_POSTGRES_MLFLOW_PASSWORD:?LEAN_POSTGRES_MLFLOW_PASSWORD must be set}
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
 
-  mlflow:
+  migration:
+    profiles: ["app"]
+    logging: *bounded-logging
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    command: python /workspace/scripts/db_migrate.py apply --json
+    environment:
+      <<: *platform-environment
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+  mlflow-db-upgrade:
     profiles: ["app"]
     logging: *bounded-logging
     build:
       context: .
       dockerfile: web/backend/Dockerfile.ml
-    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_mlflow --artifacts-destination /mlartifacts --serve-artifacts
+    command: >-
+      mlflow db upgrade
+      postgresql+psycopg://lean_mlflow:${LEAN_POSTGRES_MLFLOW_PASSWORD:?LEAN_POSTGRES_MLFLOW_PASSWORD must be set}@postgres:5432/lean_mlflow
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+  mlflow:
+    profiles: ["app"]
+    logging: *bounded-logging
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile.ml
+    command: >-
+      mlflow server --host 0.0.0.0 --port 5000 --workers 1
+      --backend-store-uri postgresql+psycopg://lean_mlflow:${LEAN_POSTGRES_MLFLOW_PASSWORD:?LEAN_POSTGRES_MLFLOW_PASSWORD must be set}@postgres:5432/lean_mlflow
+      --artifacts-destination /mlartifacts --serve-artifacts
     ports:
       - "127.0.0.1:${LEAN_MLFLOW_PORT:-5000}:5000"
     volumes:
       - mlflow-artifacts:/mlartifacts
+    depends_on:
+      mlflow-db-upgrade:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2).read()"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 20s
-    depends_on:
-      mlflow-db-init:
-        condition: service_completed_successfully
-    cpus: "${LEAN_MLFLOW_CPUS:-1.0}"
-    mem_limit: ${LEAN_MLFLOW_MEMORY:-2g}
-
-  clickhouse:
-    logging: *bounded-logging
-    image: clickhouse/clickhouse-server:24.12-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
-    environment:
-      CLICKHOUSE_DB: lean_market
-      CLICKHOUSE_USER: lean
-      CLICKHOUSE_PASSWORD: lean
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-    ports:
-      - "127.0.0.1:${LEAN_CLICKHOUSE_HTTP_PORT:-8123}:8123"
-      - "127.0.0.1:${LEAN_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-    cpus: "${LEAN_CLICKHOUSE_CPUS:-2.0}"
-    mem_limit: ${LEAN_CLICKHOUSE_MEMORY:-4g}
-
-  prometheus:
-    logging: *bounded-logging
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
-    ports:
-      - "127.0.0.1:${LEAN_PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    secrets:
-      - lean_api_token
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    cpus: "${LEAN_PROMETHEUS_CPUS:-1.0}"
-    mem_limit: ${LEAN_PROMETHEUS_MEMORY:-1g}
-
-  grafana:
-    logging: *bounded-logging
-    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
-    ports:
-      - "127.0.0.1:${LEAN_GRAFANA_PORT:-3000}:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource 4.20.0
-    volumes:
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
-      - clickhouse
-    cpus: "${LEAN_GRAFANA_CPUS:-1.0}"
-    mem_limit: ${LEAN_GRAFANA_MEMORY:-512m}
 
   api:
-    logging: *bounded-logging
-    profiles: ["app"]
-    restart: unless-stopped
-    build:
-      context: .
-      dockerfile: web/backend/Dockerfile
+    <<: *backend-service
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    ports:
-      - "127.0.0.1:${LEAN_API_PORT:-8000}:8000"
     environment:
-      <<: *release-environment
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: api
-      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
-      LEAN_API_AUTH_REQUIRED: ${LEAN_API_AUTH_REQUIRED:-1}
-      LEAN_MAINTENANCE_READ_ONLY: ${LEAN_MAINTENANCE_READ_ONLY:-0}
-      LEAN_API_TOKEN: ${LEAN_API_TOKEN:-}
-      LEAN_API_TOKEN_FILE: /run/secrets/lean_api_token
       LEAN_BACKTEST_EXECUTION_DELEGATED: "1"
       LEAN_RUNNER_URL: http://lean-runner:8010
-      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
-      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
-      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
       MLFLOW_PUBLIC_URL: http://127.0.0.1:${LEAN_MLFLOW_PORT:-5000}
-      LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
-      LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: "8123"
-      CLICKHOUSE_USERNAME: lean
-      CLICKHOUSE_PASSWORD: lean
-      CLICKHOUSE_DATABASE: lean_market
-      PROMETHEUS_URL: http://127.0.0.1:9090
+      PROMETHEUS_URL: http://127.0.0.1:${LEAN_PROMETHEUS_PORT:-9090}
       GRAFANA_URL: http://127.0.0.1:${LEAN_GRAFANA_PORT:-3000}
-      LEAN_DATA_DIR: /workspace/data
-      LEAN_PARQUET_DIR: /workspace/parquet
-      # Bound interactive DuckDB work below the API container limit.  Preview
-      # requests are serialized so concurrent page loaders cannot OOM-kill the
-      # process and turn every route transition into a proxy HTTP 500.
-      LEAN_DUCKDB_MEMORY_LIMIT: ${LEAN_DUCKDB_MEMORY_LIMIT:-256MB}
-      LEAN_DUCKDB_THREADS: ${LEAN_DUCKDB_THREADS:-2}
-      LEAN_DUCKDB_QUERY_CONCURRENCY: ${LEAN_DUCKDB_QUERY_CONCURRENCY:-1}
-      # Keep CPU-heavy Parquet compression from starving MySQL, the API and
-      # Docker Desktop during a governed full rebuild.
-      POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
-      LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
-      LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
-      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
-      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
-      LEAN_ON_DEMAND_EXPORT_ROOTS: ${LEAN_ON_DEMAND_EXPORT_ROOTS:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      KIMI_API_KEY: ${KIMI_API_KEY:-}
-      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LEAN_INSIGHTS_LLM_PROVIDER: ${LEAN_INSIGHTS_LLM_PROVIDER:-}
-      LEAN_INSIGHTS_LLM_BASE_URL: ${LEAN_INSIGHTS_LLM_BASE_URL:-}
-      LEAN_INSIGHTS_LLM_MODEL: ${LEAN_INSIGHTS_LLM_MODEL:-}
-      LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS: ${LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS:-60}
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
-      LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
-      LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}
-      LEAN_ASHARE_TECH_AGENT_MODE: ${LEAN_ASHARE_TECH_AGENT_MODE:-hybrid_multi_agent}
-      LEAN_ASHARE_TECH_EVALUATION_HOUR: ${LEAN_ASHARE_TECH_EVALUATION_HOUR:-18}
-      LEAN_ASHARE_TECH_EVALUATION_MINUTE: ${LEAN_ASHARE_TECH_EVALUATION_MINUTE:-45}
-      LEAN_PAPER_WALKFORWARD_HOUR: ${LEAN_PAPER_WALKFORWARD_HOUR:-18}
-      LEAN_PAPER_WALKFORWARD_MINUTE: ${LEAN_PAPER_WALKFORWARD_MINUTE:-45}
-      LEAN_DERIVED_MAINTENANCE_HOUR: ${LEAN_DERIVED_MAINTENANCE_HOUR:-19}
-      LEAN_DERIVED_MAINTENANCE_MINUTE: ${LEAN_DERIVED_MAINTENANCE_MINUTE:-30}
-      LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED: ${LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED:-1}
-      LEAN_SCHEDULED_AUTOMATION_ENABLED: ${LEAN_SCHEDULED_AUTOMATION_ENABLED:-1}
-      LEAN_MYSQL_BACKUP_HOUR: ${LEAN_MYSQL_BACKUP_HOUR:-3}
-      LEAN_MYSQL_BACKUP_MINUTE: ${LEAN_MYSQL_BACKUP_MINUTE:-0}
-      LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
-      LEAN_ALERT_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_WEBHOOK_BEARER_TOKEN:-}
-      LEAN_ALERT_ESCALATION_WEBHOOK_URL: ${LEAN_ALERT_ESCALATION_WEBHOOK_URL:-}
-      LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN:-}
-      LEAN_ALERT_MIN_SEVERITY: ${LEAN_ALERT_MIN_SEVERITY:-error}
-      LEAN_ALERT_ESCALATE_AFTER: ${LEAN_ALERT_ESCALATE_AFTER:-3}
-      LEAN_ALERT_ESCALATION_AFTER: ${LEAN_ALERT_ESCALATION_AFTER:-1}
-      LEAN_ALERT_COOLDOWN_SECONDS: ${LEAN_ALERT_COOLDOWN_SECONDS:-900}
-      LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS: ${LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}
-      LEAN_NOTIFICATION_MAX_ATTEMPTS: ${LEAN_NOTIFICATION_MAX_ATTEMPTS:-8}
-      LEAN_NOTIFICATION_RETRY_BASE_SECONDS: ${LEAN_NOTIFICATION_RETRY_BASE_SECONDS:-60}
-      LEAN_NOTIFICATION_RETRY_MAX_SECONDS: ${LEAN_NOTIFICATION_RETRY_MAX_SECONDS:-3600}
-      LEAN_NOTIFICATION_RETRY_JITTER_PERCENT: ${LEAN_NOTIFICATION_RETRY_JITTER_PERCENT:-20}
-      LEAN_RESOURCE_DISK_WARNING: ${LEAN_RESOURCE_DISK_WARNING:-75}
-      LEAN_RESOURCE_DISK_CRITICAL: ${LEAN_RESOURCE_DISK_CRITICAL:-85}
-      LEAN_RESOURCE_MEMORY_WARNING: ${LEAN_RESOURCE_MEMORY_WARNING:-80}
-      LEAN_RESOURCE_MEMORY_CRITICAL: ${LEAN_RESOURCE_MEMORY_CRITICAL:-90}
-      LEAN_RESOURCE_CPU_WARNING: ${LEAN_RESOURCE_CPU_WARNING:-85}
-      LEAN_RESOURCE_CPU_CRITICAL: ${LEAN_RESOURCE_CPU_CRITICAL:-95}
-      LEAN_RESOURCE_QUEUE_WARNING: ${LEAN_RESOURCE_QUEUE_WARNING:-20}
-      LEAN_RESOURCE_QUEUE_CRITICAL: ${LEAN_RESOURCE_QUEUE_CRITICAL:-50}
-      LEAN_RESOURCE_MONITOR_PATHS: ${LEAN_RESOURCE_MONITOR_PATHS:-}
-      LEAN_FAULT_INJECTION_ENABLED: ${LEAN_FAULT_INJECTION_ENABLED:-0}
-      LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS: ${LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS:-0}
-      LEAN_PAPER_FAULT_PAUSE_PHASES: ${LEAN_PAPER_FAULT_PAUSE_PHASES:-intent_capture,constraint_validation,matching,ledger,snapshot_report,reconciliation}
-      LEAN_PAPER_FAULT_PAUSE_TARGETS: ${LEAN_PAPER_FAULT_PAUSE_TARGETS:-}
-      LEAN_PAPER_FINALIZE_STALE_SECONDS: ${LEAN_PAPER_FINALIZE_STALE_SECONDS:-120}
-      LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
-      LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
-    volumes:
-      - .:/workspace:ro
-      - ./web/runtime:/workspace/web/runtime
-      # Keep this spelling aligned with the data directory inherited from the
-      # repository bind mount. Docker Desktop on case-insensitive filesystems
-      # treats /workspace/Data and /workspace/data as the same mountpoint.
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
-      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
-      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
-    secrets:
-      - lean_api_token
-      - lean_runner_token
-    tmpfs:
-      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-      clickhouse:
-        condition: service_started
-      worker:
-        condition: service_started
-      data-worker:
-        condition: service_started
-      data-lineage-worker:
-        condition: service_started
-      data-demand-worker:
-        condition: service_started
-      backtest-worker:
-        condition: service_started
-      ml-worker:
-        condition: service_started
-      lean-runner:
-        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LEAN_API_PORT:-8000}:8000"
+    secrets: [lean_api_token, lean_runner_token]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
-    cpus: "${LEAN_API_CPUS:-2.0}"
-    mem_limit: ${LEAN_API_MEMORY:-2g}
 
   worker:
-    logging: *bounded-logging
-    profiles: ["app"]
-    build:
-      context: .
-      dockerfile: web/backend/Dockerfile
+    <<: *backend-service
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=default --hostname=default@%h
     environment:
-      <<: *release-environment
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: default-worker
-      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
-      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
-      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
-      LEAN_LOADER_DATABASE_URL: mysql+pymysql://lean_loader:${LEAN_MYSQL_LOADER_PASSWORD:-loader-not-configured}@mysql:3306/lean_market
-      LEAN_MYSQL_BULK_DISABLE_BINLOG: "1"
-      LEAN_MYSQL_LOCAL_INFILE: ${LEAN_MYSQL_LOCAL_INFILE:-1}
-      LEAN_TUSHARE_LINEAGE_ASYNC: ${LEAN_TUSHARE_LINEAGE_ASYNC:-1}
-      LEAN_MYSQL_ADDITIONAL_BACKUP_DATABASES: lean_mlflow
-      LEAN_TUSHARE_CALLS_PER_MINUTE: ${LEAN_TUSHARE_CALLS_PER_MINUTE:-500}
-      LEAN_TUSHARE_FETCH_CONCURRENCY: ${LEAN_TUSHARE_FETCH_CONCURRENCY:-16}
-      LEAN_DAILY_BASIC_FETCH_CONCURRENCY: ${LEAN_DAILY_BASIC_FETCH_CONCURRENCY:-32}
-      LEAN_DIVIDEND_FETCH_CONCURRENCY: ${LEAN_DIVIDEND_FETCH_CONCURRENCY:-32}
-      LEAN_STK_LIMIT_FETCH_CONCURRENCY: ${LEAN_STK_LIMIT_FETCH_CONCURRENCY:-16}
-      LEAN_SUSPEND_FETCH_CONCURRENCY: ${LEAN_SUSPEND_FETCH_CONCURRENCY:-16}
-      LEAN_DATA_SYNC_BATCH_UNITS: ${LEAN_DATA_SYNC_BATCH_UNITS:-16}
-      LEAN_DATA_SYNC_CHUNK_ROWS: ${LEAN_DATA_SYNC_CHUNK_ROWS:-100000}
-      LEAN_DAILY_SYNC_BATCH_UNITS: ${LEAN_DAILY_SYNC_BATCH_UNITS:-16}
-      LEAN_DAILY_SYNC_CHUNK_ROWS: ${LEAN_DAILY_SYNC_CHUNK_ROWS:-100000}
-      LEAN_DAILY_INCREMENT_BATCH_DATES: ${LEAN_DAILY_INCREMENT_BATCH_DATES:-16}
-      LEAN_RAW_ARCHIVE_GZIP_LEVEL: ${LEAN_RAW_ARCHIVE_GZIP_LEVEL:-1}
-      LEAN_ALERT_WEBHOOK_URL: ${LEAN_ALERT_WEBHOOK_URL:-}
-      LEAN_ALERT_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_WEBHOOK_BEARER_TOKEN:-}
-      LEAN_ALERT_ESCALATION_WEBHOOK_URL: ${LEAN_ALERT_ESCALATION_WEBHOOK_URL:-}
-      LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN: ${LEAN_ALERT_ESCALATION_WEBHOOK_BEARER_TOKEN:-}
-      LEAN_ALERT_MIN_SEVERITY: ${LEAN_ALERT_MIN_SEVERITY:-error}
-      LEAN_ALERT_ESCALATE_AFTER: ${LEAN_ALERT_ESCALATE_AFTER:-3}
-      LEAN_ALERT_ESCALATION_AFTER: ${LEAN_ALERT_ESCALATION_AFTER:-1}
-      LEAN_ALERT_COOLDOWN_SECONDS: ${LEAN_ALERT_COOLDOWN_SECONDS:-900}
-      LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS: ${LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}
-      LEAN_NOTIFICATION_MAX_ATTEMPTS: ${LEAN_NOTIFICATION_MAX_ATTEMPTS:-8}
-      LEAN_NOTIFICATION_RETRY_BASE_SECONDS: ${LEAN_NOTIFICATION_RETRY_BASE_SECONDS:-60}
-      LEAN_NOTIFICATION_RETRY_MAX_SECONDS: ${LEAN_NOTIFICATION_RETRY_MAX_SECONDS:-3600}
-      LEAN_NOTIFICATION_RETRY_JITTER_PERCENT: ${LEAN_NOTIFICATION_RETRY_JITTER_PERCENT:-20}
       LEAN_WORKER_MAX_TASKS_PER_CHILD: ${LEAN_WORKER_MAX_TASKS_PER_CHILD:-50}
       LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB: ${LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB:-1572864}
-      LEAN_RESOURCE_DISK_WARNING: ${LEAN_RESOURCE_DISK_WARNING:-75}
-      LEAN_RESOURCE_DISK_CRITICAL: ${LEAN_RESOURCE_DISK_CRITICAL:-85}
-      LEAN_RESOURCE_MEMORY_WARNING: ${LEAN_RESOURCE_MEMORY_WARNING:-80}
-      LEAN_RESOURCE_MEMORY_CRITICAL: ${LEAN_RESOURCE_MEMORY_CRITICAL:-90}
-      LEAN_RESOURCE_CPU_WARNING: ${LEAN_RESOURCE_CPU_WARNING:-85}
-      LEAN_RESOURCE_CPU_CRITICAL: ${LEAN_RESOURCE_CPU_CRITICAL:-95}
-      LEAN_RESOURCE_QUEUE_WARNING: ${LEAN_RESOURCE_QUEUE_WARNING:-20}
-      LEAN_RESOURCE_QUEUE_CRITICAL: ${LEAN_RESOURCE_QUEUE_CRITICAL:-50}
-      LEAN_RESOURCE_MONITOR_PATHS: ${LEAN_RESOURCE_MONITOR_PATHS:-}
-      LEAN_FAULT_INJECTION_ENABLED: ${LEAN_FAULT_INJECTION_ENABLED:-0}
-      LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS: ${LEAN_PAPER_CHECKPOINT_PAUSE_SECONDS:-0}
-      LEAN_PAPER_FAULT_PAUSE_PHASES: ${LEAN_PAPER_FAULT_PAUSE_PHASES:-intent_capture,constraint_validation,matching,ledger,snapshot_report,reconciliation}
-      LEAN_PAPER_FAULT_PAUSE_TARGETS: ${LEAN_PAPER_FAULT_PAUSE_TARGETS:-}
-      LEAN_PAPER_FINALIZE_STALE_SECONDS: ${LEAN_PAPER_FINALIZE_STALE_SECONDS:-120}
-      LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB: ${LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB:-50}
-      LEAN_MYSQL_DATA_OBSERVER_DIR: /var/lib/mysql-observer
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: "8123"
-      CLICKHOUSE_USERNAME: lean
-      CLICKHOUSE_PASSWORD: lean
-      CLICKHOUSE_DATABASE: lean_market
-      LEAN_DATA_DIR: /workspace/data
-      LEAN_PARQUET_DIR: /workspace/parquet
-      POLARS_MAX_THREADS: ${LEAN_PARQUET_MAX_THREADS:-4}
-      LEAN_PARQUET_PARTITION_ROWS: ${LEAN_PARQUET_PARTITION_ROWS:-100000}
-      LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
-      LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
-      LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
-      LEAN_ON_DEMAND_EXPORT_ROOTS: ${LEAN_ON_DEMAND_EXPORT_ROOTS:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      KIMI_API_KEY: ${KIMI_API_KEY:-}
-      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LEAN_INSIGHTS_LLM_PROVIDER: ${LEAN_INSIGHTS_LLM_PROVIDER:-}
-      LEAN_INSIGHTS_LLM_BASE_URL: ${LEAN_INSIGHTS_LLM_BASE_URL:-}
-      LEAN_INSIGHTS_LLM_MODEL: ${LEAN_INSIGHTS_LLM_MODEL:-}
-      LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS: ${LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS:-60}
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
-      LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
-      LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}
-      LEAN_ASHARE_TECH_AGENT_MODE: ${LEAN_ASHARE_TECH_AGENT_MODE:-hybrid_multi_agent}
-      LEAN_ASHARE_TECH_EVALUATION_HOUR: ${LEAN_ASHARE_TECH_EVALUATION_HOUR:-18}
-      LEAN_ASHARE_TECH_EVALUATION_MINUTE: ${LEAN_ASHARE_TECH_EVALUATION_MINUTE:-45}
-      LEAN_PAPER_WALKFORWARD_HOUR: ${LEAN_PAPER_WALKFORWARD_HOUR:-18}
-      LEAN_PAPER_WALKFORWARD_MINUTE: ${LEAN_PAPER_WALKFORWARD_MINUTE:-45}
-      LEAN_DERIVED_MAINTENANCE_HOUR: ${LEAN_DERIVED_MAINTENANCE_HOUR:-19}
-      LEAN_DERIVED_MAINTENANCE_MINUTE: ${LEAN_DERIVED_MAINTENANCE_MINUTE:-30}
-      LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED: ${LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED:-1}
-      LEAN_SCHEDULED_AUTOMATION_ENABLED: ${LEAN_SCHEDULED_AUTOMATION_ENABLED:-1}
-      LEAN_MYSQL_BACKUP_HOUR: ${LEAN_MYSQL_BACKUP_HOUR:-3}
-      LEAN_MYSQL_BACKUP_MINUTE: ${LEAN_MYSQL_BACKUP_MINUTE:-0}
-      LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
-      LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
-    volumes:
-      - .:/workspace:ro
-      - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
-      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
-      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
-    tmpfs:
-      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-      clickhouse:
-        condition: service_started
-    cpus: "${LEAN_DEFAULT_WORKER_CPUS:-2.0}"
-    mem_limit: ${LEAN_DEFAULT_WORKER_MEMORY:-3g}
 
   data-worker:
-    extends:
-      service: worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-bulk,data --hostname=data-bulk@%h
+    <<: *backend-service
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-bulk --hostname=data-bulk@%h
     environment:
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: data-worker
-      LEAN_REQUIRE_LOADER_DATABASE: "1"
-      LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB: ${LEAN_DATA_WORKER_MAX_MEMORY_PER_CHILD_KB:-5242880}
-    cpus: "${LEAN_DATA_WORKER_CPUS:-2.0}"
     mem_limit: ${LEAN_DATA_WORKER_MEMORY:-6g}
 
   data-lineage-worker:
-    extends:
-      service: worker
+    <<: *backend-service
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=data-lineage --hostname=data-lineage@%h
     environment:
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: data-lineage-worker
-      LEAN_REQUIRE_LOADER_DATABASE: "1"
-      LEAN_WORKER_MAX_MEMORY_PER_CHILD_KB: ${LEAN_LINEAGE_WORKER_MAX_MEMORY_PER_CHILD_KB:-1572864}
-    cpus: "${LEAN_LINEAGE_WORKER_CPUS:-1.0}"
-    mem_limit: ${LEAN_LINEAGE_WORKER_MEMORY:-2g}
 
   data-demand-worker:
-    extends:
-      service: worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_DATA_DEMAND_WORKER_CONCURRENCY:-2} --queues=data-demand --hostname=data-demand@%h
+    <<: *backend-service
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_DATA_DEMAND_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1 --queues=data-demand --hostname=data-demand@%h
     environment:
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: data-demand-worker
-    cpus: "${LEAN_DATA_DEMAND_WORKER_CPUS:-2.0}"
-    mem_limit: ${LEAN_DATA_DEMAND_WORKER_MEMORY:-4g}
 
   backtest-worker:
-    extends:
-      service: worker
-    # Python.NET initialization in the pinned LEAN image is not reliable when
-    # two sibling containers import the same read-only strategy snapshot at
-    # once on Docker Desktop. Keep the safe default serial; operators may raise
-    # it only after validating their runner/filesystem combination.
-    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-1} --queues=backtest --hostname=backtest@%h
+    <<: *backend-service
+    command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=${LEAN_BACKTEST_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1 --queues=backtest --hostname=backtest@%h
     environment:
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: backtest-worker
       LEAN_RUNNER_URL: http://lean-runner:8010
-      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
-    volumes:
-      - .:/workspace:ro
-      - ./web/runtime:/workspace/web/runtime
-      - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data
-      - ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}:/workspace/parquet
-      - ${LEAN_MYSQL_DATA_DIR:-mysql-data}:/var/lib/mysql-observer:ro
-    secrets:
-      - lean_runner_token
+    secrets: [lean_runner_token]
     depends_on:
+      migration:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
       lean-runner:
         condition: service_healthy
-    cpus: "${LEAN_BACKTEST_WORKER_CPUS:-2.0}"
-    mem_limit: ${LEAN_BACKTEST_WORKER_MEMORY:-4g}
 
   ml-worker:
-    extends:
-      service: worker
+    <<: *backend-service
     build:
       context: .
       dockerfile: web/backend/Dockerfile.ml
     command: celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --prefetch-multiplier=1 --queues=ml --hostname=ml@%h
     environment:
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: ml-worker
       MLFLOW_TRACKING_URI: http://mlflow:5000
       LEAN_MLFLOW_EXPERIMENT: lean-ashare-cross-sectional
-      LEAN_ML_THREADS: ${LEAN_ML_THREADS:-4}
-    cpus: "${LEAN_ML_WORKER_CPUS:-4.0}"
-    mem_limit: ${LEAN_ML_WORKER_MEMORY:-8g}
     depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
+      migration:
+        condition: service_completed_successfully
+      rabbitmq:
         condition: service_healthy
       mlflow:
         condition: service_healthy
 
+  beat:
+    <<: *backend-service
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    environment:
+      <<: *platform-environment
+      LEAN_RELEASE_ROLE: beat
+
   lean-runner:
-    logging: *bounded-logging
-    profiles: ["app"]
-    build:
-      context: .
-      dockerfile: web/backend/Dockerfile
+    <<: *backend-service
     command: uvicorn app.runner_service:app --host 0.0.0.0 --port 8010
     environment:
-      <<: *release-environment
+      <<: *platform-environment
       LEAN_RELEASE_ROLE: lean-runner
-      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
-      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
-      LEAN_RUNNER_TOKEN_FILE: /run/secrets/lean_runner_token
       LEAN_HOST_PLATFORM_DIR: ${LEAN_HOST_PLATFORM_DIR:-${PWD}}
       LEAN_HOST_DATA_DIR: ${LEAN_HOST_DATA_DIR:-${PWD}/data}
       LEAN_HOST_PARQUET_DIR: ${LEAN_HOST_PARQUET_DIR:-${PWD}/data/output/parquet}
       LEAN_DOCKER_NETWORK: none
-      LEAN_DOCKER_CPUS: ${LEAN_DOCKER_CPUS:-2}
-      LEAN_DOCKER_MEMORY: ${LEAN_DOCKER_MEMORY:-4g}
-      LEAN_DOCKER_PIDS_LIMIT: ${LEAN_DOCKER_PIDS_LIMIT:-512}
       LEAN_DOCKER_READ_ONLY: "1"
     volumes:
       - .:/workspace:ro
       - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data:ro
       - /var/run/docker.sock:/var/run/docker.sock
-    secrets:
-      - lean_runner_token
+    secrets: [lean_runner_token]
     read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
-      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 128
-    cpus: "1.0"
-    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2).read()"]
       interval: 5s
       timeout: 3s
       retries: 20
-    depends_on:
-      mysql:
-        condition: service_healthy
 
-  beat:
+  clickhouse:
+    profiles: ["clickhouse"]
     logging: *bounded-logging
-    profiles: ["app"]
-    build:
-      context: .
-      dockerfile: web/backend/Dockerfile
-    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    image: clickhouse/clickhouse-server:24.12-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
     environment:
-      <<: *release-environment
-      LEAN_RELEASE_ROLE: beat
-      REDIS_URL: redis://:${LEAN_REDIS_PASSWORD:?LEAN_REDIS_PASSWORD must be set}@redis:6379/0
-      LEAN_DATABASE_URL: mysql+pymysql://${LEAN_MYSQL_USER:?LEAN_MYSQL_USER must be set}:${LEAN_MYSQL_PASSWORD:?LEAN_MYSQL_PASSWORD must be set}@mysql:3306/lean_market
-      LEAN_OBJECT_STORE_MODE: ${LEAN_OBJECT_STORE_MODE:-filesystem}
-      LEAN_FILE_OBJECT_STORE_DIR: /workspace/data/object-store
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
-      LEAN_ASHARE_TECH_REPORT_HOUR: ${LEAN_ASHARE_TECH_REPORT_HOUR:-17}
-      LEAN_ASHARE_TECH_REPORT_MINUTE: ${LEAN_ASHARE_TECH_REPORT_MINUTE:-30}
-      LEAN_ASHARE_TECH_AGENT_MODE: ${LEAN_ASHARE_TECH_AGENT_MODE:-hybrid_multi_agent}
-      LEAN_ASHARE_TECH_EVALUATION_HOUR: ${LEAN_ASHARE_TECH_EVALUATION_HOUR:-18}
-      LEAN_ASHARE_TECH_EVALUATION_MINUTE: ${LEAN_ASHARE_TECH_EVALUATION_MINUTE:-45}
-      LEAN_PAPER_WALKFORWARD_HOUR: ${LEAN_PAPER_WALKFORWARD_HOUR:-18}
-      LEAN_PAPER_WALKFORWARD_MINUTE: ${LEAN_PAPER_WALKFORWARD_MINUTE:-45}
-      LEAN_DERIVED_MAINTENANCE_HOUR: ${LEAN_DERIVED_MAINTENANCE_HOUR:-19}
-      LEAN_DERIVED_MAINTENANCE_MINUTE: ${LEAN_DERIVED_MAINTENANCE_MINUTE:-30}
-      LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED: ${LEAN_PAPER_ORDER_PIPELINE_V2_ENABLED:-1}
-      LEAN_SCHEDULED_AUTOMATION_ENABLED: ${LEAN_SCHEDULED_AUTOMATION_ENABLED:-1}
-      LEAN_MYSQL_BACKUP_HOUR: ${LEAN_MYSQL_BACKUP_HOUR:-3}
-      LEAN_MYSQL_BACKUP_MINUTE: ${LEAN_MYSQL_BACKUP_MINUTE:-0}
-      LEAN_ASHARE_TECH_RETRY_MINUTES: ${LEAN_ASHARE_TECH_RETRY_MINUTES:-30}
-      LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT: ${LEAN_ASHARE_TECH_CLOSE_TOLERANCE_PCT:-0.15}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      KIMI_API_KEY: ${KIMI_API_KEY:-}
-      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LEAN_INSIGHTS_LLM_PROVIDER: ${LEAN_INSIGHTS_LLM_PROVIDER:-}
-      LEAN_INSIGHTS_LLM_BASE_URL: ${LEAN_INSIGHTS_LLM_BASE_URL:-}
-      LEAN_INSIGHTS_LLM_MODEL: ${LEAN_INSIGHTS_LLM_MODEL:-}
-      LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS: ${LEAN_INSIGHTS_LLM_TIMEOUT_SECONDS:-60}
-    volumes:
-      - .:/workspace:ro
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
-      - /workspace/web/runtime/secrets:rw,noexec,nosuid,size=1m,mode=0700
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-    cpus: "${LEAN_BEAT_CPUS:-0.5}"
-    mem_limit: ${LEAN_BEAT_MEMORY:-512m}
+      CLICKHOUSE_DB: lean_market
+      CLICKHOUSE_USER: lean
+      CLICKHOUSE_PASSWORD: ${LEAN_CLICKHOUSE_PASSWORD:-lean}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes: [clickhouse-data:/var/lib/clickhouse]
 
-  mysql-integration-tests:
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    ports: ["127.0.0.1:${LEAN_PROMETHEUS_PORT:-9090}:9090"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
+    ports: ["127.0.0.1:${LEAN_GRAFANA_PORT:-3000}:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${LEAN_GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+  postgres-integration:
+    profiles: ["test"]
+    image: postgres:17.11
+    environment:
+      POSTGRES_DB: lean_integration
+      POSTGRES_USER: lean_integration
+      POSTGRES_PASSWORD: integration-only
+    tmpfs: [/var/lib/postgresql/data:size=1g,mode=0700]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lean_integration -d lean_integration"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  postgres-integration-tests:
     profiles: ["test"]
     build:
       context: .
       dockerfile: web/backend/Dockerfile
-    command: python -m pytest -q tests/test_mysql_integration_lane.py
+    command: python -m pytest -q tests/test_postgres_integration_lane.py
     environment:
-      RUN_MYSQL_INTEGRATION: "1"
-      LEAN_DATABASE_URL: mysql+pymysql://lean_integration:integration-only@mysql-integration:3306/lean_integration
-      LEAN_MYSQL_LOCAL_INFILE: "1"
+      RUN_POSTGRES_INTEGRATION: "1"
+      LEAN_DATABASE_URL: postgresql+psycopg://lean_integration:integration-only@postgres-integration:5432/lean_integration
       LEAN_API_AUTH_REQUIRED: "0"
       LEAN_DATA_DIR: /tmp/lean-integration-data
       LEAN_PARQUET_DIR: /tmp/lean-integration-parquet
     depends_on:
-      mysql-integration:
+      postgres-integration:
         condition: service_healthy
     tmpfs:
       - /tmp:size=1g,mode=1777
       - /workspace/web/runtime:size=256m,mode=0700
     read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 256
-    mem_limit: 1g
-    cpus: 2.0
 
 volumes:
-  redis-data:
-  mysql-data:
+  postgres-data:
+  rabbitmq-data:
   clickhouse-data:
   prometheus-data:
   grafana-data:
@@ -670,6 +385,6 @@ volumes:
 
 secrets:
   lean_api_token:
-    file: ${LEAN_API_TOKEN_SOURCE_FILE:-./web/runtime/secrets/api_token}
+    file: ${LEAN_API_TOKEN_FILE:-./web/runtime/secrets/api_token}
   lean_runner_token:
-    file: ${LEAN_RUNNER_TOKEN_SOURCE_FILE:-./web/runtime/secrets/runner_token}
+    file: ${LEAN_RUNNER_TOKEN_FILE:-./web/runtime/secrets/runner_token}

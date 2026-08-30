@@ -234,13 +234,15 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
     data_type = metadata.get("data_type") or metadata.get("dataType") or "trade"
     metadata = {**metadata, "created_at": created_at, "status": "active"}
     with db() as connection:
-        cursor = connection.execute(
-            """
+        insert_sql = """
             insert into data_assets
                 (symbol, asset_class, venue, resolution, data_type, source, rows, first_date, last_date,
                  lean_file, lean_object_id, factor_object_id, status, metadata_json, created_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+        insert_sql += " returning id"
+        cursor = connection.execute(
+            insert_sql,
             (
                 metadata["symbol"],
                 asset_class,
@@ -259,7 +261,7 @@ def record_data_asset(metadata: dict[str, Any]) -> dict[str, Any]:
                 created_at,
             ),
         )
-        metadata["id"] = cursor.lastrowid
+        metadata["id"] = cursor.fetchone()["id"]
         connection.execute(
             """
             update data_assets

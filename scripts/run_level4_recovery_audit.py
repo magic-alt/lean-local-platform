@@ -299,7 +299,7 @@ def main() -> int:
         "environment": {
             "baseUrl": args.base_url,
             "composeProject": args.compose_project,
-            "runtime": "real-mysql-celery-docker-lean",
+            "runtime": "real-postgresql-rabbitmq-celery-docker-lean",
         },
     }
     try:

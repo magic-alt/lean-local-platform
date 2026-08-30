@@ -40,7 +40,7 @@ def _table_sql(contract: dict[str, object]) -> str:
     fields = list(contract.get("fields") or [])
     columns = [
         # Use explicit bounded types for indexed metadata. The migration layer's
-        # generic SQLite-to-MySQL translator cannot infer quoted column names.
+        # portable migration translation cannot infer quoted column names.
         "    `_observation_id` varchar(64) primary key",
         "    `_batch_id` varchar(64) not null",
         "    `_natural_key_hash` varchar(64) not null",

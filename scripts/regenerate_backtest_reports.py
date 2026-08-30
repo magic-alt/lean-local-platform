@@ -151,7 +151,7 @@ def main() -> int:
     parser.add_argument(
         "--archive",
         action="store_true",
-        help="Also add the regenerated report as the latest MySQL stored-object version.",
+        help="Also add the regenerated report as the latest PostgreSQL stored-object version.",
     )
     args = parser.parse_args()
 

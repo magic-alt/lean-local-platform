@@ -1,395 +1,130 @@
 # Deployment
 
-This project is designed for local or single-host deployment first. Distributed scheduling and broker connectivity are later-stage work.
+Last reviewed: 2026-08-27. See [Current State](current-state.md).
 
-Last reviewed: 2026-07-26.
+The production runtime is PostgreSQL 17, RabbitMQ 4.3.5, Celery 5.6, Parquet,
+DuckDB and LEAN. Docker Compose and native hosts are deployment adapters for
+the same application architecture. SQLite is permitted only in isolated unit
+tests. ClickHouse is an optional asynchronous mirror and is disabled by
+default.
 
-## Local API authentication
+## Storage boundary
 
-The supported launcher creates a 256-bit bearer token in
-`web/runtime/secrets/api_token` with mode `0600`. The Vite development proxy
-adds the token to API requests; the token is never returned by an API or
-exposed to frontend JavaScript or local storage. When the production frontend
-is served directly by FastAPI, the HTML response establishes a derived,
-HttpOnly, SameSite=Strict browser session cookie. Direct API clients must send
-`Authorization: Bearer <token>` (or `X-LEAN-API-Key`). `/api/health` and
-`/metrics` requires the same Bearer authentication as the API. Prometheus reads
-the token from the read-only `/run/secrets/lean_api_token` credentials file;
-health probes remain available on their dedicated health endpoints.
+- `lean_platform`: authoritative control plane, DataRelease/PIT metadata,
+  Paper/OMS state, task facts, scheduler leases, audit and object metadata.
+- `lean_celery`: disposable Celery workflow/result metadata. It is not a
+  business source of truth and is not part of core disaster recovery.
+- `lean_mlflow`: MLflow-owned schema and metadata.
+- `data/` Parquet: authoritative market time series. DuckDB queries these files
+  directly; quote bars, minute data and ticks must not be written to PostgreSQL.
 
-`LEAN_API_AUTH_REQUIRED=1` is the production default. If authentication is
-enabled but `LEAN_API_TOKEN` is empty, business APIs fail closed with HTTP 503.
-Only isolated pytest runs should set `LEAN_API_AUTH_REQUIRED=0`.
-
-Compose exposes API and runner tokens only through `/run/secrets`. The
-repository root is mounted read-only in API/worker containers, writable
-runtime paths are mounted separately, and a private tmpfs masks
-`/workspace/web/runtime/secrets`. Use `LEAN_API_TOKEN_SOURCE_FILE` and
-`LEAN_RUNNER_TOKEN_SOURCE_FILE` only to select host-side Compose secret files.
-
-## Local Development
-
-Backend:
-
-```bash
-cd web/backend
-.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Worker:
-
-```bash
-cd web/backend
-.venv/bin/celery -A app.tasks.celery_app worker --loglevel=info --pool=solo --queues=default,data,backtest
-```
-
-Frontend:
-
-```bash
-cd web/frontend
-npm run dev
-```
-
-Redis:
-
-```bash
-redis-server --port 6379
-```
-
-Docker Desktop or Docker Engine must be running for LEAN backtests.
+The PostgreSQL baseline does not create forbidden quote relations. Application
+guards and the startup schema scan fail closed if a typed market-time-series
+source attempts a control-plane write or a forbidden relation appears.
 
 ## Docker Compose
 
-Infrastructure only:
+Copy `.env.example` to `.env` and set unique PostgreSQL, RabbitMQ, API and
+runner secrets. Then run:
 
 ```bash
-docker compose up -d mysql redis
+python scripts/platformctl.py --mode docker --profile full doctor
+python scripts/platformctl.py --mode docker --profile full start
 ```
 
-Full app profile:
+The dependency gates are:
+
+```text
+PostgreSQL healthy -> postgres-init -> migration complete -> API/workers/beat/runner
+RabbitMQ healthy ------------------------------------------> API/workers/beat
+MLflow database upgrade complete --------------------------> MLflow
+```
+
+Only the dedicated `migration` service applies platform migrations. API and
+workers verify the applied baseline read-only at startup. MLflow upgrades its
+own database separately.
+
+Compose uses exact `postgres:17.11` and `rabbitmq:4.3.5-management` tags. Before
+a production release, resolve and record the approved registry digests in the
+release evidence; an unreviewed tag update is not a certified upgrade.
+
+RabbitMQ queues are durable classic queues on the single-host topology, with
+persistent delivery, publisher confirms, manual late acknowledgements,
+heartbeat, startup retry and prefetch 1. Quorum queues are reserved for a real
+three-node broker deployment.
+
+## Native and Windows
+
+See [Native deployment](native-deployment.md) and the
+[Windows deployment matrix](current-state.md#deployment-matrix). Windows Dockerless
+development defaults to user processes managed by `platformctl`.
+`LEAN_NATIVE_MANAGER=windows-scm` selects `LeanPlatformSupervisor` and
+`LeanRestrictedRunner` services explicitly. Production mode requires SCM and
+a current host-bound certification before startup.
+
+## Database initialization and migration
 
 ```bash
-docker compose --profile app up -d --build mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
+python scripts/platformctl.py --mode native db init
+python scripts/platformctl.py --mode native db migrate
 ```
 
-Use `--build` after Dockerfile, dependency or frontend build-input changes. Ordinary restarts do not need it. For the workstation workflow, `scripts/start_web_single_instance.sh` is preferred because it serializes launchers and protects an active data sync from worker replacement.
+Fresh PostgreSQL uses `P0001_postgresql_baseline.sql`; legacy migrations and
+their checksums remain immutable lineage evidence and are never replayed into
+the new database. JSON and date/time application contracts remain text in the
+baseline. JSONB/TIMESTAMPTZ conversion is a later, independent migration.
 
-Optional observability/data services:
+## Backup and isolated restore
+
+Create a logical backup:
 
 ```bash
-docker compose up -d clickhouse prometheus grafana
+python scripts/platformctl.py --mode native backup
 ```
 
-Default service ports:
+The backup service writes `.partial` files, runs `pg_dump -Fc` for
+`lean_platform` and `lean_mlflow`, verifies hashes, writes `manifest.json`,
+atomically publishes the directory and adds `COMPLETE`. `lean_celery` is
+excluded intentionally; reconciliation redispatches non-terminal authoritative
+tasks after recovery.
 
-```text
-Redis:      6379
-MySQL:      3306
-API:        8000
-ClickHouse: 8123 / 9000
-Prometheus: 9090
-Grafana:    3000
-```
-
-Ports can be changed with:
-
-```text
-LEAN_REDIS_PORT
-LEAN_MYSQL_PORT
-LEAN_API_PORT
-LEAN_CLICKHOUSE_HTTP_PORT
-LEAN_CLICKHOUSE_NATIVE_PORT
-LEAN_PROMETHEUS_PORT
-LEAN_GRAFANA_PORT
-```
-
-## Environment Variables
-
-Important backend variables:
-
-```text
-LEAN_DATABASE_URL
-DATABASE_URL
-REDIS_URL
-LEAN_DATA_DIR
-LEAN_HOST_DATA_DIR
-LEAN_HOST_PLATFORM_DIR
-LEAN_PARQUET_DIR
-LEAN_PARQUET_MAX_THREADS
-LEAN_PARQUET_PARTITION_ROWS
-LEAN_DATA_DEMAND_WORKER_CPUS
-LEAN_DOCKER_IMAGE
-LEAN_API_AUTH_REQUIRED
-LEAN_API_TOKEN
-LEAN_API_TOKEN_FILE
-BACKTEST_JOB_TIMEOUT_SECONDS
-BACKTEST_MAX_CONCURRENT_JOBS
-LEAN_DB_OBJECT_STORE_ENABLED
-LEAN_DB_OBJECT_CHUNK_BYTES
-LEAN_MYSQL_CONNECT_ATTEMPTS
-LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS
-LEAN_MYSQL_BUFFER_POOL_SIZE
-LEAN_MYSQL_REDO_LOG_CAPACITY
-TUSHARE_TOKEN
-```
-
-### Operational alert delivery
-
-Set `LEAN_ALERT_WEBHOOK_URL` to deliver operational alerts to an
-operator-owned HTTPS endpoint. `LEAN_ALERT_WEBHOOK_BEARER_TOKEN` is optional
-and must remain in `.env` or a runtime secret manager. Delivery attempts and
-outcomes are persisted in `alert_deliveries`; query strings are removed from
-stored endpoint metadata.
-
-By default `error` and `critical` events are delivered. Paper cycle failures
-are always critical. Repeated Paper scheduling
-warnings escalate after three occurrences, successful delivery starts a
-15-minute cooldown, and a failed delivery remains visible through
-`GET /api/alert-events` without changing the underlying task result. Configure
-these controls with:
-
-```text
-LEAN_ALERT_MIN_SEVERITY
-LEAN_ALERT_ESCALATE_AFTER
-LEAN_ALERT_COOLDOWN_SECONDS
-LEAN_ALERT_WEBHOOK_TIMEOUT_SECONDS
-```
-
-### Supply-chain pinning
-
-Runtime service images and the backend Python base image are referenced by
-immutable RepoDigest, and the Grafana ClickHouse plugin uses an explicit
-version. Upgrades must update the human-readable version note, digest and
-`CHANGELOG.md` together, then run `docker compose config -q`, rebuild the
-backend image and execute the protected integration lanes. Backend installation
-uses `requirements.lock` with `--require-hashes`; direct dependencies are exact.
-
-Generate CycloneDX documents for every local Compose image and a checksum
-manifest with:
+Restore only to a new `lean_restore_*` namespace:
 
 ```bash
-scripts/generate_container_sbom.sh web/runtime/audit/sbom
-web/backend/.venv/bin/python scripts/check_supply_chain.py \
-  --output web/runtime/audit/supply-chain.json
-```
+python scripts/platformctl.py --mode native restore \
+  --backup web/runtime/backups/postgres/<backup-id> \
+  --target-prefix lean_restore_drill
 
-The checker fails on mutable images, dependency/hash drift, missing SBOM or
-local Trivy reports, unapproved/expired Critical findings, or an invalid
-Ed25519 release-evidence signature. Exceptions require a reason and expiry and
-remain visible in the signed evidence.
-
-`scripts/start_web_single_instance.sh` creates and reuses the local API token;
-deleting the token
-file intentionally rotates it at the next clean start.
-
-LEAN and Research images must be referenced by immutable SHA-256 digest and
-must appear in `LEAN_ALLOWED_DOCKER_IMAGES` or
-`LEAN_ALLOWED_RESEARCH_IMAGES`. Backtest containers use no network, a
-read-only root, dropped capabilities and per-run storage. Research containers
-bind Jupyter only to `127.0.0.1`, drop capabilities, apply CPU/memory/PID
-limits, and do not mount the shared object store or a host gateway alias.
-
-High-throughput TuShare synchronization can be tuned with
-`LEAN_TUSHARE_CALLS_PER_MINUTE` (maximum 500 for the 5,000-point account),
-`LEAN_TUSHARE_FETCH_CONCURRENCY`, `LEAN_DAILY_BASIC_FETCH_CONCURRENCY`,
-`LEAN_DIVIDEND_FETCH_CONCURRENCY`,
-`LEAN_STK_LIMIT_FETCH_CONCURRENCY`,
-`LEAN_SUSPEND_FETCH_CONCURRENCY`, `LEAN_DATA_SYNC_BATCH_UNITS`, and
-`LEAN_DATA_SYNC_CHUNK_ROWS`. Daily history additionally uses
-`LEAN_DAILY_SYNC_BATCH_UNITS`, `LEAN_DAILY_SYNC_CHUNK_ROWS`, and
-`LEAN_DAILY_INCREMENT_BATCH_DATES`; the defaults
-aggregate 16 market partitions or 100,000 rows. Initial and incremental
-`daily`, `adj_factor`, `daily_basic`, `stk_limit`, `suspend_d`, and `dividend`
-use complete market-wide date partitions. Provider pages are continued with
-`limit`/`offset` whenever a response reaches its documented cap.
-Validated daily batches are written to temporary Parquet files, archived under
-`data/bronze/tushare/revisions` when replacing an existing date, and atomically
-published to Bronze current and `data/silver/daily/current`. MySQL records the
-job, manifest, watermark, quality and certification state only. Optional typed
-reference-source writes are disabled by default and do not include quote tables.
-Index daily history, and the index/futures/options basic catalogs, fan out their
-independent provider partitions under the same bounded concurrency and then use
-one Parquet batch writer; normal incremental A-share datasets continue to use
-their market-wide per-trading-date endpoints.
-Daily-bar and dividend increments use one market-wide request per missing trade
-date instead of contacting every listed instrument; initial dividend history
-uses the same concurrent, chunked ingestion path as the other bulk datasets.
-
-Market-data capacity is governed by free space on `LEAN_MARKET_DATA_DIR`, not by
-MySQL size. One-click and on-demand Parquet writes stop before the configured
-absolute/ratio disk reserve would be breached. MySQL allocation is reported
-separately because it contains control-plane and business state, not quote facts.
-One-click refreshes retain only A-share execution data, benchmark indexes,
-CFFEX futures references, and SSE option references. Contract bars plus
-fundamentals, funds, overseas markets, macro data, and feature lists are fetched
-on demand by the workflow that uses them.
-
-MySQL uses the `mysql-data` named volume while `LEAN_MYSQL_DATA_DIR` is blank.
-To move it to a mechanical drive, stop the stack completely, copy the named
-volume contents to an empty directory on the drive, set for example
-`LEAN_MYSQL_DATA_DIR=/Volumes/MarketData/lean-platform/mysql`, and restart.
-Never copy a live MySQL data directory. Use a journaled local filesystem and do
-not place the directory under cloud synchronization.
-
-Business binlogs use `MINIMAL` row images and expire after seven days. Bulk
-provider-cache sessions do not write binlogs, preventing rebuildable history
-from consuming storage twice.
-
-## MySQL Memory and Recovery
-
-The Compose workstation defaults are intentionally conservative:
-
-```text
-LEAN_MYSQL_BUFFER_POOL_SIZE=1G
-LEAN_MYSQL_REDO_LOG_CAPACITY=256M
-LEAN_MYSQL_CONNECT_ATTEMPTS=5
-LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS=0.5
-```
-
-MySQL uses `restart: unless-stopped`. API/worker connection establishment retries transient MySQL codes 1040, 2003, 2006 and 2013 for a bounded period. If recovery is not complete, API requests return retryable HTTP 503 `DATABASE_UNAVAILABLE`; periodic recovery/reconciliation tasks retry through Celery instead of turning a short outage into a permanent failed coordinator run.
-
-Docker Desktop memory is shared by MySQL, workers, LEAN, Research, ClickHouse and observability containers. A `Lost connection ... (2013)` burst across unrelated endpoints usually indicates a server restart or OOM rather than a bad query in each endpoint. Check:
-
-```bash
-docker compose ps mysql
-docker inspect lean-platform-mysql-1 --format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}'
-docker compose logs --tail=200 mysql
-```
-
-If `OOMKilled=true` or exit code is 137, stop unused stacks/LEAN containers, increase Docker's total memory if appropriate, and keep buffer/worker concurrency within the host budget. Do not mask repeated OOM by adding unlimited client retries.
-
-`BACKTEST_MAX_CONCURRENT_JOBS` is enforced by database-backed `scheduler_leases` before a LEAN container starts. When no slot is available, the Celery task remains queued and retries instead of launching another container.
-
-Default database URL is MySQL:
-
-```text
-mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market
-```
-
-DuckDB is used only as a query engine over the canonical Parquet lake under
-`LEAN_MARKET_DATA_DIR` and generated outputs under `LEAN_PARQUET_DIR`; it is not
-a runtime metadata database.
-
-## Docker Socket
-
-Only the narrow `lean-runner` service mounts:
-
-```text
-/var/run/docker.sock:/var/run/docker.sock
-```
-
-The API and all Celery workers do not receive the Docker socket. The
-`backtest-worker` sends a structure-only authenticated job to `lean-runner`;
-free-form Docker flags and mounts are not accepted.
-The API dependency endpoint verifies the dedicated Celery backtest worker and
-reports Docker/LEAN execution as delegated; it does not require local Docker
-access inside the API container.
-Every LEAN child uses a digest allowlist, a per-run writable object directory,
-`network=none`, a read-only root filesystem, dropped capabilities, no-new-privileges,
-and bounded CPU, memory and PID settings.
-
-This remains a single-host boundary: compromising `lean-runner` can control
-the host Docker daemon. Keep that service read-only, capability-free,
-loopback/internal-only and limited to pinned images and allowlisted host
-paths; use a dedicated/rootless daemon before treating the platform as a
-multi-tenant service.
-
-## Data Directories
-
-```text
-LEAN_DATA_DIR (default repository/data)
-  LEAN cache mounted into containers.
-
-web/runtime/runs/
-  run workspaces and raw result files.
-
-web/runtime/projects/
-  uploaded/generated project files.
-
-web/runtime/object-store/
-  local object store fallback.
-
-web/runtime/reports/
-  report files.
-
-data/output/parquet or LEAN_PARQUET_DIR
-  Parquet research datasets.
-```
-
-In Docker Compose, `LEAN_HOST_DATA_DIR` must point to the host path that Docker can mount into LEAN containers.
-
-## MySQL Backup
-
-Recommended logical backup:
-
-```bash
-./scripts/backup_mysql.sh
-```
-
-Celery Beat also runs a daily logical backup at 03:00 Asia/Shanghai with a
-seven-day / fourteen-file retention policy. The container image installs the
-MySQL dump client and writes atomically under `web/runtime/backups/`.
-
-Restore only into an isolated database:
-
-```bash
-scripts/restore_mysql.sh \
-  --backup web/runtime/backups/lean_market-TIMESTAMP.sql \
-  --target-database lean_restore_dr01 \
+python scripts/run_restore_drill.py \
+  --backup web/runtime/backups/postgres/<backup-id> \
+  --target-prefix lean_restore_drill \
   --confirm RESTORE_ISOLATED_DATABASE
 ```
 
-The restore command verifies the adjacent SHA-256 file, refuses `lean_market`
-or any target not prefixed `lean_restore_`, and fails unless exact row counts
-and `CHECKSUM TABLE` values match for the critical sampled tables. Repeated
-`--verify-table NAME` selects an explicit sample set. This safe entrypoint is
-not itself production-scale DR evidence: RPO/RTO, encrypted off-host
-retention, full-size restore timing and object/Parquet recovery must still be
-measured in a dedicated environment.
+The drill compares exact row counts and deterministic row digests for critical
+tables. It never overwrites a live database.
 
-Create machine-readable RPO/RTO, sampled row-count and table-checksum evidence:
+## Health and operations
+
+`GET /api/health` reports runtime-neutral blocks for `database`, `broker`,
+`execution` and `storage`. `platformctl doctor`, `status`, `logs`, `backup`,
+`restore` and `runtime` work through the selected deployment adapter.
+
+Legacy `LEAN_MYSQL_*` and `REDIS_URL` variables are rejected in strict runtime
+v2. They are not silently translated. Broker loss, result cleanup or worker
+restart must be recoverable from `lean_platform` plus the Parquet/object store.
+
+## Verification lanes
+
+Unit tests use SQLite in an isolated temporary directory. Real PostgreSQL is
+opt-in:
 
 ```bash
-LEAN_MYSQL_ROOT_PASSWORD=... scripts/run_restore_drill.py \
-  --backup web/runtime/backups/lean_market-TIMESTAMP.sql \
-  --target-database lean_restore_dr01 \
-  --confirm RESTORE_ISOLATED_DATABASE
+cd web/backend
+RUN_POSTGRES_INTEGRATION=1 .venv/bin/python -m pytest -q \
+  -m integration_postgres tests/test_postgres_integration_lane.py
 ```
 
-Also back up:
-
-- `data/` (Bronze current/revisions, Silver, Gold, registry, quality and required caches)
-- `web/runtime/runs/`
-- `web/runtime/projects/`
-- `web/runtime/reports/`
-- any external `LEAN_MARKET_DATA_DIR` / `LEAN_PARQUET_DIR`
-
-MySQL backup does not contain stock history. Restore drills must validate both
-the control-plane dump and the Parquet manifests/SHA-256 files. Qlib-derived
-directories remain read-only to lean-platform and are restored from their own
-backup or regenerated externally.
-
-## Health Checks
-
-```text
-GET /api/health
-GET /api/health/dependencies
-GET /api/health/database
-GET /metrics
-```
-
-Use dependency health before running long backtests. Direct metric scrapes must
-send the API Bearer token; the Compose Prometheus service is already configured
-with `/run/secrets/lean_api_token`.
-
-## Production Hardening Checklist
-
-- Restrict API network exposure.
-- Protect Docker socket.
-- Move credentials to secrets.
-- Use persistent volumes and scheduled backups.
-- Run Docker integration tests after image upgrades.
-- Pin LEAN image digest for reproducible releases.
-- Monitor MySQL disk growth from `stored_object_chunks`.
-- Monitor MySQL restarts/OOM state and Docker total memory, not only query latency.
-- Archive or prune old `web/runtime/runs` after verifying object-store persistence.
+LEAN Docker integration remains opt-in. Windows production additionally needs
+the fault matrix and soak evidence described by
+`config/runtime/windows-celery-certification.json`.

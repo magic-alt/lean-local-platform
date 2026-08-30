@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **273** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **254** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -348,26 +348,7 @@
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
 | `POST` | `/api/research/imports/qlib` | Import Qlib Run | body `QlibImportRequest` | `200` - |
-| `GET` | `/api/research/runs` | List Runs | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
-| `POST` | `/api/research/runs` | Create Run | body `ResearchRunRequest` | `200` - |
-| `POST` | `/api/research/runs/preview` | Preview Run | body `ResearchRunRequest` | `200` - |
-| `DELETE` | `/api/research/runs/{run_id}` | Delete Run | `run_id` (path, required) | `200` - |
-| `GET` | `/api/research/runs/{run_id}` | Run Detail | `run_id` (path, required) | `200` - |
-| `GET` | `/api/research/runs/{run_id}/artifacts/{artifact_key}` | Research Artifact | `run_id` (path, required)<br>`artifact_key` (path, required) | `200` - |
-| `GET` | `/api/research/runs/{run_id}/backtest-draft` | Backtest Draft | `run_id` (path, required) | `200` - |
-| `POST` | `/api/research/runs/{run_id}/cancel` | Cancel Run | `run_id` (path, required) | `200` - |
-| `GET` | `/api/research/runs/{run_id}/export.csv` | Export Run | `run_id` (path, required) | `200` - |
 | `POST` | `/api/research/runs/{run_id}/lean-validation` | Record Qlib Lean Validation | `run_id` (path, required)<br>body `QlibLeanValidationRequest` | `200` - |
-| `POST` | `/api/research/runs/{run_id}/retry` | Retry Run | `run_id` (path, required) | `200` - |
-| `GET` | `/api/research/templates` | Templates | - | `200` - |
-| `GET` | `/api/research/workspaces` | List Workspaces | `limit` (query)<br>`offset` (query)<br>`paged` (query) | `200` - |
-| `POST` | `/api/research/workspaces` | Create Workspace | body `WorkspaceRequest` | `200` - |
-| `POST` | `/api/research/workspaces/snapshots` | Create Workspace Snapshot | body `SnapshotRequest` | `200` - |
-| `DELETE` | `/api/research/workspaces/{workspace_id}` | Delete Workspace | `workspace_id` (path, required)<br>`purgeWorkspace` (query) | `200` - |
-| `GET` | `/api/research/workspaces/{workspace_id}` | Workspace Detail | `workspace_id` (path, required) | `200` - |
-| `GET` | `/api/research/workspaces/{workspace_id}/logs` | Workspace Logs | `workspace_id` (path, required) | `200` - |
-| `POST` | `/api/research/workspaces/{workspace_id}/restart` | Restart Workspace | `workspace_id` (path, required) | `200` - |
-| `POST` | `/api/research/workspaces/{workspace_id}/stop` | Stop Workspace | `workspace_id` (path, required) | `200` - |
 
 ## settings
 

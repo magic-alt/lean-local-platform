@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-13.
 
-Parquet under `data/` is the source of truth for market time series. MySQL is the control-plane store for synchronization state, manifests, watermarks, quality, certification and business/runtime records. SQLite is used only by isolated tests.
+Parquet under `data/` is the source of truth for market time series. PostgreSQL is the control-plane store for synchronization state, manifests, watermarks, quality, certification and business/runtime records. SQLite is used only by isolated tests.
 
 ## Data layers
 
@@ -15,11 +15,11 @@ Provider / CSV
   -> LEAN cache and read-only Qlib consumers
   -> optional ClickHouse serving mirror
 
-MySQL
+PostgreSQL
   <- task, manifest, lineage, watermark, QA and certification metadata
 ```
 
-The default root is `data/`. A-share daily reads use `silver/daily/current/trade_date=YYYYMMDD/data.parquet`; adjustment factors and daily-basic facts use their Bronze current partitions. No pipeline stage writes stock bars, status, adjustment factors or daily-basic time series to MySQL.
+The default root is `data/`. A-share daily reads use `silver/daily/current/trade_date=YYYYMMDD/data.parquet`; adjustment factors and daily-basic facts use their Bronze current partitions. No pipeline stage writes stock bars, status, adjustment factors or daily-basic time series to PostgreSQL.
 
 ## One-click build and incremental update
 
@@ -35,14 +35,14 @@ Daily market writes follow this contract:
 4. Write a temporary Bronze Parquet partition.
 5. Archive an existing partition and manifest under `bronze/tushare/revisions/`.
 6. Atomically publish Bronze current and normalized Silver current.
-7. Persist batch, checkpoint, watermark, row counts, hashes and quality state in MySQL.
+7. Persist batch, checkpoint, watermark, row counts, hashes and quality state in PostgreSQL.
 8. Revoke affected certification until file and DuckDB checks pass again.
 
 Sync runs remain cancellable and resumable. Provider call count, processed/landed/quarantined row count, checkpoint and heartbeat are independent. Idempotent replay may process rows without changing the published partition.
 
 ## On-demand data
 
-Datasets outside the bulk scope are started explicitly. Market facts use an approved Parquet/file target; there is no MySQL market-table target or MySQL-size gate. Every target must be host-visible to the worker, remain inside an allowlisted data/export root and pass free-space checks.
+Datasets outside the bulk scope are started explicitly. Market facts use an approved Parquet/file target; there is no PostgreSQL market-table target or database-size gate. Every target must be host-visible to the worker, remain inside an allowlisted data/export root and pass free-space checks.
 
 Provider-native reference contracts may use compatibility typed-source tables only when `LEAN_TUSHARE_TYPED_SOURCE_WRITES=1`. The default is off, and this option must never recreate removed market time-series tables.
 
@@ -70,7 +70,7 @@ LEAN files are generated/restored from Silver/Gold and included in run fingerpri
 
 ### Registry and DuckDB
 
-`parquet_datasets` and `parquet_files` catalog paths, scope, coverage, versions and hashes in MySQL. Registering a dataset discovers existing files; it is not a database-to-Parquet export. DuckDB is a query engine, not a metadata database.
+`parquet_datasets` and `parquet_files` catalog paths, scope, coverage, versions and hashes in PostgreSQL. Registering a dataset discovers existing files; it is not a database-to-Parquet export. DuckDB is a query engine, not a metadata database.
 
 ### ClickHouse
 
@@ -82,7 +82,7 @@ Download a schema-specific template from `GET /api/data/import-csv/template`. Su
 
 ## Disk safety and backup
 
-Data download checks the filesystem holding `LEAN_MARKET_DATA_DIR`. UI and monitoring must report that filesystem separately from MySQL allocation. Backups must include the complete `data/` lake and an independent MySQL control-plane dump; neither alone is a complete recovery set.
+Data download checks the filesystem holding `LEAN_MARKET_DATA_DIR`. UI and monitoring must report that filesystem separately from PostgreSQL allocation. Backups must include the complete `data/` lake and an independent PostgreSQL control-plane dump; neither alone is a complete recovery set.
 
 ## A-share research/backtest gate
 

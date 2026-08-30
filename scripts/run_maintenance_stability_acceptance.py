@@ -20,8 +20,9 @@ SUCCESS_STATUSES = {"success"}
 FAILED_STATUSES = {"failed"}
 CHECKPOINT_KEYS = {"completedUnits", "attempt", "currentUnit"}
 KNOWN_RECOVERY_ERRORS = (
-    "2013",
-    "mysql",
+    "postgresql",
+    "connection reset",
+    "server closed",
     "oom",
     "out of memory",
     "orphaned_after_worker_restart",
@@ -64,8 +65,8 @@ def _failure_signature(error: Any) -> str:
         return ""
     if "orphaned_after_worker_restart" in text:
         return "orphaned_after_worker_restart"
-    if "2013" in text or "mysql" in text:
-        return "mysql" if "2013" not in text else "mysql_2013"
+    if "postgresql" in text or "connection reset" in text or "server closed" in text:
+        return "database_connection"
     if "oom" in text or "out of memory" in text:
         return "oom"
     return "other"
@@ -157,7 +158,7 @@ def _run_window_summary(runs: list[dict[str, Any]], window_hours: float) -> dict
     for item in run_timeline:
         status = str(item.get("status") or "")
         signature = str(item.get("failureSignature") or "")
-        if status in FAILED_STATUSES and signature in {"mysql", "mysql_2013", "oom", "orphaned_after_worker_restart"}:
+        if status in FAILED_STATUSES and signature in {"database_connection", "oom", "orphaned_after_worker_restart"}:
             failure_traces.append(
                 {
                     "runId": item["runId"],
@@ -180,11 +181,11 @@ def _run_window_summary(runs: list[dict[str, Any]], window_hours: float) -> dict
         for item in resumed_candidates
     ) if resumed_candidates else True
 
-    critical_no_recent_mysql_failures = len(failure_traces) == 0
+    critical_no_recent_database_failures = len(failure_traces) == 0
 
     passed = bool(
         active_overlap_ok
-        and critical_no_recent_mysql_failures
+        and critical_no_recent_database_failures
         and checkpoint_resume_passed
     )
 
@@ -194,7 +195,7 @@ def _run_window_summary(runs: list[dict[str, Any]], window_hours: float) -> dict
         "activeRunCount": len(active_runs),
         "multipleActive": multiple_active,
         "activeOverlapOk": active_overlap_ok,
-        "criticalNoMysqlOrOrphanFailure": critical_no_recent_mysql_failures,
+        "criticalNoDatabaseOrOrphanFailure": critical_no_recent_database_failures,
         "checkpointResumePassed": checkpoint_resume_passed,
         "failureTraces": failure_traces,
         "runTimeline": run_timeline,
@@ -212,7 +213,7 @@ def run(*, window_hours: float = 168.0, require_checkpoint_resume: bool = True) 
     if not require_checkpoint_resume:
         passed = bool(
             summary.get("activeOverlapOk")
-            and summary.get("criticalNoMysqlOrOrphanFailure")
+            and summary.get("criticalNoDatabaseOrOrphanFailure")
         )
         summary["passed"] = passed
     return {

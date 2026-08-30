@@ -1,0 +1,8 @@
+[Unit]
+Description=LEAN Platform native services
+Requires=lean-platform-api.service lean-platform-runner.service lean-platform-beat.service
+Wants=lean-platform-worker@default.service lean-platform-worker@data-bulk.service lean-platform-worker@data-lineage.service lean-platform-worker@data-demand.service lean-platform-worker@backtest.service
+After=network.target postgresql.service rabbitmq-server.service
+
+[Install]
+WantedBy=multi-user.target

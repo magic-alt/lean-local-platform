@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from .core.config import (
     LEAN_DOCKER_NETWORK,
     LEAN_DOCKER_PIDS_LIMIT,
     LEAN_DOCKER_READ_ONLY,
+    LEAN_EXECUTION_BACKEND,
     PLATFORM_DIR,
 )
 from .db import db, json_dump, utc_now
@@ -38,9 +40,14 @@ from .lean_engine.research import (
     stop_container as stop_research_container,
 )
 from .runners.docker_runner import DockerRunner
+from .runners.base import ExecutionSpec, LeanPathLayout
+from .runners.native_runner import NativeLeanBackend
+from .runners.runtime_registry import RuntimeRegistry
 
 
 app = FastAPI(title="Restricted LEAN Runner", docs_url=None, redoc_url=None)
+_native_backends: dict[str, NativeLeanBackend] = {}
+_execution_lock = threading.Lock()
 
 
 @app.on_event("startup")
@@ -65,6 +72,24 @@ class RunnerJob(BaseModel):
 
     runId: str = Field(min_length=1, max_length=48, pattern=r"^[A-Za-z0-9._-]+$")
     image: str = Field(min_length=1, max_length=512)
+    configPath: str = Field(min_length=1, max_length=4096)
+    dataDir: str = Field(min_length=1, max_length=4096)
+    resultsDir: str = Field(min_length=1, max_length=4096)
+    storageDir: str = Field(min_length=1, max_length=4096)
+    projectDir: str = Field(min_length=1, max_length=4096)
+    supportDir: str | None = Field(default=None, min_length=1, max_length=4096)
+    timeoutSeconds: int = Field(ge=1, le=86400)
+    traceId: str | None = Field(default=None, min_length=1, max_length=128)
+    workflowId: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class RunnerJobV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runId: str = Field(min_length=1, max_length=48, pattern=r"^[A-Za-z0-9._-]+$")
+    executionBackend: str = Field(pattern=r"^(docker|native)$")
+    runtimeRef: str = Field(min_length=1, max_length=512)
+    runtimeDigest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     configPath: str = Field(min_length=1, max_length=4096)
     dataDir: str = Field(min_length=1, max_length=4096)
     resultsDir: str = Field(min_length=1, max_length=4096)
@@ -117,8 +142,9 @@ def _authenticate(authorization: str | None) -> None:
 
 
 def _within(value: str, root: Path) -> bool:
-    root_text = str(root)
-    return value == root_text or value.startswith(root_text.rstrip("/") + "/")
+    normalized_value = value.replace("\\", "/").rstrip("/").casefold()
+    normalized_root = str(root).replace("\\", "/").rstrip("/").casefold()
+    return normalized_value == normalized_root or normalized_value.startswith(normalized_root + "/")
 
 
 def _validated_path(
@@ -129,14 +155,15 @@ def _validated_path(
     label: str,
 ) -> str:
     path = Path(value)
-    if not path.is_absolute() or ".." in path.parts or not _within(str(path), root):
+    rooted = path.is_absolute() or str(path).startswith(("/", "\\"))
+    if not rooted or ".." in path.parts or not _within(str(path), root):
         raise HTTPException(status_code=400, detail=f"runner_{label}_outside_allowlist")
     relative = path.relative_to(root)
     resolved_visible_root = visible_root.resolve()
     resolved_visible = (visible_root / relative).resolve()
     if not _within(str(resolved_visible), resolved_visible_root):
         raise HTTPException(status_code=400, detail=f"runner_{label}_symlink_escape")
-    return str(path)
+    return str(path).replace("\\", "/")
 
 
 def _validate_job(job: RunnerJob) -> dict[str, Any]:
@@ -303,9 +330,150 @@ def _run_id(value: str) -> str:
     return value
 
 
+def _visible_path(value: str, host_root: Path, visible_root: Path) -> Path:
+    return (visible_root / Path(value).relative_to(host_root)).resolve()
+
+
+def _validate_native_job(job: RunnerJobV2) -> tuple[dict[str, Any], Any, NativeLeanBackend]:
+    if LEAN_EXECUTION_BACKEND != "native" or job.executionBackend != "native":
+        raise HTTPException(status_code=409, detail="runner_backend_mismatch")
+    registry = RuntimeRegistry()
+    try:
+        runtime = registry.resolve()
+    except LeanPlatformError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if job.runtimeRef != runtime.identity.runtime_id or job.runtimeDigest != runtime.identity.artifact_sha256:
+        raise HTTPException(status_code=400, detail="runner_runtime_identity_mismatch")
+    config_host = _validated_path(
+        job.configPath, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="config_path"
+    )
+    data_host = _validated_path(
+        job.dataDir, HOST_DATA_DIR, visible_root=DATA_DIR, label="data_dir"
+    )
+    results_host = _validated_path(
+        job.resultsDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="results_dir"
+    )
+    storage_host = _validated_path(
+        job.storageDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="storage_dir"
+    )
+    project_host = _validated_path(
+        job.projectDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="project_dir"
+    )
+    support_host = (
+        _validated_path(job.supportDir, HOST_PLATFORM_DIR, visible_root=PLATFORM_DIR, label="support_dir")
+        if job.supportDir
+        else None
+    )
+    config_path = _visible_path(config_host, HOST_PLATFORM_DIR, PLATFORM_DIR)
+    data_dir = _visible_path(data_host, HOST_DATA_DIR, DATA_DIR)
+    results_dir = _visible_path(results_host, HOST_PLATFORM_DIR, PLATFORM_DIR)
+    storage_dir = _visible_path(storage_host, HOST_PLATFORM_DIR, PLATFORM_DIR)
+    project_dir = _visible_path(project_host, HOST_PLATFORM_DIR, PLATFORM_DIR)
+    support_dir = (
+        _visible_path(support_host, HOST_PLATFORM_DIR, PLATFORM_DIR) if support_host else None
+    )
+    if not config_path.is_file() or not data_dir.is_dir() or not project_dir.is_dir():
+        raise HTTPException(status_code=400, detail="runner_native_input_missing")
+    if storage_dir != results_dir / "object-store":
+        raise HTTPException(status_code=400, detail="runner_storage_path_invalid")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    layout = LeanPathLayout(
+        launcher_dir=runtime.launcher.parent,
+        data_dir=data_dir,
+        results_dir=results_dir,
+        project_dir=project_dir,
+        storage_dir=storage_dir,
+        support_dir=support_dir,
+    )
+    try:
+        config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="runner_config_invalid") from exc
+    expected_paths = {
+        "data-folder": str(data_dir),
+        "results-destination-folder": str(results_dir),
+        "object-store-root": str(storage_dir),
+    }
+    if any(config_payload.get(name) != value for name, value in expected_paths.items()):
+        raise HTTPException(status_code=400, detail="runner_config_path_layout_mismatch")
+    algorithm_location = Path(str(config_payload.get("algorithm-location") or "")).resolve()
+    if not algorithm_location.is_relative_to(project_dir) or not algorithm_location.is_file():
+        raise HTTPException(status_code=400, detail="runner_algorithm_path_invalid")
+    python_paths = config_payload.get("python-additional-paths") or []
+    expected_python_paths = [str(support_dir)] if support_dir else []
+    if python_paths != expected_python_paths:
+        raise HTTPException(status_code=400, detail="runner_python_paths_invalid")
+    execution_spec = ExecutionSpec(
+        run_id=job.runId,
+        config_path=config_path,
+        host_data_dir=data_dir,
+        host_results_dir=results_dir,
+        host_project_dir=project_dir,
+        host_storage_dir=storage_dir,
+        host_support_dir=support_dir,
+        path_layout=layout,
+        timeout_seconds=job.timeoutSeconds,
+    )
+    backend = NativeLeanBackend(job.timeoutSeconds, allow_remote=False)
+    try:
+        plan = backend.prepare(execution_spec)
+    except LeanPlatformError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    mounts = [
+        {"source": str(config_path), "mode": "ro"},
+        {"source": str(data_dir), "mode": "ro"},
+        {"source": str(project_dir), "mode": "ro"},
+        {"source": str(results_dir), "mode": "rw"},
+        {"source": str(storage_dir), "mode": "rw"},
+    ]
+    if support_dir:
+        mounts.append({"source": str(support_dir), "mode": "ro"})
+    spec = {
+        "schemaVersion": 2,
+        "runId": job.runId,
+        "executionBackend": "native",
+        "executionId": plan.execution_id,
+        "runtimeRef": runtime.identity.runtime_id,
+        "runtimeDigest": runtime.identity.artifact_sha256,
+        "runtimeIdentity": runtime.identity.as_dict(),
+        "command": plan.command,
+        "mounts": mounts,
+        "resources": {"sandbox": plan.metadata.get("sandbox"), "timeoutSeconds": job.timeoutSeconds},
+        "network": "none",
+        "traceId": job.traceId,
+        "workflowId": job.workflowId,
+    }
+    spec["digest"] = hashlib.sha256(
+        json.dumps(spec, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return spec, plan, backend
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "networkPolicy": LEAN_DOCKER_NETWORK}
+    if LEAN_EXECUTION_BACKEND == "native":
+        backend_health = NativeLeanBackend(3600, allow_remote=False).health()
+        return {
+            "ok": backend_health.ready,
+            "executionBackend": "native",
+            "networkPolicy": "none",
+            "sandbox": backend_health.sandbox,
+            "runtimeIdentity": (
+                backend_health.runtime_identity.as_dict()
+                if backend_health.runtime_identity is not None
+                else None
+            ),
+            "detail": backend_health.detail,
+        }
+    docker_ready = shutil.which("docker") is not None and LEAN_DOCKER_NETWORK == "none"
+    return {
+        "ok": docker_ready,
+        "executionBackend": "docker",
+        "networkPolicy": LEAN_DOCKER_NETWORK,
+        "sandbox": "docker",
+        "detail": "docker runner ready" if docker_ready else "docker runner unavailable",
+    }
 
 
 @app.post("/v1/research/port")
@@ -435,6 +603,183 @@ def stop_job(
     return {"runId": normalized, "containerName": container_name, "status": "stop_requested"}
 
 
+@app.post("/v2/jobs/{run_id}/stop")
+def stop_job_v2(
+    run_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authenticate(authorization)
+    normalized = _run_id(run_id)
+    with db() as connection:
+        known = connection.execute(
+            "select execution_backend,execution_id,status from restricted_runner_jobs where run_id=?",
+            (normalized,),
+        ).fetchone()
+    if known is None:
+        raise HTTPException(status_code=404, detail="runner_job_not_found")
+    backend_name = str(known["execution_backend"] or "docker")
+    execution_id = str(known["execution_id"] or f"lean-{normalized}"[:60])
+    try:
+        if backend_name == "native":
+            backend = _native_backends.get(normalized)
+            if backend is None:
+                raise LeanPlatformError("native_execution_process_not_owned")
+            backend.stop(execution_id)
+        elif backend_name == "docker":
+            DockerRunner.stop_container(execution_id)
+        else:
+            raise LeanPlatformError("runner_backend_invalid")
+    except LeanPlatformError as exc:
+        if str(known["status"]) == "running":
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    with db() as connection:
+        connection.execute(
+            """
+            update restricted_runner_jobs
+            set status='cancelled',error=coalesce(error,'cancel_requested'),finished_at=coalesce(finished_at,?)
+            where run_id=? and status='running'
+            """,
+            (utc_now(), normalized),
+        )
+    return {
+        "runId": normalized,
+        "executionBackend": backend_name,
+        "executionId": execution_id,
+        "containerName": execution_id if backend_name == "docker" else None,
+        "status": "stop_requested",
+    }
+
+
+@app.post("/v2/jobs/run")
+def run_job_v2(job: RunnerJobV2, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _authenticate(authorization)
+    if job.executionBackend != "native":
+        raise HTTPException(status_code=400, detail="runner_v2_docker_not_enabled_use_v1")
+    spec, plan, backend = _validate_native_job(job)
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    with db() as connection:
+        existing = connection.execute(
+            "select * from restricted_runner_jobs where run_id=?",
+            (job.runId,),
+        ).fetchone()
+        if existing:
+            if str(existing["spec_digest"]) != spec["digest"]:
+                raise HTTPException(status_code=409, detail="runner_job_spec_drift")
+            if str(existing["status"]) == "success":
+                runtime_identity = json.loads(existing["runtime_identity_json"] or "{}")
+                return {
+                    "jobId": existing["id"],
+                    "executionBackend": str(existing["execution_backend"] or "native"),
+                    "executionId": str(existing["execution_id"] or plan.execution_id),
+                    "containerName": None,
+                    "runtimeIdentity": runtime_identity,
+                    "exitCode": int(existing["exit_code"] or 0),
+                    "timedOut": bool(existing["timed_out"]),
+                    "error": existing["error"],
+                    "output": [],
+                    "idempotentReplay": True,
+                }
+            job_id = str(existing["id"])
+            connection.execute(
+                """
+                update restricted_runner_jobs
+                set status='running',started_at=?,finished_at=null,error=null,
+                    execution_backend=?,execution_id=?,runtime_ref=?,runtime_digest=?,
+                    runtime_identity_json=?,sandbox_json=?
+                where id=?
+                """,
+                (
+                    now,
+                    "native",
+                    plan.execution_id,
+                    spec["runtimeRef"],
+                    spec["runtimeDigest"],
+                    json_dump(spec["runtimeIdentity"]),
+                    json_dump(spec["resources"]),
+                    job_id,
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                insert into restricted_runner_jobs
+                    (id,run_id,spec_digest,image_digest,command_json,mounts_json,
+                     resource_limits_json,network_policy,status,created_at,started_at,
+                     execution_backend,execution_id,runtime_ref,runtime_digest,
+                     runtime_identity_json,sandbox_json)
+                values (?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)
+                """,
+                (
+                    job_id,
+                    job.runId,
+                    spec["digest"],
+                    spec["runtimeDigest"],
+                    json_dump(spec["command"]),
+                    json_dump(spec["mounts"]),
+                    json_dump(spec["resources"]),
+                    spec["network"],
+                    now,
+                    now,
+                    "native",
+                    plan.execution_id,
+                    spec["runtimeRef"],
+                    spec["runtimeDigest"],
+                    json_dump(spec["runtimeIdentity"]),
+                    json_dump(spec["resources"]),
+                ),
+            )
+    output: list[str] = []
+    with _execution_lock:
+        _native_backends[job.runId] = backend
+        try:
+            try:
+                result = backend.run(plan, output.append)
+            except Exception as exc:
+                error = f"native_runner_execution_failed:{type(exc).__name__}"
+                with db() as connection:
+                    connection.execute(
+                        """
+                        update restricted_runner_jobs
+                        set status='failed',exit_code=coalesce(exit_code,1),error=?,finished_at=?
+                        where id=?
+                        """,
+                        (error, utc_now(), job_id),
+                    )
+                raise HTTPException(status_code=503, detail=error) from exc
+        finally:
+            _native_backends.pop(job.runId, None)
+    success = result.exit_code == 0 and not result.timed_out and not result.error
+    with db() as connection:
+        connection.execute(
+            """
+            update restricted_runner_jobs
+            set status=?,exit_code=?,timed_out=?,error=?,finished_at=?
+            where id=?
+            """,
+            (
+                "success" if success else "failed",
+                result.exit_code,
+                1 if result.timed_out else 0,
+                result.error,
+                utc_now(),
+                job_id,
+            ),
+        )
+    return {
+        "jobId": job_id,
+        "executionBackend": "native",
+        "executionId": result.execution_id,
+        "containerName": None,
+        "runtimeIdentity": spec["runtimeIdentity"],
+        "exitCode": result.exit_code,
+        "timedOut": result.timed_out,
+        "error": result.error,
+        "output": output[-10000:],
+        "idempotentReplay": False,
+    }
+
+
 @app.post("/v1/jobs/run")
 def run_job(job: RunnerJob, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authenticate(authorization)
@@ -472,8 +817,9 @@ def run_job(job: RunnerJob, authorization: str | None = Header(default=None)) ->
                 """
                 insert into restricted_runner_jobs
                     (id,run_id,spec_digest,image_digest,command_json,mounts_json,
-                     resource_limits_json,network_policy,status,created_at,started_at)
-                values (?,?,?,?,?,?,?,?,'running',?,?)
+                     resource_limits_json,network_policy,status,created_at,started_at,
+                     execution_backend,execution_id,runtime_ref,runtime_digest,runtime_identity_json,sandbox_json)
+                values (?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)
                 """,
                 (
                     job_id,
@@ -486,14 +832,28 @@ def run_job(job: RunnerJob, authorization: str | None = Header(default=None)) ->
                     spec["network"],
                     now,
                     now,
+                    "docker",
+                    spec["containerName"],
+                    spec["image"],
+                    spec["image"].split("@sha256:", 1)[1],
+                    json_dump(
+                        {
+                            "backend": "docker",
+                            "runtimeId": spec["image"],
+                            "artifactSha256": spec["image"].split("@sha256:", 1)[1],
+                            "dockerImage": spec["image"],
+                        }
+                    ),
+                    json_dump({"sandbox": "docker", **spec["resources"]}),
                 ),
             )
     output: list[str] = []
-    result = DockerRunner(job.timeoutSeconds, allow_remote=False).run(
-        spec["command"],
-        output.append,
-        container_name=spec["containerName"],
-    )
+    with _execution_lock:
+        result = DockerRunner(job.timeoutSeconds, allow_remote=False).run(
+            spec["command"],
+            output.append,
+            container_name=spec["containerName"],
+        )
     with db() as connection:
         connection.execute(
             """
@@ -502,7 +862,7 @@ def run_job(job: RunnerJob, authorization: str | None = Header(default=None)) ->
             where id=?
             """,
             (
-                "success" if result.exit_code == 0 else "failed",
+                "success" if result.exit_code == 0 and not result.timed_out and not result.error else "failed",
                 result.exit_code,
                 1 if result.timed_out else 0,
                 result.error,

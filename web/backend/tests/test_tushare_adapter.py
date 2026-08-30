@@ -303,7 +303,6 @@ def test_hong_kong_endpoint_rate_limit_fails_fast():
     from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
 
     limiter = TushareRateLimiter(calls_per_minute=500)
-    limiter._redis = None
     pro = HongKongPro()
     proxy = RateLimitedProProxy(pro, limiter=limiter)
 
@@ -316,7 +315,6 @@ def test_rate_limited_proxy_counts_actual_endpoint_invocations():
     from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
 
     limiter = TushareRateLimiter(calls_per_minute=500)
-    limiter._redis = None
     proxy = RateLimitedProProxy(HongKongPro(), limiter=limiter)
 
     proxy.hk_basic()
@@ -329,7 +327,6 @@ def test_rate_limiter_reports_shared_window_wait_state():
     from app.services.tushare_rate_limit import RateLimitedProProxy, TushareRateLimiter
 
     limiter = TushareRateLimiter(calls_per_minute=1)
-    limiter._redis = None
     proxy = RateLimitedProProxy(type("Pro", (), {"daily": lambda self: "ok"})(), limiter=limiter)
 
     assert proxy.daily() == "ok"

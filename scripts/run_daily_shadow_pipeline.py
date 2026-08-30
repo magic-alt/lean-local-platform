@@ -125,10 +125,10 @@ def _environment(api_url: str) -> tuple[list[dict[str, Any]], list[str], list[st
         init_db()
         with db() as connection:
             row = connection.execute("select 1 as ok").fetchone()
-        steps.append(_step("mysql", "ok", {"ok": bool(row)}))
+        steps.append(_step("database", "ok", {"ok": bool(row)}))
     except Exception as exc:
-        errors.append(f"mysql_unavailable:{exc}")
-        steps.append(_step("mysql", "critical", {"error": str(exc)}))
+        errors.append(f"database_unavailable:{exc}")
+        steps.append(_step("database", "critical", {"error": str(exc)}))
     for path_name, path in (("lean_data", DATA_DIR), ("parquet", PARQUET_DIR)):
         exists = Path(path).exists()
         steps.append(_step(path_name, "ok" if exists else "critical", {"path": str(path), "exists": exists}))
@@ -395,7 +395,7 @@ def main() -> int:
     errors.extend(env_errors)
     if env_errors:
         for error in env_errors:
-            event_type = "mysql_down" if "mysql" in error else ("api_down" if "api" in error else "worker_down")
+            event_type = "database_down" if "database" in error else ("api_down" if "api" in error else "worker_down")
             alerts.append(emit_alert(event_type, severity="critical", source="daily_shadow_pipeline", related_id=run_id, details={"error": error}, alert_file=args.alert_file))
         payload = {"status": "failed", "severity": "critical", "pipelineRunId": run_id, "steps": steps, "warnings": warnings, "errors": errors, "alerts": {"count": len(alerts), "items": alerts}, "level3Decision": "LEVEL3_FAIL"}
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))

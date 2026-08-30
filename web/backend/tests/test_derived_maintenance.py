@@ -105,19 +105,12 @@ def test_source_certification_recovery_resumes_orphaned_maintenance_run(tmp_path
             ("2026-07-29T13:57:47+00:00", orphaned["id"]),
         )
 
-    discarded = []
     monkeypatch.setattr(
         worker,
         "source_certification",
         lambda *_args, **_kwargs: {"isCertified": False, "isProduction": False},
     )
-    monkeypatch.setattr(worker, "database_backend", lambda: "mysql")
     monkeypatch.setattr(derived_maintenance, "maintenance_lease_active", lambda: False)
-    monkeypatch.setattr(
-        worker,
-        "_discard_orphaned_maintenance_message",
-        lambda run_id: discarded.append(run_id) or 1,
-    )
     monkeypatch.setattr(
         worker.maintain_derived_layers_task,
         "apply_async",
@@ -128,7 +121,6 @@ def test_source_certification_recovery_resumes_orphaned_maintenance_run(tmp_path
 
     assert result["status"] == "orphan_checkpoint_resumed"
     assert result["runId"] == orphaned["id"]
-    assert discarded == [orphaned["id"]]
     with db() as connection:
         stale = connection.execute(
             "select status,error,finished_at from derived_maintenance_runs where id=?",

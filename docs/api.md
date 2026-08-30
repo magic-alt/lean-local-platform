@@ -6,7 +6,7 @@ token from `LEAN_API_TOKEN` or the 0600 runtime token file; the frontend proxy
 uses the same protected local session. Disabling authentication is permitted
 only in explicitly isolated tests.
 
-Last reviewed: 2026-08-04. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide. The final-seal release keeps the existing 233-path contract: no page or API was added. The retired legacy `/api/paper` session surface remains unavailable; acceptance-only shadow replay calls the internal service directly and Paper Account remains the supported production interface.
+Last reviewed: 2026-08-27. The generated OpenAPI document at `GET /openapi.json` and interactive UI at `/docs` are the route-level source of truth; this file is a curated behavioral guide. Endpoint counts are intentionally not duplicated here. The retired legacy `/api/paper` session surface remains unavailable; Paper Account is the supported interface.
 
 The API production boundary is local A-share daily Research, LEAN Backtest,
 Optimization, Reports and Paper Account. Unsupported asset/resolution/live
@@ -20,8 +20,8 @@ alert delivery has a persisted success.
 - JSON request/response by default.
 - Expected domain errors return structured JSON with `detail`, `message`, `error_code`, `category`, and one authoritative `retryable`; validation failures also expose the first affected `field`.
 - Missing resources return HTTP 404 with `error_code=NOT_FOUND`.
-- Redis/Celery dispatch failure returns HTTP 503 with `error_code=SERVICE_UNAVAILABLE` and `retryable=true`.
-- Temporary MySQL connection failure returns HTTP 503 with `error_code=DATABASE_UNAVAILABLE` and `retryable=true` after bounded connection retries.
+- RabbitMQ/Celery dispatch failure returns HTTP 503 with `error_code=SERVICE_UNAVAILABLE` and `retryable=true`.
+- Temporary PostgreSQL connection failure returns HTTP 503 with `error_code=DATABASE_UNAVAILABLE` and `retryable=true` after bounded connection retries.
 - The primary history lists (`projects`, `backtests`, `tasks`, `reports`,
   `experiment-batches`, `paper`, `optimize`, `research`, and `data-assets`)
   return `{items, count, limit, offset}` and accept bounded `limit`/`offset`.
@@ -70,7 +70,6 @@ under `legacyAliases` during the compatibility period.
   "start": "2024-01-02",
   "end": "2024-01-04",
   "cash": 100000,
-  "dockerImage": "quantconnect/lean:latest",
   "projectId": "my-strategy-20260721153000",
   "parameters": {
     "benchmarkSymbol": "000300"
@@ -305,20 +304,8 @@ POST   /api/portfolio-optimizations/preview
 GET    /api/portfolio-optimizations
 POST   /api/portfolio-optimizations
 
-GET    /api/research/runs
-POST   /api/research/runs
-GET    /api/research/runs/{run_id}
-POST   /api/research/runs/{run_id}/cancel
-POST   /api/research/runs/{run_id}/retry
-DELETE /api/research/runs/{run_id}
-
-GET    /api/research/workspaces
-POST   /api/research/workspaces
-GET    /api/research/workspaces/{workspace_id}
-POST   /api/research/workspaces/{workspace_id}/stop
-POST   /api/research/workspaces/{workspace_id}/restart
-GET    /api/research/workspaces/{workspace_id}/logs
-DELETE /api/research/workspaces/{workspace_id}
+POST   /api/research/imports/qlib
+POST   /api/research/runs/{run_id}/lean-validation
 
 GET    /api/factors/engines
 POST   /api/factors/values
@@ -328,9 +315,8 @@ POST   /api/factors/evaluate-batch
 GET    /api/factors/evaluations
 ```
 
-The removed `/api/research` session routes are not compatibility aliases; use
-the run or workspace resource explicitly. The complete generated endpoint and
-schema index is [API Reference](help/api-reference.md).
+The exported research execution surface is now scoped to artifact import and Lean validation verification.
+The complete generated endpoint and schema index is [API Reference](help/api-reference.md).
 
 ## Paper Trading
 
@@ -499,7 +485,7 @@ DOCKER_UNAVAILABLE
 LEAN_TIMEOUT
 LEAN_RESULT_MISSING
 TASK_CANCELLED
-REDIS_UNAVAILABLE
+BROKER_UNAVAILABLE
 RESOURCE_NOT_FOUND
 ```
 
@@ -513,3 +499,5 @@ stops polling after the resource becomes terminal:
 GET /api/backtests/{id}/logs?cursor=<byte_offset>&limit=65536
 -> {logs, offset, nextOffset, cursor, nextCursor, limit, total, hasMore}
 ```
+
+

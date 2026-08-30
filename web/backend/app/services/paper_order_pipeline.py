@@ -8,7 +8,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import db, for_update_clause, json_dump, row_to_dict, rows_to_dicts, utc_now
 
 
 ORDER_STATES = {
@@ -425,10 +425,15 @@ def append_transition(
 ) -> dict[str, Any]:
     if to_state not in ORDER_STATES:
         raise ValueError(f"Unknown Paper order state: {to_state}")
-    intent = get_intent(intent_id)
-    if not intent:
-        raise KeyError("Paper order intent not found.")
     with db() as connection:
+        intent = row_to_dict(
+            connection.execute(
+                "select * from paper_order_intents where id=?" + for_update_clause(),
+                (intent_id,),
+            ).fetchone()
+        )
+        if not intent:
+            raise KeyError("Paper order intent not found.")
         existing = connection.execute(
             """
             select * from paper_order_transitions
@@ -444,7 +449,7 @@ def append_transition(
             """
             select sequence,to_state from paper_order_transitions
             where intent_id=? order by sequence desc limit 1
-            """,
+            """ + for_update_clause(),
             (intent_id,),
         ).fetchone()
         from_state = str(latest["to_state"]) if latest else None
@@ -515,6 +520,15 @@ def record_fill_and_ledger(
     if resolved_account_id and (resolved_generation is None or not resolved_cycle_id):
         raise ValueError("Account ledger context is incomplete.")
     with db() as connection:
+        locked_intent = row_to_dict(
+            connection.execute(
+                "select * from paper_order_intents where id=?" + for_update_clause(),
+                (intent_id,),
+            ).fetchone()
+        )
+        if not locked_intent:
+            raise KeyError("Paper order intent not found.")
+        intent = locked_intent
         existing = connection.execute(
             """
             select * from paper_order_fills
@@ -609,6 +623,10 @@ def record_fill_and_ledger(
             )
         sequence = 0
         if resolved_account_id:
+            connection.execute(
+                "select id from paper_accounts where id=?" + for_update_clause(),
+                (resolved_account_id,),
+            ).fetchone()
             sequence_row = connection.execute(
                 """
                 select max(ledger_sequence) as sequence from paper_ledger_entries

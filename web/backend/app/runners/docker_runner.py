@@ -7,20 +7,16 @@ import shutil
 import subprocess
 import time
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from ..core.config import REPO_ROOT
 from ..core.request_context import current_trace_id, current_workflow_id
 from ..lean_engine.errors import LeanPlatformError
+from .base import ExecutionResult
 
-
-@dataclass
-class DockerRunResult:
-    exit_code: int
-    timed_out: bool = False
-    error: str | None = None
+# Compatibility alias. New code uses the backend-neutral result name.
+DockerRunResult = ExecutionResult
 
 
 class DockerRunner:

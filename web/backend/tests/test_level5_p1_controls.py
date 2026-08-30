@@ -248,13 +248,13 @@ def test_compose_beat_uses_a_writable_scheduler_file():
     compose = (Path(__file__).parents[3] / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert "--schedule=/tmp/celerybeat-schedule" in compose
-    assert "/tmp:rw,noexec,nosuid,size=64m" in compose
+    assert "/tmp:rw,noexec,nosuid,size=128m" in compose
 
 
 def test_restore_script_verifies_rows_and_checksums():
-    restore = (Path(__file__).parents[3] / "scripts" / "restore_mysql.sh").read_text(
+    restore = (Path(__file__).parents[3] / "scripts" / "run_restore_drill.py").read_text(
         encoding="utf-8"
     )
-    assert "SELECT COUNT(*) FROM \\`${SOURCE_DATABASE}\\`.\\`${table_name}\\`" in restore
-    assert "CHECKSUM TABLE \\`${SOURCE_DATABASE}\\`.\\`${table_name}\\`" in restore
-    assert "verification_failures" in restore
+    assert "count(*) as row_count" in restore
+    assert "md5(row_to_json(item)::text)" in restore
+    assert '"checksumMatch"' in restore

@@ -131,25 +131,7 @@ def test_init_db_records_file_migrations(tmp_path, monkeypatch):
     assert index_row is not None
 
 
-def test_mysql_index_parser_handles_leading_migration_comment():
-    import app.db as db_module
-
-    statement = """
-    -- description: Add indexes for optimization child backtest runs
-    create index if not exists idx_backtest_runs_task_created
-        on backtest_runs(task_id, created_at desc)
-    """
-
-    cleaned = db_module._strip_leading_sql_comments(statement)
-
-    assert cleaned.startswith("create index if not exists")
-    assert db_module._parse_create_index_if_not_exists(cleaned) == (
-        "idx_backtest_runs_task_created",
-        "backtest_runs",
-    )
-
-
-def test_mysql_script_splitter_ignores_semicolons_in_leading_comments():
+def test_script_splitter_ignores_semicolons_in_leading_comments():
     import app.db as db_module
 
     script = """
@@ -170,7 +152,7 @@ def test_mysql_script_splitter_ignores_semicolons_in_leading_comments():
     ]
 
 
-def test_mysql_connect_retries_transient_handshake_failures(monkeypatch):
+def test_postgres_connect_retries_transient_handshake_failures(monkeypatch):
     import app.db as db_module
 
     sentinel = object()
@@ -180,37 +162,41 @@ def test_mysql_connect_retries_transient_handshake_failures(monkeypatch):
     def connect(database_url=None):
         calls.append(database_url)
         if len(calls) < 3:
-            raise RuntimeError(2013, "Lost connection during handshake")
+            error = RuntimeError("connection reset during handshake")
+            error.sqlstate = "08006"
+            raise error
         return sentinel
 
-    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "4")
-    monkeypatch.setenv("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0.1")
-    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+    monkeypatch.setenv("LEAN_POSTGRES_CONNECT_ATTEMPTS", "4")
+    monkeypatch.setenv("LEAN_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "0.1")
+    monkeypatch.setattr(db_module, "PostgresConnection", connect)
     monkeypatch.setattr(db_module.time, "sleep", delays.append)
 
-    assert db_module._connect_mysql("mysql+pymysql://example") is sentinel
-    assert calls == ["mysql+pymysql://example"] * 3
+    assert db_module._connect_postgres("postgresql://example") is sentinel
+    assert calls == ["postgresql://example"] * 3
     assert delays == [0.1, 0.2]
 
 
-def test_mysql_connect_raises_retryable_domain_error_after_exhaustion(monkeypatch):
+def test_postgres_connect_raises_retryable_domain_error_after_exhaustion(monkeypatch):
     import app.db as db_module
 
     def connect(database_url=None):
-        raise RuntimeError(2003, "Connection refused")
+        error = RuntimeError("Connection refused")
+        error.sqlstate = "08001"
+        raise error
 
-    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "2")
-    monkeypatch.setenv("LEAN_MYSQL_CONNECT_RETRY_DELAY_SECONDS", "0")
-    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+    monkeypatch.setenv("LEAN_POSTGRES_CONNECT_ATTEMPTS", "2")
+    monkeypatch.setenv("LEAN_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "0")
+    monkeypatch.setattr(db_module, "PostgresConnection", connect)
 
     with pytest.raises(db_module.DatabaseUnavailableError) as error:
-        db_module._connect_mysql()
+        db_module._connect_postgres()
 
     assert "2 connection attempts" in str(error.value)
-    assert error.value.__cause__.args[0] == 2003
+    assert "Connection refused" in str(error.value.__cause__)
 
 
-def test_mysql_connect_does_not_retry_configuration_errors(monkeypatch):
+def test_postgres_connect_does_not_retry_configuration_errors(monkeypatch):
     import app.db as db_module
 
     calls = 0
@@ -218,12 +204,12 @@ def test_mysql_connect_does_not_retry_configuration_errors(monkeypatch):
     def connect(database_url=None):
         nonlocal calls
         calls += 1
-        raise RuntimeError(1045, "Access denied")
+        raise RuntimeError("Access denied")
 
-    monkeypatch.setenv("LEAN_MYSQL_CONNECT_ATTEMPTS", "5")
-    monkeypatch.setattr(db_module, "MySQLConnection", connect)
+    monkeypatch.setenv("LEAN_POSTGRES_CONNECT_ATTEMPTS", "5")
+    monkeypatch.setattr(db_module, "PostgresConnection", connect)
 
     with pytest.raises(RuntimeError, match="Access denied"):
-        db_module._connect_mysql()
+        db_module._connect_postgres()
 
     assert calls == 1

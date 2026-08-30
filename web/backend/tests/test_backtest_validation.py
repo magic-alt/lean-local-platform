@@ -110,7 +110,7 @@ def test_ashare_rule_contract_covers_thirteen_execution_controls():
         ("missing_suspension", "ashare_reference_coverage"),
         ("missing_st", "ashare_reference_coverage"),
         ("missing_corporate_actions", "ashare_reference_coverage"),
-        ("mysql_parquet_mismatch", "production_source_certification"),
+        ("control_plane_parquet_mismatch", "production_source_certification"),
         ("derived_cache_stale", "production_source_certification"),
         ("timezone_cross_date", "ashare_timezone_consistency"),
     ],
@@ -176,7 +176,7 @@ def test_production_backtest_fails_closed_for_seven_constructed_gaps(
         "isCertified": True,
         "qaStatus": "ok",
     }
-    if scenario == "mysql_parquet_mismatch":
+    if scenario == "control_plane_parquet_mismatch":
         certification["qaStatus"] = "manifest_mismatch"
     elif scenario == "derived_cache_stale":
         certification["qaStatus"] = "stale"

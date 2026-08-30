@@ -35,7 +35,7 @@ def main() -> int:
 
     try:
         if args.apply:
-            init_db()
+            init_db(apply_migrations=True)
         with db() as connection:
             if args.verify:
                 items = verify_migrations(connection)

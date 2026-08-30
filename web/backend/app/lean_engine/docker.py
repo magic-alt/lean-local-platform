@@ -43,9 +43,10 @@ def docker_command(
     project_dir: Path,
     support_dir: Path | None = None,
 ) -> list[str]:
-    docker = shutil.which("docker")
-    if not docker:
-        raise LeanPlatformError("docker command not found.")
+    # Preparing an execution plan is intentionally side-effect free and must work
+    # on hosts that only inspect or certify a Docker-backed run.  Backend health
+    # remains fail-closed and actual execution will fail if Docker is unavailable.
+    docker = shutil.which("docker") or "docker"
     def mount_source(path: Path) -> str:
         resolved = Path(path)
         data_mount_root = HOST_DATA_DIR if os.environ.get("LEAN_HOST_DATA_DIR") else DATA_DIR

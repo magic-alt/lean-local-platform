@@ -1,0 +1,104 @@
+name: Native Runtime Release
+
+# Optional convenience path only. The authoritative release path may be run
+# locally with deploy/windows/run_local_native_runtime_release.ps1 when hosted
+# GitHub Actions quota is unavailable.
+on:
+  workflow_dispatch:
+    inputs:
+      lean_commit:
+        description: Exact QuantConnect/Lean commit to package
+        required: true
+        default: 81a62a1eb4d4e0a96bb7c3d183b4083c47d2b600
+      runtime_id:
+        description: Immutable runtime identifier
+        required: true
+        default: lean-81a62a1-windows-x64-r1
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.11
+      - name: Build pinned Windows runtime
+        shell: pwsh
+        run: |
+          $pythonExe = (Get-Command python).Source
+          $pythonRoot = Split-Path -Parent $pythonExe
+          ./deploy/windows/build_native_lean_runtime.ps1 `
+            -LeanCommit '${{ inputs.lean_commit }}' `
+            -RuntimeId '${{ inputs.runtime_id }}' `
+            -PythonRoot $pythonRoot `
+            -OutputDir "$env:RUNNER_TEMP\runtime-release"
+      - name: Require release signing key
+        shell: pwsh
+        env:
+          LEAN_RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.LEAN_RUNTIME_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (-not $env:LEAN_RUNTIME_SIGNING_PRIVATE_KEY) {
+            throw 'LEAN_RUNTIME_SIGNING_PRIVATE_KEY repository secret is required.'
+          }
+          $key = Join-Path $env:RUNNER_TEMP 'lean-runtime-signing.pem'
+          [IO.File]::WriteAllText($key, $env:LEAN_RUNTIME_SIGNING_PRIVATE_KEY)
+          "LEAN_SIGNING_KEY=$key" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Ensure OpenSSL
+        shell: pwsh
+        run: |
+          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
+            choco install openssl.light -y --no-progress
+          }
+          openssl version
+      - name: Sign artifact
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'runtime-release'
+          $archive = Get-ChildItem $releaseDir -Filter '*.zip' | Select-Object -First 1
+          if (-not $archive) { throw 'runtime archive missing' }
+          $signature = "$($archive.FullName).sig"
+          openssl pkeyutl -sign -rawin -inkey $env:LEAN_SIGNING_KEY -in $archive.FullName -out $signature
+          if ($LASTEXITCODE) { throw "runtime signing failed: $LASTEXITCODE" }
+          openssl pkeyutl -verify -rawin -pubin -inkey config/release-signing-public.pem -in $archive.FullName -sigfile $signature
+          if ($LASTEXITCODE) { throw "runtime signature verification failed: $LASTEXITCODE" }
+      - name: Publish draft release and render lock candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $runtimeId = '${{ inputs.runtime_id }}'
+          $leanCommit = '${{ inputs.lean_commit }}'
+          $tag = "native-$runtimeId"
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'runtime-release'
+          $archive = Get-ChildItem $releaseDir -Filter '*.zip' | Select-Object -First 1
+          $signature = Get-Item "$($archive.FullName).sig"
+          $sbom = Get-ChildItem $releaseDir -Filter '*.cyclonedx.json' | Select-Object -First 1
+          $sha = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          gh release create $tag --draft --title "Native LEAN $runtimeId" --notes "Pinned LEAN $leanCommit Windows x64 native runtime. Promote only after local validation, Dockerless Golden Acceptance, and backend parity." $archive.FullName $signature.FullName $sbom.FullName
+          if ($LASTEXITCODE) { throw "draft release creation failed: $LASTEXITCODE" }
+          $base = "https://github.com/${{ github.repository }}/releases/download/$tag"
+          python scripts/render_native_runtime_lock.py `
+            --runtime-id $runtimeId `
+            --lean-commit $leanCommit `
+            --platform windows-x64 `
+            --artifact-url "$base/$($archive.Name)" `
+            --artifact-sha256 $sha `
+            --signature-url "$base/$($signature.Name)" `
+            --sbom-url "$base/$($sbom.Name)" `
+            --output "$releaseDir/lean-native.lock.generated.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-runtime-release-candidate
+          path: |
+            ${{ runner.temp }}/runtime-release/*.zip
+            ${{ runner.temp }}/runtime-release/*.sig
+            ${{ runner.temp }}/runtime-release/*.cyclonedx.json
+            ${{ runner.temp }}/runtime-release/lean-native.lock.generated.json
+          if-no-files-found: error

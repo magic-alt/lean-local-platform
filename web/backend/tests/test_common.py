@@ -50,5 +50,5 @@ def test_dispatch_task_marks_failed_when_celery_unavailable(monkeypatch):
         common.dispatch_task(Signature(), "task-3")
 
     assert exc.value.status_code == 503
-    assert exc.value.detail == "Redis/Celery unavailable. Start redis-server and the Celery worker."
-    assert update_calls == [("task-3", {"status": "failed", "error": "Redis/Celery unavailable: broker unavailable"})]
+    assert exc.value.detail == "RabbitMQ/Celery unavailable. Start RabbitMQ and the Celery worker."
+    assert update_calls == [("task-3", {"status": "failed", "error": "RabbitMQ/Celery unavailable: broker unavailable"})]

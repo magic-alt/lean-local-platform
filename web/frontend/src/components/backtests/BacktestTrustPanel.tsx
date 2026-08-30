@@ -72,6 +72,7 @@ export function BacktestTrustPanel({
   const marketDailyBars = asRecord(experimentData.marketDailyBars);
   const tradeStatus = asRecord(experimentData.tradeStatus);
   const fp = asRecord(fingerprint);
+  const runtimeIdentity = asRecord(fp.runtimeIdentity);
   if (!validation && !experiment && !fingerprint) {
     return <Alert type="info" message="Validation metadata is not available for this run." />;
   }
@@ -144,6 +145,9 @@ export function BacktestTrustPanel({
               { key: "strategySha256", value: shortHash(strategy.sha256 ?? fp.strategy_file_sha256) },
               { key: "gitCommit", value: shortHash(strategy.gitCommit ?? fp.git_commit) },
               { key: "gitDirty", value: strategy.gitDirty ?? fp.git_dirty },
+              { key: "executionBackend", value: fp.executionBackend ?? "docker" },
+              { key: "runtimeId", value: runtimeIdentity.runtimeId },
+              { key: "runtimeDigest", value: shortHash(runtimeIdentity.artifactSha256) },
               { key: "dockerImage", value: environment.dockerImage ?? fp.docker_image },
               { key: "dockerDigest", value: shortHash(environment.dockerImageDigest ?? fp.docker_image_digest) },
               { key: "leanZipSha256", value: shortHash(experimentData.leanZipSha256 ?? fp.lean_zip_sha256) },

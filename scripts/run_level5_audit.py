@@ -31,7 +31,7 @@ KNOWN_PHASES = {
     "snapshot_report",
     "reconciliation",
 }
-KNOWN_SERVICES = {"worker", "redis", "mysql", "api"}
+KNOWN_SERVICES = {"worker", "rabbitmq", "postgres", "api"}
 
 
 def _api_token() -> str:
@@ -425,7 +425,7 @@ def main() -> int:
         "--fault-scenarios",
         default="",
         help=(
-            "Comma-separated scenarios like worker@7:before_queue,redis@14:before_wait,mysql@20:after_wait "
+            "Comma-separated scenarios like worker@7:before_queue,rabbitmq@14:before_wait,postgres@20:after_wait "
             "(default phase before_queue)."
         ),
     )
@@ -548,11 +548,11 @@ def main() -> int:
     if args.with_fault and not args.fault_scenarios.strip():
         args.fault_scenarios = (
             "worker@3:intent_capture,"
-            "redis@6:constraint_validation,"
-            "mysql@9:matching,"
+            "rabbitmq@6:constraint_validation,"
+            "postgres@9:matching,"
             "worker@12:ledger,"
-            "redis@15:snapshot_report,"
-            "mysql@18:reconciliation"
+            "rabbitmq@15:snapshot_report,"
+            "postgres@18:reconciliation"
         )
 
     try:

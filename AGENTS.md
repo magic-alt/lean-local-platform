@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a local QuantConnect LEAN platform with a FastAPI backend and React frontend. Core backend code lives in `web/backend/app/`: API routers in `api/`, domain services in `services/`, Celery tasks in `tasks/`, LEAN/Docker helpers in `lean_engine/`, and migrations in `migrations/`. Backend tests are in `web/backend/tests/`. Frontend source is in `web/frontend/src/`. Operational scripts are in `scripts/`, standalone examples in `examples/`, portable configuration in `config/`, strategy templates in `strategies/templates/`, documentation in `docs/`, and runtime artifacts under `web/runtime/` or external `Data/` paths. Root-level `results/`, `runs/`, `Data/`, and `parquet/` directories are not supported.
+This repository contains a local QuantConnect LEAN platform with a FastAPI backend and React frontend. Core backend code lives in `web/backend/app/`: API routers in `api/`, domain services in `services/`, Celery tasks in `tasks/`, LEAN/Docker helpers in `lean_engine/`, and migrations in `migrations/`. Backend tests are in `web/backend/tests/`. Frontend source is in `web/frontend/src/`. Operational scripts are in `scripts/`, standalone examples in `examples/`, portable configuration in `config/`, strategy templates in `strategies/templates/`, documentation in `docs/`, and runtime artifacts under `web/runtime/` or the configured `LEAN_DATA_DIR`. Root-level `results/`, `runs/`, `Data/`, and `parquet/` directories are not supported.
 
 ## Build, Test, and Development Commands
 
@@ -20,12 +20,14 @@ cd web/frontend
 npm run dev
 ```
 
-Start the full local app stack:
+Start the full local app stack through the supported control entrypoint:
 
 ```bash
-docker compose --profile app up -d --build \
-  mysql redis api worker data-worker data-lineage-worker data-demand-worker backtest-worker beat
+python scripts/platformctl.py --mode docker --profile full doctor
+python scripts/platformctl.py --mode docker --profile full start
 ```
+
+On a Windows Dockerless development host use `./scripts/start_windows_native.ps1`. It uses the local process manager by default; SCM is opt-in through `LEAN_NATIVE_MANAGER=windows-scm` or production mode.
 
 Run backend tests with `cd web/backend && .venv/bin/python -m pytest -q`. Run the LEAN Docker integration test only when Docker is available: `RUN_LEAN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_ashare_lean_integration.py`. Build the frontend with `cd web/frontend && npm run build`.
 
@@ -45,5 +47,70 @@ Every commit must update the `Unreleased` section of `CHANGELOG.md`. Enable the 
 
 ## Security & Configuration Tips
 
-Do not commit `.env`, provider tokens, MySQL credentials, or downloaded market data. Runtime metadata uses MySQL; DuckDB is only for querying derived Parquet exports. Do not reintroduce SQLite as a runtime default.
+Do not commit `.env`, provider tokens, PostgreSQL/RabbitMQ credentials, or downloaded market data. Parquet under `LEAN_DATA_DIR` is the authoritative market-fact layer; PostgreSQL is the control-plane store; RabbitMQ is the Celery transport; DuckDB queries Parquet directly. SQLite is test-only. Do not write market time series into PostgreSQL or reintroduce SQLite as a runtime default.
+
+## Platform Invariants
+
+This repository is the production data and execution control plane.
+
+`platform` owns:
+
+- canonical market-data ingestion and immutable DataRelease publication;
+- authoritative LEAN validation;
+- portfolio construction and execution validation;
+- hard-risk enforcement;
+- the Paper lifecycle;
+- OMS, broker integration, fills, and ledgers;
+- lifecycle states after `RESEARCH_PROMOTED`.
+
+`qlib-platform` owns:
+
+- Qlib materialization;
+- feature and factor research;
+- model training and selection;
+- walk-forward research;
+- research-only portfolio screening.
+
+Do not grow `platform` into a second model-training or feature-research platform.
+
+## Cross-Repository Contract
+
+The `qlib-platform` -> `platform` boundary is:
+
+```text
+DataRelease
++ Artifact Contract v2
++ content-addressed TARGET_PORTFOLIO
+```
+
+Preserve `artifactId`, `DataReleaseId`, target-weight SHA-256, lineage, lifecycle state, and fail-closed validation. Never silently repair or reinterpret an invalid imported artifact.
+
+## Current Live-Execution Boundary
+
+P9 is not enabled.
+
+Do not introduce during ordinary feature work:
+
+- `PAPER -> PRODUCTION` API transitions;
+- live broker order endpoints;
+- broker cancel/replace endpoints;
+- OMS live-write endpoints;
+- QMT write methods;
+- automatic live activation.
+
+Any deliberate change to this boundary is an architecture and security project, not an incidental implementation detail.
+
+## Side-Effect Discipline
+
+Before changing code, classify the affected path as one of:
+
+- `READ_ONLY`
+- `LOCAL_TEST_WRITE`
+- `DATA_CONTROL_PLANE_WRITE`
+- `PAPER_STATE_WRITE`
+- `BROKER_OBSERVATION`
+- `BROKER_WRITE`
+- `LIVE_ACTIVATION`
+
+Anything at `BROKER_WRITE` or `LIVE_ACTIVATION` requires an explicit architecture change and must never be exercised by normal agent verification.
 

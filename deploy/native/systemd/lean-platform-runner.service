@@ -1,0 +1,33 @@
+[Unit]
+Description=LEAN Platform restricted native runner
+After=network.target
+
+[Service]
+Type=simple
+User=lean-runner
+Group=lean-runner
+WorkingDirectory=/opt/lean-platform/web/backend
+EnvironmentFile=/etc/lean-platform/platform.env
+ExecStart=/opt/lean-platform/web/backend/.venv/bin/python -m uvicorn app.runner_service:app --host 127.0.0.1 --port 8010
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/lean-platform/data /opt/lean-platform
+ReadWritePaths=/var/lib/lean-platform/runtime
+MemoryMax=6G
+TasksMax=640
+CPUQuota=200%
+
+[Install]
+WantedBy=lean-platform.target

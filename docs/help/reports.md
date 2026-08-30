@@ -76,6 +76,6 @@ web/backend/.venv/bin/python scripts/regenerate_backtest_reports.py --dry-run
 
 ## 对象归档
 
-报告和运行对象可以从 MySQL `stored_objects` 恢复。`web/runtime/runs` 是执行和调试缓存，不是唯一事实来源。清理运行目录前必须验证关键对象已归档。
+报告元数据位于 PostgreSQL `stored_objects`，对象载荷位于校验和保护的 filesystem object store。`web/runtime/runs` 是执行和调试缓存，不是唯一事实来源。清理运行目录前必须验证关键对象已归档。
 
 完整字段约定见 [Backtest Result Format](../backtest_result_format.md)。

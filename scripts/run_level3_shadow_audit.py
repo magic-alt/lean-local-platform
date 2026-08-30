@@ -23,7 +23,7 @@ from app.services.instrument_identity import identifier_coverage  # noqa: E402
 from app.services.source_gate import PRIMARY_DATA_SOURCE, resolve_source_context  # noqa: E402
 
 
-_PYTHON_IMPORT_CHECKS = ("pymysql", "fastapi")
+_PYTHON_IMPORT_CHECKS = ("psycopg", "fastapi")
 
 
 def _pick_python() -> list[str]:
@@ -42,7 +42,7 @@ def _pick_python() -> list[str]:
             return False
         try:
             check = subprocess.run(
-                [str(candidate), "-c", "import pymysql,fastapi; print('ok')"],
+                [str(candidate), "-c", "import psycopg,fastapi; print('ok')"],
                 cwd=str(ROOT),
                 capture_output=True,
                 text=True,
@@ -70,7 +70,7 @@ def _csv(value: str) -> list[str]:
 
 
 _SENSITIVE_CONFIG_LINE = re.compile(
-    r"(?im)^(\s*[A-Z0-9_]*(?:TOKEN|API_KEY|PASSWORD|DATABASE_URL|REDIS_URL)[A-Z0-9_]*:\s*).*$"
+    r"(?im)^(\s*[A-Z0-9_]*(?:TOKEN|API_KEY|PASSWORD|DATABASE_URL|BROKER_URL)[A-Z0-9_]*:\s*).*$"
 )
 
 

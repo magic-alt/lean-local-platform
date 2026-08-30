@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 from typing import Any
 
-from ..core.config import DEFAULT_DOCKER_IMAGE, RUNS_DIR
+from ..core.config import DEFAULT_DOCKER_IMAGE, LEAN_EXECUTION_BACKEND, RUNS_DIR
 from ..db import db, json_dump, utc_now
 from ..domain.backtest_job import CANCELLED, CREATED, FAILED, is_terminal
 from ..lean_engine.errors import LeanPlatformError
@@ -14,6 +15,8 @@ from ..lean_engine.docker import validate_lean_docker_image
 from ..lean_engine.ids import new_run_id
 from ..repositories.backtest_repository import count_backtests, get_backtest, list_backtests, update_backtest
 from ..runners.docker_runner import DockerRunner
+from ..runners.runner_client import RestrictedRunnerClient
+from ..runners.runtime_registry import RuntimeRegistry
 from .projects import get_project
 from .backtest_preflight import prepare_backtest_request
 from .backtest_validation import build_backtest_validation, build_experiment_record
@@ -164,8 +167,14 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         parameters["ashareNextOpenFillModel"] = True
     parameters["initialCash"] = parameters["cash"]
     parameters["initial_cash"] = parameters["cash"]
-    docker_image = validate_lean_docker_image(request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE)
-    parameters["dockerImage"] = docker_image
+    runtime_identity: dict[str, Any] | None = None
+    if LEAN_EXECUTION_BACKEND == "docker":
+        docker_image = validate_lean_docker_image(request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE)
+        parameters["dockerImage"] = docker_image
+    else:
+        runtime_identity = RuntimeRegistry().resolve().identity.as_dict()
+        docker_image = ""
+        parameters.pop("dockerImage", None)
     run_id = new_run_id(parameters["ticker"], parameters["start"], parameters["end"])
     run_dir = RUNS_DIR / run_id
     results_dir = run_dir / "results"
@@ -220,6 +229,8 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
         docker_image=docker_image,
         strategy_path=strategy_path,
         config_path=run_dir / "config.json",
+        execution_backend=LEAN_EXECUTION_BACKEND,
+        runtime_identity=runtime_identity,
     )
     validation = build_backtest_validation(fingerprint_parameters, fingerprint)
     experiment = build_experiment_record(
@@ -236,8 +247,9 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
             insert into backtest_runs
                 (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
                  parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, created_at,
-                 fingerprint_json, validation_json, experiment_json, data_release_id)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fingerprint_json, validation_json, experiment_json, data_release_id,
+                 execution_backend,execution_id,runtime_identity_json,canonical_config_sha256)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -252,7 +264,7 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 json_dump(parameters),
                 CREATED,
                 docker_image,
-                f"lean-{run_id}"[:60],
+                f"lean-{run_id}"[:60] if LEAN_EXECUTION_BACKEND == "docker" else None,
                 str(run_dir),
                 str(results_dir),
                 task["log_path"],
@@ -261,6 +273,10 @@ def create_backtest_job(request_data: dict[str, Any]) -> dict[str, Any]:
                 json_dump(validation),
                 json_dump(experiment),
                 parameters.get("dataReleaseId"),
+                LEAN_EXECUTION_BACKEND,
+                None,
+                json_dump(runtime_identity),
+                fingerprint.get("canonicalConfigSha256"),
             ),
         )
     record_experiment_versions(
@@ -284,7 +300,7 @@ def create_failed_backtest_job(
     start = str(request_data.get("start") or "unknown-start")
     end = str(request_data.get("end") or "unknown-end")
     project_id = request_data.get("projectId")
-    docker_image = request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE
+    docker_image = request_data.get("dockerImage") or DEFAULT_DOCKER_IMAGE if LEAN_EXECUTION_BACKEND == "docker" else ""
     parameters = {
         "ticker": symbol,
         "assetClass": request_data.get("assetClass", "equity"),
@@ -313,8 +329,8 @@ def create_failed_backtest_job(
             insert into backtest_runs
                 (id, task_id, project_id, name, symbol, asset_class, venue, resolution, data_type,
                  parameters_json, status, docker_image, container_name, work_dir, results_dir, log_path, error,
-                 error_message, failure_json, created_at, started_at, finished_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 error_message, failure_json, created_at, started_at, finished_at,execution_backend)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -329,7 +345,7 @@ def create_failed_backtest_job(
                 json_dump(parameters),
                 FAILED,
                 docker_image,
-                f"lean-{run_id}"[:60],
+                f"lean-{run_id}"[:60] if LEAN_EXECUTION_BACKEND == "docker" else None,
                 str(run_dir),
                 str(results_dir),
                 task["log_path"],
@@ -339,6 +355,7 @@ def create_failed_backtest_job(
                 now,
                 now,
                 now,
+                LEAN_EXECUTION_BACKEND,
             ),
         )
     return get_backtest(run_id) or {}
@@ -379,7 +396,15 @@ def cancel_backtest(job_id: str) -> dict[str, Any]:
             update_task(run["task_id"], status=CANCELLED, error="Cancellation requested by user.", finished_at=utc_now())
         except Exception:
             pass
-    if run.get("container_name"):
+    if run.get("execution_id") and (
+        run.get("execution_backend") == "native"
+        or os.environ.get("LEAN_RUNNER_URL", "").strip()
+    ):
+        try:
+            RestrictedRunnerClient().stop(str(run["id"]))
+        except Exception:
+            pass
+    elif run.get("container_name"):
         try:
             DockerRunner.stop_container(str(run["container_name"]))
         except Exception:

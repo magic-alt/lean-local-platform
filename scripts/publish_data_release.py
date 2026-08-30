@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Publish an immutable composite DataRelease v2")
     parser.add_argument("--spec", required=True, help="JSON release specification")
     parser.add_argument("--data-root", help="Shared data root; defaults to QUANT_DATA_ROOT or platform DATA_DIR")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and freeze without writing MySQL registry state")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and freeze without writing PostgreSQL registry state")
     args = parser.parse_args()
     spec_path = Path(args.spec).expanduser().resolve()
     spec = json.loads(spec_path.read_text(encoding="utf-8"))

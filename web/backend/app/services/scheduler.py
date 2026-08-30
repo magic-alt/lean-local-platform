@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..db import db, json_dump, row_to_dict, rows_to_dicts, utc_now
 
-try:  # pragma: no cover - optional unless MySQL is configured.
-    import pymysql
+try:  # pragma: no cover - optional in isolated SQLite unit tests.
+    import psycopg
 except Exception:  # pragma: no cover
-    pymysql = None
+    psycopg = None
 
 
 def _now_dt() -> datetime:
@@ -21,8 +22,8 @@ def _iso(value: datetime) -> str:
 
 
 def _is_integrity_error(exc: Exception) -> bool:
-    mysql_integrity = pymysql is not None and isinstance(exc, pymysql.err.IntegrityError)
-    return mysql_integrity or exc.__class__.__name__ == "IntegrityError"
+    postgres_integrity = psycopg is not None and isinstance(exc, psycopg.IntegrityError)
+    return postgres_integrity or isinstance(exc, sqlite3.IntegrityError)
 
 
 def acquire_scheduler_lease(

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "qualificationId": "windows-native-core-v1",
+  "runId": "windows-native-core-v1",
+  "projectDir": "../../strategies/acceptance/windows-native-core-v1",
+  "mainFile": "main.py",
+  "algorithmClass": "WindowsNativeCoreSmokeAlgorithm",
+  "parameters": {
+    "ticker": "999999",
+    "market": "china",
+    "start": "2024-01-02",
+    "end": "2024-01-05",
+    "cash": 100000
+  },
+  "timeoutSeconds": 120,
+  "expected": {
+    "minimumOrders": 1,
+    "minimumFilledOrders": 1
+  },
+  "fixture": {
+    "symbol": "999999",
+    "market": "china",
+    "source": "windows-native-core-v1",
+    "rows": [
+      {
+        "date": "2024-01-02",
+        "open": "10.00",
+        "high": "10.10",
+        "low": "9.90",
+        "close": "10.00",
+        "volume": "100000"
+      },
+      {
+        "date": "2024-01-03",
+        "open": "10.10",
+        "high": "10.20",
+        "low": "10.00",
+        "close": "10.10",
+        "volume": "100000"
+      },
+      {
+        "date": "2024-01-04",
+        "open": "10.20",
+        "high": "10.30",
+        "low": "10.10",
+        "close": "10.20",
+        "volume": "100000"
+      },
+      {
+        "date": "2024-01-05",
+        "open": "10.30",
+        "high": "10.40",
+        "low": "10.20",
+        "close": "10.30",
+        "volume": "100000"
+      }
+    ]
+  }
+}

@@ -105,14 +105,14 @@ def test_insights_llm_runtime_rejects_model_outside_provider_catalog():
     assert runtime["invalid_model"] is True
 
 
-def test_database_descriptor_defaults_to_mysql_without_sqlite_path(monkeypatch):
+def test_database_descriptor_defaults_to_postgresql_without_sqlite_path(monkeypatch):
     import app.db as db_module
 
-    monkeypatch.setattr(db_module, "DATABASE_URL", "mysql+pymysql://lean:lean@127.0.0.1:3306/lean_market")
+    monkeypatch.setattr(db_module, "DATABASE_URL", "postgresql+psycopg://lean_app:lean@127.0.0.1:5432/lean_platform")
     descriptor = db_module.database_descriptor()
 
-    assert descriptor["engine"] == "mysql"
-    assert descriptor["database"] == "lean_market"
+    assert descriptor["engine"] == "postgresql"
+    assert descriptor["database"] == "lean_platform"
     assert "path" not in descriptor
     assert "HS300.sqlite3" not in json.dumps(descriptor)
 

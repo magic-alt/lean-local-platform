@@ -6,7 +6,17 @@ import os
 import uuid
 from typing import Any
 
-from ..db import database_backend, db, json_dump, row_to_dict, rows_to_dicts, utc_now
+from ..db import (
+    advisory_lock_in_use,
+    database_backend,
+    db,
+    json_dump,
+    release_advisory_lock,
+    row_to_dict,
+    rows_to_dicts,
+    try_advisory_lock,
+    utc_now,
+)
 from . import market_lake
 
 
@@ -733,33 +743,23 @@ def run_maintenance(run_id: str) -> dict[str, Any]:
         retry_at = datetime.fromisoformat(str(current["next_retry_at"]))
         if retry_at > datetime.now(timezone.utc):
             return current
-    if database_backend() != "mysql":
-        return _run_locked(run_id)
     with db() as connection:
-        acquired = connection.execute("select get_lock(?,0) as acquired", (MAINTENANCE_LOCK_NAME,)).fetchone()
-        if int((acquired or {}).get("acquired") or 0) != 1:
+        if not try_advisory_lock(connection, MAINTENANCE_LOCK_NAME):
             return {"id": run_id, "status": "already_running"}
         try:
             return _run_locked(run_id)
         finally:
-            connection.execute("select release_lock(?)", (MAINTENANCE_LOCK_NAME,))
+            release_advisory_lock(connection, MAINTENANCE_LOCK_NAME)
 
 
 def maintenance_lease_active() -> bool:
-    """Return whether a MySQL session still owns the maintenance lease."""
-    if database_backend() != "mysql":
-        return False
-    with db() as connection:
-        row = connection.execute(
-            "select is_used_lock(?) as owner",
-            (MAINTENANCE_LOCK_NAME,),
-        ).fetchone()
-    return bool(row and row.get("owner") is not None)
+    """Return whether another database session owns the maintenance lease."""
+    return advisory_lock_in_use(MAINTENANCE_LOCK_NAME)
 
 
 def watermarks() -> dict[str, Any]:
     if (
-        database_backend() == "mysql"
+        database_backend() == "postgresql"
         and os.environ.get("LEAN_DERIVED_WATERMARK_BACKEND", "local_parquet").strip().lower() != "database"
     ):
         items = []

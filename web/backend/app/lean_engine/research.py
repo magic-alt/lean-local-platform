@@ -26,7 +26,9 @@ from ..core.config import (
     RESEARCH_DOCKER_CPUS,
     RESEARCH_DOCKER_MEMORY,
     RESEARCH_DOCKER_PIDS_LIMIT,
+    LEAN_RESEARCH_BACKEND,
 )
+from ..runners.native_research import NativeResearchBackend
 from .errors import LeanPlatformError
 
 
@@ -124,6 +126,22 @@ def run_detached_research(
     output_callback,
     image: str = DEFAULT_RESEARCH_IMAGE,
 ) -> dict[str, Any]:
+    if LEAN_RESEARCH_BACKEND == "native":
+        if _runner_url():
+            result = _remote_request(
+                "POST",
+                "/v1/research/start",
+                {
+                    "sessionId": session_id,
+                    "image": image,
+                    "projectDir": str(_host_platform_path(project_dir)),
+                    "port": port,
+                },
+            )
+            for line in result.pop("output", []) or []:
+                output_callback(str(line))
+            return result
+        return NativeResearchBackend().start(session_id, project_dir, port, output_callback)
     image = validate_research_docker_image(image)
     host_project_dir = _host_platform_path(project_dir)
     if _runner_url():
@@ -218,6 +236,9 @@ def run_detached_research(
 
 
 def stop_container(container_id: str) -> None:
+    if container_id.startswith("native-research-"):
+        NativeResearchBackend().stop(container_id.removeprefix("native-research-"))
+        return
     if _runner_url():
         session_id = _remote_session_id(container_id)
         if not session_id:
@@ -231,6 +252,9 @@ def stop_container(container_id: str) -> None:
 
 
 def remove_container(container_id: str) -> None:
+    if container_id.startswith("native-research-"):
+        NativeResearchBackend().remove(container_id.removeprefix("native-research-"))
+        return
     if _runner_url():
         session_id = _remote_session_id(container_id)
         if session_id:
@@ -243,6 +267,8 @@ def remove_container(container_id: str) -> None:
 
 
 def container_state(container_id: str) -> dict[str, Any]:
+    if container_id.startswith("native-research-"):
+        return NativeResearchBackend().state(container_id.removeprefix("native-research-"))
     if _runner_url():
         session_id = _remote_session_id(container_id)
         if not session_id:
@@ -262,6 +288,11 @@ def container_state(container_id: str) -> dict[str, Any]:
 
 
 def container_logs(container_id: str, *, tail: int = 200) -> str:
+    if container_id.startswith("native-research-"):
+        return NativeResearchBackend().logs(
+            container_id.removeprefix("native-research-"),
+            tail=tail,
+        )
     if _runner_url():
         session_id = _remote_session_id(container_id)
         if not session_id:
@@ -296,7 +327,7 @@ def container_port_ready(container_id: str) -> bool:
 
 
 def find_available_port(preferred: int | None = None, *, start: int = 8888, end: int = 8999) -> int:
-    if _runner_url():
+    if _runner_url() and LEAN_RESEARCH_BACKEND == "docker":
         payload = _remote_request(
             "POST",
             "/v1/research/port",

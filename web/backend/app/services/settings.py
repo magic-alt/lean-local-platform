@@ -2,7 +2,16 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..core.config import DEFAULT_DOCKER_IMAGE, DEFAULT_RESEARCH_IMAGE, JOB_TIMEOUT_SECONDS, MAX_CONCURRENT_JOBS, LOG_LEVEL
+from ..core.config import (
+    DEFAULT_DOCKER_IMAGE,
+    DEFAULT_RESEARCH_IMAGE,
+    JOB_TIMEOUT_SECONDS,
+    LEAN_DEPLOYMENT_MODE,
+    LEAN_DEPLOYMENT_PROFILE,
+    LEAN_EXECUTION_BACKEND,
+    LOG_LEVEL,
+    MAX_CONCURRENT_JOBS,
+)
 from ..db import db, json_dump, utc_now
 
 
@@ -42,6 +51,9 @@ def get_settings() -> dict[str, Any]:
             values[key] = json.loads(row["value_json"])
     if values.get("defaultEnd") == "2026-07-13":
         values["defaultEnd"] = DEFAULT_SETTINGS["defaultEnd"]
+    values["deploymentMode"] = LEAN_DEPLOYMENT_MODE
+    values["deploymentProfile"] = LEAN_DEPLOYMENT_PROFILE
+    values["executionBackend"] = LEAN_EXECUTION_BACKEND
     return values
 
 

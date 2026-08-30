@@ -95,7 +95,7 @@ def _local_lake_capabilities() -> list[dict[str, Any]]:
 
 def refresh_capabilities() -> list[dict[str, Any]]:
     if (
-        database_backend() == "mysql"
+        database_backend() == "postgresql"
         and os.environ.get("LEAN_CAPABILITY_BACKEND", "local_parquet").strip().lower() != "database"
     ):
         return _local_lake_capabilities()

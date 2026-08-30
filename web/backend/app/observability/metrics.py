@@ -58,15 +58,10 @@ CELERY_QUEUE_DEPTH = _metric(
     "Pending Celery messages by queue.",
     ["queue"],
 )
-MYSQL_CONNECTIONS = _metric(
+DATABASE_CONNECTIONS = _metric(
     Gauge,
-    "lean_mysql_connections",
-    "Current MySQL connection count when the runtime database is MySQL.",
-)
-REDIS_MEMORY_BYTES = _metric(
-    Gauge,
-    "lean_redis_memory_bytes",
-    "Redis memory currently used by the broker/backend.",
+    "lean_database_connections",
+    "Current database connections observed by the platform.",
 )
 FILESYSTEM_FREE_BYTES = _metric(
     Gauge,
@@ -114,9 +109,14 @@ def refresh_runtime_metrics() -> None:
             row = connection.execute("select count(*) as count from data_assets").fetchone()
             DATA_ASSETS_TOTAL.set(row["count"] if row else 0)
             try:
-                mysql_row = connection.execute("show status like 'Threads_connected'").fetchone()
-                if mysql_row and MYSQL_CONNECTIONS is not None:
-                    MYSQL_CONNECTIONS.set(float(mysql_row[1]))
+                from ..db import database_backend
+
+                if database_backend() == "postgresql":
+                    database_row = connection.execute(
+                        "select count(*) as count from pg_stat_activity where datname=current_database()"
+                    ).fetchone()
+                    if database_row and DATABASE_CONNECTIONS is not None:
+                        DATABASE_CONNECTIONS.set(float(database_row["count"]))
             except Exception:
                 pass
         finally:
@@ -133,18 +133,13 @@ def refresh_runtime_metrics() -> None:
                 FILESYSTEM_FREE_BYTES.labels(path).set(shutil.disk_usage(path).free)
             except OSError:
                 continue
-    if CELERY_QUEUE_DEPTH is None and REDIS_MEMORY_BYTES is None:
+    if CELERY_QUEUE_DEPTH is None:
         return
     try:
-        from redis import Redis
-        from ..core.config import REDIS_URL
+        from ..services.broker import queue_depths
 
-        client = Redis.from_url(REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5)
-        if CELERY_QUEUE_DEPTH is not None:
-            for queue in ("default", "backtest", "data-demand", "data-bulk", "data-lineage", "ml"):
-                CELERY_QUEUE_DEPTH.labels(queue).set(client.llen(queue))
-        if REDIS_MEMORY_BYTES is not None:
-            REDIS_MEMORY_BYTES.set(float((client.info("memory") or {}).get("used_memory") or 0))
+        for queue, depth in queue_depths().items():
+            CELERY_QUEUE_DEPTH.labels(queue).set(depth)
     except Exception:
         pass
 

@@ -406,7 +406,7 @@ _LOCAL_LAKE_DATASETS: dict[str, tuple[str, str, str, str]] = {
 
 
 def _local_catalog_control_state() -> dict[str, Any]:
-    """Read sync orchestration state without making MySQL a market-data store."""
+    """Read sync orchestration state without making PostgreSQL a market-data store."""
     try:
         with db() as connection:
             active = connection.execute(
@@ -515,13 +515,10 @@ def _local_lake_catalog_payload() -> dict[str, Any]:
 
 
 def catalog_payload() -> dict[str, Any]:
-    # Since migration 0051, MySQL is no longer a market-data store.  Keep the
-    # legacy synchronization catalog available only for test/explicit legacy
-    # deployments; the web data page must inspect the mounted local lake first.
-    if (
-        database_backend() == "mysql"
-        and os.environ.get("LEAN_DATA_CATALOG_BACKEND", "local_parquet").strip().lower() != "database"
-    ):
+    # Since migration 0051, the control database is no longer a market-data store. Keep the
+    # synchronization catalog available only for explicit registry inspection;
+    # the web data page must inspect the mounted local lake first.
+    if os.environ.get("LEAN_DATA_CATALOG_BACKEND", "local_parquet").strip().lower() != "database":
         return _local_lake_catalog_payload()
     try:
         return _database_catalog_payload()
@@ -693,7 +690,7 @@ def _call_with_retry(call: Callable[[], T], *, attempts: int = 3) -> T:
     raise RuntimeError("unreachable")
 
 
-def _mysql_infrastructure_failure(exc: BaseException) -> bool:
+def _database_infrastructure_failure(exc: BaseException) -> bool:
     """Identify connection loss that should pause, not skip, a bulk run."""
     pending: list[BaseException] = [exc]
     seen: set[int] = set()
@@ -704,13 +701,14 @@ def _mysql_infrastructure_failure(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, DatabaseUnavailableError):
             return True
-        try:
-            if int(current.args[0]) in {1040, 2003, 2006, 2013}:
-                return True
-        except (IndexError, TypeError, ValueError):
-            pass
+        sqlstate = str(getattr(current, "sqlstate", "") or "")
+        if sqlstate.startswith("08") or sqlstate in {"53300", "57P01", "57P02", "57P03"}:
+            return True
         message = str(current).lower()
-        if "lost connection to mysql server" in message or "mysql server has gone away" in message:
+        if "connection" in message and any(
+            marker in message
+            for marker in ("postgresql", "server closed", "connection refused", "connection reset")
+        ):
             return True
         if current.__cause__ is not None:
             pending.append(current.__cause__)
@@ -1474,7 +1472,7 @@ def _save_raw(
         existing: dict[str, tuple[str, str | None]] = {}
         keys = list(prepared)
         if not assume_new:
-            lookup_size = 4000 if database_backend() == "mysql" else 500
+            lookup_size = 500
             for offset in range(0, len(keys), lookup_size):
                 chunk = keys[offset : offset + lookup_size]
                 placeholders = ",".join("?" for _ in chunk)
@@ -1495,10 +1493,8 @@ def _save_raw(
                     }
                 )
 
-        # ``record_key`` is the clustered primary-key suffix in MySQL. Sorting
-        # each chunk turns otherwise random hash-key insertion into an ordered
-        # B-tree walk; secondary indexes can absorb the corresponding
-        # non-clustered order more cheaply.
+        # Sorting hash keys keeps primary-index updates deterministic and makes
+        # each batch friendlier to the PostgreSQL B-tree cache.
         changed_keys = sorted(
             key
             for key in keys
@@ -1747,18 +1743,12 @@ def _measure_database_storage(observer_dir: Path) -> dict[str, Any]:
     with db() as connection:
         row = connection.execute(
             """
-            select coalesce(sum(data_length + index_length), 0) as table_bytes
-            from information_schema.tables where table_schema=database()
+            select pg_database_size(current_database()) as table_bytes
             """
         ).fetchone()
-        try:
-            logs = connection.execute("show binary logs").fetchall()
-            binlog_bytes = sum(int(item.get("File_size") or item.get("file_size") or 0) for item in logs)
-        except Exception:
-            binlog_bytes = 0
     return {
-        "databaseBytes": int(row["table_bytes"] or 0) + binlog_bytes,
-        "databaseSizeSource": "mysql_metadata_estimate",
+        "databaseBytes": int(row["table_bytes"] or 0),
+        "databaseSizeSource": "postgresql_database_size",
     }
 
 
@@ -1775,23 +1765,23 @@ def _refresh_database_storage(observer_dir: Path) -> None:
 
 def _database_storage_metrics() -> dict[str, Any]:
     global _DATABASE_SIZE_CACHE, _DATABASE_SIZE_REFRESHING
-    on_demand_limit_gb = os.environ.get("LEAN_MYSQL_ON_DEMAND_MAX_DATABASE_GB")
+    on_demand_limit_gb = os.environ.get("LEAN_POSTGRES_ON_DEMAND_MAX_DATABASE_GB")
     if on_demand_limit_gb is None:
         # Backward-compatible alias; it no longer applies to one-click sync.
-        on_demand_limit_gb = os.environ.get("LEAN_MYSQL_MAX_DATABASE_GB", "50")
+        on_demand_limit_gb = "50"
     on_demand_limit = int(float(on_demand_limit_gb) * 1024**3)
-    if database_backend() != "mysql":
+    if database_backend() != "postgresql":
         return {
             "databaseBytes": 0,
             "databaseLimitBytes": 0,
             "databaseUsagePercent": 0.0,
             "databaseLimitEnforced": False,
             "onDemandDatabaseLimitBytes": on_demand_limit,
-            "databaseSizeSource": "not_mysql",
+            "databaseSizeSource": "sqlite_test_backend",
         }
     checked_at, cached = _DATABASE_SIZE_CACHE
-    cache_seconds = max(5.0, float(os.environ.get("LEAN_MYSQL_SIZE_CACHE_SECONDS", "60")))
-    observer_dir = Path(os.environ.get("LEAN_MYSQL_DATA_OBSERVER_DIR", "")).expanduser()
+    cache_seconds = max(5.0, float(os.environ.get("LEAN_POSTGRES_SIZE_CACHE_SECONDS", "60")))
+    observer_dir = Path(os.environ.get("LEAN_POSTGRES_DATA_OBSERVER_DIR", "")).expanduser()
     if not cached:
         cached = _measure_database_storage(observer_dir)
         _DATABASE_SIZE_CACHE = (time.monotonic(), cached)
@@ -1802,7 +1792,7 @@ def _database_storage_metrics() -> dict[str, Any]:
                 threading.Thread(
                     target=_refresh_database_storage,
                     args=(observer_dir,),
-                    name="mysql-storage-metrics",
+                    name="postgres-storage-metrics",
                     daemon=True,
                 ).start()
     result = {
@@ -1826,7 +1816,7 @@ def _assert_disk_capacity(estimated_write_bytes: int = 0, *, enforce_database_li
     database_limit = int(metrics.get("onDemandDatabaseLimitBytes") or 0)
     estimated_write = max(0, estimated_write_bytes)
     # Canonical tables contain both governed bulk-sync rows and on-demand
-    # repairs, so the physical size of the whole MySQL instance is not an
+    # repairs, so the physical size of the whole PostgreSQL instance is not an
     # on-demand cache usage measurement. Comparing that aggregate size with
     # this limit permanently blocks small repairs as soon as a legitimate
     # full sync grows beyond the default 50 GiB ceiling. Bound the individual
@@ -1834,10 +1824,10 @@ def _assert_disk_capacity(estimated_write_bytes: int = 0, *, enforce_database_li
     # disk reserve below.
     if enforce_database_limit and database_limit and estimated_write > database_limit:
         raise RuntimeError(
-            "on_demand_database_guard: estimated MySQL on-demand write exceeds the per-request limit; "
+            "on_demand_database_guard: estimated PostgreSQL on-demand write exceeds the per-request limit; "
             f"estimatedWrite={estimated_write}, limit={database_limit}. "
             "Choose an external download target, reduce the requested range, or move "
-            "LEAN_MYSQL_DATA_DIR to external storage."
+            "LEAN_POSTGRES_DATA_OBSERVER_DIR to external storage."
         )
     if free - estimated_write < hard_reserve:
         raise RuntimeError(
@@ -2816,7 +2806,7 @@ def _sync_daily(
                 timings=timings,
                 rate_units=processed - session_processed_base,
                 # The first activity event must reach the UI immediately;
-                # measuring a large MySQL data directory can be deferred until
+                # measuring the PostgreSQL data directory can be deferred until
                 # actual rows have started moving.
                 include_storage=downloaded > 0 or committed > 0,
             ),
@@ -3771,7 +3761,7 @@ def _sync_instrument_dataset_fast(
     fetched_units = processed
     validated = 0
     empty_units = 0
-    timings = {"fetchWait": 0.0, "validate": 0.0, "mysqlWrite": 0.0, "metadata": 0.0}
+    timings = {"fetchWait": 0.0, "validate": 0.0, "controlPlaneWrite": 0.0, "metadata": 0.0}
     chunk_rows = _sync_batch_rows("LEAN_DATA_SYNC_CHUNK_ROWS")
     batch_units = _sync_batch_units("LEAN_DATA_SYNC_BATCH_UNITS", 16)
     general_concurrency = int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))
@@ -4078,7 +4068,7 @@ def _sync_instrument_dataset_fast(
         else:
             add, change = len(all_rows), 0
         _normalize_optional(spec, changed_status_rows(all_rows), batch_id, bulk=True)
-        timings["mysqlWrite"] += (time.perf_counter() - stage_started) * 1000
+        timings["controlPlaneWrite"] += (time.perf_counter() - stage_started) * 1000
         stage_started = time.perf_counter()
         if date_mode:
             _persist_trade_date_batch_metadata(
@@ -4581,7 +4571,7 @@ def _sync_generic(
     empty_units = 0
     validated = 0
     quarantined = 0
-    timings = {"fetch": 0.0, "validate": 0.0, "mysqlWrite": 0.0}
+    timings = {"fetch": 0.0, "validate": 0.0, "controlPlaneWrite": 0.0}
     for index, item in enumerate(symbols, start=1):
         if index <= resume_after:
             continue
@@ -4661,7 +4651,7 @@ def _sync_generic(
             # back to binlogged, per-symbol business transactions.
             _normalize_optional(spec, rows, batch_id, bulk=True)
             committed += len(rows)
-            timings["mysqlWrite"] += (time.perf_counter() - stage_started) * 1000
+            timings["controlPlaneWrite"] += (time.perf_counter() - stage_started) * 1000
             _resolve_sync_failure(spec, symbol, batch_id)
             inserted += add
             updated += change
@@ -4959,7 +4949,7 @@ def run_sync(
         # The legacy-source audit scans A-share daily bars and is relevant only
         # when that dataset participates in the run.  Running it for a targeted
         # index or contract-catalog refresh needlessly scans the largest table
-        # and can exhaust a workstation MySQL instance before the requested
+        # and can exhaust a workstation PostgreSQL instance before the requested
         # dataset is touched.
         audit = audit_existing_data() if "daily" in selected_keys else {"detected": 0}
         probe_keys = _permission_probe_keys(selected_keys)
@@ -5131,9 +5121,9 @@ def run_sync(
                 _set_catalog_coverage(spec)
                 summaries[spec.key] = {"processed": processed, "inserted": inserted, "updated": updated, "failed": failed}
             except Exception as exc:  # noqa: BLE001
-                if _mysql_infrastructure_failure(exc):
+                if _database_infrastructure_failure(exc):
                     infrastructure_failure = {
-                        "code": "MYSQL_CONNECTION_LOST",
+                        "code": "DATABASE_CONNECTION_LOST",
                         "dataset": spec.key,
                         "message": str(exc),
                         "retryable": True,
@@ -5179,8 +5169,8 @@ def run_sync(
             with db() as connection:
                 parameters = (
                     json_dump(summary),
-                    "MySQL connection lost; synchronization paused at the durable checkpoint.",
-                    json_dump({"status": "blocked", "reason": "mysql_connection_lost"}),
+                    "PostgreSQL connection lost; synchronization paused at the durable checkpoint.",
+                    json_dump({"status": "blocked", "reason": "database_connection_lost"}),
                     utc_now(),
                     run_id,
                 )
@@ -5406,8 +5396,7 @@ def sync_run(run_id: str) -> dict[str, Any] | None:
                 # have the additive lineage table yet.
                 pass
             if (
-                database_backend() == "mysql"
-                and item.get("status") in {"checking", "running"}
+                item.get("status") in {"checking", "running"}
                 and "apiCalls" in metrics
             ):
                 try:
@@ -5608,16 +5597,11 @@ def download_on_demand_dataset(
 
 def materialize_daily_run(run_id: str) -> dict[str, Any]:
     """Build derivatives once per sync run, resuming a durable symbol checkpoint."""
-    if database_backend() != "mysql":
-        return _materialize_daily_run_locked(run_id)
-
     lock_name = f"lean:materialize:{run_id}"[:64]
     with db() as lease_connection:
-        lock_row = lease_connection.execute(
-            "select get_lock(?, 0) as acquired",
-            (lock_name,),
-        ).fetchone()
-        if int((lock_row or {}).get("acquired") or 0) != 1:
+        from ..db import release_advisory_lock, try_advisory_lock
+
+        if not try_advisory_lock(lease_connection, lock_name):
             with db() as connection:
                 row = connection.execute(
                     "select derived_status_json from data_sync_runs where id=?",
@@ -5631,11 +5615,11 @@ def materialize_daily_run(run_id: str) -> dict[str, Any]:
         try:
             return _materialize_daily_run_locked(run_id, lease_connection=lease_connection)
         finally:
-            lease_connection.execute("select release_lock(?)", (lock_name,))
+            release_advisory_lock(lease_connection, lock_name)
 
 
 def _materialize_daily_run_locked(run_id: str, *, lease_connection: Any | None = None) -> dict[str, Any]:
-    """Build LEAN/object/ClickHouse derivatives after canonical MySQL commit."""
+    """Build LEAN/object/ClickHouse derivatives after the control-plane commit."""
     from .data import record_data_asset
     from .lean_cache import rebuild_ashare_lean_cache_from_db
     from .market_data import mirror_rows_batch, query_database_bars
@@ -5800,7 +5784,7 @@ def _materialize_daily_run_locked(run_id: str, *, lease_connection: Any | None =
             record_failure(
                 symbol="*",
                 stage="parquet_consistency",
-                error="Parquet/MySQL/DuckDB consistency validation did not pass.",
+                error="Parquet/PostgreSQL/DuckDB consistency validation did not pass.",
             )
         if not parquet_result.get("certifiedDatasetIds"):
             record_failure(
@@ -6003,7 +5987,7 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
                     and entry.get("checkpoint")
                     and (
                         int(entry.get("failed") or 0) == 0
-                        or _mysql_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
+                        or _database_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
                     )
                 )
             )
@@ -6013,7 +5997,7 @@ def prepare_resume(run_id: str) -> dict[str, Any]:
                 and int(entry.get("failed") or 0) > 0
                 and not (
                     entry.get("checkpoint")
-                    and _mysql_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
+                    and _database_infrastructure_failure(RuntimeError(str(entry.get("error") or "")))
                 )
             )
         ]

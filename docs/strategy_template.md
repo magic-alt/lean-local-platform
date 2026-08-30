@@ -31,7 +31,7 @@ Projects created from the UI are persisted under `web/runtime/projects`.
 - Built-in service templates include `buy_hold`, `ema_cross`, `sma_cross`, `macd`, `rsi_reversion`, `donchian_breakout`, `bollinger_reversion`, `etf_rotation`, `crypto_momentum`, `future_trend` and `blank`.
 - File-backed manifests under `strategies/templates/` extend the catalog, currently including `risk_parity`, `dynamic_universe` and other repository templates.
 - `GET /api/strategies/templates` is authoritative; documentation should not duplicate a permanently fixed list.
-- `GET /api/examples` adds runnable backtest, optimization and research cases on top of strategy templates. Examples may specify batch mode, universe rules and defaults, then instantiate a project/workflow through the API.
+- `GET /api/examples` adds runnable backtest and optimization cases on top of strategy templates. Research examples belong to external `qlib-platform` and enter this repository only through Artifact Contract v2 plus LEAN validation.
 
 ## File-Backed Manifest Shape
 

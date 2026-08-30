@@ -39,7 +39,7 @@ reports, uploads, source caches, secrets and stored-object files. Root-level
 Market data defaults to the repository's lower-case `data/` directory through
 `LEAN_DATA_DIR` / `LEAN_MARKET_DATA_DIR`. Generated analytical Parquet defaults
 to `data/output/parquet`. The upper-case root `Data/` and root `parquet/` paths
-are unsupported. MySQL and ClickHouse files live in configured Docker volumes
+are unsupported. PostgreSQL and ClickHouse files live in configured Docker volumes
 or explicit host directories.
 
 Run `python3 scripts/check_repository_hygiene.py` before committing to detect

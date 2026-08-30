@@ -9,7 +9,7 @@ from .celery_app import celery_app
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from ..core.config import DEFAULT_DOCKER_IMAGE, REPORTS_DIR, RUNS_DIR
-from ..db import DatabaseUnavailableError, database_backend, db, json_dump, row_to_dict, utc_now
+from ..db import DatabaseUnavailableError, db, json_dump, row_to_dict, utc_now
 from ..lean_engine.errors import LeanPlatformError
 from ..lean_engine.reports import render_report
 from ..lean_engine.research import run_detached_research
@@ -52,7 +52,7 @@ from ..services import ml_research
 from ..services import research_runs
 from ..services import run_reconciler
 from ..services import derived_maintenance
-from ..services import mysql_backup
+from ..services import postgres_backup
 from ..services import resource_pressure
 from ..services.alerts import emit_alert, redeliver_open_alerts, resolve_open_alert
 from ..services.source_gate import source_certification
@@ -94,19 +94,19 @@ def redeliver_open_alerts_task():
     return redeliver_open_alerts()
 
 
-@celery_app.task(name="lean_web.backup_mysql")
-def backup_mysql_task():
+@celery_app.task(name="lean_web.backup_postgres")
+def backup_postgres_task():
     try:
-        return mysql_backup.create_backup()
+        return postgres_backup.create_backup()
     except Exception as exc:
         _emit_operational_alert(
-            "mysql_backup_failed",
+            "postgres_backup_failed",
             severity="critical",
-            title="Scheduled MySQL backup failed",
+            title="Scheduled PostgreSQL backup failed",
             message=str(exc),
-            source="mysql_backup",
+            source="postgres_backup",
             details={"error": str(exc)},
-            dedupe_key="mysql_backup_failed:scheduled",
+            dedupe_key="postgres_backup_failed:scheduled",
         )
         raise
 
@@ -714,7 +714,7 @@ def sync_all_data_task(task_id: str, run_id: str):
             else "failed"
         )
         error = (
-            "MySQL became unavailable; synchronization paused at its durable checkpoint."
+            "PostgreSQL became unavailable; synchronization paused at its durable checkpoint."
             if run_status == "paused"
             else "One or more datasets require retry."
             if run_status == "partial"
@@ -727,7 +727,7 @@ def sync_all_data_task(task_id: str, run_id: str):
                 "data_sync_paused",
                 severity="critical",
                 title="Governed data synchronization paused",
-                message=error or "MySQL became unavailable.",
+                message=error or "PostgreSQL became unavailable.",
                 source="data_sync",
                 related_id=run_id,
                 details={"runId": run_id, "taskId": task_id, "retryable": True},
@@ -988,10 +988,9 @@ def recover_source_certifications_task():
                 "taskId": dispatched.id,
             }
         lease_active = derived_maintenance.maintenance_lease_active()
-        if active_status == "queued" or database_backend() != "mysql" or lease_active:
+        if active_status == "queued" or lease_active:
             return {"status": "recovery_in_progress", "scheduled": False, "runId": active["id"]}
         orphaned_run_id = str(active["id"])
-        _discard_orphaned_maintenance_message(orphaned_run_id)
         with db() as connection:
             connection.execute(
                 """
@@ -1021,99 +1020,12 @@ def recover_source_certifications_task():
     }
 
 
-def _broker_unacked_maintenance_tags(client: Any, run_id: str) -> list[str]:
-    needle = run_id.encode("utf-8")
-    task_name = b"lean_web.maintain_derived_layers"
-    return [
-        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
-        for tag, message in (client.hgetall("unacked") or {}).items()
-        if needle in message and task_name in message
-    ]
-
-
-def _discard_orphaned_maintenance_message(run_id: str) -> int:
-    try:
-        import redis
-
-        client = redis.Redis.from_url(
-            celery_app.conf.broker_url,
-            socket_connect_timeout=1,
-            socket_timeout=2,
-        )
-        client.ping()
-    except Exception:
-        return 0
-    tags = _broker_unacked_maintenance_tags(client, run_id)
-    if tags:
-        client.hdel("unacked", *tags)
-        client.zrem("unacked_index", *tags)
-    return len(tags)
-
-
-def _broker_contains_sync_run(client: Any, run_id: str) -> bool:
-    """Check ready and unacknowledged Redis messages without worker RPC.
-
-    The bulk worker uses the solo pool, so it cannot answer Celery inspect
-    requests while a long synchronization is active.  Redis messages retain
-    ``argsrepr`` in their JSON envelope, which lets the recovery task avoid
-    dispatching a duplicate while the original is queued or unacknowledged.
-    """
-    needle = run_id.encode("utf-8")
-    messages: list[bytes] = []
-    for queue in ("data-bulk", "data"):
-        messages.extend(client.lrange(queue, 0, -1) or [])
-    messages.extend(client.hvals("unacked") or [])
-    return any(needle in message for message in messages)
-
-
-def _broker_ready_contains_sync_run(client: Any, run_id: str) -> bool:
-    needle = run_id.encode("utf-8")
-    messages: list[bytes] = []
-    for queue in ("data-bulk", "data"):
-        messages.extend(client.lrange(queue, 0, -1) or [])
-    return any(needle in message for message in messages)
-
-
-def _broker_unacked_sync_tags(client: Any, run_id: str) -> list[str]:
-    needle = run_id.encode("utf-8")
-    task_name = b"lean_web.sync_all_data"
-    return [
-        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
-        for tag, message in (client.hgetall("unacked") or {}).items()
-        if needle in message and task_name in message
-    ]
-
-
-def _broker_ready_contains_materialization(client: Any, run_id: str) -> bool:
-    needle = run_id.encode("utf-8")
-    task_name = b"lean_web.materialize_sync_data"
-    return any(
-        needle in message and task_name in message
-        for message in (client.lrange("data-demand", 0, -1) or [])
-    )
-
-
-def _broker_unacked_materialization_tags(client: Any, run_id: str) -> list[str]:
-    needle = run_id.encode("utf-8")
-    task_name = b"lean_web.materialize_sync_data"
-    return [
-        tag.decode("utf-8") if isinstance(tag, bytes) else str(tag)
-        for tag, message in (client.hgetall("unacked") or {}).items()
-        if needle in message and task_name in message
-    ]
-
-
 def _materialization_lease_active(run_id: str) -> bool:
-    """Use the MySQL advisory lock as the source of truth for live work."""
-    if database_backend() != "mysql":
-        return False
+    """Use the database advisory lock as the source of truth for live work."""
     lock_name = f"lean:materialize:{run_id}"[:64]
-    with db() as connection:
-        row = connection.execute(
-            "select is_used_lock(?) as owner",
-            (lock_name,),
-        ).fetchone()
-    return bool(row and row.get("owner") is not None)
+    from ..db import advisory_lock_in_use
+
+    return advisory_lock_in_use(lock_name)
 
 
 @celery_app.task(
@@ -1167,38 +1079,16 @@ def recover_data_sync_task():
     if not rows and not stale_derived:
         return {"recovered": [], "preserved": [], "recoveredDerived": [], "preservedDerived": []}
 
-    try:
-        import redis
-
-        client = redis.Redis.from_url(celery_app.conf.broker_url, socket_connect_timeout=1, socket_timeout=2)
-        client.ping()
-    except Exception as exc:  # pragma: no cover - requires broker outage.
-        return {
-            "recovered": [],
-            "preserved": [],
-            "recoveredDerived": [],
-            "preservedDerived": [],
-            "error": f"broker_unavailable:{exc}",
-        }
-
     recovered: list[str] = []
     preserved: list[str] = []
     for row in rows:
         run_id = str(row["id"])
         task_id = str(row["task_id"] or "")
-        if not task_id or _broker_ready_contains_sync_run(client, run_id):
+        if not task_id:
             preserved.append(run_id)
             continue
-        orphaned_tags = _broker_unacked_sync_tags(client, run_id)
-        if orphaned_tags:
-            # A fresh heartbeat keeps live long-running tasks out of this
-            # recovery set. Matching unacked messages that reach here belong
-            # to a worker that disappeared without acknowledging them.
-            client.hdel("unacked", *orphaned_tags)
-            client.zrem("unacked_index", *orphaned_tags)
-            append_log(task_id, f"Removed {len(orphaned_tags)} orphaned broker message(s) after stale heartbeat.")
-        # Mark queued before publishing. A concurrent recovery pass will then
-        # see the published Redis envelope and preserve it.
+        # The platform row is authoritative. The compare-and-set below lets
+        # only one recovery pass publish a replacement after a stale heartbeat.
         if not data_sync.queue_stale_run_for_recovery(run_id):
             continue
         result = sync_all_data_task.apply_async(args=[task_id, run_id], queue="data-bulk")
@@ -1208,13 +1098,9 @@ def recover_data_sync_task():
     recovered_derived: list[str] = []
     preserved_derived: list[str] = []
     for run_id, payload in stale_derived:
-        if _materialization_lease_active(run_id) or _broker_ready_contains_materialization(client, run_id):
+        if _materialization_lease_active(run_id):
             preserved_derived.append(run_id)
             continue
-        orphaned_tags = _broker_unacked_materialization_tags(client, run_id)
-        if orphaned_tags:
-            client.hdel("unacked", *orphaned_tags)
-            client.zrem("unacked_index", *orphaned_tags)
         payload["status"] = "queued"
         payload["recoveryReason"] = "stale_derived_heartbeat"
         payload["recoveredAt"] = utc_now()
@@ -1310,6 +1196,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
     run_dir = RUNS_DIR / run_id
     lean_cache: dict[str, Any] = {}
     strategy_path = Path(project["project_path"]) / project["main_file"]
+    execution_backend = "docker"
+    runtime_identity: dict[str, Any] | None = None
 
     def update_fingerprint(execution_validation: dict[str, Any] | None = None) -> dict[str, Any]:
         fingerprint = build_run_fingerprint(
@@ -1319,6 +1207,8 @@ def run_backtest_task(self, task_id: str, run_id: str):
             lean_cache=lean_cache,
             strategy_path=strategy_path,
             config_path=run_dir / "config.json",
+            execution_backend=execution_backend,
+            runtime_identity=runtime_identity,
         )
         validation = build_backtest_validation(parameters, fingerprint)
         if execution_validation is not None:
@@ -1339,6 +1229,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
             fingerprint_json=fingerprint,
             validation_json=validation,
             experiment_json=experiment,
+            execution_backend=execution_backend,
+            runtime_identity_json=runtime_identity,
+            canonical_config_sha256=fingerprint.get("canonicalConfigSha256"),
         )
         record_experiment_versions(
             run_id=run_id,
@@ -1351,8 +1244,14 @@ def run_backtest_task(self, task_id: str, run_id: str):
 
     try:
         runner = LeanRunner(timeout_seconds=timeout_seconds)
-        container_name = runner.container_name_for(run_id)
-        update_backtest(run_id, container_name=container_name, work_dir=str(run_dir), results_dir=str(run_dir / "results"))
+        execution_backend = runner.backend.name
+        update_backtest(
+            run_id,
+            execution_backend=execution_backend,
+            container_name=runner.container_name_for(run_id) if execution_backend == "docker" else None,
+            work_dir=str(run_dir),
+            results_dir=str(run_dir / "results"),
+        )
         if parameters.get("assetClass") == "equity" and (parameters.get("market") or parameters.get("venue")) == "china":
             universe_symbols = [str(value).upper() for value in parameters.get("universeSymbols") or []]
             gate_symbols = list(dict.fromkeys([str(parameters["ticker"]).upper(), *universe_symbols]))
@@ -1401,6 +1300,25 @@ def run_backtest_task(self, task_id: str, run_id: str):
             parameters["start"],
             parameters["end"],
         )
+        project_path = Path(project["project_path"])
+        workspace = runner.prepare(
+            run_id,
+            parameters,
+            run_dir,
+            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
+            algorithm_path=project_path / project["main_file"],
+            algorithm_class=project["algorithm_class"],
+            language=project["language"],
+            project_dir=project_path,
+        )
+        runtime_identity = workspace.plan.runtime_identity.as_dict()
+        update_backtest(
+            run_id,
+            execution_backend=workspace.execution_backend,
+            execution_id=workspace.execution_id,
+            runtime_identity_json=runtime_identity,
+            container_name=workspace.container_name or None,
+        )
         pre_execution_validation = update_fingerprint()
         if not pre_execution_validation.get("passed"):
             failed_gates = ",".join(
@@ -1409,18 +1327,11 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 if not gate.get("passed")
             )
             raise LeanPlatformError(f"pre_execution_gate_failed:{failed_gates or 'unknown'}")
-        project_path = Path(project["project_path"])
-        output = runner.run_backtest(
-            run_id,
-            parameters,
-            run_dir=run_dir,
+        execution = runner.execute(
+            workspace,
             output_callback=lambda line: append_log(task_id, line),
-            docker_image=parameters.get("dockerImage", DEFAULT_DOCKER_IMAGE),
-            algorithm_path=project_path / project["main_file"],
-            algorithm_class=project["algorithm_class"],
-            language=project["language"],
-            project_dir=project_path,
         )
+        output = runner.result_payload(execution)
 
         latest_run = get_backtest(run_id)
         if latest_run and latest_run.get("status") == CANCELLED:
@@ -1473,6 +1384,9 @@ def run_backtest_task(self, task_id: str, run_id: str):
                 )
             ),
             container_name=output.get("container_name"),
+            execution_backend=output.get("execution_backend"),
+            execution_id=output.get("execution_id"),
+            runtime_identity_json=output.get("runtime_identity"),
             work_dir=output.get("work_dir"),
             results_dir=output.get("results_dir"),
         )
@@ -1606,6 +1520,9 @@ def start_research_task(task_id: str, session_id: str):
             url=output["url"],
             readiness_status=output.get("readiness_status") or "ready",
             container_status=output.get("container_status") or "running",
+            execution_backend=output.get("executionBackend") or "docker",
+            execution_id=output.get("executionId") or output.get("container_id"),
+            runtime_identity_json=output.get("runtimeIdentity"),
             last_checked_at=utc_now(),
             finished_at=None,
         )

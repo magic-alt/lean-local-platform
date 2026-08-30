@@ -4,6 +4,82 @@
 
 ## Unreleased
 
+- Reset the current documentation baseline around Parquet/PostgreSQL/RabbitMQ,
+  external Qlib Research handoff, Windows local-versus-SCM deployment and
+  post-migration certification; historicalize superseded roadmap/schema/research
+  material, remove stale startup and unpinned-image guidance, and add semantic
+  drift checks for active help documents.
+
+- Restore Linux Docker image builds by preserving the Windows-only marker on
+  `pywin32`, pinning Akshare's `akracer` and MLflow's `gunicorn` dependencies
+  with hashes, and excluding nested pytest caches from Docker build contexts;
+  compile source-only Python dependencies in disposable builder stages so
+  runtime images stay compiler-free, and mount Parquet under the supported
+  writable data tree; use durable Celery control queues and exclusive event
+  queues for RabbitMQ 4.3, report delegated Runner health correctly, and
+  compare PostgreSQL migrations against the PostgreSQL migration chain.
+
+- Remove six unreferenced or superseded scripts: historical P0 release and
+  full-flow verification entrypoints, an unsafe partial-coverage CSI300 PIT
+  replacement tool, and redundant local launch/history helpers; document the
+  retention policy for supported scripts.
+
+- Make Dockerless Windows one-click startup use local managed processes by
+  default, reload `.env` through a full restart, preserve explicit certified
+  SCM deployments, and add a PowerShell launcher with matching lifecycle tests.
+
+- Document complete `.env` provisioning for Docker and Windows Native hosts,
+  including required-variable classification, independent secret generation,
+  PostgreSQL/RabbitMQ account bootstrap, API versus provider tokens, URL
+  encoding, Windows service identities, signed runtime boundaries, and
+  fail-closed verification steps; align the root and Windows templates with
+  the native PostgreSQL initializer and restricted runner authentication.
+
+- Harden Windows Dockerless preflight with one LEAN_DOTNET_PATH resolver,
+  deployment-host .NET 10 runtime versus release-host SDK checks, a frozen
+  deterministic Native LEAN smoke qualification, strict Docker installation
+  residue detection, pre-mutation Golden evidence, and non-blocking RabbitMQ
+  CLI cookie operations warnings while the signed runtime lock stays
+  fail-closed.
+
+- Make local Windows Native validation and signed runtime release the
+  authoritative fallback while hosted GitHub Actions quota is unavailable,
+  retaining Dockerless Golden Acceptance, backend parity, and production
+  certification as separate fail-closed gates.
+
+- Add Windows Dockerless Core acceptance plumbing: an absolute-path Windows
+  production environment template, consistent configurable sandbox policy/work
+  paths, an always-on Windows Native contract CI lane, Windows-specific sandbox
+  and supervisor tests, and a clean-host Golden Acceptance script covering
+  Docker absence, Native LEAN, service health, backup and isolated restore.
+
+- Repair Windows validation regressions in the PostgreSQL/RabbitMQ runtime
+  refactor: keep SQLite fixtures on explicit database-backed test paths,
+  preserve canonical provider identifiers when DuckDB reads partitioned
+  Parquet, degrade health checks when Docker CLI is absent, align maintenance
+  recovery tests with database lease/CAS semantics, keep the 26-stock report
+  fixture provider-hermetic, pin the new legacy SQL file to LF, and keep
+  unknown API paths out of the SPA fallback.
+
+- Replace the production MySQL/Redis runtime with PostgreSQL 17 and RabbitMQ
+  4.3.5; add a fresh PostgreSQL baseline, separate platform/Celery/MLflow
+  databases, PostgreSQL backup and isolated restore drills, RabbitMQ durability
+  settings, row-lock hardening for Paper and scheduler workflows, runtime-neutral
+  health, Docker migration gates, Windows solo-worker supervision, native
+  LEAN/Research sandbox checks, and a host-bound Windows production
+  certification gate. Market time series remain exclusively in Parquet/DuckDB;
+  SQLite remains test-only and legacy MySQL migrations remain immutable history.
+
+- Add runtime-neutral LEAN execution with preserved Docker behavior, a signed
+  fail-closed Native runtime/Runner path, Docker/native deployment profiles and
+  `platformctl`, Linux systemd sandboxing, workstation Native Research,
+  backend-neutral fingerprints/certificates, TCP MySQL operations, and opt-in
+  native/parity CI gates.
+
+- Add repository-scoped Codex production-control-plane safety guidance, specialized skills, read-only reviewers, approval defaults, and destructive-command guardrails for DataRelease, Qlib handoff, LEAN, Paper, and broker work.
+
+- Scope Research API on platform backend to Artifact Contract v2 import plus Lean validation boundary only: retire platform-owned research run and workspace endpoints while preserving read-only legacy row access.
+
 - Use successfully published TuShare Bronze partitions as incremental cursors, persist market-wide adjustment-factor watermarks, and prevent identical native partition replays from generating misleading revisions.
 
 - Include TuShare money-flow and ST-list endpoints in the default A-share refresh, and publish provider-shaped money-flow, suspension, limit-price, and ST partitions atomically to Bronze without replaying unchanged files.
@@ -320,3 +396,4 @@
 - 补齐 run fingerprint 字段和失败路径落库。
 - 支持 Paper 多标的和组合约束拒单原因。
 - 增加对应测试覆盖。
+
