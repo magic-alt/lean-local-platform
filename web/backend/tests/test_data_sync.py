@@ -83,6 +83,8 @@ def test_default_mysql_datasets_are_included_and_on_demand_markets_are_excluded(
     assert "hk_daily" not in {item["dataset_key"] for item in run["items"]}
     assert "us_daily" not in {item["dataset_key"] for item in run["items"]}
     assert "daily_basic" in {item["dataset_key"] for item in run["items"]}
+    assert "moneyflow" in {item["dataset_key"] for item in run["items"]}
+    assert "stock_st" in {item["dataset_key"] for item in run["items"]}
     assert "dividend" in {item["dataset_key"] for item in run["items"]}
     assert "fut_basic" in {item["dataset_key"] for item in run["items"]}
     assert "opt_basic" in {item["dataset_key"] for item in run["items"]}
@@ -1749,6 +1751,54 @@ def test_bronze_frontier_is_used_when_control_plane_watermark_is_stale(tmp_path,
     adapter = Adapter()
     assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (1, 2, 0, 0)
     assert adapter.calls == ["2026-07-17"]
+
+
+def test_bronze_frontier_is_not_skipped_when_control_plane_is_ahead(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync, market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    published = tmp_path / "bronze" / "tushare" / "current" / "stk_limit" / "trade_date=20260812"
+    published.mkdir(parents=True)
+    (published / "data.parquet").touch()
+    (published / "manifest.json").write_text('{"status":"success"}', encoding="utf-8")
+
+    assert data_sync._incremental_start_after("stk_limit", "2026-08-17") == "2026-08-12"
+
+
+def test_market_raw_initial_sync_backfills_without_existing_bronze(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["moneyflow"], mode="auto")
+    assert run["mode"] == "initial_full"
+    spec = next(item for item in data_sync.DATASET_REGISTRY if item.key == "moneyflow")
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source,batch_id) "
+            "values ('china','2026-07-17',1,'test','test')"
+        )
+    published = []
+    monkeypatch.setattr(
+        data_sync,
+        "_publish_provider_bronze",
+        lambda selected, trade_date, rows, *, run_id: published.append(
+            (selected.key, trade_date, rows, run_id)
+        ),
+    )
+
+    class Adapter:
+        def market_raw_rows_for_date(self, dataset, trade_date):
+            assert dataset == "moneyflow"
+            return [{"ts_code": "000001.SZ", "trade_date": trade_date.replace("-", ""), "net_mf_amount": 10.0}]
+
+    result = data_sync._sync_generic(
+        Adapter(), spec, run["id"], run["id"], "2026-07-17", full_refresh=True
+    )
+
+    assert result == (1, 1, 0, 0)
+    assert [(key, trade_date) for key, trade_date, _, _ in published] == [("moneyflow", "2026-07-17")]
 
 
 def test_adj_factor_date_sync_advances_market_watermarks(tmp_path, monkeypatch):

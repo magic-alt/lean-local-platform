@@ -158,6 +158,15 @@ DAILY_BASIC_FACTORS: dict[str, tuple[str, float]] = {
 }
 
 
+MARKET_RAW_FIELDS: dict[str, str] = {
+    "moneyflow": (
+        "ts_code,trade_date,buy_lg_vol,buy_lg_amount,sell_lg_vol,sell_lg_amount,"
+        "buy_elg_vol,buy_elg_amount,sell_elg_vol,sell_elg_amount,net_mf_vol,net_mf_amount"
+    ),
+    "stock_st": "ts_code,name,trade_date,type,type_name",
+}
+
+
 FINANCIAL_ID_FIELDS = {
     "ts_code",
     "ann_date",
@@ -486,6 +495,19 @@ class TushareAdapter:
         )
         return self._normalize_daily_basic_rows(frame)
 
+    def market_raw_rows_for_date(self, dataset: str, trade_date: str) -> list[dict[str, Any]]:
+        """Fetch an unmodified market-wide provider partition for Bronze."""
+        fields = MARKET_RAW_FIELDS.get(dataset)
+        endpoint = getattr(self.pro, dataset, None)
+        if not fields or not callable(endpoint):
+            raise LeanWebError(f"Unsupported market-wide TuShare raw dataset: {dataset}")
+        return self._paged_records(
+            endpoint,
+            page_size=6_000,
+            trade_date=_compact_date(trade_date, "trade_date"),
+            fields=fields,
+        )
+
     def adjustment_factors(self, symbol: str, start_date: str, end_date: str) -> dict[str, float]:
         result: dict[str, float] = {}
         for window_start, window_end in _date_windows(start_date, end_date):
@@ -699,7 +721,7 @@ class TushareAdapter:
             page_size=5_800,
             ts_code="",
             trade_date=day,
-            fields="ts_code,trade_date,up_limit,down_limit",
+            fields="ts_code,trade_date,pre_close,up_limit,down_limit",
         )
         rows: list[dict[str, Any]] = []
         for item in _records(frame):
@@ -710,6 +732,7 @@ class TushareAdapter:
                     {
                         "symbol": symbol,
                         "trade_date": normalized_date,
+                        "prev_close": _float(item.get("pre_close")),
                         "limit_up": _float(item.get("up_limit")),
                         "limit_down": _float(item.get("down_limit")),
                         "source": "tushare:stk_limit",
