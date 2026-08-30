@@ -82,7 +82,7 @@
 
 - Use successfully published TuShare Bronze partitions as incremental cursors, persist market-wide adjustment-factor watermarks, and prevent identical native partition replays from generating misleading revisions.
 
-- Include TuShare money-flow and ST-list endpoints in the default A-share refresh, and publish provider-shaped money-flow, suspension, limit-price, and ST partitions atomically to Bronze without replaying unchanged files.
+- Include TuShare money-flow and ST-list endpoints in the default A-share refresh, bootstrap their initial trade-date history, and publish provider-shaped money-flow, suspension, limit-price, and ST partitions atomically to Bronze without replaying unchanged files.
 
 - Add the `ashare_qlib_research_v2` release profile and deterministic PIT fundamental v2 exporter for Phase 2 alpha research.
 - Refresh the Longbridge Python SDK lock to 4.4.3 after the previously pinned 4.4.1 distribution became unavailable from PyPI, restoring reproducible hashed CI installs.
@@ -396,4 +396,3 @@
 - 补齐 run fingerprint 字段和失败路径落库。
 - 支持 Paper 多标的和组合约束拒单原因。
 - 增加对应测试覆盖。
-

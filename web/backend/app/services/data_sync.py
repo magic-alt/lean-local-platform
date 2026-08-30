@@ -4396,11 +4396,15 @@ def _sync_market_raw_by_trade_date(
     batch_id: str,
     end_date: str,
     task_id: str | None,
+    *,
+    full_refresh: bool = False,
+    minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Increment a provider-shaped market-wide endpoint directly into Bronze."""
-    start_after = _incremental_start_after(spec.key, _latest_raw_date(spec))
+    start_after = None if full_refresh else _incremental_start_after(spec.key, _latest_raw_date(spec))
     if not start_after:
-        raise RuntimeError(f"{spec.key} has no published Bronze frontier; initial backfill must be explicit.")
+        initial_start = minimum_start_date or "1990-01-01"
+        start_after = (date.fromisoformat(initial_start) - timedelta(days=1)).isoformat()
     with db() as connection:
         date_rows = connection.execute(
             """
@@ -4497,7 +4501,16 @@ def _sync_generic(
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     if spec.normalizer == "market_raw":
-        return _sync_market_raw_by_trade_date(adapter, spec, run_id, batch_id, end_date, task_id)
+        return _sync_market_raw_by_trade_date(
+            adapter,
+            spec,
+            run_id,
+            batch_id,
+            end_date,
+            task_id,
+            full_refresh=full_refresh,
+            minimum_start_date=minimum_start_date,
+        )
     if spec.normalizer == "adj_factor":
         return _sync_adj_factor_fast(
             adapter,
