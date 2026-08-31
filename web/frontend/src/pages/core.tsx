@@ -57,7 +57,6 @@ import type {
   CBondRiskItem,
   ChartData,
   DataQueryResult,
-  DataScope,
   DataProvider,
   DataSyncCatalog,
   DerivedLayerWatermarks,
@@ -1921,7 +1920,6 @@ export function BacktestsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [preflight, setPreflight] = useState<BacktestPreflight>();
-  const [researchDraft, setResearchDraft] = useState<{ sourceResearchRunId: string; dataScope: DataScope; target: "backtest" | "batch" }>();
   const [batchPreset, setBatchPreset] = useState<{
     example: WorkflowExample;
     project: Project;
@@ -1954,44 +1952,6 @@ export function BacktestsPage() {
       dataType: settings.data.defaultDataType
     });
   }, [form, settings.data.defaultAssetClass, settings.data.defaultDataType, settings.data.defaultMarket, settings.data.defaultResolution, settings.data.defaultVenue]);
-
-  useEffect(() => {
-    const runId = searchParams.get("researchRunId");
-    if (!runId) {
-      setResearchDraft(undefined);
-      return;
-    }
-    let active = true;
-    api.researchBacktestDraft(runId).then((draft) => {
-      if (!active) return;
-      const scope = draft.dataScope;
-      const nextAsset = scope.asset;
-      const symbol = scope.selection.values[0];
-      setResearchDraft(draft);
-      setAssetClass(nextAsset.assetClass);
-      setMarket(nextAsset.market);
-      setVenue(nextAsset.venue || nextAsset.market);
-      setResolution(nextAsset.resolution);
-      setDataType(nextAsset.dataType);
-      form.setFieldsValue({
-        name: `Research validation · ${runId.slice(0, 8)}`,
-        symbol,
-        assetClass: nextAsset.assetClass,
-        market: nextAsset.market,
-        venue: nextAsset.venue || nextAsset.market,
-        resolution: nextAsset.resolution,
-        dataType: nextAsset.dataType,
-        start: scope.time.startDate,
-        end: scope.time.endDate,
-        source: scope.provider.source,
-        allowResearchSource: scope.provider.allowResearchSource
-      });
-      setPreflight(undefined);
-    }).catch((error) => {
-      if (active) message.warning(`Research handoff could not be loaded: ${(error as Error).message}`);
-    });
-    return () => { active = false; };
-  }, [form, searchParamsKey]);
 
   useEffect(() => {
     let active = true;
@@ -2090,10 +2050,6 @@ export function BacktestsPage() {
       const payload = buildBacktestRequest({
         ...values,
       }, { assetClass, market, venue, resolution, dataType, projectId: values.projectId });
-      if (researchDraft) {
-        payload.dataScope = researchDraft.dataScope;
-        payload.sourceResearchRunId = researchDraft.sourceResearchRunId;
-      }
       const run = await api.createBacktest(payload);
       if (run.status === "failed") {
         message.error(run.error_message || run.error || "Backtest preflight failed");
@@ -2150,15 +2106,6 @@ export function BacktestsPage() {
                 </Card>
                 {runScope === "single" ? (
                 <Card title="New Backtest">
-        {researchDraft && (
-          <Alert
-            showIcon
-            type="success"
-            style={{ marginBottom: 16 }}
-            message="已继承 Research 的数据范围"
-            description="请选择策略项目，并重新执行回测 preflight。订单、资金、费用和滑点不会从 Research 推断。"
-          />
-        )}
         <Form
           form={form}
           key={`${market}-${selectedProjectId ?? "none"}-${templates.data.length}`}
@@ -2282,7 +2229,7 @@ export function BacktestsPage() {
         </Form>
       </Card>
                 ) : (
-                  <BatchWorkbench kind="backtest" projects={projects.data} preset={batchPreset} handoffDraft={researchDraft} />
+                  <BatchWorkbench kind="backtest" projects={projects.data} preset={batchPreset} />
                 )}
               </>
             )

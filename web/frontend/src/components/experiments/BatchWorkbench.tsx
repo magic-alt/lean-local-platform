@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 
 import { api } from "../../api";
 import { LeanChart } from "../../charts/LeanChart";
-import type { DataScope, ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project, WorkflowExample } from "../../api";
+import type { ExperimentBatch, ExperimentBatchComparison, ExperimentBatchPreview, ExperimentSensitivity, Project, WorkflowExample } from "../../api";
 import { DateStringPicker } from "../DateStringPicker";
 import { AdvancedFields, FormActions, FormGrid, FormSection } from "../forms/FormLayout";
 import { marketCostParameters } from "../../domain/backtest-request";
@@ -115,12 +115,10 @@ export function BatchWorkbench({
   kind,
   projects,
   preset,
-  handoffDraft,
 }: {
   kind: "backtest" | "optimization" | "research";
   projects: Project[];
   preset?: BatchPreset;
-  handoffDraft?: { sourceResearchRunId: string; dataScope: DataScope };
 }) {
   const [form] = Form.useForm();
   const [preview, setPreview] = useState<ExperimentBatchPreview>();
@@ -182,30 +180,6 @@ export function BatchWorkbench({
     return () => window.removeEventListener("lean-example-instantiated", applyExample);
   }, [form, kind, preset]);
   useEffect(() => {
-    if (kind !== "backtest" || !handoffDraft) return;
-    const scope = handoffDraft.dataScope;
-    const universe = scope.selection.type === "universe";
-    form.setFieldsValue({
-      name: `Research validation · ${handoffDraft.sourceResearchRunId.slice(0, 8)}`,
-      mode: "independent",
-      market: scope.asset.market,
-      venue: scope.asset.venue || scope.asset.market,
-      resolution: scope.asset.resolution,
-      dataType: scope.asset.dataType,
-      symbolSource: universe ? "universe" : "symbols",
-      symbols: universe ? "" : scope.selection.values.join(","),
-      universeCode: universe ? scope.selection.values[0] : undefined,
-      start: scope.time.startDate,
-      end: scope.time.endDate,
-      asOfDate: scope.time.asOfDate || scope.time.startDate,
-      source: scope.provider.source,
-      allowResearchSource: scope.provider.allowResearchSource,
-      sourceResearchRunId: handoffDraft.sourceResearchRunId,
-      dataScope: scope,
-    });
-    setPreview(undefined);
-  }, [form, handoffDraft, kind]);
-  useEffect(() => {
     if (!batches.some((item) => ["queued", "running"].includes(item.status))) return;
     const timer = window.setInterval(() => void reload(), 4000);
     return () => window.clearInterval(timer);
@@ -238,8 +212,6 @@ export function BatchWorkbench({
       parameterGrid,
       parameterGrids,
       factorNames: String(values.factorNames || "").split(/[\s,]+/).filter(Boolean),
-      sourceResearchRunId: values.sourceResearchRunId,
-      dataScope: values.dataScope,
     };
   }
 
