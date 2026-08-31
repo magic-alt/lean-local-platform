@@ -4,14 +4,40 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# Local validation is authoritative while GitHub Actions quota is constrained.
-# Set repository variable RUN_GITHUB_ACTIONS=1 to re-enable hosted CI without
-# changing this workflow.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Governance checks always run. Compute-heavy hosted lanes remain opt-in while
+# GitHub Actions quota is constrained; local validation is authoritative for a
+# lane that is intentionally disabled. Set RUN_GITHUB_ACTIONS=1 to enable the
+# standard hosted lanes without changing this workflow.
 jobs:
+  governance:
+    name: Governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate repository hygiene
+        run: python scripts/check_repository_hygiene.py
+      - name: Validate open-source governance
+        run: python scripts/check_oss_governance.py
+
   backend:
+    name: Backend
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,13 +46,15 @@ jobs:
           cache: pip
           cache-dependency-path: web/backend/requirements-ml.lock
       - run: pip install --require-hashes -r web/backend/requirements-ml.lock
-      - run: python scripts/check_repository_hygiene.py
       - run: python -m pytest -q
         working-directory: web/backend
 
   frontend:
+    name: Frontend
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web/frontend
@@ -41,8 +69,11 @@ jobs:
       - run: npm run build
 
   native-contract:
+    name: Native contract
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,8 +87,11 @@ jobs:
         working-directory: web/backend
 
   windows-native-contract:
+    name: Windows native contract
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -97,8 +131,11 @@ jobs:
         working-directory: web/backend
 
   docker-backtest:
+    name: LEAN Docker integration
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_DOCKER_INTEGRATION == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,8 +146,11 @@ jobs:
         working-directory: web/backend
 
   native-backtest:
+    name: LEAN native integration
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_NATIVE_INTEGRATION == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -123,8 +163,11 @@ jobs:
         working-directory: web/backend
 
   backend-parity:
+    name: Backend parity
+    needs: governance
     if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_BACKEND_PARITY == '1' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

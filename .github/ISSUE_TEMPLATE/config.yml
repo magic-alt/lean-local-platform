@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/magic-alt/platform/security/policy
+    about: Do not disclose security vulnerabilities in a public issue. Follow the private reporting guidance in SECURITY.md.

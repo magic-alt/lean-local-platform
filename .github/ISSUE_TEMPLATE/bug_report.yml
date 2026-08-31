@@ -1,0 +1,120 @@
+name: Bug report
+description: Report a reproducible defect in the platform, data pipeline, API, UI, or execution control plane.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include credentials, tokens, private market data, or exploitable security details. Security vulnerabilities must follow SECURITY.md.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken, and what did you expect instead?
+      placeholder: A concise description of the defect.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Data ingestion / certification
+        - Backtest / LEAN execution
+        - Optimization / experiment batch
+        - Research artifact handoff
+        - Paper account / ledger
+        - API / backend
+        - Frontend / UI
+        - Docker deployment
+        - Native / Windows deployment
+        - Observability / operations
+        - Documentation / developer tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe, deterministic reproduction you can.
+      placeholder: |
+        1. Start ...
+        2. Configure ...
+        3. Run ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized errors or logs if useful.
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Commit / branch
+      description: Commit SHA, branch, or release baseline where the issue occurs.
+      placeholder: main @ <sha>
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker/native mode, Python/Node versions, relevant service versions, and deployment profile.
+      placeholder: |
+        OS: Windows 11 / Ubuntu / macOS
+        Mode: docker | native
+        Profile: full | core
+        Python: 3.12.x
+        Browser: ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data_source
+    attributes:
+      label: Does the bug involve authoritative data or state mutation?
+      options:
+        - No / read-only
+        - Local test writes only
+        - Data control-plane writes
+        - Paper state writes
+        - Broker observation
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Sanitized screenshots, trace IDs, report IDs, dataset IDs, or other non-secret evidence.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and pull requests for duplicates.
+          required: true
+        - label: I removed credentials, tokens, passwords, and private data from this report.
+          required: true
+        - label: This is not a security vulnerability requiring private disclosure.
+          required: true
