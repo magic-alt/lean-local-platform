@@ -77,6 +77,37 @@ def test_scheduled_maintenance_persists_independent_layer_watermarks(tmp_path, m
         assert connection.execute("select count(*) as count from derived_maintenance_runs").fetchone()["count"] == 1
 
 
+def test_discovered_scope_kind_is_not_forwarded_twice(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+
+    from app.services import derived_maintenance, market_lake, parquet_lake
+
+    discovered_scope = {
+        "kind": "bars",
+        "asset_class": "equity",
+        "market": "china",
+        "venue": "china",
+        "resolution": "daily",
+        "data_type": "trade",
+        "adjust": "raw",
+        "source": "tushare",
+    }
+    captured = []
+    monkeypatch.setattr(parquet_lake, "_available_scopes", lambda **_kwargs: [discovered_scope])
+    monkeypatch.setattr(
+        market_lake,
+        "query_rows",
+        lambda **kwargs: captured.append(kwargs) or [],
+    )
+
+    run = derived_maintenance.create_maintenance_run(layers=["parquet"])
+    completed = derived_maintenance.run_maintenance(run["id"])
+
+    assert completed["status"] == "success"
+    assert captured[0]["kind"] == "bars"
+    assert list(captured[0]).count("kind") == 1
+
+
 def test_celery_beat_schedules_weekday_derived_maintenance():
     from app.tasks.celery_app import celery_app
 

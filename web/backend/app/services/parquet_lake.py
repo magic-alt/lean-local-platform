@@ -96,6 +96,23 @@ def _register(scope: dict[str, str], manifest: dict[str, Any]) -> dict[str, Any]
     files = _manifest_files(manifest)
     dataset_key = str(manifest.get("datasetKey") or _dataset_key(**scope))
     dataset_id = _dataset_id(dataset_key)
+    registered_file_manifest = [
+        {
+            "path": f"parquet/{item['path']}",
+            "rowCount": int(item["rowCount"]),
+            "sha256": str(item.get("sha256") or ""),
+        }
+        for item in sorted(files, key=lambda value: str(value["path"]))
+    ]
+    registered_manifest_sha256 = hashlib.sha256(
+        json.dumps(
+            registered_file_manifest,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    dataset_version = f"{scope['source']}-{dataset_id[:12]}-{registered_manifest_sha256[:12]}"
     row_count = sum(int(item["rowCount"]) for item in files)
     starts = [str(item["firstTimestamp"]) for item in files if item.get("firstTimestamp")]
     ends = [str(item["lastTimestamp"]) for item in files if item.get("lastTimestamp")]
@@ -126,7 +143,7 @@ def _register(scope: dict[str, str], manifest: dict[str, Any]) -> dict[str, Any]
                 scope["resolution"], scope["data_type"], scope["adjust"], scope["source"],
                 f"parquet/{dataset_key}", market_lake.MANIFEST_SCHEMA_VERSION,
                 min(starts) if starts else None, max(ends) if ends else None,
-                row_count, len(files), json_dump(metadata), now, now, manifest.get("datasetVersion"),
+                row_count, len(files), json_dump(metadata), now, now, dataset_version,
             ),
         )
         connection.execute("delete from parquet_files where dataset_id=?", (dataset_id,))
@@ -148,7 +165,7 @@ def _register(scope: dict[str, str], manifest: dict[str, Any]) -> dict[str, Any]
     return {
         "id": dataset_id,
         "datasetKey": dataset_key,
-        "datasetVersion": manifest.get("datasetVersion"),
+        "datasetVersion": dataset_version,
         "manifestSha256": manifest.get("manifestSha256"),
         "rootPath": f"parquet/{dataset_key}",
         "rowCount": row_count,
@@ -276,26 +293,31 @@ def parquet_consistency_report(
     if source_filter:
         scopes = [scope for scope in scopes if scope["source"] in source_filter]
     for scope in scopes:
-        if not market_lake.load_manifest(**scope).get("manifestSha256"):
-            market_lake.adopt_legacy_files(**scope)
-        integrity = market_lake.integrity_report(**scope)
         manifest = market_lake.load_manifest(**scope)
+        if not manifest.get("manifestSha256"):
+            manifest = market_lake.adopt_legacy_files(**scope)
+        integrity = market_lake.integrity_report(manifest=manifest, **scope)
         files = _manifest_files(manifest)
         row_count = sum(int(item["rowCount"]) for item in files)
+        registered = _register(scope, manifest)
         items.append(
             {
-                "datasetId": _dataset_id(str(manifest.get("datasetKey"))),
+                "datasetId": registered["id"],
                 "datasetKey": manifest.get("datasetKey"),
-                "datasetVersion": manifest.get("datasetVersion"),
+                "datasetVersion": registered["datasetVersion"],
                 "datasetRows": row_count,
                 "datasetFiles": len(files),
                 "severity": "ok" if integrity["passed"] else "critical",
                 "passed": integrity["passed"],
                 "issues": integrity["issues"],
                 "parquet": {"rowCount": row_count, "fileCount": len(files)},
+                "sourceLineage": {
+                    "passed": bool(files) and integrity["passed"],
+                    "authority": "parquet_manifest",
+                    "manifestSha256": manifest.get("manifestSha256"),
+                },
             }
         )
-        _register(scope, manifest)
     missing = bool(source_filter and not items)
     severity = "critical" if missing or any(not item["passed"] for item in items) else "ok"
     report = {
@@ -319,7 +341,7 @@ def certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]:
             if not item.get("passed") or int(item.get("datasetRows") or 0) <= 0:
                 continue
             dataset_id = str(item["datasetId"])
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update parquet_datasets set environment='production',is_production=1,is_certified=1,
                     certified_at=?,certified_by='parquet-manifest-v2',qa_status='ok',qa_report_id=?
@@ -327,7 +349,7 @@ def certify_consistent_production_datasets(report: dict[str, Any]) -> list[str]:
                 """,
                 (utc_now(), report["reportId"], dataset_id, PRIMARY_DATA_SOURCE),
             )
-            if getattr(connection, "total_changes", 0):
+            if int(getattr(cursor, "rowcount", 0) or 0) > 0:
                 certified.append(dataset_id)
     return certified
 

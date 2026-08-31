@@ -196,7 +196,7 @@ def source_certification(source: str | None, *, asset_class: str = "equity", mar
     normalized = normalize_source(source)
     if (
         database_backend() == "postgresql"
-        and os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "local_parquet").strip().lower() != "database"
+        and os.environ.get("LEAN_SOURCE_CERTIFICATION_BACKEND", "database").strip().lower() != "database"
     ):
         local = _local_lake_certification(
             normalized,

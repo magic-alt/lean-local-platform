@@ -1547,6 +1547,8 @@ export function DataPage() {
   }, false);
   const [csvForm] = Form.useForm();
   const [csvImporting, setCsvImporting] = useState(false);
+  const [syncStarting, setSyncStarting] = useState(false);
+  const [maintenanceStarting, setMaintenanceStarting] = useState(false);
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
   const localCatalogRows = useMemo(
@@ -1560,6 +1562,45 @@ export function DataPage() {
   const permissionReason = (item: typeof catalogRows[number]) => item.permission_reason || "本地 data 目录可读取";
   const permissionDisplayStatus = (item: typeof catalogRows[number]) => item.permission_status === "empty" ? "available" : item.permission_status;
   const syncError = (item: typeof catalogRows[number]) => permissionReason(item);
+  const activeSync = catalog.data.activeRun;
+  const latestMaintenance = derivedWatermarks.data.runs[0];
+  const syncActive = Boolean(activeSync && ["queued", "running", "cancelling"].includes(activeSync.status));
+  const maintenanceActive = Boolean(latestMaintenance && ["queued", "running", "retry_wait"].includes(latestMaintenance.status));
+
+  useEffect(() => {
+    if (!syncActive && !maintenanceActive) return;
+    const timer = window.setInterval(() => {
+      void catalog.reload();
+      void derivedWatermarks.reload();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [catalog.reload, derivedWatermarks.reload, maintenanceActive, syncActive]);
+
+  async function startLocalDataUpdate() {
+    setSyncStarting(true);
+    try {
+      const run = await api.startDataSync({ mode: catalog.data.recommendedMode });
+      catalog.setData((previous) => ({ ...previous, activeRun: run, latestRun: run }));
+      message.success(catalog.data.recommendedMode === "incremental" ? "本地数据增量更新已启动" : "本地数据首次建库已启动");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSyncStarting(false);
+    }
+  }
+
+  async function startDerivedValidation() {
+    setMaintenanceStarting(true);
+    try {
+      await api.startDerivedMaintenance(["parquet", "clickhouse"]);
+      await derivedWatermarks.reload();
+      message.success("派生层验证与生产数据复认证已启动");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setMaintenanceStarting(false);
+    }
+  }
 
   async function importCsv(values: any) {
     const file = values.file?.fileList?.[0]?.originFileObj;
@@ -1611,10 +1652,52 @@ export function DataPage() {
         title="本地 Data · Parquet 股票数据"
         style={{ marginBottom: 16 }}
         extra={<Space>
+          <Button
+            type="primary"
+            icon={<CloudDownloadOutlined />}
+            loading={syncStarting}
+            disabled={syncActive}
+            onClick={() => void startLocalDataUpdate()}
+          >
+            {catalog.data.recommendedMode === "incremental" ? "增量更新" : "首次建库"}
+          </Button>
+          <Button
+            icon={<PlayCircleOutlined />}
+            loading={maintenanceStarting}
+            disabled={maintenanceActive}
+            onClick={() => void startDerivedValidation()}
+          >重新验证生产数据</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { catalog.reload(); derivedWatermarks.reload(); }}>刷新</Button>
         </Space>}
       >
         {catalog.error && <Alert type="warning" showIcon message="同步目录尚未初始化" description={catalog.error.message} style={{ marginBottom: 12 }} />}
+        {activeSync && (
+          <Alert
+            type="info"
+            showIcon
+            message={`本地数据更新：${activeSync.status}`}
+            description={`模式 ${activeSync.mode} · ${activeSync.items?.length || 0} 个数据集；页面每 5 秒自动刷新状态。`}
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        {!activeSync && catalog.data.latestRun?.status === "failed" && (
+          <Alert
+            type="error"
+            showIcon
+            message="最近一次本地数据更新失败"
+            description={catalog.data.latestRun.error || "请查看任务日志后重试。"}
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        {latestMaintenance?.status === "failed" && (
+          <Alert
+            type="error"
+            showIcon
+            message="最近一次派生层验证失败"
+            description={latestMaintenance.error || "请修复失败原因后重新验证。"}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         <div className="grid">
           <Card size="small"><Statistic title="数据源" value="本地 Parquet" /></Card>
           <Card size="small"><Statistic title="可用数据集" value={localCatalogRows.length} /></Card>
