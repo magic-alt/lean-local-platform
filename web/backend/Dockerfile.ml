@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf AS python-base
+FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5 AS python-base
 
 ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=10 \
