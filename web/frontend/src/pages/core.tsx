@@ -1563,6 +1563,11 @@ export function DataPage() {
   const permissionDisplayStatus = (item: typeof catalogRows[number]) => item.permission_status === "empty" ? "available" : item.permission_status;
   const syncError = (item: typeof catalogRows[number]) => permissionReason(item);
   const activeSync = catalog.data.activeRun;
+  const latestSync = catalog.data.latestRun;
+  const latestSyncIssues = (latestSync?.items || [])
+    .filter((item) => ["failed", "partial", "paused"].includes(item.status) || Boolean(item.error))
+    .map((item) => `${item.dataset_key}: ${item.error || item.status}`)
+    .slice(0, 3);
   const latestMaintenance = derivedWatermarks.data.runs[0];
   const syncActive = Boolean(activeSync && ["queued", "running", "cancelling"].includes(activeSync.status));
   const maintenanceActive = Boolean(latestMaintenance && ["queued", "running", "retry_wait"].includes(latestMaintenance.status));
@@ -1680,12 +1685,12 @@ export function DataPage() {
             style={{ marginBottom: 12 }}
           />
         )}
-        {!activeSync && catalog.data.latestRun?.status === "failed" && (
+        {!activeSync && latestSync && ["failed", "partial", "paused"].includes(latestSync.status) && (
           <Alert
-            type="error"
+            type={latestSync.status === "failed" ? "error" : "warning"}
             showIcon
-            message="最近一次本地数据更新失败"
-            description={catalog.data.latestRun.error || "请查看任务日志后重试。"}
+            message={latestSync.status === "failed" ? "最近一次本地数据更新失败" : "最近一次本地数据更新未完整完成"}
+            description={latestSync.error || latestSyncIssues.join("；") || "部分数据集未完成，请查看任务日志后重试。"}
             style={{ marginBottom: 12 }}
           />
         )}

@@ -42,6 +42,7 @@ from .tushare_contracts import contract_for, contract_public_item, coverage_repo
 from .tushare_rate_limit import DEFAULT_CALLS_PER_MINUTE, global_tushare_quota_status
 from .tushare_typed_source import persist_typed_source_rows
 from .tushare_lineage import async_lineage_enabled, enqueue_lineage_job, lineage_metrics
+from .tushare_extended_sync import sync_extended_daily
 from . import market_lake
 
 
@@ -116,6 +117,15 @@ DATASET_REGISTRY: tuple[DatasetSpec, ...] = (
     DatasetSpec("suspend_d", "suspend_d", "A股/交易状态", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "suspend_date", "suspend_timing"), date_field="suspend_date", normalizer="suspend_d", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("stk_limit", "stk_limit", "A股/交易状态", "instrument", probe={"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260110"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="stk_limit", initial_fetch="per_symbol_full", incremental_fetch="by_trade_date"),
     DatasetSpec("stock_st", "stock_st", "A股/交易状态", "window", probe={"trade_date": "20260109"}, key_fields=("ts_code", "trade_date"), date_field="trade_date", normalizer="market_raw", initial_fetch="by_trade_date", incremental_fetch="by_trade_date"),
+    DatasetSpec(
+        "extended_daily",
+        "moneyflow_hsgt",
+        "扩展数据/日更",
+        "window",
+        probe={"trade_date": "20260109"},
+        normalizer="extended_daily",
+        retain_raw=False,
+    ),
     DatasetSpec("dividend", "dividend", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH"}, ("ts_code", "end_date", "ann_date", "div_proc"), "ann_date", normalizer="dividend"),
     DatasetSpec("income", "income", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date", "report_type"), "ann_date", normalizer="financial"),
     DatasetSpec("balancesheet", "balancesheet", "A股/财务", "instrument", "quarterly", {"ts_code": "600519.SH", "start_date": "20250101", "end_date": "20261231"}, ("ts_code", "end_date", "ann_date", "report_type"), "ann_date", normalizer="financial"),
@@ -175,6 +185,7 @@ BULK_DATASET_KEYS = {
     "suspend_d",
     "stk_limit",
     "stock_st",
+    "extended_daily",
     "dividend",
     "index_basic",
     "index_daily",
@@ -1689,8 +1700,20 @@ def _disk_hard_reserve_bytes(total_bytes: int) -> int:
     return max(500 * 1024**3, int(total_bytes * 0.50))
 
 
+def _disk_capacity_path() -> str:
+    # Docker deliberately mounts /tmp as a small 128 MiB tmpfs. It is not the
+    # destination for canonical data and must never drive the capacity guard,
+    # otherwise every incremental write is rejected even when the host-backed
+    # data volume has ample free space.
+    return (
+        os.environ.get("LEAN_DATA_SYNC_SPOOL_DIR")
+        or os.environ.get("LEAN_RUNTIME_DIR")
+        or str(DATA_DIR)
+    )
+
+
 def _disk_metrics() -> dict[str, Any]:
-    path = os.environ.get("LEAN_DATA_SYNC_SPOOL_DIR") or str(os.environ.get("LEAN_RUNTIME_DIR") or "/tmp")
+    path = _disk_capacity_path()
     try:
         usage = shutil.disk_usage(path)
     except OSError:
@@ -2008,6 +2031,19 @@ def _latest_open_trade_date(end_date: str, market: str = "china") -> str:
     return str(row["trade_date"]) if row and row["trade_date"] else end_date
 
 
+def _open_trade_dates(end_date: str, *, start_date: str = "2000-01-01") -> list[str]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select trade_date from trade_calendar
+            where market='china' and is_open=1 and trade_date between ? and ?
+            order by trade_date
+            """,
+            (start_date, end_date),
+        ).fetchall()
+    return [str(row["trade_date"]) for row in rows]
+
+
 def _latest_published_bronze_date(dataset_key: str) -> str | None:
     """Return the latest successfully published native TuShare partition.
 
@@ -2035,6 +2071,28 @@ def _latest_published_bronze_date(dataset_key: str) -> str | None:
         if latest is None or published_date > latest:
             latest = published_date
     return latest
+
+
+def _published_bronze_partition_exists(dataset_key: str, trade_date: str) -> bool:
+    compact = trade_date.replace("-", "")
+    partition = (
+        market_lake.PARQUET_DIR
+        / "bronze"
+        / "tushare"
+        / "current"
+        / dataset_key
+        / f"trade_date={compact}"
+    )
+    if not (partition / "data.parquet").is_file():
+        return False
+    try:
+        manifest = json.loads((partition / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(manifest, dict) and str(manifest.get("status") or "").lower() in {
+        "success",
+        "empty",
+    }
 
 
 _MARKET_RAW_BRONZE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -2108,6 +2166,60 @@ def _incremental_start_after(dataset_key: str, persisted_start_after: str | None
     """Prefer the durable Bronze frontier; use DB metadata only before it exists."""
     published_start_after = _latest_published_bronze_date(dataset_key)
     return published_start_after or persisted_start_after
+
+
+def _incremental_replay_start_after(
+    dataset_key: str,
+    frontier: str | None,
+    end_date: str,
+) -> str | None:
+    """Replay recent sessions and repair holes in the bounded catch-up window.
+
+    This mirrors the qlib-platform daily plan: every incremental run rechecks a
+    small recent window for provider corrections and also fills missing Bronze
+    partitions in a wider bounded window. The caller still writes through the
+    normal content comparison, so unchanged partitions remain idempotent.
+    """
+    dataset_root = (
+        market_lake.PARQUET_DIR / "bronze" / "tushare" / "current" / dataset_key
+    )
+    if not dataset_root.is_dir():
+        return frontier
+    lookback = max(
+        1,
+        min(20, int(os.environ.get("LEAN_DATA_SYNC_LOOKBACK_TRADING_DAYS", "5"))),
+    )
+    catchup = max(
+        lookback,
+        min(250, int(os.environ.get("LEAN_DATA_SYNC_CATCHUP_TRADING_DAYS", "60"))),
+    )
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select trade_date from trade_calendar
+            where market='china' and is_open=1 and trade_date<=?
+            order by trade_date desc limit ?
+            """,
+            (end_date, catchup),
+        ).fetchall()
+    open_dates = sorted(str(row["trade_date"]) for row in rows)
+    if not open_dates:
+        return frontier
+    selected = set(open_dates[-lookback:])
+    selected.update(
+        trade_date
+        for trade_date in open_dates
+        if not _published_bronze_partition_exists(dataset_key, trade_date)
+    )
+    if frontier:
+        selected.update(trade_date for trade_date in open_dates if trade_date > frontier)
+    if not selected:
+        return frontier
+    earliest = min(selected)
+    earlier = [trade_date for trade_date in open_dates if trade_date < earliest]
+    if earlier:
+        return earlier[-1]
+    return (date.fromisoformat(earliest) - timedelta(days=1)).isoformat()
 
 
 def _latest_bar(symbol: str) -> str | None:
@@ -2693,7 +2805,11 @@ def _sync_daily(
             or uncovered_started_after_frontier
         )
     ):
-        date_mode_start_after = market_start_after
+        date_mode_start_after = _incremental_replay_start_after(
+            spec.key,
+            market_start_after,
+            end_date,
+        )
     if date_mode_start_after:
         return _sync_daily_by_trade_date(
             adapter,
@@ -3382,7 +3498,11 @@ def _sync_adj_factor_fast(
             )
             start_after = (date.fromisoformat(first_date) - timedelta(days=1)).isoformat()
         else:
-            start_after = _incremental_start_after(spec.key, _latest_raw_date(spec)) or "1990-12-18"
+            frontier = _incremental_start_after(spec.key, _latest_raw_date(spec))
+            start_after = (
+                _incremental_replay_start_after(spec.key, frontier, end_date)
+                or "1990-12-18"
+            )
         with db() as connection:
             dates = connection.execute(
                 """
@@ -3843,7 +3963,11 @@ def _sync_instrument_dataset_fast(
         )
         and hasattr(adapter, str(date_fetch_name))
     ):
-        date_mode_start_after = market_start_after
+        date_mode_start_after = _incremental_replay_start_after(
+            spec.key,
+            market_start_after,
+            end_date,
+        )
     date_mode = bool(date_mode_start_after)
     work: list[dict[str, Any]] = []
 
@@ -4401,7 +4525,12 @@ def _sync_market_raw_by_trade_date(
     minimum_start_date: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Increment a provider-shaped market-wide endpoint directly into Bronze."""
-    start_after = None if full_refresh else _incremental_start_after(spec.key, _latest_raw_date(spec))
+    frontier = None if full_refresh else _incremental_start_after(spec.key, _latest_raw_date(spec))
+    start_after = (
+        frontier
+        if full_refresh
+        else _incremental_replay_start_after(spec.key, frontier, end_date)
+    )
     if not start_after:
         initial_start = minimum_start_date or "1990-01-01"
         start_after = (date.fromisoformat(initial_start) - timedelta(days=1)).isoformat()
@@ -4959,6 +5088,10 @@ def run_sync(
             date.fromisoformat(end_date) - timedelta(days=history_bars * 8 // 5 + 60)
         ).isoformat()
     try:
+        # Fail before permission probes or provider reads when the durable data
+        # volume cannot accept even a small write. This avoids consuming quota
+        # and returning a misleading collection of zero-row dataset successes.
+        _assert_disk_capacity(0)
         # The legacy-source audit scans A-share daily bars and is relevant only
         # when that dataset participates in the run.  Running it for a targeted
         # index or contract-catalog refresh needlessly scans the largest table
@@ -5004,6 +5137,7 @@ def run_sync(
             if row["status"] == "partial" and _checkpoint_complete(row)
         }
         infrastructure_failure: dict[str, Any] | None = None
+        blocking_failure: dict[str, Any] | None = None
         for spec in DATASET_REGISTRY:
             if spec.key not in selected_keys:
                 continue
@@ -5058,6 +5192,39 @@ def run_sync(
                         full_refresh=full_refresh,
                         reconcile_full_snapshot=reconcile_full_snapshot,
                         minimum_start_date=minimum_start_date,
+                    )
+                elif spec.key == "extended_daily":
+                    extended = sync_extended_daily(
+                        adapter,
+                        run_id=run_id,
+                        end_date=market_end_date,
+                        open_dates=_open_trade_dates(market_end_date),
+                    )
+                    validation = {
+                        "status": "passed" if not extended["failed"] else "failed",
+                        "criticalErrors": extended["failures"],
+                        "warnings": [],
+                        "checkedRows": int(extended["rows"]),
+                        "rejectedRows": 0,
+                        "keysSha256": hashlib.sha256(b"").hexdigest(),
+                    }
+                    _record_ingestion_manifest(
+                        run_id=run_id,
+                        spec=spec,
+                        scope_key="extended_daily",
+                        request={"endDate": market_end_date, "mode": "gap_fill_and_financial_replay"},
+                        rows=[],
+                        validation=validation,
+                        endpoint_counts=dict(extended["endpointCounts"]),
+                        coverage_start=None,
+                        coverage_end=market_end_date,
+                        status="success" if not extended["failed"] else "failed",
+                    )
+                    result = (
+                        int(extended["processed"]),
+                        int(extended["rows"]),
+                        int(extended["changed"]),
+                        int(extended["failed"]),
                     )
                 else:
                     dataset_end_date = (
@@ -5123,6 +5290,11 @@ def run_sync(
                     inserted=inserted,
                     updated=updated,
                     failed=failed,
+                    error=(
+                        json_dump({"failed": failed, "samples": extended.get("failures") or []})
+                        if spec.key == "extended_daily" and failed
+                        else ""
+                    ),
                     canonical_status="ready" if failed == 0 else "partial",
                     derived_status_json=json_dump(
                         {"status": "pending"}
@@ -5166,6 +5338,17 @@ def run_sync(
                     finished_at=utc_now(),
                 )
                 summaries[spec.key] = {"error": str(exc)}
+                if spec.key in {"stock_basic", "trade_cal"}:
+                    # Security master and trading calendar are required inputs
+                    # for every market-by-date increment. Continuing would make
+                    # downstream datasets report zero-row success against an
+                    # empty universe or stale calendar.
+                    blocking_failure = {
+                        "code": "REQUIRED_DATASET_FAILED",
+                        "dataset": spec.key,
+                        "message": str(exc),
+                    }
+                    break
         if infrastructure_failure is not None:
             summary = {
                 "status": "paused",
@@ -5204,8 +5387,24 @@ def run_sync(
             any(item.get("error") or int(item.get("failed") or 0) > 0 for item in summaries.values())
             or not completion_evidence["passed"]
         )
-        final_status = "cancelled" if cancelled else "partial" if degraded else "success"
-        canonical_status = "cancelled" if cancelled else "partial" if degraded else "ready"
+        final_status = (
+            "cancelled"
+            if cancelled
+            else "failed"
+            if blocking_failure
+            else "partial"
+            if degraded
+            else "success"
+        )
+        canonical_status = (
+            "cancelled"
+            if cancelled
+            else "failed"
+            if blocking_failure
+            else "partial"
+            if degraded
+            else "ready"
+        )
         daily_summary = summaries.get("daily") or {}
         should_materialize = bool(
             not cancelled
@@ -5239,6 +5438,8 @@ def run_sync(
             "mode": sync_mode, "resumeBaseMode": resume_base_mode or None,
             "completionEvidence": completion_evidence,
         }
+        if blocking_failure:
+            summary["blockingFailure"] = blocking_failure
         with db() as connection:
             if task_id:
                 connection.execute(
