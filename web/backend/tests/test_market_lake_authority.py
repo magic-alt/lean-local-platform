@@ -75,6 +75,40 @@ def test_native_silver_daily_layout_is_read_without_copy(tmp_path, monkeypatch):
     assert rows == [{"symbol": "000001", "trade_date": "2026-08-11", "close": 11.26}]
 
 
+def test_single_file_index_layout_uses_file_date_coverage(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    target = tmp_path / "gold" / "qlib_staging" / "full" / "SH000300.parquet"
+    target.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "date": ["2026-08-10", "2026-08-11"],
+            "symbol": ["SH000300", "SH000300"],
+            "open": [4000.0, 4010.0],
+            "high": [4020.0, 4030.0],
+            "low": [3990.0, 4000.0],
+            "close": [4010.0, 4020.0],
+            "volume": [100.0, 120.0],
+        }
+    ).write_parquet(target)
+
+    manifest = market_lake.adopt_legacy_files(
+        kind="bars",
+        asset_class="index",
+        market="china",
+        venue="china",
+        resolution="daily",
+        data_type="trade",
+        adjust="raw",
+        source="tushare",
+    )
+
+    assert manifest["files"][0]["year"] == 2026
+    assert manifest["files"][0]["firstTimestamp"] == "2026-08-10"
+    assert manifest["files"][0]["lastTimestamp"] == "2026-08-11"
+
+
 def test_native_auxiliary_layouts_are_discovered_without_custom_manifest(tmp_path, monkeypatch):
     """The local bronze/silver layers must not depend on a ``kind=`` tree."""
     from app.services import market_lake

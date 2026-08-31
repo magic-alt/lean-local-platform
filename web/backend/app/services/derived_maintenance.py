@@ -22,6 +22,15 @@ from . import market_lake
 
 LAYERS = ("parquet", "clickhouse")
 MAINTENANCE_LOCK_NAME = "lean:derived:scheduled-maintenance"
+BAR_SCOPE_KEYS = (
+    "asset_class",
+    "market",
+    "venue",
+    "resolution",
+    "data_type",
+    "adjust",
+    "source",
+)
 
 
 def _scope_key(scope: dict[str, str]) -> str:
@@ -45,6 +54,14 @@ def _scope_from_key(scope_key: str, source: str) -> dict[str, str]:
         "scopeKey": scope_key,
         "source": source,
     }
+
+
+def _bar_scope(scope: dict[str, str]) -> dict[str, str]:
+    """Remove discovery-only fields before calling bar-specific helpers."""
+    kind = str(scope.get("kind") or "bars")
+    if kind != "bars":
+        raise ValueError(f"Unsupported maintenance scope kind: {kind}.")
+    return {key: scope[key] for key in BAR_SCOPE_KEYS}
 
 
 def create_maintenance_run(
@@ -165,7 +182,11 @@ def _upsert_watermark(
 
 
 def _canonical_stats(scope: dict[str, str]) -> dict[str, Any]:
-    rows = market_lake.query_rows(kind="bars", **scope, columns="count(*) row_count,min(trade_date) first_date,max(trade_date) last_date")
+    rows = market_lake.query_rows(
+        kind="bars",
+        **_bar_scope(scope),
+        columns="count(*) row_count,min(trade_date) first_date,max(trade_date) last_date",
+    )
     return rows[0] if rows else {"row_count": 0, "first_date": None, "last_date": None}
 
 
@@ -244,7 +265,7 @@ def _existing_layer_seed(layer: str, scope: dict[str, str], stats: dict[str, Any
 
 def _canonical_date_counts(scope: dict[str, str]) -> dict[str, int]:
     rows = market_lake.query_rows(
-        kind="bars", **scope, columns="trade_date,count(*) row_count",
+        kind="bars", **_bar_scope(scope), columns="trade_date,count(*) row_count",
         group_by="trade_date", order_by="trade_date",
     )
     return {str(row["trade_date"]): int(row["row_count"]) for row in rows}
@@ -292,7 +313,7 @@ def _clickhouse_reconcile_dates(scope: dict[str, str]) -> dict[str, Any]:
         date_chunk = repair_dates[offset : offset + 100]
         placeholders = ",".join("?" for _ in date_chunk)
         rows = market_lake.query_rows(
-            kind="bars", **scope, columns="symbol,trade_date,open,high,low,close,volume",
+            kind="bars", **_bar_scope(scope), columns="symbol,trade_date,open,high,low,close,volume",
             predicates=(f"trade_date in ({placeholders})",), parameters=date_chunk,
             order_by="symbol,trade_date",
         )
@@ -388,7 +409,7 @@ def _clickhouse_incremental(scope: dict[str, str], start_date: str | None) -> di
     lake_predicates = ("trade_date>=?",) if start_date else ()
     lake_values = (start_date,) if start_date else ()
     symbols = [str(row["symbol"]) for row in market_lake.query_rows(
-        kind="bars", **scope, columns="distinct symbol", predicates=lake_predicates,
+        kind="bars", **_bar_scope(scope), columns="distinct symbol", predicates=lake_predicates,
         parameters=lake_values, order_by="symbol",
     )]
     inserted = 0
@@ -481,7 +502,7 @@ def _run_locked(run_id: str) -> dict[str, Any]:
             """,
             (started, attempt, started, f"{os.getpid()}:{run_id}", run_id),
         )
-    scopes = _available_scopes(include_research_sources=False)
+    scopes = [_bar_scope(scope) for scope in _available_scopes(include_research_sources=False)]
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     canonical_end = max((str(_canonical_stats(scope).get("last_date") or "") for scope in scopes), default="") or None

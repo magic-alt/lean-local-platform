@@ -33,6 +33,28 @@ def test_adopt_registers_existing_native_lake_without_export(tmp_path, monkeypat
     assert result["files"][0]["relativePath"].endswith("trade_date=20260703/data.parquet")
 
 
+def test_native_lake_consistency_can_certify_registered_dataset(tmp_path, monkeypatch):
+    from app.db import init_db
+    from app.services import market_lake, parquet_lake
+    from app.services.source_gate import source_certification
+
+    init_db()
+    _native_daily(tmp_path)
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    monkeypatch.setattr(parquet_lake, "PARQUET_DIR", tmp_path)
+
+    report = parquet_lake.parquet_consistency_report(sources=["tushare"], persist=True)
+    certified = parquet_lake.certify_consistent_production_datasets(report)
+    certification = source_certification("tushare")
+
+    assert report["passed"] is True
+    assert report["items"][0]["datasetRows"] == 1
+    assert report["items"][0]["sourceLineage"]["passed"] is True
+    assert certified == [report["items"][0]["datasetId"]]
+    assert certification["isProduction"] is True
+    assert certification["isCertified"] is True
+
+
 def test_duckdb_query_reads_native_parquet_authority(tmp_path, monkeypatch):
     from app.db import init_db
     from app.services import market_lake, parquet_lake

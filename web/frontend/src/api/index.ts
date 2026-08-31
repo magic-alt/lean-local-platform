@@ -4,6 +4,7 @@ import type {
   DataAsset,
   DataProvider,
   DataSyncCatalog,
+  DataSyncRun,
   DataContractCatalog,
   DerivedLayerWatermarks,
   MarketInfo,
@@ -250,6 +251,12 @@ export const api = {
   },
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   dataCatalog: () => request<DataSyncCatalog>("/api/data/catalog"),
+  startDataSync: (payload: { datasets?: string[]; mode?: "auto" | "initial_full" | "incremental" }) =>
+    request<DataSyncRun>("/api/data/sync-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: payload.mode ?? "auto", datasets: payload.datasets })
+    }),
   dataContracts: (params?: { assetClass?: string; status?: string; includeFields?: boolean }) => {
     const query = new URLSearchParams();
     if (params?.assetClass) query.set("assetClass", params.assetClass);

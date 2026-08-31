@@ -381,14 +381,26 @@ def adopt_legacy_files(**scope: str) -> dict[str, Any]:
     if native:
         entries: list[dict[str, Any]] = []
         for path in native:
-            frame = pl.scan_parquet(path).select(pl.len().alias("rows")).collect()
-            date_value = path.parent.name.split("=", 1)[-1]
-            if len(date_value) == 8 and date_value.isdigit():
-                date_value = f"{date_value[:4]}-{date_value[4:6]}-{date_value[6:]}"
+            scan = pl.scan_parquet(path)
+            partition_name = path.parent.name
+            if partition_name.startswith("trade_date="):
+                frame = scan.select(pl.len().alias("rows")).collect()
+                compact_date = partition_name.split("=", 1)[1]
+                date_start = date_end = _iso_date(compact_date)
+            else:
+                schema = scan.collect_schema()
+                date_column = "trade_date" if "trade_date" in schema else "date"
+                frame = scan.select(
+                    pl.len().alias("rows"),
+                    pl.col(date_column).min().alias("first"),
+                    pl.col(date_column).max().alias("last"),
+                ).collect()
+                date_start = _iso_date(frame.item(0, "first"))
+                date_end = _iso_date(frame.item(0, "last"))
             entries.append({
-                "path": _relative(path), "year": int(date_value[:4]),
-                "rowCount": int(frame.item(0, "rows")), "firstTimestamp": date_value,
-                "lastTimestamp": date_value, "sha256": _sha256(path), "size": path.stat().st_size,
+                "path": _relative(path), "year": int(date_start[:4]),
+                "rowCount": int(frame.item(0, "rows")), "firstTimestamp": date_start,
+                "lastTimestamp": date_end, "sha256": _sha256(path), "size": path.stat().st_size,
             })
         digest = hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         return {
@@ -1372,8 +1384,8 @@ def delete_snapshot_absences(
     return deleted
 
 
-def integrity_report(**scope: str) -> dict[str, Any]:
-    manifest = load_manifest(**scope)
+def integrity_report(*, manifest: dict[str, Any] | None = None, **scope: str) -> dict[str, Any]:
+    manifest = manifest or load_manifest(**scope)
     issues: list[str] = []
     rows = 0
     for item in manifest.get("files") or []:
@@ -1394,5 +1406,3 @@ def integrity_report(**scope: str) -> dict[str, Any]:
         "manifestRows": rows,
         "issues": issues,
     }
-
-

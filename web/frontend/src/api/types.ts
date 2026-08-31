@@ -58,6 +58,26 @@ export interface DataSyncCatalogItem {
   capabilityReason?: string | null;
 }
 
+export interface DataSyncRun {
+  id: string;
+  mode: string;
+  status: string;
+  canonical_status?: string | null;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  items?: Array<{
+    id: string;
+    dataset_key: string;
+    status: string;
+    processed: number;
+    inserted: number;
+    failed: number;
+    error?: string | null;
+  }>;
+}
+
 export interface DataContractField {
   name: string;
   providerName: string;
@@ -165,6 +185,8 @@ export interface DataSyncCatalog {
   };
   hasCompletedInitialSync: boolean;
   recommendedMode: "initial_full" | "incremental";
+  activeRun?: DataSyncRun | null;
+  latestRun?: DataSyncRun | null;
   contractCoverage?: Omit<DataContractCatalog, "items" | "count">;
   /** Market data is read directly from the configured local Data directory. */
   localOnly?: boolean;
