@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.github.com"
 
 
-def api_get(path: str, token: str | None) -> Any:
+def _request(path: str, token: str | None) -> urllib.request.Request:
     request = urllib.request.Request(
         f"{API}{path}",
         headers={
@@ -27,8 +27,20 @@ def api_get(path: str, token: str | None) -> Any:
     )
     if token:
         request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(request, timeout=15) as response:
+    return request
+
+
+def api_get(path: str, token: str | None) -> Any:
+    with urllib.request.urlopen(_request(path, token), timeout=15) as response:
         return json.load(response)
+
+
+def api_status(path: str, token: str | None) -> int:
+    try:
+        with urllib.request.urlopen(_request(path, token), timeout=15) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
 
 
 def expected_metadata() -> tuple[str, list[str]]:
@@ -117,6 +129,15 @@ def main() -> int:
             errors.append(
                 f"ruleset {expected['name']!r} target: "
                 f"expected {expected.get('target')!r}, got {actual.get('target')!r}"
+            )
+
+    security = policy.get("security") or {}
+    if security.get("dependency_graph_required"):
+        status = api_status(f"/repos/{owner}/{repo}/dependency-graph/sbom", token)
+        if status != 200:
+            errors.append(
+                "security.dependency_graph: expected enabled/readable, "
+                f"GitHub dependency-graph SBOM endpoint returned HTTP {status}"
             )
 
     if errors:

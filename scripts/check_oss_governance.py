@@ -181,6 +181,13 @@ def validate_repository_policy(errors: list[str]) -> None:
     tags = by_name.get("Protect release tags")
     if not tags:
         errors.append("repository policy is missing the Protect release tags ruleset")
+    security = policy.get("security") or {}
+    if security.get("dependency_update_bot") != "dependabot":
+        errors.append("repository policy must use Dependabot as the single dependency-update bot")
+    if security.get("dependency_graph_required") is not True:
+        errors.append("repository policy must require GitHub Dependency Graph")
+    if security.get("dependency_review_required") is not True:
+        errors.append("repository policy must require Dependency Review after its prerequisite is enabled")
 
 
 def validate_dependency_security(errors: list[str]) -> None:
@@ -194,12 +201,16 @@ def validate_dependency_security(errors: list[str]) -> None:
     review = ROOT / ".github/workflows/dependency-review.yml"
     if review.is_file():
         text = review.read_text(encoding="utf-8")
-        if "actions/dependency-review-action@v4" not in text:
-            errors.append("Dependency Review must use actions/dependency-review-action@v4")
-        if "fail-on-severity: high" not in text:
-            errors.append("Dependency Review must fail on high-or-greater vulnerabilities")
-        if "name: Dependency Review" not in text:
-            errors.append("Dependency Review check name must remain stable for Ruleset use")
+        required_claims = (
+            "actions/dependency-review-action@v4",
+            "fail-on-severity: high",
+            "name: Dependency Review",
+            "dependency-graph/sbom",
+            "steps.dependency_graph.outputs.enabled == 'true'",
+        )
+        for claim in required_claims:
+            if claim not in text:
+                errors.append(f"Dependency Review workflow is missing required configuration: {claim}")
 
     codeql = ROOT / ".github/workflows/codeql.yml"
     if codeql.is_file():

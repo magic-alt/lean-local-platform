@@ -42,6 +42,7 @@
   ],
   "security": {
     "dependency_update_bot": "dependabot",
+    "dependency_graph_required": true,
     "dependency_review_required": true,
     "dependency_review_fail_on_severity": "high",
     "codeql_languages": [
