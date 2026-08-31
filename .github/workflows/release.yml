@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer from VERSION, without the leading v
+        required: true
+        type: string
+      prerelease:
+        description: Mark the draft release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: platform-release
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    name: Draft release
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Validate release version and changelog
+        run: python scripts/check_release_version.py --tag "v${{ inputs.version }}" --require-changelog
+      - name: Re-run governance gates
+        run: |
+          python scripts/check_repository_hygiene.py
+          python scripts/check_oss_governance.py
+      - name: Ensure tag does not already exist
+        shell: bash
+        run: |
+          tag="v${{ inputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag already exists: $tag" >&2
+            exit 1
+          fi
+      - name: Create annotated release tag
+        shell: bash
+        run: |
+          tag="v${{ inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "LEAN Local Platform $tag"
+          git push origin "$tag"
+      - name: Create draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ inputs.version }}"
+          args=(release create "$tag" --verify-tag --draft --generate-notes --title "$tag")
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"
