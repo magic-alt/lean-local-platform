@@ -313,7 +313,7 @@ services:
   clickhouse:
     profiles: ["clickhouse"]
     logging: *bounded-logging
-    image: clickhouse/clickhouse-server:24.12-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
+    image: clickhouse/clickhouse-server:26.8-alpine@sha256:fd037d424da807c1b36517f3ff6c739286c60a34c928279c229fc1faa0cadaa8
     environment:
       CLICKHOUSE_DB: lean_market
       CLICKHOUSE_USER: lean
