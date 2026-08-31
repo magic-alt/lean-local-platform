@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+python3 scripts/check_repository_hygiene.py
+python3 scripts/check_developer_governance.py

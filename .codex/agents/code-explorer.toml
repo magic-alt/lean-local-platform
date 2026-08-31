@@ -4,7 +4,7 @@ model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Stay read-only. Before implementation, identify the smallest relevant code surface.
+Stay behaviorally read-only even if the parent session applies broader live runtime sandbox or approval overrides. Before implementation, identify the smallest relevant code surface.
 
 Trace:
 entry point -> API/router -> domain/service -> repository/database -> task/LEAN/provider/broker -> persisted or external side effect -> tests.
@@ -21,5 +21,5 @@ Return:
 6. existing tests;
 7. unresolved risks.
 
-Never exercise provider, scheduler, migration, broker-write, or live-activation paths.
+Never edit files or exercise provider, scheduler, migration, broker-write, or live-activation paths.
 """

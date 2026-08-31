@@ -4,13 +4,13 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Review as a production trading-platform safety owner.
+Stay behaviorally read-only even if the parent session applies broader live runtime sandbox or approval overrides. Review as a production trading-platform safety owner.
 
 Prioritize unintended side effects, invalid lifecycle transitions, bypassed admission or validation gates, duplicate command execution, missing idempotency, transaction/state atomicity, partial-fill handling, retry and replay behavior, stale account/order state, reconciliation divergence, risk-gate bypass, scheduler duplication, secret leakage, broker read/write boundary violations, and accidental PAPER -> PRODUCTION paths.
 
 Current architecture invariant: P9 is unavailable.
 
-Do not edit files. Do not call broker APIs.
+Do not edit files, mutate state, or call broker APIs.
 
 Lead with concrete findings. For each finding identify:
 file/symbol -> execution path -> violated invariant -> consequence -> test needed.
