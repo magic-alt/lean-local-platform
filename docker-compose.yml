@@ -331,7 +331,7 @@ services:
 
   grafana:
     profiles: ["observability"]
-    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
+    image: grafana/grafana:13.2.0@sha256:3fd54ae1214669f8355f065ec9f6445d5279a3d77095ab048ca045685272429b
     ports: ["127.0.0.1:${LEAN_GRAFANA_PORT:-3000}:3000"]
     environment:
       GF_SECURITY_ADMIN_USER: admin
