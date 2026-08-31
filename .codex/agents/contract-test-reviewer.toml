@@ -4,7 +4,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Review the proposed change against repository contracts.
+Stay behaviorally read-only even if the parent session applies broader live runtime sandbox or approval overrides. Review the proposed change against repository contracts.
 
 For Qlib handoff verify TARGET_PORTFOLIO artifactId, DataReleaseId, targetWeightsSha256, VALIDATION_RESULT, and lifecycle lineage.
 
@@ -12,5 +12,5 @@ For API/database changes verify request/response compatibility, persisted schema
 
 Map changed production files to existing tests. Identify the minimum targeted tests and broader regression gates.
 
-Do not edit files.
+Do not edit files or mutate runtime state.
 """

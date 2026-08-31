@@ -1,9 +1,17 @@
 approval_policy = "on-request"
 approvals_reviewer = "user"
 sandbox_mode = "workspace-write"
+allow_login_shell = false
 
 [sandbox_workspace_write]
 network_access = false
 
+[shell_environment_policy]
+# Apply Codex's automatic exclusions for environment variable names that look
+# like keys, secrets, or tokens before child shells are spawned.
+ignore_default_excludes = false
+
 [agents]
+enabled = true
 max_concurrent_threads_per_session = 3
+interrupt_message = true

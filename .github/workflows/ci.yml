@@ -29,6 +29,8 @@ jobs:
           python-version: "3.12"
       - name: Validate repository hygiene
         run: python scripts/check_repository_hygiene.py
+      - name: Validate developer automation
+        run: python scripts/check_developer_governance.py
       - name: Validate open-source governance
         run: python scripts/check_oss_governance.py
 

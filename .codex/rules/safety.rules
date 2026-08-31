@@ -1,35 +1,115 @@
+# Project-local command rules are an additional guardrail, not a substitute for
+# sandboxing, approval policy, repository review, or operator judgment.
+# Keep inline match/not_match examples so Codex validates intended prefixes.
+
 prefix_rule(
     pattern = ["git", "push", "--force"],
     decision = "forbidden",
-    justification = "Force-push is prohibited for agent workflows; publish a new commit instead."
+    justification = "Force-push is prohibited for agent workflows; publish a new commit instead.",
+    match = ["git push --force origin main"],
+    not_match = ["git push origin main", "git push --force-with-lease origin main"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "-f"],
+    decision = "forbidden",
+    justification = "Force-push is prohibited for agent workflows; publish a new commit instead.",
+    match = ["git push -f origin feature"],
+    not_match = ["git push origin feature"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--force-with-lease"],
+    decision = "prompt",
+    justification = "Force-with-lease can rewrite shared history; require explicit review before using it.",
+    match = ["git push --force-with-lease origin feature"],
+    not_match = ["git push origin feature"],
 )
 
 prefix_rule(
     pattern = ["git", "reset", "--hard"],
     decision = "prompt",
-    justification = "This may destroy uncommitted work."
+    justification = "A hard reset can destroy uncommitted work; inspect status and require explicit review.",
+    match = ["git reset --hard HEAD~1"],
+    not_match = ["git reset --soft HEAD~1"],
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "prompt",
+    justification = "Git clean can delete untracked work; inspect the target set before destructive cleanup.",
+    match = ["git clean -fd", "git clean -fxd"],
+    not_match = ["git status --short"],
 )
 
 prefix_rule(
     pattern = ["docker", "compose", "down"],
     decision = "prompt",
-    justification = "Stopping the platform stack may affect persistent state."
+    justification = "Stopping the platform stack may affect persistent state and active development sessions.",
+    match = ["docker compose down", "docker compose down --remove-orphans"],
+    not_match = ["docker compose ps"],
 )
 
 prefix_rule(
     pattern = ["docker", "compose", "rm"],
     decision = "prompt",
-    justification = "Container removal may destroy local runtime state."
+    justification = "Container removal may destroy local runtime state; review the target services first.",
+    match = ["docker compose rm -f api"],
+    not_match = ["docker compose ps"],
 )
 
 prefix_rule(
     pattern = ["docker", "volume", "rm"],
     decision = "forbidden",
-    justification = "Volume deletion can destroy persistent platform data; use a reviewed, backup-aware maintenance procedure instead."
+    justification = "Volume deletion can destroy persistent platform data; use a reviewed, backup-aware maintenance procedure instead.",
+    match = ["docker volume rm platform_postgres"],
+    not_match = ["docker volume ls"],
+)
+
+prefix_rule(
+    pattern = ["docker", "volume", "prune"],
+    decision = "forbidden",
+    justification = "Volume pruning can delete persistent platform data; use an explicit reviewed maintenance procedure instead.",
+    match = ["docker volume prune -f"],
+    not_match = ["docker volume ls"],
+)
+
+prefix_rule(
+    pattern = ["docker", "system", "prune"],
+    decision = "prompt",
+    justification = "System pruning is broad and may remove caches or resources needed by other work.",
+    match = ["docker system prune -af"],
+    not_match = ["docker system df"],
 )
 
 prefix_rule(
     pattern = ["rm", "-rf"],
     decision = "prompt",
-    justification = "Recursive destructive deletion requires review."
+    justification = "Recursive destructive deletion requires review of the resolved path.",
+    match = ["rm -rf build"],
+    not_match = ["rm build.log"],
+)
+
+prefix_rule(
+    pattern = ["rm", "-fr"],
+    decision = "prompt",
+    justification = "Recursive destructive deletion requires review of the resolved path.",
+    match = ["rm -fr build"],
+    not_match = ["rm build.log"],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "delete"],
+    decision = "forbidden",
+    justification = "Repository deletion is never an ordinary agent operation; perform it manually through a separately reviewed administrative procedure.",
+    match = ["gh repo delete magic-alt/platform"],
+    not_match = ["gh repo view magic-alt/platform"],
+)
+
+prefix_rule(
+    pattern = ["gh", "release", "delete"],
+    decision = "prompt",
+    justification = "Release deletion mutates published evidence; verify release policy and require explicit maintainer review.",
+    match = ["gh release delete v0.1.0"],
+    not_match = ["gh release view v0.1.0"],
 )

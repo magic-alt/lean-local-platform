@@ -36,6 +36,15 @@ Explain any checked impact:
 
 <!-- Keep Parquet/PostgreSQL/RabbitMQ authority and qlib-platform handoff explicit. -->
 
+## Developer automation / repository governance
+
+- [ ] No `.agents`, `.codex`, `.githooks`, `.github`, `AGENTS.md`, release-policy, or repository-setting changes
+- [ ] Developer automation / governance changed and is described below
+- [ ] Any version-sensitive Codex/GitHub syntax was checked against current upstream documentation
+- [ ] No required check, CODEOWNERS rule, command guardrail, secret filter, or release protection was weakened
+
+Details:
+
 ## Data and migrations
 
 - [ ] No schema or migration changes
@@ -58,10 +67,14 @@ List the exact commands run and their results.
 
 ```text
 python scripts/check_repository_hygiene.py
+python scripts/check_developer_governance.py
 python scripts/check_oss_governance.py
 
 # add relevant backend/frontend/integration commands here
 ```
+
+For remote GitHub checks, distinguish an actual scan/review step from a
+bootstrap warning or skipped lane.
 
 Intentionally skipped validation lanes and why:
 
@@ -84,5 +97,6 @@ N/A
 - [ ] I preserved the documented Research / Execution boundary.
 - [ ] I did not bypass fail-closed data, PIT, benchmark, lineage, hash, or certification gates.
 - [ ] I did not introduce broker writes or live activation as an incidental change.
+- [ ] I did not weaken developer-automation or repository-governance safety controls to make validation pass.
 - [ ] I updated the `Unreleased` section of `CHANGELOG.md`.
 - [ ] I reviewed the contribution and security policies.

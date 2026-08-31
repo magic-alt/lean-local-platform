@@ -1,6 +1,13 @@
 # Default repository ownership
 * @magic-alt
 
+# Developer / agent control plane
+/AGENTS.md @magic-alt
+/.agents/ @magic-alt
+/.codex/ @magic-alt
+/.githooks/ @magic-alt
+/scripts/check_developer_governance.py @magic-alt
+
 # Governance and release surfaces
 /.github/ @magic-alt
 /README.md @magic-alt
@@ -8,6 +15,7 @@
 /CONTRIBUTING.md @magic-alt
 /CODE_OF_CONDUCT.md @magic-alt
 /LICENSE @magic-alt
+/VERSION @magic-alt
 /CHANGELOG.md @magic-alt
 
 # Architecture, runtime, and product surfaces
