@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 
@@ -61,3 +63,27 @@ def test_metrics_requires_bearer_authentication(monkeypatch):
         "/metrics",
         headers={"Authorization": "Bearer unit-secret"},
     ).status_code == 200
+
+
+def test_vite_dev_proxy_bridges_platform_api_credentials_server_side():
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "web" / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
+
+    for contract in (
+        'loadEnv(mode, repoRoot, "")',
+        "process.env.LEAN_API_TOKEN",
+        "env.LEAN_API_TOKEN",
+        "process.env.LEAN_API_TOKEN_FILE",
+        "env.LEAN_API_TOKEN_FILE",
+        '"web/runtime/secrets/api_token"',
+        "headers: proxyHeaders",
+    ):
+        assert contract in source
+
+    # The operator credential is consumed by Vite's Node proxy configuration
+    # only. React application source must never embed or read it.
+    frontend_source = repo_root / "web" / "frontend" / "src"
+    assert not any(
+        "LEAN_API_TOKEN" in path.read_text(encoding="utf-8")
+        for path in frontend_source.rglob("*.ts*")
+    )
