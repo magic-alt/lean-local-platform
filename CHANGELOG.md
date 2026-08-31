@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Restore the frontend Research API contract changes from PR #34 on the
+  default-branch lineage: freeze the external-Qlib/LEAN-validation surface,
+  reject stale frontend Research routes locally and in CI, and remove retired
+  Research client helpers.
+
 - Reset the current documentation baseline around Parquet/PostgreSQL/RabbitMQ,
   external Qlib Research handoff, Windows local-versus-SCM deployment and
   post-migration certification; historicalize superseded roadmap/schema/research

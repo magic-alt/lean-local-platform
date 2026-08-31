@@ -6,3 +6,4 @@ cd "$repo_root"
 
 python3 scripts/check_repository_hygiene.py
 python3 scripts/check_developer_governance.py
+python3 scripts/check_frontend_api_contract.py

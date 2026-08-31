@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "description": "Public Research API surface owned by platform. Retired execution/workspace tombstones are intentionally excluded from OpenAPI.",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/research/imports/qlib"
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/runs/{run_id}/lean-validation"
+    }
+  ]
+}
