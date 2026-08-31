@@ -1,0 +1,95 @@
+name: Feature request
+description: Propose a focused capability or engineering improvement that fits the documented platform boundary.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first, then the proposed solution. Architecture changes should identify the affected source-of-truth and side-effect boundaries.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What user, operator, developer, or reliability problem should be solved?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain the desired behavior and important constraints.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Data platform / governance
+        - Backtest / LEAN execution
+        - Optimization / experiment batch
+        - Research artifact handoff
+        - Paper account / execution controls
+        - API / backend
+        - Frontend / UX
+        - Deployment / operations
+        - Observability
+        - Documentation / developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: side_effect
+    attributes:
+      label: Highest expected side-effect class
+      options:
+        - READ_ONLY
+        - LOCAL_TEST_WRITE
+        - DATA_CONTROL_PLANE_WRITE
+        - PAPER_STATE_WRITE
+        - BROKER_OBSERVATION
+        - BROKER_WRITE
+        - LIVE_ACTIVATION
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: architecture
+    attributes:
+      label: Architecture / contract impact
+      description: Does this change Parquet/PostgreSQL/RabbitMQ authority, Artifact Contract v2, DataRelease, LEAN execution, Paper ledger, or live-execution boundaries?
+      placeholder: No boundary change, or explain the proposed boundary change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What simpler or existing approaches were considered?
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What observable behavior and validation evidence would make this complete?
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and pull requests for similar proposals.
+          required: true
+        - label: I reviewed the current architecture and support boundary.
+          required: true
+        - label: This request does not rely on silently bypassing fail-closed validation gates.
+          required: true

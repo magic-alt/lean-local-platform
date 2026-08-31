@@ -1,0 +1,53 @@
+name: Documentation improvement
+description: Report unclear, stale, missing, or inconsistent documentation.
+title: "[Docs]: "
+body:
+  - type: textarea
+    id: location
+    attributes:
+      label: Document / section
+      description: Link or name the README, document, help article, API reference, or section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is unclear, incorrect, stale, or missing?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Suggested improvement
+      description: Describe the information or structure that would be more useful.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Incorrect operating guidance
+        - Architecture / boundary drift
+        - Setup / deployment blocker
+        - API / contract mismatch
+        - Missing developer guidance
+        - Readability / navigation
+        - Typo / minor wording
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked Current State / Release Status when the report concerns current behavior.
+          required: true
+        - label: I searched existing issues and pull requests for the same documentation problem.
+          required: true

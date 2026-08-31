@@ -1,0 +1,24 @@
+# Canonical repository metadata for maintainers and settings automation.
+# GitHub does not apply this file by itself; keep the repository settings in sync.
+
+description: >-
+  Local-first quantitative execution and control platform built around QuantConnect LEAN,
+  FastAPI, React, PostgreSQL, RabbitMQ, Parquet, and DuckDB.
+
+topics:
+  - quantitative-finance
+  - algorithmic-trading
+  - quantconnect
+  - lean
+  - backtesting
+  - paper-trading
+  - quant-research
+  - fastapi
+  - react
+  - postgresql
+  - rabbitmq
+  - celery
+  - parquet
+  - duckdb
+  - python
+  - typescript

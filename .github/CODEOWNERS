@@ -1,0 +1,21 @@
+# Default repository ownership
+* @magic-alt
+
+# Governance and release surfaces
+/.github/ @magic-alt
+/README.md @magic-alt
+/SECURITY.md @magic-alt
+/CONTRIBUTING.md @magic-alt
+/CODE_OF_CONDUCT.md @magic-alt
+/LICENSE @magic-alt
+/CHANGELOG.md @magic-alt
+
+# Architecture, runtime, and product surfaces
+/docs/ @magic-alt
+/config/ @magic-alt
+/deploy/ @magic-alt
+/docker/ @magic-alt
+/scripts/ @magic-alt
+/strategies/ @magic-alt
+/web/backend/ @magic-alt
+/web/frontend/ @magic-alt
