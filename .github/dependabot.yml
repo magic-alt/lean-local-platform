@@ -1,0 +1,97 @@
+version: 2
+
+# Dependabot is the single dependency-update bot for this repository.
+# Do not enable Renovate in parallel: duplicate update PRs make lockfile and
+# container-image review harder, not safer.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Singapore
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /web/frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: Asia/Singapore
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "deps(frontend)"
+    groups:
+      frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # Python installs are hash-locked. The repository currently has no single
+  # canonical lock-regeneration command, so routine version-update PRs are
+  # deliberately disabled until that workflow exists. Dependabot security
+  # updates/alerts remain available for vulnerable dependencies.
+  - package-ecosystem: pip
+    directory: /web/backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Singapore
+    open-pull-requests-limit: 0
+    rebase-strategy: auto
+    commit-message:
+      prefix: "deps(backend)"
+
+  - package-ecosystem: docker
+    directory: /web/backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: Asia/Singapore
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "deps(docker)"
+    groups:
+      backend-images-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: Asia/Singapore
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "deps(compose)"
+    groups:
+      compose-images-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

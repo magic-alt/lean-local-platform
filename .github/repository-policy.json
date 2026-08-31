@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "repository": {
+    "visibility": "public",
+    "allow_squash_merge": true,
+    "allow_rebase_merge": true,
+    "allow_merge_commit": false,
+    "delete_branch_on_merge": true,
+    "allow_update_branch": true
+  },
+  "rulesets": [
+    {
+      "name": "Protect main",
+      "target": "branch",
+      "enforcement": "active",
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
+      "block_deletions": true,
+      "block_force_pushes": true,
+      "require_linear_history": true,
+      "require_pull_request": true,
+      "required_approving_reviews": 0,
+      "require_code_owner_review": false,
+      "require_review_thread_resolution": true,
+      "strict_status_checks": true,
+      "required_status_checks": [
+        "Governance",
+        "Dependency Review"
+      ]
+    },
+    {
+      "name": "Protect release tags",
+      "target": "tag",
+      "enforcement": "active",
+      "include": [
+        "refs/tags/v*"
+      ],
+      "block_deletions": true,
+      "block_force_pushes": true
+    }
+  ],
+  "security": {
+    "dependency_update_bot": "dependabot",
+    "dependency_graph_required": true,
+    "dependency_review_required": true,
+    "dependency_review_fail_on_severity": "high",
+    "codeql_languages": [
+      "python",
+      "javascript-typescript"
+    ],
+    "codeql_required_for_merge": false
+  }
+}

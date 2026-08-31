@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Validate open-source governance files without third-party dependencies."""
+"""Validate open-source and repository-governance files without third-party dependencies."""
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_FILES = (
     "README.md",
+    "VERSION",
     "LICENSE",
     "SECURITY.md",
     "CONTRIBUTING.md",
@@ -22,8 +24,18 @@ REQUIRED_FILES = (
     ".github/ISSUE_TEMPLATE/feature_request.yml",
     ".github/ISSUE_TEMPLATE/documentation.yml",
     ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/dependabot.yml",
+    ".github/release.yml",
     ".github/repository-metadata.yml",
+    ".github/repository-policy.json",
     ".github/workflows/ci.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/dependency-review.yml",
+    ".github/workflows/release.yml",
+    "docs/repository-governance.md",
+    "docs/releasing.md",
+    "scripts/check_release_version.py",
+    "scripts/audit_repository_settings.py",
 )
 
 MARKDOWN_FILES = (
@@ -31,6 +43,8 @@ MARKDOWN_FILES = (
     "SECURITY.md",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
+    "docs/repository-governance.md",
+    "docs/releasing.md",
 )
 
 POLICY_FILES = (
@@ -39,6 +53,8 @@ POLICY_FILES = (
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
+    "docs/repository-governance.md",
+    "docs/releasing.md",
 )
 
 ISSUE_FORMS = (
@@ -51,6 +67,13 @@ LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 PLACEHOLDER_RE = re.compile(
     r"(?:\[INSERT[^\]]*\]|<INSERT[^>]*>|\bCHANGEME\b|\bPLACEHOLDER_CONTACT\b)",
     re.IGNORECASE,
+)
+SEMVER_RE = re.compile(
+    r"^(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 
 
@@ -72,6 +95,15 @@ def validate_license(errors: list[str]) -> None:
         errors.append("LICENSE must contain the Apache License 2.0 text")
     if "Copyright 2026 magic-alt contributors" not in text:
         errors.append("LICENSE is missing the project copyright notice")
+
+
+def validate_version(errors: list[str]) -> None:
+    path = ROOT / "VERSION"
+    if not path.is_file():
+        return
+    version = path.read_text(encoding="utf-8").strip()
+    if not SEMVER_RE.fullmatch(version):
+        errors.append(f"VERSION must be valid SemVer, got {version!r}")
 
 
 def validate_codeowners(errors: list[str]) -> None:
@@ -121,11 +153,105 @@ def validate_repository_metadata(errors: list[str]) -> None:
             errors.append(f"repository metadata is missing required topic: {topic}")
 
 
+def validate_repository_policy(errors: list[str]) -> None:
+    path = ROOT / ".github/repository-policy.json"
+    if not path.is_file():
+        return
+    try:
+        policy = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        errors.append(f"repository policy is invalid JSON: {exc}")
+        return
+    if policy.get("schemaVersion") != 1:
+        errors.append("repository policy must use schemaVersion 1")
+    rulesets = policy.get("rulesets") or []
+    by_name = {item.get("name"): item for item in rulesets if isinstance(item, dict)}
+    main = by_name.get("Protect main")
+    if not main:
+        errors.append("repository policy is missing the Protect main ruleset")
+    else:
+        checks = main.get("required_status_checks") or []
+        for check in ("Governance", "Dependency Review"):
+            if check not in checks:
+                errors.append(f"Protect main must require status check: {check}")
+        if main.get("required_approving_reviews") != 0:
+            errors.append("single-maintainer baseline must use 0 required approvals")
+        if not main.get("strict_status_checks"):
+            errors.append("Protect main must require strict/up-to-date status checks")
+    tags = by_name.get("Protect release tags")
+    if not tags:
+        errors.append("repository policy is missing the Protect release tags ruleset")
+    security = policy.get("security") or {}
+    if security.get("dependency_update_bot") != "dependabot":
+        errors.append("repository policy must use Dependabot as the single dependency-update bot")
+    if security.get("dependency_graph_required") is not True:
+        errors.append("repository policy must require GitHub Dependency Graph")
+    if security.get("dependency_review_required") is not True:
+        errors.append("repository policy must require Dependency Review after its prerequisite is enabled")
+
+
+def validate_dependency_security(errors: list[str]) -> None:
+    dependabot = ROOT / ".github/dependabot.yml"
+    if dependabot.is_file():
+        text = dependabot.read_text(encoding="utf-8")
+        for ecosystem in ("github-actions", "npm", "pip", "docker", "docker-compose"):
+            if f"package-ecosystem: {ecosystem}" not in text:
+                errors.append(f"Dependabot is missing ecosystem: {ecosystem}")
+
+    review = ROOT / ".github/workflows/dependency-review.yml"
+    if review.is_file():
+        text = review.read_text(encoding="utf-8")
+        required_claims = (
+            "actions/dependency-review-action@v4",
+            "fail-on-severity: high",
+            "name: Dependency Review",
+            "dependency-graph/sbom",
+            "steps.dependency_graph.outputs.enabled == 'true'",
+        )
+        for claim in required_claims:
+            if claim not in text:
+                errors.append(f"Dependency Review workflow is missing required configuration: {claim}")
+
+    codeql = ROOT / ".github/workflows/codeql.yml"
+    if codeql.is_file():
+        text = codeql.read_text(encoding="utf-8")
+        for claim in (
+            "github/codeql-action/init@v4",
+            "github/codeql-action/analyze@v4",
+            "python",
+            "javascript-typescript",
+            "security-events: write",
+        ):
+            if claim not in text:
+                errors.append(f"CodeQL workflow is missing required configuration: {claim}")
+
+
+def validate_release_policy(errors: list[str]) -> None:
+    release = ROOT / ".github/workflows/release.yml"
+    if release.is_file():
+        text = release.read_text(encoding="utf-8")
+        for claim in (
+            "workflow_dispatch:",
+            "check_release_version.py",
+            "--require-changelog",
+            "--draft",
+            "--verify-tag",
+        ):
+            if claim not in text:
+                errors.append(f"Release workflow is missing required safety gate: {claim}")
+
+    docs = ROOT / "docs/releasing.md"
+    if docs.is_file():
+        text = docs.read_text(encoding="utf-8")
+        for claim in ("Semantic Versioning", "production certification", "VERSION", "draft"):
+            if claim not in text:
+                errors.append(f"release documentation is missing required policy claim: {claim}")
+
+
 def normalize_markdown_target(raw: str) -> str:
     target = raw.strip()
     if target.startswith("<") and target.endswith(">"):
         target = target[1:-1]
-    # Ignore an optional Markdown link title after a whitespace separator.
     if " \"" in target:
         target = target.split(" \"", 1)[0]
     if " '" in target:
@@ -199,9 +325,13 @@ def main() -> int:
     errors: list[str] = []
     validate_required_files(errors)
     validate_license(errors)
+    validate_version(errors)
     validate_codeowners(errors)
     validate_issue_forms(errors)
     validate_repository_metadata(errors)
+    validate_repository_policy(errors)
+    validate_dependency_security(errors)
+    validate_release_policy(errors)
     validate_markdown_links(errors)
     validate_policy_claims(errors)
 
