@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -34,6 +35,7 @@ MANIFEST_NAME = "_active_manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
 KINDS = {"bars", "trade_status", "adjustment_factor", "daily_basic"}
 PARTITION_FILE_NAME = "p.parquet"
+_TUSHARE_SYMBOL_PARTITION = re.compile(r"^(?P<symbol>\d{6})\.(?P<venue>SH|SZ|BJ|HK)$", re.IGNORECASE)
 
 BAR_COLUMNS = (
     "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
@@ -1114,6 +1116,13 @@ def write_tushare_extended_bronze_partition(
     _require_engine()
     safe_dataset = str(dataset).strip()
     safe_partition = str(partition).strip()
+    # Symbol partitions used to be written with a dot (``000001.SZ``), while
+    # the incremental synchronizer uses a filesystem-stable underscore
+    # (``000001_SZ``). Normalize at the writer boundary so every caller shares
+    # one immutable current-partition identity.
+    symbol_partition = _TUSHARE_SYMBOL_PARTITION.fullmatch(safe_partition)
+    if symbol_partition:
+        safe_partition = f"{symbol_partition.group('symbol')}_{symbol_partition.group('venue').upper()}"
     if (
         not safe_dataset
         or not safe_partition

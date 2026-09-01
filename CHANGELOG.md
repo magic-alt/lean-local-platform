@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Normalize extended TuShare symbol partitions to the canonical
+  `000001_SZ` form at the write boundary, avoiding duplicate current data
+  directories while preserving replaced current snapshots in immutable
+  revisions.
+
 - Make the open Data page periodically check the latest known China trading
   session and automatically enqueue one post-close incremental refresh; accept
   the UI's explicit initial-build mode, fail queued sync runs when task dispatch

@@ -197,3 +197,28 @@ def test_provider_bronze_partition_replay_is_a_noop_and_correction_is_versioned(
     assert corrected["changed"] is True
     revisions = tmp_path / "bronze" / "tushare" / "revisions" / "moneyflow"
     assert list(revisions.rglob("data.parquet"))
+
+
+def test_extended_symbol_partition_is_normalized_and_current_remains_published(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    columns = ("ts_code", "ann_date", "cash_div")
+    first = market_lake.write_tushare_extended_bronze_partition(
+        "dividend", "000001.SZ",
+        [{"ts_code": "000001.SZ", "ann_date": "20260101", "cash_div": 0.1}],
+        columns=columns,
+    )
+    corrected = market_lake.write_tushare_extended_bronze_partition(
+        "dividend", "000001_SZ",
+        [{"ts_code": "000001.SZ", "ann_date": "20260101", "cash_div": 0.2}],
+        columns=columns,
+    )
+
+    current = tmp_path / "bronze" / "tushare" / "current" / "extended" / "dividend" / "trade_date=000001_SZ"
+    assert first["changed"] is True
+    assert corrected["changed"] is True
+    assert (current / "data.parquet").is_file()
+    assert not (current.parent / "trade_date=000001.SZ").exists()
+    assert pl.read_parquet(current / "data.parquet").item(0, "cash_div") == 0.2
+    assert list((tmp_path / "bronze" / "tushare" / "revisions" / "extended" / "dividend").rglob("data.parquet"))
