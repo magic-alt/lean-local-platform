@@ -258,6 +258,9 @@ def _permission_error(exc: Exception) -> tuple[str, str]:
             "timeout",
             "temporar",
             "connection",
+            "查询数据失败",
+            "系统繁忙",
+            "服务异常",
         )
     ):
         return "retryable", reason
@@ -727,6 +730,14 @@ def _missing_default_index_daily_codes() -> set[str]:
 def _complete_global_query(pro: Any, spec: DatasetSpec, params: dict[str, Any]) -> list[dict[str, Any]]:
     """Fetch independent market partitions concurrently, preserving request order."""
     concurrency = max(1, min(32, int(os.environ.get("LEAN_TUSHARE_FETCH_CONCURRENCY", "16"))))
+    if spec.key == "index_daily":
+        # TuShare can reject a burst of long, independently paged index-history
+        # windows with its generic Chinese "query failed" response. Keep this
+        # workload parallel, but below its less-documented endpoint threshold.
+        concurrency = min(
+            concurrency,
+            max(1, min(8, int(os.environ.get("LEAN_TUSHARE_INDEX_DAILY_FETCH_CONCURRENCY", "4")))),
+        )
 
     def fetch_many(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(requests) == 1:

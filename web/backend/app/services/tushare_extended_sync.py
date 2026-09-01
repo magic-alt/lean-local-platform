@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable, Iterable
 
 from . import market_lake
@@ -140,6 +141,30 @@ def _fetch_rows(adapter: Any, endpoint: str, params: dict[str, str]) -> list[dic
     return [dict(row) for row in frame.to_dict("records")]
 
 
+def _retryable_provider_error(exc: Exception) -> bool:
+    """Identify transient TuShare failures without masking bad endpoint requests."""
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "查询数据失败", "系统繁忙", "服务异常", "频率", "每分钟", "每小时",
+            "rate", "too many", "timeout", "temporar", "connection",
+        )
+    )
+
+
+def _fetch_rows_with_retry(adapter: Any, endpoint: str, params: dict[str, str]) -> list[dict[str, Any]]:
+    """Retry provider-side transient failures before marking a partition failed."""
+    for attempt in range(1, 4):
+        try:
+            return _fetch_rows(adapter, endpoint, params)
+        except Exception as exc:  # noqa: BLE001 - preserve the final provider error.
+            if not _retryable_provider_error(exc) or attempt == 3:
+                raise
+            time.sleep(float(attempt))
+    raise RuntimeError("unreachable")
+
+
 def _symbols(adapter: Any) -> list[str]:
     """Return the active stock universe for per-symbol extended endpoints."""
     frame = adapter.pro.stock_basic(list_status="L", fields="ts_code")
@@ -267,7 +292,7 @@ def sync_extended_daily(
                 }
             counters["processed"] += 1
             try:
-                rows = _fetch_rows(adapter, endpoint.name, params)
+                rows = _fetch_rows_with_retry(adapter, endpoint.name, params)
                 columns = _columns(endpoint.name, rows)
                 if not columns:
                     raise RuntimeError(f"extended_schema_unavailable:{endpoint.name}")
