@@ -1184,6 +1184,39 @@ def test_extended_daily_sync_reports_each_partition_failure(monkeypatch):
     assert failures == [{"dataset": "broken_vip", "partition": "20260630", "error": "provider rejected period"}]
 
 
+def test_extended_daily_sync_retries_transient_tushare_query_failures(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    calls = []
+
+    class Pro:
+        @staticmethod
+        def share_float(**params):
+            calls.append(params)
+            if len(calls) < 3:
+                raise RuntimeError("查询数据失败，请确认参数！可以反馈管理员协助您排查问题")
+            return [{"value": "ok"}]
+
+    endpoint = tushare_extended_sync.ExtendedDailyEndpoint("share_float", "corporate", "date_range")
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", (endpoint,))
+    monkeypatch.setattr(tushare_extended_sync, "_columns", lambda dataset, rows: ("value",))
+    monkeypatch.setattr(tushare_extended_sync.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        tushare_extended_sync.market_lake,
+        "write_tushare_extended_bronze_partition",
+        lambda *args, **kwargs: {"changed": True},
+    )
+
+    result = tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()), run_id="run-retry", end_date="2026-09-01", open_dates=[],
+        financial_lookback_calendar_days=1,
+    )
+
+    assert result["failed"] == 0
+    assert calls[:3] == [{"start_date": "20260801", "end_date": "20260831"}] * 3
+    assert len(calls) == 4
+
+
 def test_extended_daily_sync_limits_symbol_batch_and_heartbeats(monkeypatch):
     from app.services import tushare_extended_sync
 
@@ -3477,6 +3510,22 @@ def test_transient_provider_failures_are_retried(monkeypatch):
         calls.append(True)
         if len(calls) < 3:
             raise RuntimeError("每分钟最多访问该接口500次")
+        return "ok"
+
+    assert data_sync._call_with_retry(operation) == "ok"
+    assert len(calls) == 3
+
+
+def test_tushare_generic_query_failure_is_retried(monkeypatch):
+    from app.services import data_sync
+
+    calls = []
+    monkeypatch.setattr(data_sync.time, "sleep", lambda seconds: None)
+
+    def operation():
+        calls.append(True)
+        if len(calls) < 3:
+            raise RuntimeError("查询数据失败，请确认参数！可以反馈管理员协助您排查问题")
         return "ok"
 
     assert data_sync._call_with_retry(operation) == "ok"
