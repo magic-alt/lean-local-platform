@@ -164,7 +164,14 @@ def sync_extended_daily(
     counters = {"processed": 0, "changed": 0, "rows": 0, "failed": 0, "skipped": 0}
     failures: list[dict[str, str]] = []
     endpoint_counts: dict[str, int] = {}
-    for endpoint in EXTENDED_DAILY_ENDPOINTS:
+    # Bounded market/date/report/exchange calls must land before the expensive
+    # active-universe sweep. A worker restart or cancellation during thousands
+    # of per-symbol calls must not starve the remaining daily datasets.
+    endpoint_order = sorted(
+        enumerate(EXTENDED_DAILY_ENDPOINTS),
+        key=lambda item: (item[1].plan == "symbol", item[0]),
+    )
+    for _, endpoint in endpoint_order:
         if endpoint.plan == "trade_date":
             tasks = [
                 (trade_date.replace("-", ""), {"trade_date": trade_date.replace("-", "")})

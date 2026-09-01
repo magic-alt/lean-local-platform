@@ -1549,6 +1549,8 @@ export function DataPage() {
   const [csvImporting, setCsvImporting] = useState(false);
   const [syncStarting, setSyncStarting] = useState(false);
   const [maintenanceStarting, setMaintenanceStarting] = useState(false);
+  const automaticSyncStarting = useRef(false);
+  const automaticSyncAttemptedFor = useRef<string | null>(null);
   const csvAssetClass = Form.useWatch("assetClass", csvForm) || "equity";
   const csvMarket = Form.useWatch("market", csvForm) || "china";
   const localCatalogRows = useMemo(
@@ -1580,6 +1582,38 @@ export function DataPage() {
     }, 5_000);
     return () => window.clearInterval(timer);
   }, [catalog.reload, derivedWatermarks.reload, maintenanceActive, syncActive]);
+
+  useEffect(() => {
+    const seconds = catalog.data.automaticUpdate?.checkIntervalSeconds ?? 300;
+    const timer = window.setInterval(() => void catalog.reload(), seconds * 1_000);
+    return () => window.clearInterval(timer);
+  }, [catalog.reload, catalog.data.automaticUpdate?.checkIntervalSeconds]);
+
+  useEffect(() => {
+    const automatic = catalog.data.automaticUpdate;
+    if (
+      catalog.loading
+      || !automatic?.enabled
+      || !automatic.due
+      || syncActive
+      || syncStarting
+      || automaticSyncStarting.current
+      || automaticSyncAttemptedFor.current === automatic.asOfDate
+    ) return;
+    automaticSyncStarting.current = true;
+    automaticSyncAttemptedFor.current = automatic.asOfDate || "unknown";
+    setSyncStarting(true);
+    void api.startDataSync({ mode: "incremental" })
+      .then((run) => {
+        catalog.setData((previous) => ({ ...previous, activeRun: run, latestRun: run }));
+        message.success(`检测到 ${automatic.asOfDate || "最新交易日"} 数据待更新，增量更新已自动启动`);
+      })
+      .catch((error: unknown) => message.error((error as Error).message))
+      .finally(() => {
+        automaticSyncStarting.current = false;
+        setSyncStarting(false);
+      });
+  }, [catalog.data.automaticUpdate, catalog.loading, catalog.setData, syncActive, syncStarting]);
 
   async function startLocalDataUpdate() {
     setSyncStarting(true);
@@ -1664,7 +1698,9 @@ export function DataPage() {
             disabled={syncActive}
             onClick={() => void startLocalDataUpdate()}
           >
-            {catalog.data.recommendedMode === "incremental" ? "增量更新" : "首次建库"}
+            {syncActive
+              ? "更新进行中"
+              : catalog.data.recommendedMode === "incremental" ? "增量更新" : "首次建库"}
           </Button>
           <Button
             icon={<PlayCircleOutlined />}

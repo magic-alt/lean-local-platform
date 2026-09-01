@@ -27,6 +27,14 @@ The Data page bulk scope is defined by `BULK_DATASET_KEYS` and currently include
 
 Before the first successful build, the UI offers a full update. After manifests and watermarks exist, it offers an incremental update. Restarts do not reset this state.
 
+While the Data page remains open, it polls the local control plane every five
+minutes. After 19:30 Asia/Shanghai on the latest known open session, it starts
+one incremental refresh when no successful post-close run exists. This check
+does not call TuShare itself; provider access still occurs only inside the
+normal governed sync command. Set `LEAN_DATA_AUTO_UPDATE=0` to disable this
+page-driven behavior or adjust `LEAN_DATA_AUTO_CHECK_SECONDS` between 60 and
+3600 seconds.
+
 Daily market writes follow this contract:
 
 1. Check endpoint permission and bounded request scope.

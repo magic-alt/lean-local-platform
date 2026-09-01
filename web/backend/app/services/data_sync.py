@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from typing import Any, Callable, TypeVar
+from zoneinfo import ZoneInfo
 
 from ..core.config import (
     DATA_DIR,
@@ -385,7 +386,7 @@ def _database_catalog_payload() -> dict[str, Any]:
             item["capabilityReason"] = capability.get("executable_reason")
     active_run = sync_run(str(active["id"])) if active else None
     latest_run = sync_run(str(latest["id"])) if latest else None
-    return {
+    payload = {
         "provider": "tushare",
         "entitlementPoints": 5000,
         "boundary": "low_frequency",
@@ -404,6 +405,8 @@ def _database_catalog_payload() -> dict[str, Any]:
         "recommendedMode": "incremental" if completed_initial_sync else "initial_full",
         "contractCoverage": coverage_report(DATASET_REGISTRY),
     }
+    payload["automaticUpdate"] = _automatic_update_state(payload)
+    return payload
 
 
 _LOCAL_LAKE_DATASETS: dict[str, tuple[str, str, str, str]] = {
@@ -445,6 +448,77 @@ def _local_catalog_control_state() -> dict[str, Any]:
         # startup window instead of turning a control-plane drift into HTTP 500.
         logger.warning("local catalog control state unavailable: %s", exc)
         return {"activeRun": None, "latestRun": None, "hasCompletedInitialSync": False}
+
+
+def _automatic_update_state(control_state: dict[str, Any]) -> dict[str, Any]:
+    """Report whether an open Data page should enqueue one unattended refresh.
+
+    The check is deliberately local and read-only: the browser polls this state,
+    while the normal sync command remains the only boundary that calls TuShare
+    or publishes Parquet. A refresh becomes due after 19:30 Asia/Shanghai for
+    the latest known open session and remains due until a canonical run succeeds.
+    """
+    try:
+        configured_interval = int(os.environ.get("LEAN_DATA_AUTO_CHECK_SECONDS", "300"))
+    except ValueError:
+        configured_interval = 300
+    interval_seconds = max(60, min(3_600, configured_interval))
+    enabled = os.environ.get("LEAN_DATA_AUTO_UPDATE", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    state: dict[str, Any] = {
+        "enabled": enabled,
+        "due": False,
+        "checkIntervalSeconds": interval_seconds,
+        "timezone": "Asia/Shanghai",
+        "scheduledTime": "19:30",
+        "asOfDate": None,
+        "lastSuccessfulAt": None,
+    }
+    if not enabled or control_state.get("activeRun") or not control_state.get("hasCompletedInitialSync"):
+        return state
+    try:
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        candidate_date = now.date().isoformat()
+        candidate_cutoff = datetime.combine(
+            now.date(), datetime.min.time().replace(hour=19, minute=30), tzinfo=now.tzinfo,
+        )
+        comparison = "<=" if now >= candidate_cutoff else "<"
+        with db() as connection:
+            session = connection.execute(
+                f"select max(trade_date) as trade_date from trade_calendar "
+                f"where market='china' and is_open=1 and trade_date {comparison} ?",
+                (candidate_date,),
+            ).fetchone()
+            successful = connection.execute(
+                "select finished_at from data_sync_runs "
+                "where status='success' and coalesce(canonical_status,'ready')='ready' "
+                "order by finished_at desc limit 1"
+            ).fetchone()
+        as_of_date = str(session["trade_date"] or "") if session else ""
+        if not as_of_date:
+            return state
+        due_after = datetime.combine(
+            date.fromisoformat(as_of_date),
+            datetime.min.time().replace(hour=19, minute=30),
+            tzinfo=now.tzinfo,
+        )
+        last_success_text = str(successful["finished_at"] or "") if successful else ""
+        last_success = None
+        if last_success_text:
+            last_success = datetime.fromisoformat(last_success_text.replace("Z", "+00:00"))
+            if last_success.tzinfo is None:
+                last_success = last_success.replace(tzinfo=timezone.utc)
+        state.update(
+            {
+                "due": now >= due_after and (last_success is None or last_success < due_after),
+                "asOfDate": as_of_date,
+                "lastSuccessfulAt": last_success_text or None,
+            }
+        )
+    except Exception as exc:
+        logger.warning("automatic data update state unavailable: %s", exc)
+    return state
 
 
 def _local_lake_catalog_payload() -> dict[str, Any]:
@@ -495,7 +569,7 @@ def _local_lake_catalog_payload() -> dict[str, Any]:
     control_state = _local_catalog_control_state()
     usage = shutil.disk_usage(DATA_DIR if DATA_DIR.exists() else Path("/"))
     reserve = _disk_hard_reserve_bytes(usage.total)
-    return {
+    payload = {
         "provider": "local_parquet",
         "entitlementPoints": 0,
         "boundary": "local_data_directory",
@@ -523,6 +597,8 @@ def _local_lake_catalog_payload() -> dict[str, Any]:
         "marketDataAuthority": "local_parquet",
         "marketDataRoot": str(DATA_DIR),
     }
+    payload["automaticUpdate"] = _automatic_update_state(payload)
+    return payload
 
 
 def catalog_payload() -> dict[str, Any]:
@@ -5504,8 +5580,8 @@ def create_sync_run(
     *, requested: list[str] | None = None, mode: str = "auto", request_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_catalog()
-    if mode not in {"auto", "incremental", "full_rebuild", "universe_backfill", "screen_backfill"}:
-        raise ValueError("Data sync mode must be auto, incremental, full_rebuild, universe_backfill, or screen_backfill.")
+    if mode not in {"auto", "initial_full", "incremental", "full_rebuild", "universe_backfill", "screen_backfill"}:
+        raise ValueError("Data sync mode must be auto, initial_full, incremental, full_rebuild, universe_backfill, or screen_backfill.")
     if mode == "universe_backfill":
         scope_type = str((request_scope or {}).get("type") or "")
         if scope_type != "pit_universe_union":
@@ -6049,6 +6125,28 @@ def mark_run_failed(run_id: str, error: str) -> None:
             "update data_sync_runs set status='failed', canonical_status='failed', error=?, finished_at=? where id=?",
             (error, utc_now(), run_id),
         )
+
+
+def fail_stale_unbound_run(run_id: str) -> bool:
+    """Fail a queued run that never reached task binding after command creation."""
+    with db() as connection:
+        cursor = connection.execute(
+            "update data_sync_runs set status='failed',canonical_status='failed',error=?,finished_at=? "
+            "where id=? and status='queued' and task_id is null",
+            ("Task dispatch was not completed; start the update again.", utc_now(), run_id),
+        )
+    return bool(cursor.rowcount)
+
+
+def finalize_stale_cancellation(run_id: str) -> bool:
+    """Complete a cancellation whose worker heartbeat has disappeared."""
+    with db() as connection:
+        cursor = connection.execute(
+            "update data_sync_runs set status='cancelled',canonical_status='cancelled',finished_at=? "
+            "where id=? and status='cancelling' and cancel_requested=1",
+            (utc_now(), run_id),
+        )
+    return bool(cursor.rowcount)
 
 
 def bind_task(run_id: str, task_id: str) -> None:

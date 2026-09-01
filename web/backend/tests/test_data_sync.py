@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 import json
 import time
 from types import SimpleNamespace
@@ -73,6 +74,47 @@ def test_catalog_active_run_includes_dataset_items(tmp_path, monkeypatch):
 
     assert catalog["activeRun"]["id"] == run["id"]
     assert {item["dataset_key"] for item in catalog["activeRun"]["items"]} == {"stock_basic", "daily"}
+
+
+def test_automatic_update_is_due_after_latest_session_cutoff(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 1, 20, 0)
+            return value.replace(tzinfo=tz) if tz else value
+
+    monkeypatch.setattr(data_sync, "datetime", FixedDateTime)
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source) "
+            "values ('china','2026-09-01',1,'test')"
+        )
+        connection.execute(
+            "insert into data_sync_runs "
+            "(id,provider,scope,status,mode,canonical_status,created_at,finished_at) "
+            "values ('completed','tushare','all','success','incremental','ready',"
+            "'2026-08-31T12:00:00+00:00','2026-08-31T12:30:00+00:00')"
+        )
+
+    state = data_sync._automatic_update_state(
+        {"activeRun": None, "hasCompletedInitialSync": True}
+    )
+
+    assert state["due"] is True
+    assert state["asOfDate"] == "2026-09-01"
+
+
+def test_explicit_initial_full_mode_matches_data_page_request(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"], mode="initial_full")
+
+    assert run["mode"] == "initial_full"
 
 
 def test_default_mysql_datasets_are_included_and_on_demand_markets_are_excluded(tmp_path, monkeypatch):
@@ -987,6 +1029,43 @@ def test_extended_daily_sync_gap_fills_market_and_replays_financials(tmp_path, m
     assert second["failed"] == 0
     assert second["processed"] == 41
     assert second["changed"] == 0
+
+
+def test_extended_daily_sync_prioritizes_bounded_work_before_symbol_sweeps(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    endpoints = (
+        tushare_extended_sync.ExtendedDailyEndpoint("slow_symbol", "holder", "symbol"),
+        tushare_extended_sync.ExtendedDailyEndpoint("daily_window", "market", "trade_date"),
+    )
+    calls: list[str] = []
+
+    class Pro:
+        @staticmethod
+        def stock_basic(**params):
+            return [{"ts_code": "000001.SZ"}]
+
+        def __getattr__(self, endpoint):
+            return lambda **params: calls.append(endpoint) or [{"value": endpoint}]
+
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", endpoints)
+    monkeypatch.setattr(tushare_extended_sync, "_columns", lambda dataset, rows: ("value",))
+    monkeypatch.setattr(tushare_extended_sync, "_terminal_partition", lambda *args: False)
+    monkeypatch.setattr(
+        tushare_extended_sync.market_lake,
+        "write_tushare_extended_bronze_partition",
+        lambda *args, **kwargs: {"changed": True},
+    )
+
+    result = tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()),
+        run_id="run-order",
+        end_date="2026-09-01",
+        open_dates=["2026-09-01"],
+    )
+
+    assert result["failed"] == 0
+    assert calls == ["daily_window", "slow_symbol"]
 
 
 def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, monkeypatch):
@@ -3056,6 +3135,39 @@ def test_recovery_requeues_stale_derived_materialization(tmp_path, monkeypatch):
     assert queued == [([run["id"]], "data-demand")]
     assert data_sync.sync_run(run["id"])["derivedStatus"]["status"] == "queued"
     assert data_sync.sync_run(run["id"])["derivedStatus"]["recoveryReason"] == "stale_derived_heartbeat"
+
+
+def test_recovery_unblocks_stale_unbound_and_cancelling_runs(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+
+    from app.db import db
+    from app.services import data_sync
+    from app.tasks import worker
+
+    unbound = data_sync.create_sync_run(requested=["daily"])
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set created_at='2000-01-01T00:00:00+00:00' where id=?",
+            (unbound["id"],),
+        )
+
+    result = worker.recover_data_sync_task.run()
+
+    assert result["failedUnbound"] == [unbound["id"]]
+    assert data_sync.sync_run(unbound["id"])["status"] == "failed"
+
+    cancelling = data_sync.create_sync_run(requested=["daily"])
+    with db() as connection:
+        connection.execute(
+            "update data_sync_runs set status='cancelling',cancel_requested=1,"
+            "created_at='2000-01-01T00:00:00+00:00' where id=?",
+            (cancelling["id"],),
+        )
+
+    result = worker.recover_data_sync_task.run()
+
+    assert result["cancelled"] == [cancelling["id"]]
+    assert data_sync.sync_run(cancelling["id"])["status"] == "cancelled"
 
 
 def test_recovery_preserves_stale_derived_materialization_with_live_lease(tmp_path, monkeypatch):

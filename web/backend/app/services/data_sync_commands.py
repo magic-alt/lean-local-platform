@@ -38,7 +38,14 @@ def create_run(
         if mode == "universe_backfill"
         else sync_all_data_task.s(task["id"], run["id"])
     )
-    _dispatch(signature, task["id"])
+    try:
+        _dispatch(signature, task["id"])
+    except Exception as exc:
+        # Run creation and broker publication are one user-visible command. If
+        # RabbitMQ rejects publication, leaving the run queued forever makes
+        # the Data-page update button permanently disabled.
+        data_sync.mark_run_failed(run["id"], f"Task dispatch failed: {exc}")
+        raise
     return data_sync.sync_run(run["id"]) or run
 
 

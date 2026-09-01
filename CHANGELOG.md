@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Make the open Data page periodically check the latest known China trading
+  session and automatically enqueue one post-close incremental refresh; accept
+  the UI's explicit initial-build mode, fail queued sync runs when task dispatch
+  fails so controls cannot remain disabled forever, terminalize stale unbound
+  or cancelling runs, and prioritize bounded extended-data refreshes ahead of
+  expensive per-symbol sweeps.
+
 - Repair TuShare incremental updates by measuring capacity on the durable data
   volume instead of Docker's 128 MiB `/tmp` tmpfs, using PostgreSQL-portable
   security-master upserts, failing closed when required master/calendar inputs
