@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 import json
+import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from . import market_lake
 from .tushare_contracts import contract_for
@@ -148,6 +149,20 @@ def _symbols(adapter: Any) -> list[str]:
     return sorted({str(row.get("ts_code") or "").upper() for row in rows if row.get("ts_code")})
 
 
+def _symbol_partition_due(dataset: str, partition: str) -> bool:
+    """Return whether a symbol snapshot is absent or old enough to refresh."""
+    manifest = _partition_manifest(dataset, partition)
+    if not _terminal_partition(dataset, partition):
+        return True
+    written_at = str(manifest.get("written_at_utc") or "")
+    try:
+        written_day = date.fromisoformat(written_at[:10])
+    except ValueError:
+        return True
+    refresh_days = max(1, min(365, int(os.environ.get("LEAN_DATA_EXTENDED_SYMBOL_REFRESH_DAYS", "30"))))
+    return written_day <= date.today() - timedelta(days=refresh_days)
+
+
 def sync_extended_daily(
     adapter: Any,
     *,
@@ -155,6 +170,9 @@ def sync_extended_daily(
     end_date: str,
     open_dates: Iterable[str],
     financial_lookback_calendar_days: int = 400,
+    symbol_batch_size: int | None = None,
+    heartbeat: Callable[[], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Fill market-reference holes and replay recent financial periods."""
     end = date.fromisoformat(end_date)
@@ -164,6 +182,10 @@ def sync_extended_daily(
     counters = {"processed": 0, "changed": 0, "rows": 0, "failed": 0, "skipped": 0}
     failures: list[dict[str, str]] = []
     endpoint_counts: dict[str, int] = {}
+    deferred_symbol_tasks = 0
+    if symbol_batch_size is None:
+        symbol_batch_size = int(os.environ.get("LEAN_DATA_EXTENDED_SYMBOLS_PER_RUN", "200"))
+    symbol_batch_size = max(1, min(1_000, symbol_batch_size))
     # Bounded market/date/report/exchange calls must land before the expensive
     # active-universe sweep. A worker restart or cancellation during thousands
     # of per-symbol calls must not starve the remaining daily datasets.
@@ -200,12 +222,26 @@ def sync_extended_daily(
                 }))
                 cursor = window_end + timedelta(days=1)
         elif endpoint.plan == "symbol":
-            tasks = [(symbol.replace(".", "_"), {"ts_code": symbol}) for symbol in _symbols(adapter)]
+            due_tasks = [
+                (symbol.replace(".", "_"), {"ts_code": symbol})
+                for symbol in _symbols(adapter)
+                if _symbol_partition_due(endpoint.name, symbol.replace(".", "_"))
+            ]
+            tasks = due_tasks[:symbol_batch_size]
+            deferred_symbol_tasks += max(0, len(due_tasks) - len(tasks))
         elif endpoint.plan == "exchange":
             tasks = [(exchange, {"exchange": exchange}) for exchange in endpoint.exchanges]
         else:
             tasks = [(end_date.replace("-", ""), {})]
         for partition, params in tasks:
+            if cancelled and cancelled():
+                return {
+                    **counters,
+                    "endpointCounts": endpoint_counts,
+                    "failures": failures,
+                    "deferredSymbolTasks": deferred_symbol_tasks,
+                    "cancelled": True,
+                }
             counters["processed"] += 1
             try:
                 rows = _fetch_rows(adapter, endpoint.name, params)
@@ -234,4 +270,13 @@ def sync_extended_daily(
                     failures.append(
                         {"dataset": endpoint.name, "partition": partition, "error": str(exc)}
                     )
-    return {**counters, "endpointCounts": endpoint_counts, "failures": failures}
+            finally:
+                if heartbeat:
+                    heartbeat()
+    return {
+        **counters,
+        "endpointCounts": endpoint_counts,
+        "failures": failures,
+        "deferredSymbolTasks": deferred_symbol_tasks,
+        "cancelled": False,
+    }

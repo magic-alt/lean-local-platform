@@ -9,7 +9,11 @@
   the UI's explicit initial-build mode, fail queued sync runs when task dispatch
   fails so controls cannot remain disabled forever, terminalize stale unbound
   or cancelling runs, and prioritize bounded extended-data refreshes ahead of
-  expensive per-symbol sweeps.
+  expensive per-symbol sweeps. Bound those sweeps to durable batches, skip
+  fresh symbol snapshots, and heartbeat each extended partition so recovery
+  cannot duplicate a long-running update and hold the page control disabled;
+  preserve completed checkpoints during recovery and terminalize a sync if its
+  bounded worker time limit is exceeded.
 
 - Repair TuShare incremental updates by measuring capacity on the durable data
   volume instead of Docker's 128 MiB `/tmp` tmpfs, using PostgreSQL-portable

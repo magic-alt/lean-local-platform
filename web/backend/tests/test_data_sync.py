@@ -117,6 +117,28 @@ def test_explicit_initial_full_mode_matches_data_page_request(tmp_path, monkeypa
     assert run["mode"] == "initial_full"
 
 
+def test_permission_probe_does_not_reset_completed_recovery_items(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["daily"])
+    with db() as connection:
+        connection.execute(
+            "update data_sync_items set status='success',finished_at=? where run_id=? and dataset_key='daily'",
+            ("2026-09-01T00:00:00+00:00", run["id"]),
+        )
+
+    class Pro:
+        @staticmethod
+        def daily(**params):
+            return []
+
+    data_sync.probe_permissions(SimpleNamespace(pro=Pro()), only={"daily"}, run_id=run["id"])
+
+    assert data_sync.sync_run(run["id"])["items"][0]["status"] == "success"
+
+
 def test_default_mysql_datasets_are_included_and_on_demand_markets_are_excluded(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services import data_sync
@@ -1027,7 +1049,7 @@ def test_extended_daily_sync_gap_fills_market_and_replays_financials(tmp_path, m
     )
 
     assert second["failed"] == 0
-    assert second["processed"] == 41
+    assert second["processed"] < first["processed"]
     assert second["changed"] == 0
 
 
@@ -1066,6 +1088,46 @@ def test_extended_daily_sync_prioritizes_bounded_work_before_symbol_sweeps(monke
 
     assert result["failed"] == 0
     assert calls == ["daily_window", "slow_symbol"]
+
+
+def test_extended_daily_sync_limits_symbol_batch_and_heartbeats(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    calls: list[str] = []
+    heartbeats: list[None] = []
+    endpoints = (tushare_extended_sync.ExtendedDailyEndpoint("slow_symbol", "holder", "symbol"),)
+
+    class Pro:
+        @staticmethod
+        def stock_basic(**params):
+            return [{"ts_code": f"00000{index}.SZ"} for index in range(1, 4)]
+
+        @staticmethod
+        def slow_symbol(**params):
+            calls.append(str(params["ts_code"]))
+            return [{"value": params["ts_code"]}]
+
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", endpoints)
+    monkeypatch.setattr(tushare_extended_sync, "_columns", lambda dataset, rows: ("value",))
+    monkeypatch.setattr(tushare_extended_sync, "_symbol_partition_due", lambda *args: True)
+    monkeypatch.setattr(
+        tushare_extended_sync.market_lake,
+        "write_tushare_extended_bronze_partition",
+        lambda *args, **kwargs: {"changed": True},
+    )
+
+    result = tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()),
+        run_id="run-batch",
+        end_date="2026-09-01",
+        open_dates=[],
+        symbol_batch_size=2,
+        heartbeat=lambda: heartbeats.append(None),
+    )
+
+    assert calls == ["000001.SZ", "000002.SZ"]
+    assert result["deferredSymbolTasks"] == 1
+    assert len(heartbeats) == 2
 
 
 def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, monkeypatch):
@@ -3250,10 +3312,12 @@ def test_failed_data_sync_emits_critical_operational_alert(monkeypatch):
 
     updates = []
     alerts = []
+    failed_runs = []
     monkeypatch.setattr(worker, "get_task", lambda task_id: {"id": task_id, "status": "queued"})
     monkeypatch.setattr(worker, "update_task", lambda task_id, **values: updates.append(values))
     monkeypatch.setattr(worker, "append_log", lambda *args, **kwargs: None)
     monkeypatch.setattr(worker, "_record_task_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.data_sync, "mark_run_failed", lambda run_id, error: failed_runs.append((run_id, error)))
     monkeypatch.setattr(
         worker.data_sync,
         "run_sync",
@@ -3268,6 +3332,7 @@ def test_failed_data_sync_emits_critical_operational_alert(monkeypatch):
     assert alerts[0][0] == "data_sync_failed"
     assert alerts[0][1]["severity"] == "critical"
     assert alerts[0][1]["related_id"] == "run-1"
+    assert failed_runs == [("run-1", "provider schema changed")]
 
 
 def test_transient_provider_failures_are_retried(monkeypatch):

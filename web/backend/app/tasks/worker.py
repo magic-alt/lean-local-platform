@@ -62,6 +62,19 @@ from ..core.config import ASHARE_TECH_RETRY_MINUTES
 logger = logging.getLogger(__name__)
 
 
+def _data_sync_task_time_limit() -> tuple[int, int]:
+    """Bound a provider call so an unresponsive SDK cannot lock the UI forever."""
+    try:
+        soft = int(os.environ.get("LEAN_DATA_SYNC_TASK_SOFT_LIMIT_SECONDS", "1200"))
+    except ValueError:
+        soft = 1200
+    soft = max(300, min(7_200, soft))
+    return soft, soft + 60
+
+
+DATA_SYNC_SOFT_TIME_LIMIT, DATA_SYNC_HARD_TIME_LIMIT = _data_sync_task_time_limit()
+
+
 def _emit_operational_alert(event_type: str, **kwargs: Any) -> None:
     try:
         emit_alert(event_type, **kwargs)
@@ -695,6 +708,8 @@ def download_on_demand_dataset_task(task_id: str, api_parameters: dict[str, Any]
     name="lean_web.sync_all_data",
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=DATA_SYNC_SOFT_TIME_LIMIT,
+    time_limit=DATA_SYNC_HARD_TIME_LIMIT,
 )
 def sync_all_data_task(task_id: str, run_id: str):
     task = get_task(task_id)
@@ -738,6 +753,7 @@ def sync_all_data_task(task_id: str, run_id: str):
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        data_sync.mark_run_failed(run_id, str(exc))
         _emit_operational_alert(
             "data_sync_failed",
             severity="critical",

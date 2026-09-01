@@ -35,6 +35,14 @@ normal governed sync command. Set `LEAN_DATA_AUTO_UPDATE=0` to disable this
 page-driven behavior or adjust `LEAN_DATA_AUTO_CHECK_SECONDS` between 60 and
 3600 seconds.
 
+Extended datasets run bounded date/report work first. Per-symbol endpoints are
+then refreshed in a durable batch of at most 200 symbols per incremental run,
+with a 30-day refresh cadence for existing snapshots. This prevents a large
+symbol sweep from blocking the daily-bar update or leaving the Data-page
+control in a running state. Operators may tune these local limits with
+`LEAN_DATA_EXTENDED_SYMBOLS_PER_RUN` (1--1000) and
+`LEAN_DATA_EXTENDED_SYMBOL_REFRESH_DAYS` (1--365).
+
 Daily market writes follow this contract:
 
 1. Check endpoint permission and bounded request scope.

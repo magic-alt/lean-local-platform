@@ -820,8 +820,24 @@ def probe_permissions(
             continue
         if run_id and _cancelled(run_id, task_id):
             break
+        preserve_completed_item = False
         if run_id:
-            _item(run_id, spec.key, status="checking", error="")
+            with db() as connection:
+                existing_item = connection.execute(
+                    "select * from data_sync_items where run_id=? and dataset_key=?",
+                    (run_id, spec.key),
+                ).fetchone()
+            existing_record = row_to_dict(existing_item) or {}
+            preserve_completed_item = (
+                existing_record.get("status") == "success"
+                or (
+                    existing_record.get("status") == "partial"
+                    and _checkpoint_complete(existing_record)
+                )
+            )
+        if run_id:
+            if not preserve_completed_item:
+                _item(run_id, spec.key, status="checking", error="")
         checked = utc_now()
         try:
             rows = _query(adapter.pro, spec, dict(spec.probe))
@@ -850,7 +866,8 @@ def probe_permissions(
                 (status, reason, checked, spec.key),
             )
         if run_id and not _cancelled(run_id, task_id):
-            _item(run_id, spec.key, status="queued")
+            if not preserve_completed_item:
+                _item(run_id, spec.key, status="queued")
     return counts
 
 
@@ -1766,6 +1783,15 @@ def _item(run_id: str, dataset: str, **fields: Any) -> None:
             f"update data_sync_items set {assignments} where run_id = ? and dataset_key = ?",
             [*clean.values(), run_id, dataset],
         )
+        connection.execute(
+            "update data_sync_runs set heartbeat_at=? where id=? and status in ('queued','running','cancelling')",
+            (utc_now(), run_id),
+        )
+
+
+def _touch_run_heartbeat(run_id: str) -> None:
+    """Keep long, partitioned auxiliary work visible to stale-run recovery."""
+    with db() as connection:
         connection.execute(
             "update data_sync_runs set heartbeat_at=? where id=? and status in ('queued','running','cancelling')",
             (utc_now(), run_id),
@@ -5275,11 +5301,17 @@ def run_sync(
                         run_id=run_id,
                         end_date=market_end_date,
                         open_dates=_open_trade_dates(market_end_date),
+                        heartbeat=lambda: _touch_run_heartbeat(run_id),
+                        cancelled=lambda: _cancelled(run_id, task_id),
                     )
+                    extended_deferred = int(extended.get("deferredSymbolTasks") or 0)
                     validation = {
-                        "status": "passed" if not extended["failed"] else "failed",
+                        "status": "passed" if not extended["failed"] and not extended_deferred else "failed",
                         "criticalErrors": extended["failures"],
-                        "warnings": [],
+                        "warnings": (
+                            [f"extended_symbol_tasks_deferred:{extended_deferred}"]
+                            if extended_deferred else []
+                        ),
                         "checkedRows": int(extended["rows"]),
                         "rejectedRows": 0,
                         "keysSha256": hashlib.sha256(b"").hexdigest(),
@@ -5294,13 +5326,13 @@ def run_sync(
                         endpoint_counts=dict(extended["endpointCounts"]),
                         coverage_start=None,
                         coverage_end=market_end_date,
-                        status="success" if not extended["failed"] else "failed",
+                        status="success" if not extended["failed"] and not extended_deferred else "failed",
                     )
                     result = (
                         int(extended["processed"]),
                         int(extended["rows"]),
                         int(extended["changed"]),
-                        int(extended["failed"]),
+                        int(extended["failed"]) + int(bool(extended_deferred)),
                     )
                 else:
                     dataset_end_date = (
