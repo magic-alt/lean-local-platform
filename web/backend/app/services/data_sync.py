@@ -456,7 +456,10 @@ def _automatic_update_state(control_state: dict[str, Any]) -> dict[str, Any]:
     The check is deliberately local and read-only: the browser polls this state,
     while the normal sync command remains the only boundary that calls TuShare
     or publishes Parquet. A refresh becomes due after 19:30 Asia/Shanghai for
-    the latest known open session and remains due until a canonical run succeeds.
+    the latest known open session. A partial run that completed the required
+    daily partition is a completed automatic attempt: surface its auxiliary
+    failures for an explicit retry, rather than continuously re-enqueuing the
+    same full run every time the page is opened.
     """
     try:
         configured_interval = int(os.environ.get("LEAN_DATA_AUTO_CHECK_SECONDS", "300"))
@@ -474,6 +477,7 @@ def _automatic_update_state(control_state: dict[str, Any]) -> dict[str, Any]:
         "scheduledTime": "19:30",
         "asOfDate": None,
         "lastSuccessfulAt": None,
+        "lastCompletedAt": None,
     }
     if not enabled or control_state.get("activeRun") or not control_state.get("hasCompletedInitialSync"):
         return state
@@ -490,10 +494,19 @@ def _automatic_update_state(control_state: dict[str, Any]) -> dict[str, Any]:
                 f"where market='china' and is_open=1 and trade_date {comparison} ?",
                 (candidate_date,),
             ).fetchone()
-            successful = connection.execute(
-                "select finished_at from data_sync_runs "
-                "where status='success' and coalesce(canonical_status,'ready')='ready' "
-                "order by finished_at desc limit 1"
+            completed = connection.execute(
+                """
+                select r.finished_at,r.status from data_sync_runs r
+                where r.status='success'
+                   or (
+                       r.status='partial'
+                       and exists (
+                           select 1 from data_sync_items i
+                           where i.run_id=r.id and i.dataset_key='daily' and i.status='success'
+                       )
+                   )
+                order by r.finished_at desc limit 1
+                """
             ).fetchone()
         as_of_date = str(session["trade_date"] or "") if session else ""
         if not as_of_date:
@@ -503,17 +516,18 @@ def _automatic_update_state(control_state: dict[str, Any]) -> dict[str, Any]:
             datetime.min.time().replace(hour=19, minute=30),
             tzinfo=now.tzinfo,
         )
-        last_success_text = str(successful["finished_at"] or "") if successful else ""
-        last_success = None
-        if last_success_text:
-            last_success = datetime.fromisoformat(last_success_text.replace("Z", "+00:00"))
-            if last_success.tzinfo is None:
-                last_success = last_success.replace(tzinfo=timezone.utc)
+        last_completed_text = str(completed["finished_at"] or "") if completed else ""
+        last_completed = None
+        if last_completed_text:
+            last_completed = datetime.fromisoformat(last_completed_text.replace("Z", "+00:00"))
+            if last_completed.tzinfo is None:
+                last_completed = last_completed.replace(tzinfo=timezone.utc)
         state.update(
             {
-                "due": now >= due_after and (last_success is None or last_success < due_after),
+                "due": now >= due_after and (last_completed is None or last_completed < due_after),
                 "asOfDate": as_of_date,
-                "lastSuccessfulAt": last_success_text or None,
+                "lastSuccessfulAt": last_completed_text or None,
+                "lastCompletedAt": last_completed_text or None,
             }
         )
     except Exception as exc:

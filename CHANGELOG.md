@@ -8,6 +8,12 @@
   times aligned with successful partition publication and authoritative
   unchanged rechecks, so filesystem-level freshness inspection reflects the
   actual current-data state without altering published Parquet or revisions.
+- Apply that freshness signal to each direct TuShare dataset directory as
+  well, so unchanged VIP report partitions cannot leave their dataset folder
+  apparently stale in filesystem views.
+- Treat a post-close partial refresh with the required daily partition
+  completed as one automatic-update attempt, surfacing auxiliary failures for
+  manual retry instead of continuously launching another full refresh.
 
 - Normalize extended TuShare symbol partitions to the canonical
   `000001_SZ` form at the write boundary, avoiding duplicate current data

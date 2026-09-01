@@ -1022,7 +1022,7 @@ def _write_manifest(root: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, target)
 
 
-def _touch_tushare_current_freshness(*, extended: bool) -> None:
+def _touch_tushare_current_freshness(*, dataset: str, extended: bool) -> None:
     """Advance the operator-facing mtime for the TuShare current views.
 
     Replacing a partition manifest updates that partition's directory, but
@@ -1035,7 +1035,10 @@ def _touch_tushare_current_freshness(*, extended: bool) -> None:
     current = PARQUET_DIR / "bronze" / "tushare" / "current"
     roots = [current]
     if extended:
-        roots.append(current / "extended")
+        extended_root = current / "extended"
+        roots.extend((extended_root, extended_root / dataset))
+    else:
+        roots.append(current / dataset)
     for root in roots:
         try:
             os.utime(root, None)
@@ -1090,7 +1093,7 @@ def write_tushare_bronze_partition(
             except (OSError, ValueError, TypeError):
                 current_hash = ""
         if target.is_file() and current_hash == content_sha256:
-            _touch_tushare_current_freshness(extended=False)
+            _touch_tushare_current_freshness(dataset=dataset, extended=False)
             return {"changed": False, "rows": frame.height, "contentSha256": content_sha256}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
@@ -1119,7 +1122,7 @@ def write_tushare_bronze_partition(
         manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
         manifest_tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         os.replace(manifest_tmp, manifest_path)
-        _touch_tushare_current_freshness(extended=False)
+        _touch_tushare_current_freshness(dataset=dataset, extended=False)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 
@@ -1220,7 +1223,7 @@ def write_tushare_extended_bronze_partition(
                 json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
             )
             os.replace(manifest_tmp, manifest_path)
-            _touch_tushare_current_freshness(extended=True)
+            _touch_tushare_current_freshness(dataset=safe_dataset, extended=True)
             return {"changed": False, "rows": frame.height, "contentSha256": content_sha256, "checked": True}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
@@ -1261,7 +1264,7 @@ def write_tushare_extended_bronze_partition(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
         os.replace(manifest_tmp, manifest_path)
-        _touch_tushare_current_freshness(extended=True)
+        _touch_tushare_current_freshness(dataset=safe_dataset, extended=True)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 

@@ -108,6 +108,42 @@ def test_automatic_update_is_due_after_latest_session_cutoff(tmp_path, monkeypat
     assert state["asOfDate"] == "2026-09-01"
 
 
+def test_automatic_update_does_not_repeat_a_partial_run_with_daily_complete(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 1, 20, 0)
+            return value.replace(tzinfo=tz) if tz else value
+
+    monkeypatch.setattr(data_sync, "datetime", FixedDateTime)
+    with db() as connection:
+        connection.execute(
+            "insert into trade_calendar(market,trade_date,is_open,source) "
+            "values ('china','2026-09-01',1,'test')"
+        )
+        connection.execute(
+            "insert into data_sync_runs "
+            "(id,provider,scope,status,mode,canonical_status,created_at,finished_at) "
+            "values ('partial','tushare','all','partial','incremental','partial',"
+            "'2026-09-01T11:00:00+00:00','2026-09-01T12:30:00+00:00')"
+        )
+        connection.execute(
+            "insert into data_sync_items(id,run_id,dataset_key,status) "
+            "values ('partial-daily','partial','daily','success')"
+        )
+
+    state = data_sync._automatic_update_state(
+        {"activeRun": None, "hasCompletedInitialSync": True}
+    )
+
+    assert state["due"] is False
+    assert state["lastCompletedAt"] == "2026-09-01T12:30:00+00:00"
+
+
 def test_explicit_initial_full_mode_matches_data_page_request(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.services import data_sync
