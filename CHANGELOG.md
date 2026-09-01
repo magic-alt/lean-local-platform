@@ -8,6 +8,8 @@
   `000001_SZ` form at the write boundary, avoiding duplicate current data
   directories while preserving replaced current snapshots in immutable
   revisions.
+- Prioritize the stalest extended symbol endpoints after bounded date/report
+  work, so a continually refreshed endpoint cannot starve older datasets.
 
 - Make the open Data page periodically check the latest known China trading
   session and automatically enqueue one post-close incremental refresh; accept

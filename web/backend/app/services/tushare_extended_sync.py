@@ -163,6 +163,15 @@ def _symbol_partition_due(dataset: str, partition: str) -> bool:
     return written_day <= date.today() - timedelta(days=refresh_days)
 
 
+def _endpoint_latest_manifest_mtime(endpoint: ExtendedDailyEndpoint) -> float:
+    """Return the latest published partition time without reading its rows."""
+    root = market_lake.PARQUET_DIR / "bronze" / "tushare" / "current" / "extended" / endpoint.name
+    try:
+        return max((path.stat().st_mtime for path in root.glob("trade_date=*/manifest.json")), default=0.0)
+    except OSError:
+        return 0.0
+
+
 def sync_extended_daily(
     adapter: Any,
     *,
@@ -191,7 +200,11 @@ def sync_extended_daily(
     # of per-symbol calls must not starve the remaining daily datasets.
     endpoint_order = sorted(
         enumerate(EXTENDED_DAILY_ENDPOINTS),
-        key=lambda item: (item[1].plan == "symbol", item[0]),
+        key=lambda item: (
+            item[1].plan == "symbol",
+            _endpoint_latest_manifest_mtime(item[1]) if item[1].plan == "symbol" else item[0],
+            item[0],
+        ),
     )
     for _, endpoint in endpoint_order:
         if endpoint.plan == "trade_date":

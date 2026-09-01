@@ -1130,6 +1130,44 @@ def test_extended_daily_sync_limits_symbol_batch_and_heartbeats(monkeypatch):
     assert len(heartbeats) == 2
 
 
+def test_extended_daily_sync_prioritizes_oldest_symbol_endpoint(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    endpoints = (
+        tushare_extended_sync.ExtendedDailyEndpoint("newer_symbol", "holder", "symbol"),
+        tushare_extended_sync.ExtendedDailyEndpoint("older_symbol", "holder", "symbol"),
+    )
+    calls: list[str] = []
+
+    class Pro:
+        @staticmethod
+        def stock_basic(**params):
+            return [{"ts_code": "000001.SZ"}]
+
+        def __getattr__(self, endpoint):
+            return lambda **params: calls.append(endpoint) or [{"value": endpoint}]
+
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", endpoints)
+    monkeypatch.setattr(tushare_extended_sync, "_columns", lambda dataset, rows: ("value",))
+    monkeypatch.setattr(tushare_extended_sync, "_symbol_partition_due", lambda *args: True)
+    monkeypatch.setattr(
+        tushare_extended_sync,
+        "_endpoint_latest_manifest_mtime",
+        lambda endpoint: {"older_symbol": 1.0, "newer_symbol": 2.0}[endpoint.name],
+    )
+    monkeypatch.setattr(
+        tushare_extended_sync.market_lake,
+        "write_tushare_extended_bronze_partition",
+        lambda *args, **kwargs: {"changed": True},
+    )
+
+    tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()), run_id="run-priority", end_date="2026-09-01", open_dates=[]
+    )
+
+    assert calls == ["older_symbol", "newer_symbol"]
+
+
 def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db
