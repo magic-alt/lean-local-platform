@@ -1090,6 +1090,64 @@ def test_extended_daily_sync_prioritizes_bounded_work_before_symbol_sweeps(monke
     assert calls == ["daily_window", "slow_symbol"]
 
 
+def test_extended_daily_sync_prioritizes_vip_reports_before_date_range(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    endpoints = (
+        tushare_extended_sync.ExtendedDailyEndpoint("slow_range", "corporate", "date_range"),
+        tushare_extended_sync.ExtendedDailyEndpoint("vip_report", "financial", "report_period"),
+    )
+    calls: list[str] = []
+
+    class Pro:
+        def __getattr__(self, endpoint):
+            return lambda **params: calls.append(endpoint) or [{"value": endpoint}]
+
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", endpoints)
+    monkeypatch.setattr(tushare_extended_sync, "_columns", lambda dataset, rows: ("value",))
+    monkeypatch.setattr(
+        tushare_extended_sync.market_lake,
+        "write_tushare_extended_bronze_partition",
+        lambda *args, **kwargs: {"changed": True},
+    )
+
+    tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()),
+        run_id="run-vip-priority",
+        end_date="2026-09-01",
+        open_dates=[],
+        financial_lookback_calendar_days=80,
+    )
+
+    assert calls[0] == "vip_report"
+
+
+def test_extended_daily_sync_reports_each_partition_failure(monkeypatch):
+    from app.services import tushare_extended_sync
+
+    endpoint = tushare_extended_sync.ExtendedDailyEndpoint("broken_vip", "financial", "report_period")
+    failures: list[dict[str, str]] = []
+
+    class Pro:
+        @staticmethod
+        def broken_vip(**params):
+            raise RuntimeError("provider rejected period")
+
+    monkeypatch.setattr(tushare_extended_sync, "EXTENDED_DAILY_ENDPOINTS", (endpoint,))
+
+    result = tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()),
+        run_id="run-error",
+        end_date="2026-09-01",
+        open_dates=[],
+        financial_lookback_calendar_days=80,
+        failure_reporter=failures.append,
+    )
+
+    assert result["failed"] == 1
+    assert failures == [{"dataset": "broken_vip", "partition": "20260630", "error": "provider rejected period"}]
+
+
 def test_extended_daily_sync_limits_symbol_batch_and_heartbeats(monkeypatch):
     from app.services import tushare_extended_sync
 

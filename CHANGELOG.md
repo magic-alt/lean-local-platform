@@ -10,6 +10,16 @@
   revisions.
 - Prioritize the stalest extended symbol endpoints after bounded date/report
   work, so a continually refreshed endpoint cannot starve older datasets.
+- Record the last successful provider check for unchanged extended partitions,
+  distinguishing fresh identical VIP/report data from a stalled publication
+  without rewriting Parquet or creating a spurious revision.
+- Run extended VIP report periods before monthly date-range scans so financial
+  statements and disclosure calendars are refreshed promptly.
+- Surface individual extended partition failures while a sync is running,
+  instead of withholding provider error context until the entire batch ends.
+- Normalize non-finite VIP financial values and infer their bounded response
+  schema across the full partition, preventing late `NaN` fields from blocking
+  financial-statement publication.
 
 - Make the open Data page periodically check the latest known China trading
   session and automatically enqueue one post-close incremental refresh; accept

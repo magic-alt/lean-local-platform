@@ -5296,6 +5296,14 @@ def run_sync(
                         minimum_start_date=minimum_start_date,
                     )
                 elif spec.key == "extended_daily":
+                    def record_extended_failure(failure: dict[str, str]) -> None:
+                        _item(
+                            run_id,
+                            spec.key,
+                            status="running",
+                            error=json_dump({"lastFailure": failure}),
+                        )
+
                     extended = sync_extended_daily(
                         adapter,
                         run_id=run_id,
@@ -5303,6 +5311,7 @@ def run_sync(
                         open_dates=_open_trade_dates(market_end_date),
                         heartbeat=lambda: _touch_run_heartbeat(run_id),
                         cancelled=lambda: _cancelled(run_id, task_id),
+                        failure_reporter=record_extended_failure,
                     )
                     extended_deferred = int(extended.get("deferredSymbolTasks") or 0)
                     validation = {

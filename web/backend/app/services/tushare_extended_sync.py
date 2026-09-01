@@ -172,6 +172,15 @@ def _endpoint_latest_manifest_mtime(endpoint: ExtendedDailyEndpoint) -> float:
         return 0.0
 
 
+_EXTENDED_PLAN_PRIORITY = {
+    "exchange": 0,
+    "report_period": 1,
+    "trade_date": 2,
+    "date_range": 3,
+    "symbol": 4,
+}
+
+
 def sync_extended_daily(
     adapter: Any,
     *,
@@ -182,6 +191,7 @@ def sync_extended_daily(
     symbol_batch_size: int | None = None,
     heartbeat: Callable[[], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    failure_reporter: Callable[[dict[str, str]], None] | None = None,
 ) -> dict[str, Any]:
     """Fill market-reference holes and replay recent financial periods."""
     end = date.fromisoformat(end_date)
@@ -201,7 +211,7 @@ def sync_extended_daily(
     endpoint_order = sorted(
         enumerate(EXTENDED_DAILY_ENDPOINTS),
         key=lambda item: (
-            item[1].plan == "symbol",
+            _EXTENDED_PLAN_PRIORITY.get(item[1].plan, 99),
             _endpoint_latest_manifest_mtime(item[1]) if item[1].plan == "symbol" else item[0],
             item[0],
         ),
@@ -279,10 +289,11 @@ def sync_extended_daily(
                 counters["skipped"] += int(not bool(result["changed"]))
             except Exception as exc:  # noqa: BLE001 - preserve good partitions and report partial work.
                 counters["failed"] += 1
+                failure = {"dataset": endpoint.name, "partition": partition, "error": str(exc)}
                 if len(failures) < 20:
-                    failures.append(
-                        {"dataset": endpoint.name, "partition": partition, "error": str(exc)}
-                    )
+                    failures.append(failure)
+                if failure_reporter:
+                    failure_reporter(failure)
             finally:
                 if heartbeat:
                     heartbeat()

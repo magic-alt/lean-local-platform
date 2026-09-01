@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1132,8 +1133,23 @@ def write_tushare_extended_bronze_partition(
     ordered_columns = tuple(str(column) for column in columns)
     if not ordered_columns:
         raise ValueError("TuShare extended Bronze partitions require an explicit schema.")
-    materialized = [{column: row.get(column) for column in ordered_columns} for row in rows]
-    frame = pl.DataFrame(materialized, schema=list(ordered_columns), strict=False)
+    materialized = [
+        {
+            column: (
+                None
+                if isinstance(row.get(column), float) and not math.isfinite(row[column])
+                else row.get(column)
+            )
+            for column in ordered_columns
+        }
+        for row in rows
+    ]
+    # Financial VIP responses often begin with a long null run and later
+    # contain a finite number or NaN. Infer against the full bounded provider
+    # partition so the first 100 rows cannot lock an incompatible dtype.
+    frame = pl.DataFrame(
+        materialized, schema=list(ordered_columns), strict=False, infer_schema_length=None
+    )
     sort_columns = [
         column
         for column in ("trade_date", "ts_code", "end_date", "ann_date")
@@ -1162,7 +1178,24 @@ def write_tushare_extended_bronze_partition(
             except (OSError, ValueError, TypeError):
                 current_hash = ""
         if target.is_file() and current_hash == content_sha256:
-            return {"changed": False, "rows": frame.height, "contentSha256": content_sha256}
+            # A no-op replay is still authoritative evidence that the provider
+            # was checked. Keep the published content identity and
+            # ``written_at_utc`` immutable, but atomically advance an explicit
+            # freshness field so consumers do not mistake an unchanged report
+            # period for a stalled dataset.
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                manifest = {}
+            manifest["last_checked_at_utc"] = datetime.now(UTC).isoformat()
+            if metadata and metadata.get("ingest_run_id"):
+                manifest["last_checked_run_id"] = str(metadata["ingest_run_id"])
+            manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+            manifest_tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            )
+            os.replace(manifest_tmp, manifest_path)
+            return {"changed": False, "rows": frame.height, "contentSha256": content_sha256, "checked": True}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
             revision = (
@@ -1193,6 +1226,7 @@ def write_tushare_extended_bronze_partition(
             "content_sha256": content_sha256,
             "content_hash_kind": "logical_frame_v1",
             "written_at_utc": datetime.now(UTC).isoformat(),
+            "last_checked_at_utc": datetime.now(UTC).isoformat(),
             "writer": "lean-platform",
             **(metadata or {}),
         }
