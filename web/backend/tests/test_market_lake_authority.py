@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 
@@ -198,6 +199,43 @@ def test_provider_bronze_partition_replay_is_a_noop_and_correction_is_versioned(
     assert corrected["changed"] is True
     revisions = tmp_path / "bronze" / "tushare" / "revisions" / "moneyflow"
     assert list(revisions.rglob("data.parquet"))
+
+
+def test_tushare_current_directory_mtime_tracks_publish_and_replay(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    columns = ("ts_code", "trade_date", "close")
+    rows = [{"ts_code": "000001.SZ", "trade_date": "20260901", "close": 11.2}]
+    market_lake.write_tushare_bronze_partition("daily", "2026-09-01", rows, columns=columns)
+    current = tmp_path / "bronze" / "tushare" / "current"
+    os.utime(current, (1, 1))
+
+    market_lake.write_tushare_bronze_partition("daily", "2026-09-01", rows, columns=columns)
+
+    assert current.stat().st_mtime > 1
+
+
+def test_tushare_extended_directory_mtime_tracks_publish_and_replay(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    columns = ("ts_code", "ann_date", "cash_div")
+    rows = [{"ts_code": "000001.SZ", "ann_date": "20260101", "cash_div": 0.1}]
+    market_lake.write_tushare_extended_bronze_partition(
+        "dividend", "000001.SZ", rows, columns=columns
+    )
+    current = tmp_path / "bronze" / "tushare" / "current"
+    extended = current / "extended"
+    os.utime(current, (1, 1))
+    os.utime(extended, (1, 1))
+
+    market_lake.write_tushare_extended_bronze_partition(
+        "dividend", "000001.SZ", rows, columns=columns
+    )
+
+    assert current.stat().st_mtime > 1
+    assert extended.stat().st_mtime > 1
 
 
 def test_extended_symbol_partition_is_normalized_and_current_remains_published(tmp_path, monkeypatch):

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Keep the TuShare `current` and `current/extended` directory modification
+  times aligned with successful partition publication and authoritative
+  unchanged rechecks, so filesystem-level freshness inspection reflects the
+  actual current-data state without altering published Parquet or revisions.
+
 - Normalize extended TuShare symbol partitions to the canonical
   `000001_SZ` form at the write boundary, avoiding duplicate current data
   directories while preserving replaced current snapshots in immutable

@@ -1022,6 +1022,29 @@ def _write_manifest(root: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, target)
 
 
+def _touch_tushare_current_freshness(*, extended: bool) -> None:
+    """Advance the operator-facing mtime for the TuShare current views.
+
+    Replacing a partition manifest updates that partition's directory, but
+    POSIX does not propagate the change to its ancestors. The two current
+    roots are routinely inspected in Finder and by operational checks, so
+    keep their directory mtime aligned with a successful publish or an
+    authoritative unchanged replay. This is only a freshness signal: no
+    Parquet payload, current manifest, or immutable revision is changed.
+    """
+    current = PARQUET_DIR / "bronze" / "tushare" / "current"
+    roots = [current]
+    if extended:
+        roots.append(current / "extended")
+    for root in roots:
+        try:
+            os.utime(root, None)
+        except OSError:
+            # The partition publish remains authoritative if a non-standard
+            # filesystem refuses a directory timestamp update.
+            continue
+
+
 def write_tushare_bronze_partition(
     dataset: str,
     trade_date: str,
@@ -1067,6 +1090,7 @@ def write_tushare_bronze_partition(
             except (OSError, ValueError, TypeError):
                 current_hash = ""
         if target.is_file() and current_hash == content_sha256:
+            _touch_tushare_current_freshness(extended=False)
             return {"changed": False, "rows": frame.height, "contentSha256": content_sha256}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
@@ -1095,6 +1119,7 @@ def write_tushare_bronze_partition(
         manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
         manifest_tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         os.replace(manifest_tmp, manifest_path)
+        _touch_tushare_current_freshness(extended=False)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 
@@ -1195,6 +1220,7 @@ def write_tushare_extended_bronze_partition(
                 json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
             )
             os.replace(manifest_tmp, manifest_path)
+            _touch_tushare_current_freshness(extended=True)
             return {"changed": False, "rows": frame.height, "contentSha256": content_sha256, "checked": True}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
@@ -1235,6 +1261,7 @@ def write_tushare_extended_bronze_partition(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
         os.replace(manifest_tmp, manifest_path)
+        _touch_tushare_current_freshness(extended=True)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 
