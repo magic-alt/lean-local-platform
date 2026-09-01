@@ -192,7 +192,9 @@ def import_security_master(
                     name=case when excluded.name=excluded.symbol and securities.name<>securities.symbol
                               then securities.name else excluded.name end,
                     exchange=excluded.exchange,
-                    listed_date=min(securities.listed_date,excluded.listed_date),
+                    listed_date=case
+                        when securities.listed_date<=excluded.listed_date then securities.listed_date
+                        else excluded.listed_date end,
                     delisted_date=coalesce(excluded.delisted_date,securities.delisted_date),
                     status=case when excluded.delisted_date is null and securities.delisted_date is not null
                                 then securities.status else excluded.status end,
@@ -214,8 +216,11 @@ def import_security_master(
                     name=case when excluded.name=excluded.symbol and instruments.name<>instruments.symbol
                               then instruments.name else excluded.name end,
                     exchange=excluded.exchange,
-                    listed_date=case when instruments.listed_date is null then excluded.listed_date
-                                     else min(instruments.listed_date,excluded.listed_date) end,
+                    listed_date=case
+                        when instruments.listed_date is null then excluded.listed_date
+                        when excluded.listed_date is null then instruments.listed_date
+                        when instruments.listed_date<=excluded.listed_date then instruments.listed_date
+                        else excluded.listed_date end,
                     delisted_date=coalesce(excluded.delisted_date,instruments.delisted_date),
                     status=case when excluded.delisted_date is null and instruments.delisted_date is not null
                                 then instruments.status else excluded.status end,
@@ -340,7 +345,10 @@ def upsert_security(
                     else excluded.name
                 end,
                 exchange = excluded.exchange,
-                listed_date = min(securities.listed_date, excluded.listed_date),
+                listed_date = case
+                    when securities.listed_date <= excluded.listed_date then securities.listed_date
+                    else excluded.listed_date
+                end,
                 -- A partial source refresh (for example CSI300 PIT materialization)
                 -- has no authority to resurrect a security by erasing its known
                 -- delisting date or status.

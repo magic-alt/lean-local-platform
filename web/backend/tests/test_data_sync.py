@@ -245,6 +245,42 @@ def test_postgres_connection_loss_pauses_sync_before_next_dataset(tmp_path, monk
     assert resumed_items["stock_basic"]["failed"] == 0
 
 
+def test_required_dataset_failure_stops_dependent_market_sync(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(requested=["stock_basic", "daily"])
+    with db() as connection:
+        connection.execute(
+            "update provider_dataset_catalog set permission_status='available' "
+            "where dataset_key in ('stock_basic','daily')"
+        )
+    monkeypatch.setattr(data_sync, "_assert_disk_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(data_sync, "probe_permissions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(data_sync, "_permission_summary", lambda keys: {})
+    monkeypatch.setattr(data_sync, "audit_existing_data", lambda: {"detected": 0})
+    monkeypatch.setattr(data_sync, "_latest_open_trade_date", lambda end_date: end_date)
+    calls = []
+
+    def fail_master(*args, **kwargs):
+        calls.append("stock_basic")
+        raise RuntimeError("security master rejected")
+
+    monkeypatch.setattr(data_sync, "_sync_stock_basic", fail_master)
+    monkeypatch.setattr(
+        data_sync,
+        "_sync_daily",
+        lambda *args, **kwargs: calls.append("daily") or (0, 0, 0, 0),
+    )
+
+    result = data_sync.run_sync(run["id"], adapter=SimpleNamespace(pro=SimpleNamespace()))
+
+    assert result["status"] == "failed"
+    assert result["blockingFailure"]["dataset"] == "stock_basic"
+    assert calls == ["stock_basic"]
+
+
 def test_paused_daily_resume_preserves_committed_checkpoint(tmp_path, monkeypatch):
     configure_temp_platform(tmp_path, monkeypatch)
     from app.db import db, json_dump
@@ -850,6 +886,107 @@ def test_disk_reserve_is_at_least_500_gib_or_half_the_disk(monkeypatch):
     data_sync._assert_disk_capacity(10 * gib)
     with pytest.raises(RuntimeError, match="data_sync_disk_guard"):
         data_sync._assert_disk_capacity(10 * gib + 1)
+
+
+def test_disk_metrics_default_to_durable_data_volume_not_tmpfs(tmp_path, monkeypatch):
+    from app.services import data_sync
+
+    monkeypatch.delenv("LEAN_DATA_SYNC_SPOOL_DIR", raising=False)
+    monkeypatch.delenv("LEAN_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(data_sync, "DATA_DIR", tmp_path / "data")
+
+    path = data_sync._disk_capacity_path()
+
+    assert path == str(tmp_path / "data")
+
+
+def test_incremental_plan_replays_recent_dates_and_repairs_bronze_holes(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    monkeypatch.setattr(data_sync.market_lake, "PARQUET_DIR", tmp_path)
+    monkeypatch.setenv("LEAN_DATA_SYNC_LOOKBACK_TRADING_DAYS", "2")
+    monkeypatch.setenv("LEAN_DATA_SYNC_CATCHUP_TRADING_DAYS", "10")
+    dates = [f"2026-07-{day:02d}" for day in range(1, 11)]
+    with db() as connection:
+        connection.executemany(
+            "insert into trade_calendar (market,trade_date,is_open,source) values ('china',?,1,'test')",
+            [(trade_date,) for trade_date in dates],
+        )
+    for trade_date in dates:
+        if trade_date == "2026-07-07":
+            continue
+        partition = (
+            tmp_path
+            / "bronze"
+            / "tushare"
+            / "current"
+            / "daily"
+            / f"trade_date={trade_date.replace('-', '')}"
+        )
+        partition.mkdir(parents=True)
+        (partition / "data.parquet").write_bytes(b"test")
+        (partition / "manifest.json").write_text(
+            json.dumps({"status": "success"}),
+            encoding="utf-8",
+        )
+
+    start_after = data_sync._incremental_replay_start_after(
+        "daily",
+        "2026-07-10",
+        "2026-07-10",
+    )
+
+    assert start_after == "2026-07-06"
+
+
+def test_extended_daily_sync_gap_fills_market_and_replays_financials(tmp_path, monkeypatch):
+    from app.services import market_lake, tushare_extended_sync
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+
+    class Pro:
+        def __getattr__(self, endpoint):
+            return lambda **params: [{"ts_code": "000001.SZ", **params, "endpoint": endpoint}]
+
+    class Adapter:
+        pro = Pro()
+
+        @staticmethod
+        def _paged_records(endpoint, *, page_size, **params):
+            return endpoint(**params)
+
+    first = tushare_extended_sync.sync_extended_daily(
+        Adapter(),
+        run_id="run-1",
+        end_date="2026-08-14",
+        open_dates=["2026-08-12", "2026-08-13", "2026-08-14"],
+        financial_lookback_calendar_days=80,
+    )
+
+    assert first["failed"] == 0
+    assert first["changed"] == 62  # all extended endpoint families are covered
+    assert (
+        tmp_path
+        / "bronze/tushare/current/extended/moneyflow_hsgt/trade_date=20260814/data.parquet"
+    ).is_file()
+    assert (
+        tmp_path
+        / "bronze/tushare/current/extended/fina_indicator_vip/trade_date=20260630/data.parquet"
+    ).is_file()
+
+    second = tushare_extended_sync.sync_extended_daily(
+        Adapter(),
+        run_id="run-2",
+        end_date="2026-08-14",
+        open_dates=["2026-08-12", "2026-08-13", "2026-08-14"],
+        financial_lookback_calendar_days=80,
+    )
+
+    assert second["failed"] == 0
+    assert second["processed"] == 41
+    assert second["changed"] == 0
 
 
 def test_raw_records_are_idempotent_and_changed_payloads_are_updated(tmp_path, monkeypatch):
@@ -1749,8 +1886,8 @@ def test_bronze_frontier_is_used_when_control_plane_watermark_is_stale(tmp_path,
             ]
 
     adapter = Adapter()
-    assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (1, 2, 0, 0)
-    assert adapter.calls == ["2026-07-17"]
+    assert data_sync._sync_daily(adapter, run["id"], run["id"], "2026-07-17") == (2, 4, 0, 0)
+    assert adapter.calls == ["2026-07-16", "2026-07-17"]
 
 
 def test_bronze_frontier_is_not_skipped_when_control_plane_is_ahead(tmp_path, monkeypatch):

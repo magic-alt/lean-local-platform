@@ -224,7 +224,9 @@ def _materialize_snapshot_intervals(
                     name=case when excluded.name=excluded.symbol and securities.name<>securities.symbol
                               then securities.name else excluded.name end,
                     exchange=excluded.exchange,
-                    listed_date=min(securities.listed_date,excluded.listed_date),
+                    listed_date=case
+                        when securities.listed_date<=excluded.listed_date then securities.listed_date
+                        else excluded.listed_date end,
                     updated_at=excluded.updated_at
                 """,
                 security_parameters[offset : offset + 5_000],

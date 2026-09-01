@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Repair TuShare incremental updates by measuring capacity on the durable data
+  volume instead of Docker's 128 MiB `/tmp` tmpfs, using PostgreSQL-portable
+  security-master upserts, failing closed when required master/calendar inputs
+  fail, replaying five recent sessions while repairing bounded Bronze holes,
+  and surfacing partial runs in the Data page. The default incremental run now
+  also updates all TuShare `extended` Bronze datasets incrementally: market
+  dates, recent report/date windows, exchange catalogs, and active-stock
+  per-symbol partitions, with content-addressed idempotency.
+
 - Restore Data-page controls for governed TuShare full/incremental updates and
   derived-layer recertification, with live run status; normalize discovered
   Parquet scopes so automatic production recertification no longer crashes on
