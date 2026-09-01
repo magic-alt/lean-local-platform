@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -34,6 +36,7 @@ MANIFEST_NAME = "_active_manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
 KINDS = {"bars", "trade_status", "adjustment_factor", "daily_basic"}
 PARTITION_FILE_NAME = "p.parquet"
+_TUSHARE_SYMBOL_PARTITION = re.compile(r"^(?P<symbol>\d{6})\.(?P<venue>SH|SZ|BJ|HK)$", re.IGNORECASE)
 
 BAR_COLUMNS = (
     "instrument_id", "symbol", "asset_class", "market", "venue", "trade_date",
@@ -1019,6 +1022,32 @@ def _write_manifest(root: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, target)
 
 
+def _touch_tushare_current_freshness(*, dataset: str, extended: bool) -> None:
+    """Advance the operator-facing mtime for the TuShare current views.
+
+    Replacing a partition manifest updates that partition's directory, but
+    POSIX does not propagate the change to its ancestors. The two current
+    roots are routinely inspected in Finder and by operational checks, so
+    keep their directory mtime aligned with a successful publish or an
+    authoritative unchanged replay. This is only a freshness signal: no
+    Parquet payload, current manifest, or immutable revision is changed.
+    """
+    current = PARQUET_DIR / "bronze" / "tushare" / "current"
+    roots = [current]
+    if extended:
+        extended_root = current / "extended"
+        roots.extend((extended_root, extended_root / dataset))
+    else:
+        roots.append(current / dataset)
+    for root in roots:
+        try:
+            os.utime(root, None)
+        except OSError:
+            # The partition publish remains authoritative if a non-standard
+            # filesystem refuses a directory timestamp update.
+            continue
+
+
 def write_tushare_bronze_partition(
     dataset: str,
     trade_date: str,
@@ -1064,6 +1093,7 @@ def write_tushare_bronze_partition(
             except (OSError, ValueError, TypeError):
                 current_hash = ""
         if target.is_file() and current_hash == content_sha256:
+            _touch_tushare_current_freshness(dataset=dataset, extended=False)
             return {"changed": False, "rows": frame.height, "contentSha256": content_sha256}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
@@ -1092,6 +1122,7 @@ def write_tushare_bronze_partition(
         manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
         manifest_tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         os.replace(manifest_tmp, manifest_path)
+        _touch_tushare_current_freshness(dataset=dataset, extended=False)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 
@@ -1114,6 +1145,13 @@ def write_tushare_extended_bronze_partition(
     _require_engine()
     safe_dataset = str(dataset).strip()
     safe_partition = str(partition).strip()
+    # Symbol partitions used to be written with a dot (``000001.SZ``), while
+    # the incremental synchronizer uses a filesystem-stable underscore
+    # (``000001_SZ``). Normalize at the writer boundary so every caller shares
+    # one immutable current-partition identity.
+    symbol_partition = _TUSHARE_SYMBOL_PARTITION.fullmatch(safe_partition)
+    if symbol_partition:
+        safe_partition = f"{symbol_partition.group('symbol')}_{symbol_partition.group('venue').upper()}"
     if (
         not safe_dataset
         or not safe_partition
@@ -1123,8 +1161,23 @@ def write_tushare_extended_bronze_partition(
     ordered_columns = tuple(str(column) for column in columns)
     if not ordered_columns:
         raise ValueError("TuShare extended Bronze partitions require an explicit schema.")
-    materialized = [{column: row.get(column) for column in ordered_columns} for row in rows]
-    frame = pl.DataFrame(materialized, schema=list(ordered_columns), strict=False)
+    materialized = [
+        {
+            column: (
+                None
+                if isinstance(row.get(column), float) and not math.isfinite(row[column])
+                else row.get(column)
+            )
+            for column in ordered_columns
+        }
+        for row in rows
+    ]
+    # Financial VIP responses often begin with a long null run and later
+    # contain a finite number or NaN. Infer against the full bounded provider
+    # partition so the first 100 rows cannot lock an incompatible dtype.
+    frame = pl.DataFrame(
+        materialized, schema=list(ordered_columns), strict=False, infer_schema_length=None
+    )
     sort_columns = [
         column
         for column in ("trade_date", "ts_code", "end_date", "ann_date")
@@ -1153,7 +1206,25 @@ def write_tushare_extended_bronze_partition(
             except (OSError, ValueError, TypeError):
                 current_hash = ""
         if target.is_file() and current_hash == content_sha256:
-            return {"changed": False, "rows": frame.height, "contentSha256": content_sha256}
+            # A no-op replay is still authoritative evidence that the provider
+            # was checked. Keep the published content identity and
+            # ``written_at_utc`` immutable, but atomically advance an explicit
+            # freshness field so consumers do not mistake an unchanged report
+            # period for a stalled dataset.
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                manifest = {}
+            manifest["last_checked_at_utc"] = datetime.now(UTC).isoformat()
+            if metadata and metadata.get("ingest_run_id"):
+                manifest["last_checked_run_id"] = str(metadata["ingest_run_id"])
+            manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+            manifest_tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            )
+            os.replace(manifest_tmp, manifest_path)
+            _touch_tushare_current_freshness(dataset=safe_dataset, extended=True)
+            return {"changed": False, "rows": frame.height, "contentSha256": content_sha256, "checked": True}
         if target.is_file():
             prior_hash = current_hash or _sha256(target)
             revision = (
@@ -1184,6 +1255,7 @@ def write_tushare_extended_bronze_partition(
             "content_sha256": content_sha256,
             "content_hash_kind": "logical_frame_v1",
             "written_at_utc": datetime.now(UTC).isoformat(),
+            "last_checked_at_utc": datetime.now(UTC).isoformat(),
             "writer": "lean-platform",
             **(metadata or {}),
         }
@@ -1192,6 +1264,7 @@ def write_tushare_extended_bronze_partition(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
         )
         os.replace(manifest_tmp, manifest_path)
+        _touch_tushare_current_freshness(dataset=safe_dataset, extended=True)
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 

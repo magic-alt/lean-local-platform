@@ -62,6 +62,19 @@ from ..core.config import ASHARE_TECH_RETRY_MINUTES
 logger = logging.getLogger(__name__)
 
 
+def _data_sync_task_time_limit() -> tuple[int, int]:
+    """Bound a provider call so an unresponsive SDK cannot lock the UI forever."""
+    try:
+        soft = int(os.environ.get("LEAN_DATA_SYNC_TASK_SOFT_LIMIT_SECONDS", "1200"))
+    except ValueError:
+        soft = 1200
+    soft = max(300, min(7_200, soft))
+    return soft, soft + 60
+
+
+DATA_SYNC_SOFT_TIME_LIMIT, DATA_SYNC_HARD_TIME_LIMIT = _data_sync_task_time_limit()
+
+
 def _emit_operational_alert(event_type: str, **kwargs: Any) -> None:
     try:
         emit_alert(event_type, **kwargs)
@@ -695,6 +708,8 @@ def download_on_demand_dataset_task(task_id: str, api_parameters: dict[str, Any]
     name="lean_web.sync_all_data",
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=DATA_SYNC_SOFT_TIME_LIMIT,
+    time_limit=DATA_SYNC_HARD_TIME_LIMIT,
 )
 def sync_all_data_task(task_id: str, run_id: str):
     task = get_task(task_id)
@@ -738,6 +753,7 @@ def sync_all_data_task(task_id: str, run_id: str):
     except Exception as exc:
         append_log(task_id, f"error: {exc}")
         update_task(task_id, status="failed", error=str(exc), finished_at=utc_now())
+        data_sync.mark_run_failed(run_id, str(exc))
         _emit_operational_alert(
             "data_sync_failed",
             severity="critical",
@@ -1050,6 +1066,15 @@ def recover_data_sync_task():
             """,
             (cutoff,),
         ).fetchall()
+        cancelling_rows = connection.execute(
+            """
+            select id from data_sync_runs
+            where status='cancelling' and cancel_requested=1
+              and coalesce(heartbeat_at,started_at,created_at) < ?
+            order by created_at
+            """,
+            (cutoff,),
+        ).fetchall()
         derived_rows = connection.execute(
             """
             select id,derived_status_json,finished_at
@@ -1076,16 +1101,21 @@ def recover_data_sync_task():
             heartbeat = datetime.min.replace(tzinfo=timezone.utc)
         if heartbeat < cutoff_datetime:
             stale_derived.append((str(row["id"]), payload))
-    if not rows and not stale_derived:
-        return {"recovered": [], "preserved": [], "recoveredDerived": [], "preservedDerived": []}
+    if not rows and not cancelling_rows and not stale_derived:
+        return {
+            "recovered": [], "failedUnbound": [], "cancelled": [], "preserved": [],
+            "recoveredDerived": [], "preservedDerived": [],
+        }
 
     recovered: list[str] = []
+    failed_unbound: list[str] = []
     preserved: list[str] = []
     for row in rows:
         run_id = str(row["id"])
         task_id = str(row["task_id"] or "")
         if not task_id:
-            preserved.append(run_id)
+            if data_sync.fail_stale_unbound_run(run_id):
+                failed_unbound.append(run_id)
             continue
         # The platform row is authoritative. The compare-and-set below lets
         # only one recovery pass publish a replacement after a stale heartbeat.
@@ -1095,6 +1125,11 @@ def recover_data_sync_task():
         update_task(task_id, celery_task_id=result.id, status="queued", error=None, finished_at=None)
         append_log(task_id, "Recovered orphaned data synchronization after worker restart.")
         recovered.append(run_id)
+    cancelled = [
+        str(row["id"])
+        for row in cancelling_rows
+        if data_sync.finalize_stale_cancellation(str(row["id"]))
+    ]
     recovered_derived: list[str] = []
     preserved_derived: list[str] = []
     for run_id, payload in stale_derived:
@@ -1110,6 +1145,8 @@ def recover_data_sync_task():
         recovered_derived.append(run_id)
     return {
         "recovered": recovered,
+        "failedUnbound": failed_unbound,
+        "cancelled": cancelled,
         "preserved": preserved,
         "recoveredDerived": recovered_derived,
         "preservedDerived": preserved_derived,

@@ -192,6 +192,15 @@ export interface DataSyncCatalog {
   localOnly?: boolean;
   marketDataAuthority?: "local_parquet" | string;
   marketDataRoot?: string;
+  automaticUpdate?: {
+    enabled: boolean;
+    due: boolean;
+    checkIntervalSeconds: number;
+    timezone: string;
+    scheduledTime: string;
+    asOfDate?: string | null;
+    lastSuccessfulAt?: string | null;
+  };
 }
 
 export interface SecurityProfileIdentifier {

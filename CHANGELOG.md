@@ -4,6 +4,45 @@
 
 ## Unreleased
 
+- Keep the TuShare `current` and `current/extended` directory modification
+  times aligned with successful partition publication and authoritative
+  unchanged rechecks, so filesystem-level freshness inspection reflects the
+  actual current-data state without altering published Parquet or revisions.
+- Apply that freshness signal to each direct TuShare dataset directory as
+  well, so unchanged VIP report partitions cannot leave their dataset folder
+  apparently stale in filesystem views.
+- Treat a post-close partial refresh with the required daily partition
+  completed as one automatic-update attempt, surfacing auxiliary failures for
+  manual retry instead of continuously launching another full refresh.
+
+- Normalize extended TuShare symbol partitions to the canonical
+  `000001_SZ` form at the write boundary, avoiding duplicate current data
+  directories while preserving replaced current snapshots in immutable
+  revisions.
+- Prioritize the stalest extended symbol endpoints after bounded date/report
+  work, so a continually refreshed endpoint cannot starve older datasets.
+- Record the last successful provider check for unchanged extended partitions,
+  distinguishing fresh identical VIP/report data from a stalled publication
+  without rewriting Parquet or creating a spurious revision.
+- Run extended VIP report periods before monthly date-range scans so financial
+  statements and disclosure calendars are refreshed promptly.
+- Surface individual extended partition failures while a sync is running,
+  instead of withholding provider error context until the entire batch ends.
+- Normalize non-finite VIP financial values and infer their bounded response
+  schema across the full partition, preventing late `NaN` fields from blocking
+  financial-statement publication.
+
+- Make the open Data page periodically check the latest known China trading
+  session and automatically enqueue one post-close incremental refresh; accept
+  the UI's explicit initial-build mode, fail queued sync runs when task dispatch
+  fails so controls cannot remain disabled forever, terminalize stale unbound
+  or cancelling runs, and prioritize bounded extended-data refreshes ahead of
+  expensive per-symbol sweeps. Bound those sweeps to durable batches, skip
+  fresh symbol snapshots, and heartbeat each extended partition so recovery
+  cannot duplicate a long-running update and hold the page control disabled;
+  preserve completed checkpoints during recovery and terminalize a sync if its
+  bounded worker time limit is exceeded.
+
 - Repair TuShare incremental updates by measuring capacity on the durable data
   volume instead of Docker's 128 MiB `/tmp` tmpfs, using PostgreSQL-portable
   security-master upserts, failing closed when required master/calendar inputs
