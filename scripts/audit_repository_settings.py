@@ -70,7 +70,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--repository",
-        default=os.environ.get("GITHUB_REPOSITORY", "magic-alt/platform"),
+        default=os.environ.get("GITHUB_REPOSITORY", "magic-alt/lean-local-platform"),
         help="owner/repository",
     )
     args = parser.parse_args()
