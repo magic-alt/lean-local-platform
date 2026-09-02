@@ -1268,6 +1268,116 @@ def write_tushare_extended_bronze_partition(
     return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
 
 
+def write_tushare_instrument_bronze_partition(
+    dataset: str,
+    ts_code: str,
+    rows: Iterable[dict[str, Any]],
+    *,
+    columns: Sequence[str],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically refresh a provider-shaped ``ts_code`` Bronze snapshot."""
+    _require_engine()
+    safe_dataset = str(dataset).strip()
+    safe_ts_code = str(ts_code).strip().upper()
+    if not safe_dataset or any(token in safe_dataset for token in ("/", "\\", "..")):
+        raise ValueError(f"invalid TuShare instrument dataset: {dataset!r}")
+    if not _TUSHARE_SYMBOL_PARTITION.fullmatch(safe_ts_code):
+        raise ValueError(f"invalid TuShare instrument code: {ts_code!r}")
+    ordered_columns = tuple(str(column) for column in columns)
+    if not ordered_columns:
+        raise ValueError("TuShare instrument Bronze partitions require an explicit schema.")
+    materialized = [
+        {
+            column: (
+                None
+                if isinstance(row.get(column), float) and not math.isfinite(row[column])
+                else row.get(column)
+            )
+            for column in ordered_columns
+        }
+        for row in rows
+    ]
+    frame = pl.DataFrame(
+        materialized, schema=list(ordered_columns), strict=False, infer_schema_length=None
+    )
+    sort_columns = [
+        column for column in ("end_date", "ann_date", "ex_date", "ts_code")
+        if column in frame.columns
+    ]
+    if sort_columns:
+        frame = frame.sort(sort_columns)
+    canonical = json.dumps(
+        frame.to_dicts(), ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"),
+    ).encode("utf-8")
+    content_sha256 = hashlib.sha256(canonical).hexdigest()
+    relative = Path(safe_dataset) / f"ts_code={safe_ts_code}"
+    root = PARQUET_DIR / "bronze" / "tushare" / "current" / relative
+    target = root / "data.parquet"
+    manifest_path = root / "manifest.json"
+    lock_key = hashlib.sha256(
+        f"tushare-bronze:instrument:{safe_dataset}".encode("utf-8")
+    ).hexdigest()[:24]
+    with _write_lock(PARQUET_DIR / ".locks" / lock_key):
+        current_hash = ""
+        if manifest_path.is_file():
+            try:
+                current_hash = str(
+                    json.loads(manifest_path.read_text(encoding="utf-8")).get("content_sha256") or ""
+                )
+            except (OSError, ValueError, TypeError):
+                current_hash = ""
+        now = datetime.now(UTC).isoformat()
+        if target.is_file() and current_hash == content_sha256:
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                manifest = {}
+            manifest["last_checked_at_utc"] = now
+            if metadata and metadata.get("ingest_run_id"):
+                manifest["last_checked_run_id"] = str(metadata["ingest_run_id"])
+            manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+            manifest_tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+            )
+            os.replace(manifest_tmp, manifest_path)
+            _touch_tushare_current_freshness(dataset=safe_dataset, extended=False)
+            return {"changed": False, "rows": frame.height, "contentSha256": content_sha256, "checked": True}
+        if target.is_file():
+            prior_hash = current_hash or _sha256(target)
+            revision = PARQUET_DIR / "bronze" / "tushare" / "revisions" / relative / prior_hash
+            revision.mkdir(parents=True, exist_ok=True)
+            if not (revision / "data.parquet").exists():
+                shutil.copy2(target, revision / "data.parquet")
+            if manifest_path.is_file() and not (revision / "manifest.json").exists():
+                shutil.copy2(manifest_path, revision / "manifest.json")
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        frame.write_parquet(temporary, compression=PARQUET_COMPRESSION)
+        os.replace(temporary, target)
+        payload = {
+            "schema_version": "1.1",
+            "dataset": safe_dataset,
+            "ts_code": safe_ts_code,
+            "status": "empty" if frame.height == 0 else "success",
+            "rows": frame.height,
+            "columns": list(ordered_columns),
+            "sha256": _sha256(target),
+            "content_sha256": content_sha256,
+            "content_hash_kind": "logical_frame_v1",
+            "written_at_utc": now,
+            "last_checked_at_utc": now,
+            "writer": "lean-platform",
+            **(metadata or {}),
+        }
+        manifest_tmp = manifest_path.with_name(f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+        manifest_tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8"
+        )
+        os.replace(manifest_tmp, manifest_path)
+        _touch_tushare_current_freshness(dataset=safe_dataset, extended=False)
+    return {"changed": True, "rows": frame.height, "contentSha256": content_sha256}
+
 def upsert_rows(
     rows: Iterable[dict[str, Any]],
     *,

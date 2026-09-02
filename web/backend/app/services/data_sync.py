@@ -1834,7 +1834,6 @@ def _disk_capacity_path() -> str:
     # data volume has ample free space.
     return (
         os.environ.get("LEAN_DATA_SYNC_SPOOL_DIR")
-        or os.environ.get("LEAN_RUNTIME_DIR")
         or str(DATA_DIR)
     )
 
@@ -3989,6 +3988,7 @@ def _sync_instrument_dataset_fast(
     *,
     full_refresh: bool,
     minimum_start_date: str | None = None,
+    retry_failed_only: bool = False,
 ) -> tuple[int, int, int, int]:
     """Batch instrument history and use market-wide daily increments when supported."""
     state = _item_state(run_id, spec.key)
@@ -4050,7 +4050,7 @@ def _sync_instrument_dataset_fast(
         market_start_after
         and all(str(item.get("listed_date") or "") > market_start_after for item in uncovered_active)
     )
-    retry_failed_only = bool(checkpoint.get("retryFailedOnly"))
+    retry_failed_only = retry_failed_only or bool(checkpoint.get("retryFailedOnly"))
     date_fetch_name = {
         "suspend_d": "suspend_rows_for_date",
         "daily_basic": "daily_basic_rows_for_date",
@@ -4755,6 +4755,7 @@ def _sync_generic(
     task_id: str | None = None,
     full_refresh: bool = False,
     minimum_start_date: str | None = None,
+    retry_failed_only: bool = False,
 ) -> tuple[int, int, int, int]:
     if spec.normalizer == "market_raw":
         return _sync_market_raw_by_trade_date(
@@ -4788,6 +4789,7 @@ def _sync_generic(
             task_id,
             full_refresh=full_refresh,
             minimum_start_date=minimum_start_date,
+            retry_failed_only=retry_failed_only,
         )
     if spec.normalizer == "suspend_d" and not full_refresh and hasattr(adapter, "suspend_rows_for_date"):
         listed_securities = _listed_securities()
@@ -5206,6 +5208,9 @@ def run_sync(
         "screen_backfill",
     }
     request_scope = run_record.get("requestScope") or {}
+    retry_failed_only_datasets = {
+        str(item) for item in request_scope.get("retryFailedOnlyDatasets") or []
+    }
     minimum_start_date: str | None = None
     if sync_mode == "screen_backfill" or resume_base_mode == "screen_backfill":
         requested_as_of = str(request_scope.get("asOfDate") or end_date)
@@ -5383,6 +5388,7 @@ def run_sync(
                         task_id,
                         full_refresh=full_refresh,
                         minimum_start_date=minimum_start_date,
+                        retry_failed_only=spec.key in retry_failed_only_datasets,
                     )
                 processed, inserted, updated, failed = result
                 if spec.key in {"stock_basic", "trade_cal"}:
@@ -5446,7 +5452,20 @@ def run_sync(
                     finished_at=utc_now(),
                 )
                 _set_catalog_coverage(spec)
-                summaries[spec.key] = {"processed": processed, "inserted": inserted, "updated": updated, "failed": failed}
+                dataset_summary = {
+                    "processed": processed,
+                    "inserted": inserted,
+                    "updated": updated,
+                    "failed": failed,
+                }
+                if spec.key == "extended_daily":
+                    dataset_summary.update(
+                        {
+                            "partitionFailures": int(extended["failed"]),
+                            "deferredSymbolTasks": extended_deferred,
+                        }
+                    )
+                summaries[spec.key] = dataset_summary
             except Exception as exc:  # noqa: BLE001
                 if _database_infrastructure_failure(exc):
                     infrastructure_failure = {

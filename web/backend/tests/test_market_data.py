@@ -54,6 +54,36 @@ def test_batch_daily_writer_reuses_existing_instrument_id(tmp_path, monkeypatch)
     assert row["instrument_id"] == existing_id
 
 
+def test_upsert_instrument_preserves_earliest_listed_date(tmp_path, monkeypatch):
+    configure_temp_db(tmp_path, monkeypatch)
+    from app.services.market_repository import get_instrument, upsert_instrument
+
+    upsert_instrument(
+        symbol="000001",
+        asset_class="equity",
+        market="china",
+        listed_date="1992-01-01",
+        source="tushare",
+    )
+    upsert_instrument(
+        symbol="000001",
+        asset_class="equity",
+        market="china",
+        listed_date="1991-04-03",
+        source="tushare",
+    )
+    upsert_instrument(
+        symbol="000001",
+        asset_class="equity",
+        market="china",
+        listed_date="1993-01-01",
+        source="tushare",
+    )
+
+    instrument = get_instrument("000001", market="china")
+    assert instrument is not None
+    assert instrument["listed_date"] == "1991-04-03"
+
 def test_query_database_bars_reads_local_parquet_lake(tmp_path, monkeypatch):
     configure_temp_db(tmp_path, monkeypatch)
     from app.services import market_lake

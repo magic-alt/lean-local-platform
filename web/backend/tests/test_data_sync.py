@@ -988,16 +988,26 @@ def test_disk_reserve_is_at_least_500_gib_or_half_the_disk(monkeypatch):
         data_sync._assert_disk_capacity(10 * gib + 1)
 
 
-def test_disk_metrics_default_to_durable_data_volume_not_tmpfs(tmp_path, monkeypatch):
+def test_disk_metrics_default_to_durable_data_volume_not_runtime(tmp_path, monkeypatch):
     from app.services import data_sync
 
     monkeypatch.delenv("LEAN_DATA_SYNC_SPOOL_DIR", raising=False)
-    monkeypatch.delenv("LEAN_RUNTIME_DIR", raising=False)
+    monkeypatch.setenv("LEAN_RUNTIME_DIR", str(tmp_path / "runtime-on-another-volume"))
     monkeypatch.setattr(data_sync, "DATA_DIR", tmp_path / "data")
 
     path = data_sync._disk_capacity_path()
 
     assert path == str(tmp_path / "data")
+
+
+def test_disk_metrics_honor_explicit_sync_spool_volume(tmp_path, monkeypatch):
+    from app.services import data_sync
+
+    spool = tmp_path / "sync-spool"
+    monkeypatch.setenv("LEAN_DATA_SYNC_SPOOL_DIR", str(spool))
+    monkeypatch.setattr(data_sync, "DATA_DIR", tmp_path / "data")
+
+    assert data_sync._disk_capacity_path() == str(spool)
 
 
 def test_incremental_plan_replays_recent_dates_and_repairs_bronze_holes(tmp_path, monkeypatch):
@@ -3662,3 +3672,60 @@ def test_sync_mode_records_initial_incremental_and_checkpoint_resume(tmp_path, m
     assert catalog["recommendedMode"] == "incremental"
     incremental = data_sync.create_sync_run(requested=["daily"])
     assert incremental["mode"] == "incremental"
+
+
+def test_extended_dividend_refreshes_instrument_bronze(tmp_path, monkeypatch):
+    from app.services import market_lake, tushare_extended_sync
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    monkeypatch.setattr(
+        tushare_extended_sync,
+        "EXTENDED_DAILY_ENDPOINTS",
+        (tushare_extended_sync.ExtendedDailyEndpoint("dividend", "corporate", "symbol"),),
+    )
+
+    class Pro:
+        @staticmethod
+        def stock_basic(**params):
+            return [{"ts_code": "000001.SZ"}]
+
+        @staticmethod
+        def dividend(**params):
+            return [{"ts_code": params["ts_code"], "ann_date": "20260101", "cash_div": 0.1}]
+
+    result = tushare_extended_sync.sync_extended_daily(
+        SimpleNamespace(pro=Pro()), run_id="run-dividend", end_date="2026-09-01", open_dates=[]
+    )
+
+    assert result["failed"] == 0
+    assert (
+        tmp_path / "bronze/tushare/current/dividend/ts_code=000001.SZ/data.parquet"
+    ).is_file()
+
+
+def test_run_sync_forwards_failed_only_dataset_scope(tmp_path, monkeypatch):
+    configure_temp_platform(tmp_path, monkeypatch)
+    from app.db import db
+    from app.services import data_sync
+
+    run = data_sync.create_sync_run(
+        requested=["dividend"],
+        request_scope={"retryFailedOnlyDatasets": ["dividend"]},
+    )
+    with db() as connection:
+        connection.execute(
+            "update provider_dataset_catalog set permission_status='available' where dataset_key='dividend'"
+        )
+    monkeypatch.setattr(data_sync, "probe_permissions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(data_sync, "_sync_completion_evidence", lambda *args, **kwargs: {"passed": True, "items": []})
+    monkeypatch.setattr(data_sync, "_set_catalog_coverage", lambda spec: None)
+    received = []
+
+    def sync_generic(adapter, spec, run_id, batch_id, end_date, *args, **kwargs):
+        received.append(kwargs.get("retry_failed_only"))
+        return 0, 0, 0, 0
+
+    monkeypatch.setattr(data_sync, "_sync_generic", sync_generic)
+    data_sync.run_sync(run["id"], adapter=SimpleNamespace(pro=SimpleNamespace()))
+
+    assert received == [True]

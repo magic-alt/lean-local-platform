@@ -133,7 +133,8 @@ def upsert_instrument(
                 listed_date = case
                     when instruments.listed_date is null then excluded.listed_date
                     when excluded.listed_date is null then instruments.listed_date
-                    else min(instruments.listed_date, excluded.listed_date)
+                    when instruments.listed_date <= excluded.listed_date then instruments.listed_date
+                    else excluded.listed_date
                 end,
                 delisted_date = excluded.delisted_date,
                 expiry_date = coalesce(excluded.expiry_date, instruments.expiry_date),

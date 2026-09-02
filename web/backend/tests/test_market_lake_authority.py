@@ -306,3 +306,26 @@ def test_extended_vip_writer_accepts_late_nan_after_null_schema_prefix(tmp_path,
     target = tmp_path / "bronze/tushare/current/extended/balancesheet_vip/trade_date=20260630/data.parquet"
     assert result["changed"] is True
     assert pl.read_parquet(target).null_count().item(0, "metric") == 102
+
+
+def test_instrument_bronze_replay_refreshes_manifest_without_revision(tmp_path, monkeypatch):
+    from app.services import market_lake
+
+    monkeypatch.setattr(market_lake, "PARQUET_DIR", tmp_path)
+    columns = ("ts_code", "ann_date", "cash_div")
+    rows = [{"ts_code": "000001.SZ", "ann_date": "20260101", "cash_div": 0.1}]
+    first = market_lake.write_tushare_instrument_bronze_partition(
+        "dividend", "000001.SZ", rows, columns=columns, metadata={"ingest_run_id": "first"}
+    )
+    replay = market_lake.write_tushare_instrument_bronze_partition(
+        "dividend", "000001.SZ", rows, columns=columns, metadata={"ingest_run_id": "replay"}
+    )
+
+    root = tmp_path / "bronze/tushare/current/dividend/ts_code=000001.SZ"
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert first["changed"] is True
+    assert replay["changed"] is False
+    assert replay["checked"] is True
+    assert manifest["last_checked_run_id"] == "replay"
+    assert pl.read_parquet(root / "data.parquet").height == 1
+    assert not list((tmp_path / "bronze/tushare/revisions/dividend").rglob("data.parquet"))

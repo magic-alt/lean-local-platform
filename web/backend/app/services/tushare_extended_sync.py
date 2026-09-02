@@ -308,6 +308,18 @@ def sync_extended_daily(
                         "ingest_run_id": run_id,
                     },
                 )
+                if endpoint.name == "dividend" and params.get("ts_code"):
+                    market_lake.write_tushare_instrument_bronze_partition(
+                        "dividend",
+                        params["ts_code"],
+                        rows,
+                        columns=columns,
+                        metadata={
+                            "api": endpoint.name,
+                            "params": params,
+                            "ingest_run_id": run_id,
+                        },
+                    )
                 endpoint_counts[endpoint.name] = endpoint_counts.get(endpoint.name, 0) + 1
                 counters["rows"] += len(rows)
                 counters["changed"] += int(bool(result["changed"]))
