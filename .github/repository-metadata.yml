@@ -2,17 +2,21 @@
 # GitHub does not apply this file by itself; keep the repository settings in sync.
 
 description: >-
-  Local-first quantitative execution and control platform built around QuantConnect LEAN,
-  FastAPI, React, PostgreSQL, RabbitMQ, Parquet, and DuckDB.
+  Local-first QuantConnect LEAN platform for governed A-share data, reproducible
+  backtesting, research artifact validation, optimization, and paper trading.
 
 topics:
   - quantitative-finance
   - algorithmic-trading
+  - trading-platform
   - quantconnect
   - lean
   - backtesting
   - paper-trading
   - quant-research
+  - a-share
+  - tushare
+  - reproducible-research
   - fastapi
   - react
   - postgresql
