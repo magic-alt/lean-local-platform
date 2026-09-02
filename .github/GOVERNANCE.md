@@ -1,8 +1,9 @@
 # GitHub Repository Governance
 
-This directory contains the version-controlled part of the GitHub control
-plane. Read it with `docs/repository-governance.md`: some controls live in
-GitHub server-side Settings and cannot be activated by committing files alone.
+> [!NOTE]
+> This file is intentionally named `GOVERNANCE.md` instead of `README.md` so the repository landing page renders the root [`README.md`](../README.md). GitHub gives `.github/README.md` precedence over the root README when choosing the repository homepage document.
+
+This directory contains the version-controlled part of the GitHub control plane. Read it together with [`docs/repository-governance.md`](../docs/repository-governance.md): some controls live in GitHub server-side Settings and cannot be activated by committing files alone.
 
 ## Layout
 
@@ -23,9 +24,7 @@ GitHub server-side Settings and cannot be activated by committing files alone.
 
 ## Authority boundaries
 
-Repository files declare and validate **desired state**. They do not prove that
-server-side settings are enabled. Remote verification is required for branch or
-tag Rulesets, Dependency Graph, Description/Topics, merge settings, and secrets.
+Repository files declare and validate **desired state**. They do not prove that server-side settings are enabled. Remote verification is required for branch or tag Rulesets, Dependency Graph, Description/Topics, merge settings, and secrets.
 
 Use:
 
@@ -37,12 +36,9 @@ to detect remote drift where the GitHub API exposes the relevant state.
 
 ## Workflow permissions
 
-Use least-privilege `permissions:` blocks. Content-validation workflows should
-normally use `contents: read`. Grant `contents: write` or
-`security-events: write` only to the narrow workflow/job that requires it.
+Use least-privilege `permissions:` blocks. Content-validation workflows should normally use `contents: read`. Grant `contents: write` or `security-events: write` only to the narrow workflow/job that requires it.
 
-Do not use `pull_request_target` for untrusted contributor code unless a
-specific design has been security-reviewed.
+Do not use `pull_request_target` for untrusted contributor code unless a specific design has been security-reviewed.
 
 ## Required-check discipline
 
@@ -53,8 +49,7 @@ A workflow name is not enough evidence that a control executed. Distinguish:
 - intentionally skipped compute-heavy lane;
 - failed or cancelled run.
 
-Only promote a check to required after it has a stable, non-deadlocking path for
-the repository contribution model.
+Only promote a check to required after it has a stable, non-deadlocking path for the repository contribution model.
 
 ## Developer automation
 

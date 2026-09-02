@@ -22,7 +22,7 @@ REQUIRED_FILES = (
     ".codex/README.md", ".codex/config.toml", ".codex/rules/safety.rules",
     ".codex/agents/repository-governance-reviewer.toml",
     ".githooks/README.md", ".githooks/pre-commit", ".githooks/commit-msg",
-    ".github/README.md", ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/GOVERNANCE.md", ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/workflows/ci.yml",
 )
 FRONT_MATTER_RE = re.compile(r"\A---\n(?P<meta>.*?)\n---\n", re.DOTALL)
