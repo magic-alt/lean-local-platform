@@ -25,7 +25,7 @@ English · [简体中文](README.zh-CN.md)
 </div>
 
 > [!IMPORTANT]
-> **Current release status: NOT CERTIFIED.** The PostgreSQL/RabbitMQ architecture migration invalidated earlier certification evidence. **Live broker writes and P9 activation are disabled.** Read [Current Release Status](docs/release-status.md) before using the platform in any production-like environment.
+> **Current release status: NOT CERTIFIED.** The PostgreSQL/RabbitMQ architecture migration invalidated earlier certification evidence. **Live trading / P9 activation is disabled.** Live broker writes remain disabled. Read [Current Release Status](docs/release-status.md) before using the platform in any production-like environment.
 
 LEAN Local Platform is an open-source **Execution Plane / Control Plane** built around [QuantConnect LEAN](https://github.com/QuantConnect/Lean). It turns governed market data and externally produced research artifacts into reproducible LEAN validation, backtests, optimization runs, paper-account state, and audit-ready operational evidence.
 
