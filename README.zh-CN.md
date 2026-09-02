@@ -6,7 +6,7 @@
 
 一个围绕 [QuantConnect LEAN](https://github.com/QuantConnect/Lean) 构建的 local-first 开源量化平台，面向受治理的 A 股数据、研究成果交付、回测、优化、Paper Trading 与可审计运行证据。
 
-[![CI](https://github.com/magic-alt/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/magic-alt/platform/actions/workflows/ci.yml)
+[![CI](https://github.com/magic-alt/lean-local-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/magic-alt/lean-local-platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![LEAN](https://img.shields.io/badge/engine-QuantConnect%20LEAN-111827)](https://github.com/QuantConnect/Lean)
@@ -20,6 +20,24 @@
 
 > [!IMPORTANT]
 > **当前版本状态：NOT CERTIFIED。** PostgreSQL / RabbitMQ 架构迁移后，旧版本认证证据不再适用于当前架构；Live Trading / P9 激活仍处于禁用状态。任何生产化或类生产部署前，请先阅读 [Current Release Status](docs/release-status.md)。
+
+## 产品界面
+
+<p align="center">
+  <a href="docs/help/backtests.md">
+    <img src="docs/help/assets/backtest-workbench.png" alt="由可复现 E2E 演示环境生成的 LEAN Local Platform 回测工作台真实界面" width="100%">
+  </a>
+</p>
+
+<p align="center"><sub><strong>真实产品 UI。</strong> 截图由仓库现有 Playwright 文档流程使用隔离 E2E 数据生成；它用于展示产品能力，不代表当前版本已完成 Release Certification。</sub></p>
+
+<p align="center">
+  <a href="docs/help/assets/data-library.png">数据</a> ·
+  <a href="docs/help/assets/project-editor.png">项目</a> ·
+  <a href="docs/help/assets/optimization-workbench.png">优化</a> ·
+  <a href="docs/help/assets/research-workspace.png">研究交付</a> ·
+  <a href="docs/help/assets/reports-library.png">报告</a>
+</p>
 
 ## 这是什么项目？
 
@@ -94,8 +112,8 @@ flowchart LR
 ### 1. 克隆并配置
 
 ```bash
-git clone https://github.com/magic-alt/platform.git
-cd platform
+git clone https://github.com/magic-alt/lean-local-platform.git
+cd lean-local-platform
 cp .env.example .env
 ```
 
@@ -179,7 +197,7 @@ flowchart LR
 ## 研究 / 执行边界
 
 ```text
-platform
+lean-local-platform
   └─ 发布不可变 DataRelease
        ↓
 qlib-platform
@@ -190,14 +208,14 @@ qlib-platform
 Artifact Contract v2
 + content-addressed TARGET_PORTFOLIO
        ↓
-platform
+lean-local-platform
   ├─ fail-closed import
   ├─ lineage / hash validation
   ├─ authoritative LEAN validation
   └─ backtest / optimization / paper control
 ```
 
-这个边界是有意设计的：`platform` 不扩张成第二个特征工程或模型训练平台，研究结果也不会因为“上游成功生成”就自动获得可执行资格。
+这个边界是有意设计的：LEAN Local Platform 不扩张成第二个特征工程或模型训练平台，研究结果也不会因为“上游成功生成”就自动获得可执行资格。
 
 ## 当前支持边界
 
@@ -245,6 +263,7 @@ Windows 默认使用用户进程进行本地开发；Windows SCM 仅用于明确
 | **使用数据** | [Data Sources](docs/data_sources.md) · [Data Pipeline](docs/data_pipeline.md) · [Market Data Lake](docs/market_data_lake.md) |
 | **API 集成** | [API](docs/api.md) · [Help Center](docs/help/index.md) |
 | **验证变更** | [Testing](docs/testing.md) · [Release Status](docs/release-status.md) |
+| **维护项目品牌** | [Branding & Discoverability](docs/branding-and-discovery.md) · 截图、Social Preview 与仓库迁移说明 |
 | **规划后续开发** | [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md) |
 
 `docs/history/` 中的历史文档只代表原始 baseline 的历史证据，**不是当前运行指南**。
@@ -298,7 +317,7 @@ npm run build
 
 - 市场时序数据保存在 Parquet，而不是 PostgreSQL；
 - RabbitMQ 只负责 transport，不承担业务事实；
-- 保持 `qlib-platform` → Artifact Contract v2 → `platform` 边界；
+- 保持 `qlib-platform` → Artifact Contract v2 → `lean-local-platform` 边界；
 - 不静默修复无效研究 Artifact；
 - 不把 broker write 或 live activation 作为普通 feature 顺带引入；
 - 每次 commit 都要更新 `CHANGELOG.md` 的 `Unreleased`。

@@ -30,7 +30,7 @@ tag Rulesets, Dependency Graph, Description/Topics, merge settings, and secrets.
 Use:
 
 ```bash
-python scripts/audit_repository_settings.py --repository magic-alt/platform
+python scripts/audit_repository_settings.py --repository magic-alt/lean-local-platform
 ```
 
 to detect remote drift where the GitHub API exposes the relevant state.

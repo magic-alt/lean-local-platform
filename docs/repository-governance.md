@@ -1,6 +1,6 @@
 # Repository Governance
 
-This document defines the intended GitHub-side governance for `magic-alt/platform`. Repository files are version controlled; GitHub Rulesets and repository settings are server-side controls and must be kept in sync with `.github/repository-policy.json`.
+This document defines the intended GitHub-side governance for `magic-alt/lean-local-platform`. Repository files are version controlled; GitHub Rulesets and repository settings are server-side controls and must be kept in sync with `.github/repository-policy.json`.
 
 ## Current target
 
@@ -90,7 +90,7 @@ The connected automation surface may not be allowed to mutate Rulesets or reposi
 8. Run the remote audit below.
 
 ```bash
-python scripts/audit_repository_settings.py --repository magic-alt/platform
+python scripts/audit_repository_settings.py --repository magic-alt/lean-local-platform
 ```
 
 Set `GITHUB_TOKEN` when unauthenticated GitHub API rate limits or protected-setting visibility require authentication. The script only reads settings and never prints the token.
