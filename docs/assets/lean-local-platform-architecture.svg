@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">LEAN Local Platform Architecture</title>
+  <desc id="desc">LEAN Local Platform execution and control architecture with qlib-platform research handoff, Parquet market data, PostgreSQL control state, RabbitMQ transport, Celery workers, and QuantConnect LEAN validation.</desc>
+  <defs>
+    <style>
+      .bg{fill:#071426}.frame{fill:#0b1c36;stroke:#244d80;stroke-width:2}.node{fill:#102744;stroke:#4d8cf5;stroke-width:2}.research{fill:#102744;stroke:#6fa8ff;stroke-width:2}.store{fill:#0d2948;stroke:#79aefc;stroke-width:2}.artifact{fill:#152b48;stroke:#6997d4;stroke-width:2}.title{fill:#f4f7ff;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:34px;font-weight:700}.sub{fill:#a9bbd9;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:15px}.label{fill:#eef4ff;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:17px;font-weight:650}.small{fill:#9fb2d1;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:12px}.group{fill:#d9e7ff;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:15px;font-weight:650}.line{stroke:#67a3ff;stroke-width:3;fill:none;marker-end:url(#a)}.dash{stroke:#8bb7ff;stroke-width:2.5;fill:none;stroke-dasharray:8 7;marker-end:url(#a)}.hint{fill:#b9cff1;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:12px;font-weight:600}
+    </style>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#67a3ff"/></marker>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text class="title" x="54" y="62">LEAN Local Platform Architecture</text>
+  <text class="sub" x="54" y="91">Governed A-share data → research-artifact handoff → authoritative LEAN validation → paper execution evidence.</text>
+
+  <rect class="frame" x="44" y="122" width="1192" height="548" rx="26"/>
+  <text class="group" x="68" y="154">Execution / Control Plane — lean-local-platform</text>
+
+  <!-- primary request / execution path -->
+  <rect class="node" x="72" y="190" width="128" height="64" rx="15"/>
+  <text class="label" x="136" y="222" text-anchor="middle">Browser</text>
+  <text class="small" x="136" y="241" text-anchor="middle">Operator UI</text>
+
+  <rect class="node" x="235" y="190" width="138" height="64" rx="15"/>
+  <text class="label" x="304" y="222" text-anchor="middle">React / Vite</text>
+  <text class="small" x="304" y="241" text-anchor="middle">Frontend</text>
+
+  <rect class="node" x="408" y="190" width="132" height="64" rx="15"/>
+  <text class="label" x="474" y="222" text-anchor="middle">FastAPI</text>
+  <text class="small" x="474" y="241" text-anchor="middle">Control API</text>
+
+  <rect class="node" x="575" y="190" width="136" height="64" rx="15"/>
+  <text class="label" x="643" y="222" text-anchor="middle">RabbitMQ</text>
+  <text class="small" x="643" y="241" text-anchor="middle">Task transport</text>
+
+  <rect class="node" x="746" y="190" width="128" height="64" rx="15"/>
+  <text class="label" x="810" y="222" text-anchor="middle">Celery</text>
+  <text class="small" x="810" y="241" text-anchor="middle">Workers</text>
+
+  <rect class="node" x="909" y="190" width="142" height="64" rx="15"/>
+  <text class="label" x="980" y="216" text-anchor="middle">Restricted</text>
+  <text class="label" x="980" y="237" text-anchor="middle">LEAN Runner</text>
+
+  <rect class="node" x="1086" y="190" width="126" height="64" rx="15"/>
+  <text class="label" x="1149" y="216" text-anchor="middle">QuantConnect</text>
+  <text class="label" x="1149" y="237" text-anchor="middle">LEAN</text>
+
+  <path class="line" d="M200 222 H235"/>
+  <path class="line" d="M373 222 H408"/>
+  <path class="line" d="M540 222 H575"/>
+  <path class="line" d="M711 222 H746"/>
+  <path class="line" d="M874 222 H909"/>
+  <path class="line" d="M1051 222 H1086"/>
+
+  <!-- control state -->
+  <rect class="store" x="390" y="326" width="168" height="82" rx="17"/>
+  <text class="label" x="474" y="357" text-anchor="middle">PostgreSQL</text>
+  <text class="small" x="474" y="379" text-anchor="middle">Control-plane state</text>
+  <text class="small" x="474" y="397" text-anchor="middle">registries · audit · tasks</text>
+  <path class="line" d="M474 254 V326"/>
+  <text class="hint" x="488" y="300">metadata / state</text>
+
+  <!-- research handoff -->
+  <rect class="research" x="72" y="326" width="188" height="92" rx="17"/>
+  <text class="label" x="166" y="358" text-anchor="middle">qlib-platform</text>
+  <text class="small" x="166" y="380" text-anchor="middle">Research Plane</text>
+  <text class="small" x="166" y="399" text-anchor="middle">features · models · targets</text>
+
+  <rect class="artifact" x="285" y="336" width="150" height="72" rx="16"/>
+  <text class="label" x="360" y="365" text-anchor="middle">Artifact</text>
+  <text class="label" x="360" y="386" text-anchor="middle">Contract v2</text>
+
+  <path class="dash" d="M260 372 H285"/>
+  <path class="dash" d="M435 372 H458 V254"/>
+  <text class="hint" x="274" y="319">versioned, content-addressed handoff</text>
+  <text class="hint" x="438" y="431">fail-closed import</text>
+
+  <!-- market data authority -->
+  <rect class="store" x="72" y="510" width="204" height="86" rx="17"/>
+  <text class="label" x="174" y="542" text-anchor="middle">Parquet Market Lake</text>
+  <text class="small" x="174" y="564" text-anchor="middle">Authoritative market facts</text>
+  <text class="small" x="174" y="583" text-anchor="middle">$LEAN_DATA_DIR</text>
+
+  <rect class="node" x="318" y="522" width="130" height="64" rx="15"/>
+  <text class="label" x="383" y="555" text-anchor="middle">DuckDB</text>
+  <text class="small" x="383" y="574" text-anchor="middle">Parquet query</text>
+
+  <path class="line" d="M276 554 H318"/>
+  <path class="line" d="M174 510 V458 H1149 V254"/>
+  <text class="hint" x="716" y="447">governed market data</text>
+
+  <!-- execution evidence -->
+  <rect class="artifact" x="1006" y="510" width="206" height="86" rx="17"/>
+  <text class="label" x="1109" y="542" text-anchor="middle">Run Artifacts</text>
+  <text class="small" x="1109" y="564" text-anchor="middle">reports · logs · results</text>
+  <text class="small" x="1109" y="583" text-anchor="middle">audit-ready evidence</text>
+  <path class="line" d="M1149 254 V510"/>
+
+  <text class="sub" x="68" y="636">Authority model: Parquet = market facts · PostgreSQL = control state · RabbitMQ = transport · QuantConnect LEAN = execution validation.</text>
+</svg>
