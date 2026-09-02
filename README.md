@@ -1,34 +1,140 @@
+<div align="center">
+
 # LEAN Local Platform
+
+**Reproducible quantitative research delivery, LEAN validation, and paper execution — on your own infrastructure.**
+
+A local-first control plane around [QuantConnect LEAN](https://github.com/QuantConnect/Lean) for governed A-share data, artifact-based research handoff, backtesting, optimization, paper trading, and audit-ready evidence.
 
 [![CI](https://github.com/magic-alt/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/magic-alt/platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![LEAN](https://img.shields.io/badge/engine-QuantConnect%20LEAN-111827)](https://github.com/QuantConnect/Lean)
+[![Release status](https://img.shields.io/badge/release-NOT%20CERTIFIED-critical)](docs/release-status.md)
 
-A local-first quantitative execution and control platform built around [QuantConnect LEAN](https://github.com/QuantConnect/Lean), with FastAPI, React, Celery, RabbitMQ, PostgreSQL, Parquet, and DuckDB.
+[Quick Start](#quick-start) · [Architecture](#architecture) · [Documentation](#documentation) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
 
-LEAN Local Platform focuses on the engineering boundary between **trusted market data, reproducible research delivery, authoritative LEAN validation, backtesting, optimization, paper trading, and operational control**. Model research remains intentionally separated in the external `qlib-platform` repository and is handed off through versioned, content-addressed artifacts.
+English · [简体中文](README.zh-CN.md)
+
+</div>
 
 > [!IMPORTANT]
-> The current release is **NOT CERTIFIED** after the PostgreSQL/RabbitMQ architecture migration. Live trading / P9 activation is disabled. See [Current Release Status](docs/release-status.md) before treating any deployment as production-ready.
+> **Current release status: NOT CERTIFIED.** The PostgreSQL/RabbitMQ architecture migration invalidated earlier certification evidence. Live trading / P9 activation is disabled. Read [Current Release Status](docs/release-status.md) before using the platform in any production-like environment.
+
+## What is LEAN Local Platform?
+
+LEAN Local Platform is an open-source quantitative execution and control platform built around **QuantConnect LEAN**, with **FastAPI, React, Celery, RabbitMQ, PostgreSQL, Parquet, and DuckDB**.
+
+It is designed for teams and independent researchers who want more than “a backtest that ran once.” The platform makes the research-to-execution path explicit and inspectable: which market-data release, code snapshot, parameters, runtime, research artifact, validation evidence, and execution state produced a result.
+
+Model research is intentionally separated into the external [`qlib-platform`](https://github.com/magic-alt/qlib-platform) repository. Research outputs cross the boundary only through versioned, content-addressed artifacts and are revalidated by this platform before execution workflows continue.
 
 ## Why this project exists
 
-Most quantitative stacks can run a backtest. Fewer make it possible to answer, later and unambiguously:
+Most quantitative stacks can produce a backtest. Fewer can answer this question later and unambiguously:
 
-> Which code, data release, parameters, runtime, research artifact, and validation evidence produced this result?
+> **Which code, data release, parameters, runtime, research artifact, and validation evidence produced this result?**
 
-This repository is designed around that question. It keeps market facts, control-plane facts, research outputs, execution evidence, and runtime state in explicit domains instead of treating the local workstation as one mutable black box.
+LEAN Local Platform is organized around that requirement.
+
+| Design goal | What it means in practice |
+| --- | --- |
+| **Reproducible by design** | Project snapshots, dataset versions, runtime fingerprints, manifests, hashes, logs, reports, and raw results are preserved as evidence. |
+| **Fail-closed data governance** | Market-data ingestion uses normalization, source selection, QA/PIT/reference gates, quarantine, watermarks, lineage, manifests, hashes, and atomic publication. |
+| **LEAN remains authoritative** | Backtests and execution validation are performed through QuantConnect LEAN rather than a second bespoke execution engine. |
+| **Research and execution stay separate** | `qlib-platform` owns features/models/research; this repository owns governed data publication, LEAN validation, paper state, OMS boundaries, and operations. |
+| **Operational truth is explicit** | Parquet, PostgreSQL, RabbitMQ, DuckDB, and optional analytical services each have a defined role instead of becoming interchangeable state stores. |
+| **Safety boundaries are visible** | Live broker writes and P9 activation are disabled until deliberately enabled through a separate architecture and certification effort. |
+
+## End-to-end workflow
+
+```mermaid
+flowchart LR
+    A[Governed market data] --> B[Immutable DataRelease]
+    B --> C[qlib-platform research]
+    C --> D[Artifact Contract v2]
+    D --> E[Fail-closed import]
+    E --> F[LEAN validation]
+    F --> G[Backtest / optimization]
+    G --> H[Paper account lifecycle]
+    H --> I[Operational evidence]
+
+    B -. lineage .-> I
+    D -. hashes .-> I
+    F -. reports .-> I
+```
+
+The platform preserves `artifactId`, `DataReleaseId`, target-weight SHA-256, lineage, and lifecycle state. Invalid imported research artifacts are rejected rather than silently repaired or reinterpreted.
 
 ## Core capabilities
 
-- **Authoritative LEAN execution** for backtests and validation.
-- **A-share daily-data workflows** with fail-closed data, benchmark, QA, PIT, and reference-data gates.
-- **Experiment batches and optimization** using standard child backtests, rolling windows, parameter grids, and walk-forward workflows.
-- **Paper accounts** with immutable intents, fills, ledgers, checkpoints, and rebuildable projections.
-- **Governed market-data ingestion** with normalization, source selection, quarantine, watermarks, lineage, manifests, hashes, and atomic Parquet publication.
-- **Research handoff** from external `qlib-platform` through Artifact Contract v2 and content-addressed `TARGET_PORTFOLIO` artifacts.
-- **Reproducible evidence** including project snapshots, dataset versions, runtime fingerprints, raw results, logs, reports, manifests, and checksums.
-- **Docker and native deployment adapters** over the same application architecture.
-- **Operational controls** for backup/restore, health checks, alerts, scheduling, and optional observability services.
+| Area | Capability |
+| --- | --- |
+| **Execution validation** | Authoritative QuantConnect LEAN backtests and validation workflows. |
+| **A-share data** | Daily-data ingestion with source governance, normalization, QA, PIT/reference-data gates, lineage, immutable releases, and atomic Parquet publication. |
+| **Experiments** | Standard child backtests, rolling windows, parameter grids, experiment batches, optimization, and walk-forward workflows. |
+| **Research handoff** | Artifact Contract v2 and content-addressed `TARGET_PORTFOLIO` import from external `qlib-platform`. |
+| **Paper trading** | Immutable intents, fills, ledgers, checkpoints, rebuildable projections, and operational gates. |
+| **Evidence & auditability** | Project snapshots, dataset versions, runtime fingerprints, raw results, logs, reports, manifests, and checksums. |
+| **Deployment** | Docker and native-host adapters over the same application architecture. |
+| **Operations** | Health checks, scheduling, alerts, backup/restore, recovery workflows, and optional observability services. |
+
+## Quick start
+
+### Prerequisites
+
+Recommended local setup:
+
+- Git
+- Docker Engine or Docker Desktop
+- Docker Compose v2
+- Python 3.12 for repository control scripts
+- At least 16 GiB assigned to Docker Desktop for a full initial data synchronization
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/magic-alt/platform.git
+cd platform
+cp .env.example .env
+```
+
+Set unique infrastructure secrets in `.env`:
+
+```text
+LEAN_POSTGRES_ADMIN_PASSWORD
+LEAN_POSTGRES_APP_PASSWORD
+LEAN_POSTGRES_CELERY_PASSWORD
+LEAN_POSTGRES_MLFLOW_PASSWORD
+LEAN_RABBITMQ_PASSWORD
+```
+
+Then configure credentials only for the providers you enable, for example `TUSHARE_TOKEN`.
+
+> [!WARNING]
+> Never commit `.env`, provider credentials, broker credentials, API tokens, runner tokens, or downloaded market data.
+
+### 2. Validate the host
+
+```bash
+python scripts/platformctl.py --mode docker --profile full doctor
+```
+
+### 3. Start the stack
+
+```bash
+python scripts/platformctl.py --mode docker --profile full start
+```
+
+### 4. Inspect status
+
+```bash
+python scripts/platformctl.py --mode docker --profile full status
+```
+
+The API health endpoint is available at `GET /api/health` on the configured API port.
+
+For secret provisioning, backup/restore, production-like requirements, and failure recovery, continue with [Deployment](docs/deployment.md).
 
 ## Architecture
 
@@ -66,9 +172,9 @@ flowchart LR
 | Parquet query | DuckDB |
 | Analytical mirror | ClickHouse — optional, never authoritative |
 
-PostgreSQL must not become a market quote store. RabbitMQ is transport, not business truth. SQLite is allowed only in isolated tests.
+**PostgreSQL is not a market quote store. RabbitMQ is transport, not business truth. SQLite is test-only.**
 
-For the complete system model, read [Current State](docs/current-state.md) and [Architecture](docs/architecture.md).
+For the full system model, see [Current State](docs/current-state.md) and [Architecture](docs/architecture.md).
 
 ## Research / execution boundary
 
@@ -91,7 +197,7 @@ platform
   └─ backtest / optimization / paper control
 ```
 
-The platform preserves `artifactId`, `DataReleaseId`, target-weight SHA-256, lineage, and lifecycle state. It does not silently repair an invalid imported artifact and does not grow a second feature/model research system.
+This boundary is intentional: the platform does not grow a second feature/model research system, and research artifacts do not become executable merely because they were produced successfully upstream.
 
 ## Current support boundary
 
@@ -109,65 +215,7 @@ The platform preserves `artifactId`, `DataReleaseId`, target-weight SHA-256, lin
 | Live broker writes / P9 activation | **Disabled** |
 | Current release certification | **NOT CERTIFIED** |
 
-The exact boundary is versioned in [Current State](docs/current-state.md) and [Release Status](docs/release-status.md). Those documents take precedence over historical audits or screenshots.
-
-## Quick start
-
-### Prerequisites
-
-Recommended local path:
-
-- Git
-- Docker Engine or Docker Desktop
-- Docker Compose v2
-- Python 3.12 for repository control scripts
-- At least 16 GiB assigned to Docker Desktop for a full initial data synchronization
-
-### 1. Clone and configure
-
-```bash
-git clone https://github.com/magic-alt/platform.git
-cd platform
-cp .env.example .env
-```
-
-Set unique infrastructure secrets in `.env`:
-
-```text
-LEAN_POSTGRES_ADMIN_PASSWORD
-LEAN_POSTGRES_APP_PASSWORD
-LEAN_POSTGRES_CELERY_PASSWORD
-LEAN_POSTGRES_MLFLOW_PASSWORD
-LEAN_RABBITMQ_PASSWORD
-```
-
-Then configure credentials only for the providers you actually enable, for example `TUSHARE_TOKEN`.
-
-Never commit `.env`, provider credentials, broker credentials, API tokens, runner tokens, or downloaded market data.
-
-### 2. Validate the host
-
-```bash
-python scripts/platformctl.py --mode docker --profile full doctor
-```
-
-### 3. Start the stack
-
-```bash
-python scripts/platformctl.py --mode docker --profile full start
-```
-
-The startup path enforces dependency ordering around PostgreSQL initialization/migrations and RabbitMQ health before application consumers start.
-
-### 4. Inspect status
-
-```bash
-python scripts/platformctl.py --mode docker --profile full status
-```
-
-The API health endpoint is available at `GET /api/health` on the configured API port.
-
-For deployment, secret provisioning, backup/restore, and production-like requirements, use [Deployment](docs/deployment.md).
+The exact boundary is versioned in [Current State](docs/current-state.md) and [Release Status](docs/release-status.md). Those documents take precedence over historical audits, screenshots, or older release evidence.
 
 ## Native deployment
 
@@ -186,7 +234,25 @@ On a Dockerless Windows development machine:
 
 Windows user-process management is the local-development default. Windows SCM is reserved for explicitly configured certified deployments. See [Native Deployment](docs/native-deployment.md).
 
+## Documentation
+
+Start with the [Documentation Hub](docs/README.md).
+
+| Path | Best starting point |
+| --- | --- |
+| **Understand the system** | [Current State](docs/current-state.md) · [Architecture](docs/architecture.md) |
+| **Install and operate** | [Deployment](docs/deployment.md) · [Native Deployment](docs/native-deployment.md) · [Operations Runbook](docs/operations/level5-runbook.md) |
+| **Work with data** | [Data Sources](docs/data_sources.md) · [Data Pipeline](docs/data_pipeline.md) · [Market Data Lake](docs/market_data_lake.md) |
+| **Integrate through APIs** | [API](docs/api.md) · [Help Center](docs/help/index.md) |
+| **Validate changes** | [Testing](docs/testing.md) · [Release Status](docs/release-status.md) |
+| **Plan future work** | [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md) |
+
+Historical material under `docs/history/` is evidence for its original baseline and is **not** current operating guidance.
+
 ## Repository layout
+
+<details>
+<summary><strong>Show repository structure</strong></summary>
 
 ```text
 platform/
@@ -207,16 +273,18 @@ platform/
 
 Runtime artifacts belong under `web/runtime/` or the configured `$LEAN_DATA_DIR`. Root-level `results/`, `runs/`, `Data/`, and `parquet/` directories are not supported. See [Repository Layout](docs/repository_layout.md).
 
+</details>
+
 ## Development
 
-Run the backend:
+### Backend
 
 ```bash
 cd web/backend
 .venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Run the frontend:
+### Frontend
 
 ```bash
 cd web/frontend
@@ -229,6 +297,7 @@ Repository and governance checks:
 
 ```bash
 python scripts/check_repository_hygiene.py
+python scripts/check_developer_governance.py
 python scripts/check_oss_governance.py
 ```
 
@@ -265,48 +334,24 @@ See [Testing](docs/testing.md) for the complete validation matrix.
 
 Local validation remains authoritative for lanes that are intentionally disabled in hosted CI. A skipped heavy lane must not be represented as evidence that the corresponding runtime passed.
 
-## Documentation
-
-| Document | Purpose |
-| --- | --- |
-| [Current State](docs/current-state.md) | Single source of truth for runtime architecture and support boundaries |
-| [Architecture](docs/architecture.md) | Component boundaries, main chains, storage and recovery |
-| [Release Status](docs/release-status.md) | Certification state and evidence bindings |
-| [Deployment](docs/deployment.md) | Docker/native deployment, backup and recovery |
-| [Data Sources](docs/data_sources.md) | Provider governance and source correctness |
-| [Data Pipeline](docs/data_pipeline.md) | Full/incremental/on-demand synchronization and publication |
-| [API](docs/api.md) | API contracts and error semantics |
-| [Testing](docs/testing.md) | Unit, integration, browser, and acceptance validation |
-| [Operations Runbook](docs/operations/level5-runbook.md) | SLO, RPO/RTO, alerts, recovery, and release gates |
-| [Roadmap](docs/roadmap.md) | Current priorities and planned work |
-| [Help Center](docs/help/index.md) | In-application operating documentation |
-
-Historical material under `docs/history/` is evidence for its original baseline and is not current operating guidance.
-
 ## Contributing
 
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and use the repository issue / pull-request templates.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and use the repository issue / pull-request templates.
 
-Important project invariants include:
+Key project invariants:
 
 - keep market time series in Parquet, not PostgreSQL;
 - keep RabbitMQ as transport, not business truth;
 - preserve the `qlib-platform` → Artifact Contract v2 → platform boundary;
 - never silently repair invalid research artifacts;
 - do not introduce broker writes or live activation as incidental feature work;
-- update the `Unreleased` section of `CHANGELOG.md` for each commit.
+- update the `Unreleased` section of `CHANGELOG.md` for every commit.
 
 Security-sensitive findings must follow [SECURITY.md](SECURITY.md), not a public bug report.
 
-## License
-
-This project is licensed under the [Apache License 2.0](LICENSE).
-
-QuantConnect LEAN is an independent upstream project and is also distributed under Apache-2.0. QuantConnect and LEAN names and trademarks remain the property of their respective owners. This repository is not presented as an official QuantConnect product.
-
 ## Project status
 
-The engineering priority order is deliberately conservative:
+The engineering priority is deliberately conservative:
 
 ```text
 Data correctness
@@ -325,3 +370,19 @@ Live execution
 ```
 
 Live execution is not enabled. Always check [docs/release-status.md](docs/release-status.md) before relying on historical certification evidence.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+QuantConnect LEAN is an independent upstream project and is also distributed under Apache-2.0. QuantConnect and LEAN names and trademarks remain the property of their respective owners. This repository is not presented as an official QuantConnect product.
+
+---
+
+<div align="center">
+
+**Built for quant workflows where reproducibility, data lineage, and execution evidence matter as much as strategy code.**
+
+[Documentation](docs/README.md) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+</div>
