@@ -18,7 +18,7 @@ from app.services.data_sync import BULK_DATASET_KEYS, _sync_completion_evidence 
 from app.services.db_object_store import integrity_report  # noqa: E402
 
 
-def _latest_ten_dataset_run() -> dict[str, Any]:
+def _latest_bulk_dataset_run() -> dict[str, Any]:
     required = set(BULK_DATASET_KEYS)
     with db() as connection:
         rows = connection.execute(
@@ -37,11 +37,19 @@ def _latest_ten_dataset_run() -> dict[str, Any]:
         evidence_keys = {str(item.get("datasetKey")) for item in evidence.get("items") or []}
         if required <= (requested | evidence_keys) and evidence.get("passed"):
             return run
-    raise RuntimeError("No successful ten-dataset sync run with passing completion evidence was found.")
+    raise RuntimeError(
+        "No successful bulk sync run covering all "
+        f"{len(required)} managed datasets with passing completion evidence was found."
+    )
+
+
+# Compatibility alias for callers that imported the historical name before the
+# managed bulk set grew beyond ten datasets.
+_latest_ten_dataset_run = _latest_bulk_dataset_run
 
 
 def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, Any]:
-    run = _latest_ten_dataset_run()
+    run = _latest_bulk_dataset_run()
     if run_id and run["id"] != run_id:
         with db() as connection:
             selected = row_to_dict(
@@ -135,14 +143,20 @@ def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, An
                 updates,
             )
 
+    passed = bool(
+        evidence.get("passed")
+        and object_integrity.get("passed")
+        and all(item["passed"] for item in decisions)
+    )
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": resolved_at,
         "mode": "apply" if apply else "dry_run",
-        "passed": evidence.get("passed")
-        and object_integrity.get("passed")
-        and all(item["passed"] for item in decisions),
+        "passed": passed,
         "runId": run["id"],
+        "bulkDatasetCount": len(BULK_DATASET_KEYS),
+        "bulkDatasetEvidence": evidence,
+        # Temporary compatibility alias for scripts consuming schema v1 output.
         "tenDatasetEvidence": evidence,
         "activeObjectIntegrity": object_integrity,
         "openIssueCount": len(issues),
@@ -154,7 +168,10 @@ def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, An
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Reconcile quarantined provider archive references against a verified ten-dataset rebuild."
+        description=(
+            "Reconcile quarantined provider archive references against the current "
+            "verified managed bulk dataset set."
+        )
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--run-id")
