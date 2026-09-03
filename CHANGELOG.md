@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Add a portable `datactl` operations CLI for managed data status/update/repair/validation, remove the hard-coded Windows `D:` requirement from TuShare current recovery, keep explicit local data-root overrides coherent across Parquet/market/spool paths, and modernize archive reconciliation terminology for the current managed bulk dataset set.
+
 - Fix TuShare extended and index-daily refresh recovery: retry transient Chinese provider query failures and bound concurrent index-history windows to avoid provider burst rejection, while preserving failed partitions for explicit reporting after retries are exhausted.
 
 - Keep the TuShare `current` and `current/extended` directory modification
