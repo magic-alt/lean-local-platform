@@ -15,6 +15,7 @@ This directory contains the current technical, operational, and user-facing docu
 | Run without Docker on a supported native host | [Native Deployment](native-deployment.md) |
 | Understand market-data providers and source governance | [Data Sources](data_sources.md) |
 | Understand synchronization and publication | [Data Pipeline](data_pipeline.md) |
+| Operate local data sync, repair, status, and validation from the CLI | [Data Operations CLI](data-operations.md) |
 | Understand the Parquet market-data authority | [Market Data Lake](market_data_lake.md) |
 | Integrate with the backend | [API](api.md) |
 | Validate a change | [Testing](testing.md) |
@@ -39,6 +40,7 @@ These documents define how the platform is supposed to work now.
 
 - [Data Sources](data_sources.md) — provider selection, source governance, and correctness constraints.
 - [Data Pipeline](data_pipeline.md) — full, incremental, and on-demand synchronization plus publication semantics.
+- [Data Operations CLI](data-operations.md) — portable data-root resolution plus status, update, bounded repair, and fail-closed validation commands.
 - [Market Data Lake](market_data_lake.md) — Parquet authority, organization, and query model.
 
 The core invariant is simple: **market time-series facts live in Parquet, not PostgreSQL**.

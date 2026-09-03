@@ -49,18 +49,18 @@ _latest_ten_dataset_run = _latest_bulk_dataset_run
 
 
 def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, Any]:
-    run = _latest_bulk_dataset_run()
-    if run_id and run["id"] != run_id:
+    if run_id:
         with db() as connection:
-            selected = row_to_dict(
+            run = row_to_dict(
                 connection.execute(
                     "select * from data_sync_runs where id=? and status='success'",
                     (run_id,),
                 ).fetchone()
             )
-        if not selected:
+        if not run:
             raise RuntimeError(f"Successful sync run not found: {run_id}")
-        run = selected
+    else:
+        run = _latest_bulk_dataset_run()
     evidence = _sync_completion_evidence(str(run["id"]), set(BULK_DATASET_KEYS))
     evidence_by_key = {str(item["datasetKey"]): item for item in evidence["items"]}
     object_integrity = integrity_report()
@@ -149,14 +149,14 @@ def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, An
         and all(item["passed"] for item in decisions)
     )
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 1,
         "generatedAt": resolved_at,
         "mode": "apply" if apply else "dry_run",
         "passed": passed,
         "runId": run["id"],
         "bulkDatasetCount": len(BULK_DATASET_KEYS),
         "bulkDatasetEvidence": evidence,
-        # Temporary compatibility alias for scripts consuming schema v1 output.
+        # Compatibility alias for scripts consuming the historical field name.
         "tenDatasetEvidence": evidence,
         "activeObjectIntegrity": object_integrity,
         "openIssueCount": len(issues),
