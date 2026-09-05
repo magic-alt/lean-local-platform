@@ -26,7 +26,8 @@ test.describe("10 documentation center @smoke @responsive", () => {
 
     await page.getByRole("link", { name: "快速开始" }).first().click();
     await expect(page).toHaveURL(/#\/docs\/quick-start/);
-    await expect(page.getByRole("heading", { name: "1. 环境要求" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "快速开始" })).toBeVisible();
+    await expect(page.locator(".docs-markdown")).not.toBeEmpty();
     await page.reload();
     await expect(page.getByRole("heading", { name: "快速开始" })).toBeVisible();
 

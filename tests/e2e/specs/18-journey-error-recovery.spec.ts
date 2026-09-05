@@ -7,7 +7,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       id: "recovery-run", name: "异常历史数据", symbol: "510300", status: "failed",
       parameters: { market: "china", start: "2026-07-01", end: "2026-07-20", cash: 300000 },
       docker_image: "quantconnect/lean:test", results_dir: "/tmp/recovery-run",
-      error_message: "worker unavailable: Redis connection refused", created_at: "2026-07-27T08:00:00+08:00"
+      error_message: "worker unavailable: RabbitMQ connection refused", created_at: "2026-07-27T08:00:00+08:00"
     };
     await page.route(/^https?:\/\/[^/]+\/api\/.*$/, async (route) => {
       const url = new URL(route.request().url());
@@ -16,7 +16,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       }
       if (url.pathname === "/api/backtests") return route.fulfill({ json: [failedRun] });
       if (url.pathname === `/api/backtests/${failedRun.id}`) return route.fulfill({ json: failedRun });
-      if (url.pathname === `/api/backtests/${failedRun.id}/logs`) return route.fulfill({ json: { logs: "Redis connection refused" } });
+      if (url.pathname === `/api/backtests/${failedRun.id}/logs`) return route.fulfill({ json: { logs: "RabbitMQ connection refused", offset: 0, nextOffset: 27, cursor: "0", nextCursor: null, limit: 1000, total: 27, hasMore: false } });
       if (url.pathname === `/api/backtests/${failedRun.id}/validation`) return route.fulfill({ json: { job_id: failedRun.id, validation: null, experiment: null, fingerprint: null } });
       if (url.pathname === `/api/backtests/${failedRun.id}/admission`) return route.fulfill({ json: { runId: failedRun.id, registrationStatus: "not_applicable" } });
       if (url.pathname === "/api/projects" || url.pathname === "/api/strategies/templates" || url.pathname === "/api/asset-classes") return route.fulfill({ json: [] });
@@ -37,7 +37,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       if (url.pathname === "/api/securities/search") {
         return route.fulfill({ json: { items: [], count: 0, query: "", markets: ["china"] } });
       }
-      return route.fulfill({ json: {} });
+      return route.continue();
     });
 
     await page.goto("/#/backtests?view=history&status=failed&symbol=510300");
@@ -46,7 +46,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
     await page.reload();
     await expect(page.getByText("异常历史数据")).toBeVisible();
     await page.getByTestId(`open-run-${failedRun.id}`).click();
-    await expect(page.getByText("worker unavailable: Redis connection refused")).toBeVisible();
+    await expect(page.getByText("worker unavailable: RabbitMQ connection refused")).toBeVisible();
     await page.goBack();
     await expect(page).toHaveURL(/status=failed/);
     await expect(page.getByText("异常历史数据")).toBeVisible();
@@ -58,12 +58,13 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       market_scope: "china", base_currency: "CNY", initial_cash: "1000000", benchmark_symbol: "000300",
       current_generation: 1, total_equity: "1000000", health_status: "degraded",
       automation_status: "error", last_run_status: "failed", last_failure_code: "data_missing",
-      last_failure_detail: "data missing · benchmark missing · QA critical · Redis unavailable",
+      last_failure_detail: "data missing · benchmark missing · QA critical · RabbitMQ unavailable",
       created_at: "", updated_at: ""
     };
     await page.route(/^https?:\/\/[^/]+\/api\/.*$/, async (route) => {
       const url = new URL(route.request().url());
       if (url.pathname === "/api/paper/accounts") return route.fulfill({ json: { items: [account], count: 1, limit: 50, offset: 0, dataTrust: { valuationTrusted: true, reason: null } } });
+      if (url.pathname === "/api/paper/certification-cohorts") return route.fulfill({ json: { items: [], count: 0 } });
       if (url.pathname === "/api/paper/accounts/recovery-paper/overview") {
         return route.fulfill({
           json: {
@@ -81,7 +82,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       }
       if (url.pathname.endsWith("/positions")) return route.fulfill({ json: { items: [], count: 0, limit: 50, offset: 0 } });
       if (url.pathname.endsWith("/performance")) return route.fulfill({ json: { points: [] } });
-      return route.fulfill({ json: {} });
+      return route.continue();
     });
 
     await page.goto("/#/paper");

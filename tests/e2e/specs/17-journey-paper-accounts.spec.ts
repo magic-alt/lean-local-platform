@@ -43,6 +43,9 @@ test.describe("17 多账户模拟盘用户旅程 @smoke @responsive", () => {
       if (url.pathname === "/api/paper/accounts") {
         return route.fulfill({ json: { items: accounts, count: 2, limit: 50, offset: 0, dataTrust: { valuationTrusted: true, reason: null } } });
       }
+      if (url.pathname === "/api/paper/certification-cohorts") {
+        return route.fulfill({ json: { items: [], count: 0 } });
+      }
       if (url.pathname === "/api/paper/accounts/paper-b/overview") {
         return route.fulfill({
           json: {
@@ -76,7 +79,7 @@ test.describe("17 多账户模拟盘用户旅程 @smoke @responsive", () => {
       if (url.pathname === "/api/health/dependencies") {
         return route.fulfill({ json: { status: "degraded", dependencies: [{ service: "backtest_worker", ok: false, detail: "worker unavailable" }] } });
       }
-      return route.fulfill({ json: {} });
+      return route.continue();
     });
 
     await page.goto("/#/paper?view=cards&status=error");
