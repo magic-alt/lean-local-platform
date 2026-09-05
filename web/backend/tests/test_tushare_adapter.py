@@ -278,7 +278,7 @@ def test_stk_limit_increment_fetches_full_market_for_one_trade_date():
         {
             "ts_code": "",
             "trade_date": "20260717",
-            "fields": "ts_code,trade_date,up_limit,down_limit",
+            "fields": "ts_code,trade_date,pre_close,up_limit,down_limit",
             "limit": 5800,
             "offset": 0,
         }

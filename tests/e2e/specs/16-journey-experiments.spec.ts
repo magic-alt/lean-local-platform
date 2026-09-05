@@ -54,7 +54,15 @@ test.describe("16 实验与 Walk-Forward 用户旅程 @smoke @responsive", () =>
     await expect(page.getByRole("heading", { name: "Optimization Center" })).toBeVisible();
     const controls = new BasePage(page);
     await page.getByLabel("名称").fill("E2E Walk Forward");
-    await controls.selectByLabel("模式", "Walk-forward");
+
+    // Ant Design's virtualized Select does not consistently expose its options
+    // through role=option in headless Chromium. Target the open dropdown item
+    // directly so this test validates the product mode rather than the helper.
+    await page.getByLabel("模式", { exact: true }).click();
+    const modeDropdown = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").last();
+    await expect(modeDropdown).toBeVisible();
+    await modeDropdown.locator(".ant-select-item-option").filter({ hasText: /^Walk-forward$/ }).click();
+
     await controls.selectByLabel("策略项目", "WF Strategy");
     await page.getByRole("button", { name: "预览展开" }).click();
     await expect(page.getByText(/1 个参数候选 → 6 个标准回测工作单元/)).toBeVisible();

@@ -19,7 +19,7 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
       ["模拟交易", "模拟账户"],
       ["研究", "研究交付"],
       ["报告", "Reports"],
-      ["洞察", "Insights"],
+      ["洞察", "洞察 · A股科技日报"],
       ["任务", "Tasks"],
       ["监控", "Monitoring"],
       ["设置", "Settings"]

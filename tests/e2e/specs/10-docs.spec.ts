@@ -36,8 +36,8 @@ test.describe("10 documentation center @smoke @responsive", () => {
     await expect(page.getByText("| Dataset |", { exact: false })).toHaveCount(0);
 
     const search = page.getByPlaceholder("搜索配置、API、操作或错误");
-    await search.fill("maxBatchRuns");
-    await expect(page.locator(".docs-search-results")).toContainText("批量");
+    await search.fill("CELERY_BROKER_URL");
+    await expect(page.locator(".docs-search-results")).toContainText("配置");
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);

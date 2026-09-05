@@ -7,14 +7,16 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
       id: "recovery-run", name: "异常历史数据", symbol: "510300", status: "failed",
       parameters: { market: "china", start: "2026-07-01", end: "2026-07-20", cash: 300000 },
       docker_image: "quantconnect/lean:test", results_dir: "/tmp/recovery-run",
-      error_message: "worker unavailable: RabbitMQ connection refused", created_at: "2026-07-27T08:00:00+08:00"
+      error_message: "worker unavailable: RabbitMQ connection refused", created_at: new Date().toISOString()
     };
     await page.route(/^https?:\/\/[^/]+\/api\/.*$/, async (route) => {
       const url = new URL(route.request().url());
       if (url.pathname === "/api/backtests" && unavailable) {
         return route.fulfill({ status: 503, json: { detail: "服务暂不可用，请刷新重试" } });
       }
-      if (url.pathname === "/api/backtests") return route.fulfill({ json: [failedRun] });
+      if (url.pathname === "/api/backtests") {
+        return route.fulfill({ json: { items: [failedRun], count: 1, limit: 20, offset: 0 } });
+      }
       if (url.pathname === `/api/backtests/${failedRun.id}`) return route.fulfill({ json: failedRun });
       if (url.pathname === `/api/backtests/${failedRun.id}/logs`) return route.fulfill({ json: { logs: "RabbitMQ connection refused", offset: 0, nextOffset: 27, cursor: "0", nextCursor: null, limit: 1000, total: 27, hasMore: false } });
       if (url.pathname === `/api/backtests/${failedRun.id}/validation`) return route.fulfill({ json: { job_id: failedRun.id, validation: null, experiment: null, fingerprint: null } });
@@ -49,6 +51,7 @@ test.describe("18 错误恢复用户旅程 @smoke @responsive", () => {
     await expect(page.getByText("worker unavailable: RabbitMQ connection refused")).toBeVisible();
     await page.goBack();
     await expect(page).toHaveURL(/status=failed/);
+    await expect(page).toHaveURL(/symbol=510300/);
     await expect(page.getByText("异常历史数据")).toBeVisible();
   });
 
