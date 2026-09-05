@@ -21,6 +21,7 @@ test.describe("09 frontend resilience @smoke @responsive", () => {
   });
 
   test("renders long running logs without white screen", async ({ page }) => {
+    const logText = Array.from({ length: 2000 }, (_, index) => `E2E log line ${index}`).join("\n");
     const run = {
       id: "e2e-resilience-run",
       name: "E2E_Resilience_Long_Log",
@@ -33,10 +34,24 @@ test.describe("09 frontend resilience @smoke @responsive", () => {
       artifacts: []
     };
     await page.route("**/api/backtests/e2e-resilience-run", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(run) }));
-    await page.route("**/api/backtests/e2e-resilience-run/logs", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logs: Array.from({ length: 2000 }, (_, index) => `E2E log line ${index}`).join("\n") }) }));
+    await page.route("**/api/backtests/e2e-resilience-run/logs**", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        logs: logText,
+        offset: 0,
+        nextOffset: logText.length,
+        cursor: "0",
+        nextCursor: null,
+        limit: 200000,
+        total: logText.length,
+        hasMore: false
+      })
+    }));
     await page.route("**/api/backtests/e2e-resilience-run/validation", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job_id: run.id, validation: null, experiment: null, fingerprint: null }) }));
     await page.goto("/#/runs/e2e-resilience-run");
     await expect(page.getByTestId("run-status")).toContainText("running");
+    await page.getByRole("tab", { name: "Run Details" }).click();
     await page.getByRole("tab", { name: "Logs" }).click();
     await expect(page.getByTestId("backtest-logs")).toContainText("E2E log line 1999");
     await expect(page.locator(".app-content")).not.toBeEmpty();
@@ -88,7 +103,7 @@ test.describe("09 frontend resilience @smoke @responsive", () => {
     };
 
     await page.route(`**/api/backtests/${runId}`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(run) }));
-    await page.route(`**/api/backtests/${runId}/logs`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logs: "legacy run" }) }));
+    await page.route(`**/api/backtests/${runId}/logs`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logs: "legacy run", offset: 0, nextOffset: 10, cursor: "0", nextCursor: null, limit: 1000, total: 10, hasMore: false }) }));
     await page.route(`**/api/backtests/${runId}/validation`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job_id: runId, validation: run.validation }) }));
     await page.route(`**/api/backtests/${runId}/admission**`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId, registrationStatus: "not_applicable", parametersSha256: "" }) }));
     await page.route(`**/api/backtests/${runId}/chart-data`, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(chart) }));

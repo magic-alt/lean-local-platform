@@ -43,8 +43,10 @@ def _latest_bulk_dataset_run() -> dict[str, Any]:
     )
 
 
-# Compatibility alias for callers that imported the historical name before the
-# managed bulk set grew beyond ten datasets.
+# Compatibility alias for callers and tests that imported/overrode the historical
+# name before the managed bulk set grew beyond ten datasets.  Reconciliation
+# deliberately resolves through the alias so those supported override points do
+# not silently stop working after the terminology-only rename.
 _latest_ten_dataset_run = _latest_bulk_dataset_run
 
 
@@ -60,7 +62,7 @@ def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, An
         if not run:
             raise RuntimeError(f"Successful sync run not found: {run_id}")
     else:
-        run = _latest_bulk_dataset_run()
+        run = _latest_ten_dataset_run()
     evidence = _sync_completion_evidence(str(run["id"]), set(BULK_DATASET_KEYS))
     evidence_by_key = {str(item["datasetKey"]): item for item in evidence["items"]}
     object_integrity = integrity_report()
@@ -68,8 +70,7 @@ def reconcile(*, apply: bool = False, run_id: str | None = None) -> dict[str, An
         issues = rows_to_dicts(
             connection.execute(
                 """
-                select *
-                from provider_raw_archive_issues
+                select * from provider_raw_archive_issues
                 where coalesce(status,'open')='open'
                 order by dataset_key,archive_created_at,archive_id
                 """
