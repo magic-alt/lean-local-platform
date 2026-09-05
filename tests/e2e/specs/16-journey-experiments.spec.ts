@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
 
-import { BasePage } from "../pages/base.page";
-
 test.describe("16 实验与 Walk-Forward 用户旅程 @smoke @responsive", () => {
   test("预览并排队带冻结数据口径的 Walk-Forward 优化", async ({ page }) => {
     const optimizations: Array<Record<string, unknown>> = [];
@@ -52,20 +50,36 @@ test.describe("16 实验与 Walk-Forward 用户旅程 @smoke @responsive", () =>
 
     await page.goto("/#/optimization");
     await expect(page.getByRole("heading", { name: "Optimization Center" })).toBeVisible();
-    const controls = new BasePage(page);
     await page.getByLabel("名称").fill("E2E Walk Forward");
 
-    // Ant Design's virtualized Select does not consistently expose its options
-    // through role=option in headless Chromium. Target the open dropdown item
-    // directly so this test validates the product mode rather than the helper.
+    // Ant Design virtualizes Select options in headless Chromium. Click the
+    // rendered option node directly so both single and multiple selects mutate
+    // the actual Form value instead of an accessibility-only virtual option.
     await page.getByLabel("模式", { exact: true }).click();
     const modeDropdown = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").last();
     await expect(modeDropdown).toBeVisible();
-    await modeDropdown.locator(".ant-select-item-option").filter({ hasText: /^Walk-forward$/ }).click();
+    const modeOption = modeDropdown.locator(".ant-select-item-option").filter({ hasText: /^Walk-forward$/ });
+    await expect(modeOption).toBeVisible();
+    await modeOption.click();
 
-    await controls.selectByLabel("策略项目", "WF Strategy");
+    await page.getByLabel("策略项目", { exact: true }).click();
+    const projectDropdown = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").last();
+    await expect(projectDropdown).toBeVisible();
+    const projectOption = projectDropdown.locator(".ant-select-item-option").filter({ hasText: /^WF Strategy$/ });
+    await expect(projectOption).toBeVisible();
+    await projectOption.click();
+    await expect(page.locator(".ant-select-selection-item").filter({ hasText: /^WF Strategy$/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(projectDropdown).toBeHidden();
+
+    const previewResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/optimizations/preview" && response.request().method() === "POST";
+    });
     await page.getByRole("button", { name: "预览展开" }).click();
+    expect((await previewResponse).ok()).toBeTruthy();
     await expect(page.getByText(/1 个参数候选 → 6 个标准回测工作单元/)).toBeVisible();
+
     await page.getByRole("button", { name: "创建优化" }).click();
     await expect(page.getByText(/优化已排队/)).toBeVisible();
   });

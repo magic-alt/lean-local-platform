@@ -38,7 +38,7 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
 
     await page.goto("/#/compare");
     await dashboard.expectHeading("Optimization Center");
-    await expect(page.getByRole("tab", { name: "Compare Runs" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Compare Results" })).toBeVisible();
 
     await page.goto("/#/object-store");
     await expect(page.getByText("Page Not Found")).toBeVisible();
