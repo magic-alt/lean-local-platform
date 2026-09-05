@@ -75,6 +75,9 @@ jobs:
     needs: governance
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      NODE_PATH: ${{ github.workspace }}/web/frontend/node_modules
+      LEAN_API_AUTH_REQUIRED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

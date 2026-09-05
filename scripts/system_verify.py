@@ -106,6 +106,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     python = _python()
     npm = _command("npm")
     npx = _command("npx")
+    node_path = str(FRONTEND / "node_modules")
     stages: list[dict[str, Any]] = []
 
     governance_commands = [
@@ -146,7 +147,11 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                 "--project=mobile",
             ],
             cwd=FRONTEND,
-            env={"E2E_UI_ONLY": "1"},
+            env={
+                "E2E_UI_ONLY": "1",
+                "LEAN_API_AUTH_REQUIRED": "0",
+                "NODE_PATH": node_path,
+            },
             timeout=900,
         )
     )
@@ -155,6 +160,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         "E2E_PYTHON": python,
         "E2E_STOP_STACK": "1",
         "E2E_REQUIRE_LEAN_RUNTIME": "0" if args.profile == "pr" else "1",
+        "LEAN_API_AUTH_REQUIRED": "0",
+        "NODE_PATH": node_path,
     }
     if args.profile == "pr":
         stages.append(
