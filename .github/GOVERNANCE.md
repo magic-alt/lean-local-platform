@@ -51,7 +51,7 @@ A workflow name is not enough evidence that a control executed. Distinguish:
 
 The deterministic merge surface is aggregated by the `Required CI` job. It fails unless Governance, Backend, Frontend, Web E2E smoke, Native contract and Windows native contract all report `success`. Runtime-heavy LEAN Docker/native/parity lanes remain explicitly opt-in and must not be represented as passed when skipped.
 
-The desired main-branch Ruleset requires `Required CI` and `Dependency Review`. The committed desired state does not prove that GitHub server-side Rulesets are active; verify remote settings separately.
+The desired main-branch Ruleset keeps the direct `Governance` check and additionally requires `Required CI` and `Dependency Review`. The committed desired state does not prove that GitHub server-side Rulesets are active; verify remote settings separately.
 
 ## Developer automation
 
