@@ -25,7 +25,7 @@
       "require_review_thread_resolution": true,
       "strict_status_checks": true,
       "required_status_checks": [
-        "Governance",
+        "Required CI",
         "Dependency Review"
       ]
     },

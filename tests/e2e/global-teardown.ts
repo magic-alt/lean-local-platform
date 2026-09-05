@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
-import { reportPath, repoRoot } from "./utils/env";
+import { e2eComposeEnvironment, reportPath, repoRoot } from "./utils/env";
 
 function stopLocalProcesses() {
   const processFile = reportPath("processes.json");
@@ -19,6 +19,7 @@ function stopLocalProcesses() {
       }
     }
   }
+  fs.rmSync(processFile, { force: true });
 }
 
 async function globalTeardown() {
@@ -38,12 +39,9 @@ async function globalTeardown() {
     stoppedStack: process.env.E2E_STOP_STACK === "1"
   }, null, 2), "utf-8");
   if (process.env.E2E_STOP_STACK === "1") {
-    spawnSync("docker", ["compose", "--profile", "app", "down"], {
+    spawnSync("docker", ["compose", "--profile", "app", "down", "--remove-orphans"], {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        COMPOSE_PROJECT_NAME: process.env.COMPOSE_PROJECT_NAME || "lean-e2e"
-      },
+      env: e2eComposeEnvironment(),
       stdio: "inherit"
     });
   }
