@@ -48,7 +48,7 @@ test.describe("20 real local data preview", () => {
     await page.getByRole("link", { name: "回测", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Backtests" })).toBeVisible();
     await page.getByRole("link", { name: "研究", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "研究工作台" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "研究交付与结果预览" })).toBeVisible();
     await page.getByRole("link", { name: "数据", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Data Library" })).toBeVisible();
 

@@ -1,0 +1,60 @@
+name: Nightly Full Integration
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-full-integration
+  cancel-in-progress: false
+
+jobs:
+  full-integration:
+    name: Full integration and managed convergence
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      LEAN_API_AUTH_REQUIRED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements-ml.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - run: pip install --require-hashes -r web/backend/requirements-ml.lock
+      - run: npm ci
+        working-directory: web/frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: web/frontend
+      - name: Pre-pull pinned LEAN runtime
+        env:
+          PYTHONPATH: web/backend
+        run: |
+          image="$(python -c 'from app.core.config import DEFAULT_DOCKER_IMAGE; print(DEFAULT_DOCKER_IMAGE)')"
+          docker pull "$image"
+      - name: Run fail-closed full verification ladder
+        run: python scripts/system_verify.py --profile full
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-full-integration-${{ github.run_id }}
+          path: |
+            web/runtime/audit/*.json
+            tests/e2e/reports
+          if-no-files-found: warn
+      - name: Cleanup verification stacks
+        if: always()
+        run: |
+          docker compose --profile app down --remove-orphans || true
+          docker compose down --remove-orphans || true

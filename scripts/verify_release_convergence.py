@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import urllib.request
@@ -12,14 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "web" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-
 
 SERVICES = (
     "api",
@@ -43,8 +42,23 @@ REQUIRED_PATHS = {
 
 
 def _digest(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _git_sha() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError(result.stderr.strip() or "unable to resolve git HEAD")
+    return result.stdout.strip()
 
 
 def _token() -> str:
@@ -64,14 +78,14 @@ def _get_json(base_url: str, path: str, *, authenticated: bool = False) -> dict[
         return json.loads(response.read().decode("utf-8"))
 
 
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
+def _run(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(args),
         cwd=ROOT,
         text=True,
         capture_output=True,
         check=False,
-        timeout=120,
+        timeout=timeout,
     )
 
 
@@ -80,7 +94,9 @@ def _service_environment(service: str) -> dict[str, str]:
     container_id = located.stdout.strip()
     if located.returncode or not container_id:
         return {}
-    inspected = _run("docker", "inspect", "--format", "{{json .Config.Env}}", container_id)
+    inspected = _run(
+        "docker", "inspect", "--format", "{{json .Config.Env}}", container_id
+    )
     if inspected.returncode:
         return {}
     values = json.loads(inspected.stdout.strip() or "[]")
@@ -95,10 +111,14 @@ def verify(base_url: str) -> dict[str, Any]:
     actual_paths = set(actual_openapi.get("paths") or {})
     environments = {service: _service_environment(service) for service in SERVICES}
     release_ids = {
-        value.get("LEAN_RELEASE_ID") for value in environments.values() if value.get("LEAN_RELEASE_ID")
+        value.get("LEAN_RELEASE_ID")
+        for value in environments.values()
+        if value.get("LEAN_RELEASE_ID")
     }
     release_shas = {
-        value.get("LEAN_RELEASE_SHA") for value in environments.values() if value.get("LEAN_RELEASE_SHA")
+        value.get("LEAN_RELEASE_SHA")
+        for value in environments.values()
+        if value.get("LEAN_RELEASE_SHA")
     }
     missing_services = [service for service, value in environments.items() if not value]
     ping = _run(
@@ -121,12 +141,14 @@ def verify(base_url: str) -> dict[str, Any]:
         "openApiHashMatches": release.get("openApiSha256") == _digest(actual_openapi),
         "schemaAligned": bool((release.get("schema") or {}).get("aligned")),
         "allServicesPresent": not missing_services,
-        "singleReleaseId": len(release_ids) == 1 and release.get("releaseId") in release_ids,
-        "singleGitSha": len(release_shas) == 1 and release.get("gitSha") in release_shas,
+        "singleReleaseId": len(release_ids) == 1
+        and release.get("releaseId") in release_ids,
+        "singleGitSha": len(release_shas) == 1
+        and release.get("gitSha") in release_shas,
         "workersReachable": ping.returncode == 0 and "pong" in ping.stdout.lower(),
     }
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "passed": all(checks.values()),
         "checks": checks,
@@ -153,9 +175,140 @@ def verify(base_url: str) -> dict[str, Any]:
     }
 
 
+def _ensure_compose_secret(path: Path) -> bool:
+    if path.is_file():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(secrets.token_urlsafe(48) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return True
+
+
+def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
+    sha = _git_sha()
+    resolved_data = (
+        data_dir.expanduser().resolve()
+        if data_dir is not None
+        else (ROOT / "web" / "runtime" / "convergence-data").resolve()
+    )
+    resolved_data.mkdir(parents=True, exist_ok=True)
+    parquet_dir = resolved_data / "output" / "parquet"
+    parquet_dir.mkdir(parents=True, exist_ok=True)
+    project = f"lean-convergence-{sha[:8]}"
+    env = {
+        "COMPOSE_PROJECT_NAME": project,
+        "LEAN_RELEASE_SHA": sha,
+        "LEAN_RELEASE_ID": f"convergence-{sha[:12]}",
+        "LEAN_DEPLOYMENT_PROFILE": "certification",
+        "LEAN_POSTGRES_ADMIN_PASSWORD": "convergence-admin-only",
+        "LEAN_POSTGRES_APP_PASSWORD": "convergence-app-only",
+        "LEAN_POSTGRES_CELERY_PASSWORD": "convergence-celery-only",
+        "LEAN_POSTGRES_MLFLOW_PASSWORD": "convergence-mlflow-only",
+        "LEAN_RABBITMQ_PASSWORD": "convergence-rabbit-only",
+        "LEAN_API_AUTH_REQUIRED": "0",
+        "LEAN_DATA_AUTO_UPDATE": "0",
+        "LEAN_SCHEDULED_AUTOMATION_ENABLED": "0",
+        "CLICKHOUSE_ENABLED": "0",
+        "LEAN_HOST_DATA_DIR": str(resolved_data),
+        "LEAN_HOST_PARQUET_DIR": str(parquet_dir),
+        "LEAN_API_PORT": "18081",
+        "LEAN_POSTGRES_PORT": "15433",
+        "LEAN_RABBITMQ_PORT": "15675",
+        "LEAN_RABBITMQ_MANAGEMENT_PORT": "15676",
+        "LEAN_MLFLOW_PORT": "15001",
+        "LEAN_PROMETHEUS_PORT": "19091",
+        "LEAN_GRAFANA_PORT": "13001",
+    }
+    return env, "http://127.0.0.1:18081"
+
+
+def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
+    managed_env, base_url = _managed_environment(data_dir)
+    previous = {key: os.environ.get(key) for key in managed_env}
+    created_secrets: list[Path] = []
+    secrets_root = ROOT / "web" / "runtime" / "secrets"
+    for name in ("api_token", "runner_token"):
+        path = secrets_root / name
+        if _ensure_compose_secret(path):
+            created_secrets.append(path)
+    os.environ.update(managed_env)
+
+    start = _run(
+        "docker",
+        "compose",
+        "--profile",
+        "app",
+        "up",
+        "-d",
+        "--build",
+        "--wait",
+        timeout=3600,
+    )
+    try:
+        if start.returncode:
+            return {
+                "schemaVersion": 2,
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "managedStack": True,
+                "baseUrl": base_url,
+                "passed": False,
+                "failure": {
+                    "type": "ComposeStartFailed",
+                    "detail": (start.stderr or start.stdout).strip()[-12000:],
+                    "exitCode": start.returncode,
+                },
+            }
+        result = verify(base_url)
+        result["managedStack"] = True
+        result["baseUrl"] = base_url
+        result["composeProject"] = managed_env["COMPOSE_PROJECT_NAME"]
+        result["managedDataDir"] = managed_env["LEAN_HOST_DATA_DIR"]
+        return result
+    finally:
+        down = _run(
+            "docker",
+            "compose",
+            "--profile",
+            "app",
+            "down",
+            "--remove-orphans",
+            timeout=600,
+        )
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        for path in created_secrets:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        if start.returncode == 0 and down.returncode:
+            print(
+                f"warning: managed convergence stack cleanup failed: {down.stderr.strip()}",
+                file=sys.stderr,
+            )
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify one release identity across the actual LEAN app stack.")
+    parser = argparse.ArgumentParser(
+        description="Verify one release identity across the actual LEAN app stack."
+    )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument(
+        "--manage-stack",
+        action="store_true",
+        help="Start the complete Compose app profile, verify it, and tear it down.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        help="Data directory mounted into the managed stack; omit for a scratch convergence lake.",
+    )
     parser.add_argument(
         "--evidence",
         type=Path,
@@ -163,18 +316,26 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        result = verify(args.base_url)
+        if args.manage_stack:
+            result = verify_managed_stack(args.data_dir)
+        else:
+            result = verify(args.base_url)
+            result["managedStack"] = False
+            result["baseUrl"] = args.base_url
     except Exception as exc:
         result = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "managedStack": bool(args.manage_stack),
             "passed": False,
             "failure": {"type": type(exc).__name__, "detail": str(exc)},
         }
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
-    args.evidence.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    args.evidence.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["passed"] else 1
+    return 0 if result.get("passed") else 1
 
 
 if __name__ == "__main__":

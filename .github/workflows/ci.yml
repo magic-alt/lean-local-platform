@@ -13,10 +13,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The merge gate is intentionally split between deterministic always-on lanes
-# and expensive LEAN engine integrations. Required CI aggregates every
-# deterministic lane; actual LEAN Docker/native parity remains opt-in and is
-# exercised by full/local certification where the runtime is available.
+# Required CI contains deterministic source checks plus a real full-Compose
+# release-convergence gate. Engine-specific Docker/native parity lanes remain
+# independently opt-in because they exercise alternate runtime implementations.
 jobs:
   governance:
     name: Governance
@@ -116,6 +115,29 @@ jobs:
           name: web-e2e-smoke-${{ github.run_id }}
           path: tests/e2e/reports
           if-no-files-found: warn
+
+  release-convergence:
+    name: Release convergence
+    needs: governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements.lock
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - name: Verify full Compose release convergence
+        run: python scripts/verify_release_convergence.py --manage-stack
+      - name: Upload convergence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-convergence-${{ github.run_id }}
+          path: web/runtime/audit/release-convergence.json
+          if-no-files-found: error
 
   native-contract:
     name: Native contract
@@ -232,17 +254,19 @@ jobs:
       - backend
       - frontend
       - web-e2e-smoke
+      - release-convergence
       - native-contract
       - windows-native-contract
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every deterministic lane
+      - name: Require every mandatory lane
         env:
           GOVERNANCE: ${{ needs.governance.result }}
           BACKEND: ${{ needs.backend.result }}
           FRONTEND: ${{ needs.frontend.result }}
           WEB_E2E_SMOKE: ${{ needs.web-e2e-smoke.result }}
+          RELEASE_CONVERGENCE: ${{ needs.release-convergence.result }}
           NATIVE_CONTRACT: ${{ needs.native-contract.result }}
           WINDOWS_NATIVE_CONTRACT: ${{ needs.windows-native-contract.result }}
         run: |
@@ -253,6 +277,7 @@ jobs:
               "Backend": os.environ["BACKEND"],
               "Frontend": os.environ["FRONTEND"],
               "Web E2E smoke": os.environ["WEB_E2E_SMOKE"],
+              "Release convergence": os.environ["RELEASE_CONVERGENCE"],
               "Native contract": os.environ["NATIVE_CONTRACT"],
               "Windows native contract": os.environ["WINDOWS_NATIVE_CONTRACT"],
           }
