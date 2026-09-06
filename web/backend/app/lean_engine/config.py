@@ -13,8 +13,10 @@ from ..domain.assets import (
     resolution_key,
     venue_key,
 )
+from ..localization import market_profile
 from .errors import LeanPlatformError
 from .symbols import market_key, normalize_symbol, parse_date
+
 
 def lean_job_parameters(parameters: dict[str, Any]) -> dict[str, str]:
     excluded = {"dockerImage", "fastValues", "slowValues"}
@@ -106,6 +108,12 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     requested_data_type = data_type_key(str(parameters.get("dataType") or parameters.get("data_type") or "trade"))
     if requested_asset_class == "equity":
         market = market_key(str(parameters.get("market", parameters.get("venue", "usa"))))
+        profile = market_profile(market)
+        if profile.get("execution_scope") == "preview_only":
+            raise LeanPlatformError(
+                f"market_execution_not_certified:{market}:"
+                "localization is preview-only until required per-security market metadata and validation evidence are certified"
+            )
         ticker = normalize_symbol(str(parameters["ticker"]), market).upper()
         venue = market
     else:

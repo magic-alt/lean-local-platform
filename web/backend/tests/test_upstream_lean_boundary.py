@@ -25,6 +25,8 @@ def test_platform_contract_preserves_upstream_lean_and_external_research():
 
 def test_cn_hk_localization_profiles_are_explicit_and_fail_closed():
     from app.architecture.platform_contract import platform_capabilities
+    from app.lean_engine.config import validate_backtest_parameters
+    from app.lean_engine.errors import LeanPlatformError
     from app.lean_engine.symbols import normalize_symbol
 
     markets = {
@@ -42,6 +44,19 @@ def test_cn_hk_localization_profiles_are_explicit_and_fail_closed():
     ]
     assert china["currency"] == "CNY"
     assert normalize_symbol("600519.SH", "china") == "600519"
+    china_parameters = validate_backtest_parameters(
+        {
+            "ticker": "600519",
+            "assetClass": "equity",
+            "market": "china",
+            "resolution": "daily",
+            "dataType": "trade",
+            "start": "2025-01-02",
+            "end": "2025-01-03",
+            "cash": 100000,
+        }
+    )
+    assert china_parameters["market"] == "china"
 
     assert hongkong["implementation_status"] == "partial"
     assert hongkong["execution_scope"] == "preview_only"
@@ -49,6 +64,19 @@ def test_cn_hk_localization_profiles_are_explicit_and_fail_closed():
     assert hongkong["lot_size_policy"] == "per_security_board_lot_required"
     assert hongkong["tick_size_policy"] == "per_security_price_tier_required"
     assert normalize_symbol("0700.HK", "hongkong") == "00700"
+    with pytest.raises(LeanPlatformError, match="market_execution_not_certified:hongkong"):
+        validate_backtest_parameters(
+            {
+                "ticker": "00700",
+                "assetClass": "equity",
+                "market": "hongkong",
+                "resolution": "daily",
+                "dataType": "trade",
+                "start": "2025-01-02",
+                "end": "2025-01-03",
+                "cash": 100000,
+            }
+        )
 
 
 def test_local_research_examples_are_no_longer_advertised_or_instantiable():
