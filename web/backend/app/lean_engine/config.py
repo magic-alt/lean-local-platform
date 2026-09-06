@@ -41,7 +41,10 @@ def base_config(
     asset_class = str(parameters.get("assetClass") or "equity").strip().lower()
     market = str(parameters.get("market") or parameters.get("venue") or "").strip().lower()
     if asset_class == "equity" and market:
-        profile = market_profile(market)
+        try:
+            profile = market_profile(market)
+        except KeyError:
+            profile = {}
         if profile.get("execution_scope") == "preview_only":
             raise LeanPlatformError(
                 f"market_execution_not_certified:{market}:"
