@@ -22,41 +22,17 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected exactly one replacement in {path}, found {count}")
-              target.write_text(text.replace(old, new), encoding="utf-8")
-
-          old_function = '''def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
-              if frequency == "daily":
-                  return panel.copy()
-              rule = {"weekly": "W-FRI", "monthly": "ME"}[frequency]
-              try:
-                  grouped = panel.resample(rule)
-              except ValueError:
-                  # pandas < 2.2 uses M instead of ME.
-                  rule = "M" if rule == "ME" else rule
-                  grouped = panel.resample(rule)
-
-              def compound(x: pd.Series) -> float:
-                  x = x.dropna()
-                  if x.empty:
-                      return np.nan
-                  return float(np.prod(1.0 + x) - 1.0)
-
-              out = grouped.apply(compound)
-              out = out.dropna(how="all")
-              observed_dates = pd.Series(panel.index, index=panel.index).resample(rule).max()
-              out.index = pd.DatetimeIndex(observed_dates.loc[out.index].to_numpy())
-              out.index.name = panel.index.name
-              return out
-          '''.replace("          ", "")
-
-          new_function = '''def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
+          source_path = Path("examples/a_share_financial_rotation_tushare/a_share_financial_rotation_study.py")
+          source = source_path.read_text(encoding="utf-8")
+          start = source.index("def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:")
+          end = source.index("\ndef safe_rate", start)
+          current = source[start:end]
+          if "panel.resample(" not in current or "observed_dates" not in current:
+              raise SystemExit("compound_resample no longer matches the deprecated implementation")
+          replacement = dedent('''\
+          def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
               if frequency == "daily":
                   return panel.copy()
 
@@ -70,35 +46,17 @@ jobs:
                   return float(np.prod(1.0 + x) - 1.0)
 
               out = panel.groupby(periods, sort=True).agg(compound)
+              # 删除全空期；不允许用 0 填补非交易/缺失数据。
               out = out.dropna(how="all")
+
+              # 周/月标签使用该期最后一个实际观测日，避免把截至周四或月末前一日的
+              # 不完整样本误标成周五/月末已完整收盘。
               observed_dates = pd.Series(panel.index, index=panel.index).groupby(periods, sort=True).max()
               out.index = pd.DatetimeIndex(observed_dates.loc[out.index].to_numpy())
               out.index.name = panel.index.name
               return out
-          '''.replace("          ", "")
-
-          replace_once(
-              "examples/a_share_financial_rotation_tushare/a_share_financial_rotation_study.py",
-              old_function,
-              new_function,
-          )
-
-          old_polars = '''polars==1.43.0 \\
-              --hash=sha256:bb2c67553e4968c18dfe268a88ff9a5790d5c2e0b7ea7efe97640b9a90438c88 \\
-              --hash=sha256:c49078b14e2d6b8ff5cc5b78b6d9638603ea5dffafb889d9204818822f55b813
-              # via -r requirements.txt
-          polars-runtime-32==1.43.0 \\
-              --hash=sha256:01e1471a5ee161a969c7a96991d8e5d20b97a0b7fe075df9c7a01f52a49c5ac2 \\
-              --hash=sha256:3ecc8feaf04de5989a29245885921db612ef1ce9065e5cb6ec37495acfa55bba \\
-              --hash=sha256:41a75fb3cb4cc574eb21801383578f75cfc374597c22322ef457ab7bac8a3301 \\
-              --hash=sha256:4ffa99bb2c7ee0a9392ae50b350af0ed17acf0519d15c75fe223021798566174 \\
-              --hash=sha256:5fb47a3a883402e62eab2fde5922f78c531d037aeece3640c15225f39228621e \\
-              --hash=sha256:6707193d30a7135bce0424304f76d8145270527444097548e794ad8d26823b70 \\
-              --hash=sha256:78ca2f97740b2a6beb36eb112749280b5e08750c60f53c08d2feffebdba9d35a \\
-              --hash=sha256:9cd8b813afe67d59e87027dedcaf5c6a06fe602472fd74e1a49f4bafea47259c \\
-              --hash=sha256:c285e598dd91e08560e519275b8b8108adbafb438d218a175ebe073dbc2027fb
-              # via polars
-          '''.replace("          ", "")
+          ''')
+          source_path.write_text(source[:start] + replacement + source[end:], encoding="utf-8")
 
           new_polars = '''polars==1.44.1 \\
               --hash=sha256:1fa62fc1c88fba77a68b28291b5aabdd69e5f38b34e59721a064ae3169b59bb5 \\
@@ -117,11 +75,19 @@ jobs:
               # via polars
           '''.replace("          ", "")
 
-          for lock in ("web/backend/requirements.lock", "web/backend/requirements-ml.lock"):
-              replace_once(lock, old_polars, new_polars)
-              text = Path(lock).read_text(encoding="utf-8")
-              if "polars==1.43.0" in text or "polars-runtime-32==1.43.0" in text:
-                  raise SystemExit(f"stale Polars pin remains in {lock}")
+          for lock_name in ("web/backend/requirements.lock", "web/backend/requirements-ml.lock"):
+              lock_path = Path(lock_name)
+              lock = lock_path.read_text(encoding="utf-8")
+              block_start = lock.index("polars==1.43.0 ")
+              via_runtime = lock.index("    # via polars", block_start)
+              block_end = lock.index("\n", via_runtime) + 1
+              current_block = lock[block_start:block_end]
+              if "polars-runtime-32==1.43.0" not in current_block:
+                  raise SystemExit(f"unexpected Polars lock layout in {lock_name}")
+              lock = lock[:block_start] + new_polars + lock[block_end:]
+              if "polars==1.43.0" in lock or "polars-runtime-32==1.43.0" in lock:
+                  raise SystemExit(f"stale Polars pin remains in {lock_name}")
+              lock_path.write_text(lock, encoding="utf-8")
 
           top_level = Path("web/backend/requirements.txt").read_text(encoding="utf-8")
           if "polars==1.44.1" not in top_level:
