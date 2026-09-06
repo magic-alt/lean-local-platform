@@ -42,6 +42,45 @@ def _secret(name: str) -> str:
     raise RuntimeError(f"{name}_required")
 
 
+def _initialize_celery_result_schema(
+    *,
+    host: str,
+    port: int,
+    database: str,
+    user: str,
+    password: str,
+) -> None:
+    """Create Celery SQL result tables once before workers start concurrently."""
+    try:
+        from celery.backends.database import models as celery_database_models
+        from celery.backends.database.session import ResultModelBase
+        from sqlalchemy import create_engine
+        from sqlalchemy.engine import URL
+    except ImportError as exc:
+        raise RuntimeError("celery_sqlalchemy_required_in_backend_environment") from exc
+
+    # Importing the model module above registers Task/TaskSet tables and their
+    # PostgreSQL sequences on ResultModelBase.metadata. Pre-creating them here
+    # avoids the documented SQLAlchemy create_all race when many Celery worker
+    # containers cold-start against the same empty result database.
+    _ = (celery_database_models.Task, celery_database_models.TaskSet)
+    engine = create_engine(
+        URL.create(
+            drivername="postgresql+psycopg",
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        ),
+        pool_pre_ping=True,
+    )
+    try:
+        ResultModelBase.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+
+
 def main() -> int:
     try:
         import psycopg
@@ -56,6 +95,7 @@ def main() -> int:
     if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
         raise RuntimeError("LEAN_POSTGRES_ADMIN_URL_invalid")
 
+    resolved_databases: dict[str, tuple[str, str, str]] = {}
     connection = psycopg.connect(
         host=parsed.hostname,
         port=int(parsed.port or 5432),
@@ -72,6 +112,7 @@ def main() -> int:
             )
             user = _identifier(os.environ.get(user_env, default_user), "role_name")
             password = _secret(password_env)
+            resolved_databases[default_database] = (database, user, password)
             with connection.cursor() as cursor:
                 cursor.execute("select 1 from pg_roles where rolname=%s", (user,))
                 if cursor.fetchone():
@@ -100,7 +141,16 @@ def main() -> int:
                 )
     finally:
         connection.close()
-    print("PostgreSQL platform, Celery, and MLflow databases are ready.")
+
+    celery_database, celery_user, celery_password = resolved_databases["lean_celery"]
+    _initialize_celery_result_schema(
+        host=parsed.hostname,
+        port=int(parsed.port or 5432),
+        database=celery_database,
+        user=celery_user,
+        password=celery_password,
+    )
+    print("PostgreSQL platform, Celery result schema, and MLflow databases are ready.")
     return 0
 
 
