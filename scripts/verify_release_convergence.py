@@ -202,7 +202,7 @@ def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
         "COMPOSE_PROJECT_NAME": project,
         "LEAN_RELEASE_SHA": sha,
         "LEAN_RELEASE_ID": f"convergence-{sha[:12]}",
-        "LEAN_DEPLOYMENT_PROFILE": "certification",
+        "LEAN_DEPLOYMENT_PROFILE": "full",
         "LEAN_POSTGRES_ADMIN_PASSWORD": "convergence-admin-only",
         "LEAN_POSTGRES_APP_PASSWORD": "convergence-app-only",
         "LEAN_POSTGRES_CELERY_PASSWORD": "convergence-celery-only",
