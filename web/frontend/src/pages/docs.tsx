@@ -266,15 +266,18 @@ export function DocsPage() {
       ).finally(() => {
         if (active) setListLoading(false);
       });
+      const normalizedQuery = query.trim();
       const params = new URLSearchParams(searchParams);
-      if (query.trim()) params.set("q", query.trim()); else params.delete("q");
-      setSearchParams(params, { replace: true });
+      if ((params.get("q") || "") !== normalizedQuery) {
+        if (normalizedQuery) params.set("q", normalizedQuery); else params.delete("q");
+        setSearchParams(params, { replace: true });
+      }
     }, 250);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [location.pathname, query]);
 
   useEffect(() => {
     let active = true;

@@ -129,7 +129,7 @@ def verify(base_url: str) -> dict[str, Any]:
         "worker",
         "celery",
         "-A",
-        "app.tasks.celery_app",
+        "app.tasks.celery_app:celery_app",
         "inspect",
         "ping",
         "--json",
@@ -185,6 +185,17 @@ def _ensure_compose_secret(path: Path) -> bool:
     except OSError:
         pass
     return True
+
+
+def _ensure_workspace_data_mountpoint() -> tuple[Path, bool]:
+    """Ensure nested Compose mounts can target /workspace/data under a read-only root bind."""
+    path = ROOT / "data"
+    if path.exists():
+        if not path.is_dir():
+            raise RuntimeError(f"Compose data mountpoint is not a directory: {path}")
+        return path, False
+    path.mkdir()
+    return path, True
 
 
 def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
@@ -252,24 +263,32 @@ def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
     previous = {key: os.environ.get(key) for key in managed_env}
     created_secrets: list[Path] = []
     secrets_root = ROOT / "web" / "runtime" / "secrets"
-    for name in ("api_token", "runner_token"):
-        path = secrets_root / name
-        if _ensure_compose_secret(path):
-            created_secrets.append(path)
-    os.environ.update(managed_env)
+    data_mountpoint = ROOT / "data"
+    created_data_mountpoint = False
+    environment_applied = False
+    start: subprocess.CompletedProcess[str] | None = None
+    down: subprocess.CompletedProcess[str] | None = None
 
-    start = _run(
-        "docker",
-        "compose",
-        "--profile",
-        "app",
-        "up",
-        "-d",
-        "--build",
-        "--wait",
-        timeout=3600,
-    )
     try:
+        data_mountpoint, created_data_mountpoint = _ensure_workspace_data_mountpoint()
+        for name in ("api_token", "runner_token"):
+            path = secrets_root / name
+            if _ensure_compose_secret(path):
+                created_secrets.append(path)
+        os.environ.update(managed_env)
+        environment_applied = True
+
+        start = _run(
+            "docker",
+            "compose",
+            "--profile",
+            "app",
+            "up",
+            "-d",
+            "--build",
+            "--wait",
+            timeout=3600,
+        )
         if start.returncode:
             diagnostics = _compose_failure_diagnostics()
             return {
@@ -294,15 +313,16 @@ def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
         result["managedDataDir"] = managed_env["LEAN_HOST_DATA_DIR"]
         return result
     finally:
-        down = _run(
-            "docker",
-            "compose",
-            "--profile",
-            "app",
-            "down",
-            "--remove-orphans",
-            timeout=600,
-        )
+        if environment_applied:
+            down = _run(
+                "docker",
+                "compose",
+                "--profile",
+                "app",
+                "down",
+                "--remove-orphans",
+                timeout=600,
+            )
         for key, value in previous.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -313,7 +333,17 @@ def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
                 path.unlink()
             except FileNotFoundError:
                 pass
-        if start.returncode == 0 and down.returncode:
+        if created_data_mountpoint:
+            try:
+                data_mountpoint.rmdir()
+            except OSError:
+                pass
+        if (
+            start is not None
+            and start.returncode == 0
+            and down is not None
+            and down.returncode
+        ):
             print(
                 f"warning: managed convergence stack cleanup failed: {down.stderr.strip()}",
                 file=sys.stderr,

@@ -43,6 +43,7 @@ def test_nightly_and_self_hosted_certification_workflows_are_fail_closed():
 
 def test_full_and_local_data_system_profiles_require_release_convergence():
     verifier = _read("scripts/system_verify.py")
-    assert 'args.profile in {"full", "local-data"}' in verifier
+    compact_verifier = "".join(verifier.split())
+    assert 'args.profilein{"full","local-data"}' in compact_verifier
     assert 'convergence_command.append("--manage-stack")' in verifier
     assert 'cert_command.extend(["--data-release-id", args.data_release_id])' in verifier
