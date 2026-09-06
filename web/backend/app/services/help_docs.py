@@ -26,7 +26,8 @@ def _plain(markdown: str) -> str:
     value = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", value)
     value = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", value)
     value = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"[`#>*_|~\[\]()]", " ", value)
+    # Keep underscores so code/config identifiers such as CELERY_BROKER_URL remain searchable.
+    return re.sub(r"[`#>*|~\[\]()]", " ", value)
 
 
 def _resolve_source(source: str) -> Path:
