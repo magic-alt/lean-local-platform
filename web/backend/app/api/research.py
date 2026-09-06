@@ -3,13 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..services import qlib_import_v2, qlib_promotion, research_runs
+from ..architecture.platform_contract import platform_capabilities
+from ..services import qlib_import_v2, qlib_promotion, research_interop, research_runs
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 _RETIRED_RESEARCH_DETAIL = (
     "Platform-owned research execution and notebook workspace routes are retired. "
-    "Run research in qlib-platform and hand results back through Artifact Contract v2."
+    "Run research in qlib-platform and hand immutable results back through Artifact Contract v2."
 )
 
 
@@ -24,6 +25,26 @@ class QlibLeanValidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     leanBacktestRunId: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/capabilities")
+def capabilities():
+    """Expose the upstream-LEAN/localization/research ownership contract."""
+    return platform_capabilities()
+
+
+@router.get("/imports")
+def imported_qlib_runs(limit: int = 20, offset: int = 0):
+    """Read-only preview of research bundles already imported from qlib-platform."""
+    return research_interop.list_imports(limit=limit, offset=offset)
+
+
+@router.get("/imports/{import_id}")
+def imported_qlib_run(import_id: str):
+    try:
+        return research_interop.get_import(import_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/imports/qlib")
@@ -55,8 +76,8 @@ def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest)
 
 
 def _retired_research_route() -> None:
-    """Keep retired HTTP surfaces fail-closed and stable behind the SPA mount."""
-    raise HTTPException(status_code=404, detail=_RETIRED_RESEARCH_DETAIL)
+    """Keep retired execution surfaces fail-closed and explicit behind the SPA mount."""
+    raise HTTPException(status_code=410, detail=_RETIRED_RESEARCH_DETAIL)
 
 
 @router.api_route(
