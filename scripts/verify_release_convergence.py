@@ -225,6 +225,28 @@ def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
     return env, "http://127.0.0.1:18081"
 
 
+def _compose_failure_diagnostics() -> dict[str, Any]:
+    ps = _run("docker", "compose", "--profile", "app", "ps", "-a")
+    logs = _run(
+        "docker",
+        "compose",
+        "--profile",
+        "app",
+        "logs",
+        "--no-color",
+        "--tail",
+        "300",
+        "migration",
+        "postgres-init",
+        "postgres",
+        timeout=120,
+    )
+    return {
+        "composePs": ((ps.stdout or "") + ("\n" + ps.stderr if ps.stderr else "")).strip()[-12000:],
+        "migrationLogs": ((logs.stdout or "") + ("\n" + logs.stderr if logs.stderr else "")).strip()[-24000:],
+    }
+
+
 def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
     managed_env, base_url = _managed_environment(data_dir)
     previous = {key: os.environ.get(key) for key in managed_env}
@@ -249,16 +271,20 @@ def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
     )
     try:
         if start.returncode:
+            diagnostics = _compose_failure_diagnostics()
             return {
                 "schemaVersion": 2,
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
                 "managedStack": True,
                 "baseUrl": base_url,
+                "composeProject": managed_env["COMPOSE_PROJECT_NAME"],
+                "managedDataDir": managed_env["LEAN_HOST_DATA_DIR"],
                 "passed": False,
                 "failure": {
                     "type": "ComposeStartFailed",
                     "detail": (start.stderr or start.stdout).strip()[-12000:],
                     "exitCode": start.returncode,
+                    **diagnostics,
                 },
             }
         result = verify(base_url)
