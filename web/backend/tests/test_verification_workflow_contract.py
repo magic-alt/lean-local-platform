@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -7,6 +8,32 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _profile_membership_values(source: str) -> list[set[str]]:
+    memberships: list[set[str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], ast.In) or len(node.comparators) != 1:
+            continue
+        left = node.left
+        container = node.comparators[0]
+        if not (
+            isinstance(left, ast.Attribute)
+            and isinstance(left.value, ast.Name)
+            and left.value.id == "args"
+            and left.attr == "profile"
+            and isinstance(container, (ast.Set, ast.Tuple, ast.List))
+        ):
+            continue
+        values = {
+            element.value
+            for element in container.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+        memberships.append(values)
+    return memberships
 
 
 def test_real_local_data_e2e_tracks_current_research_handoff_heading():
@@ -43,7 +70,7 @@ def test_nightly_and_self_hosted_certification_workflows_are_fail_closed():
 
 def test_full_and_local_data_system_profiles_require_release_convergence():
     verifier = _read("scripts/system_verify.py")
-    compact_verifier = "".join(verifier.split())
-    assert 'args.profilein{"full","local-data"}' in compact_verifier
+    memberships = _profile_membership_values(verifier)
+    assert {"full", "local-data"} in memberships
     assert 'convergence_command.append("--manage-stack")' in verifier
     assert 'cert_command.extend(["--data-release-id", args.data_release_id])' in verifier
