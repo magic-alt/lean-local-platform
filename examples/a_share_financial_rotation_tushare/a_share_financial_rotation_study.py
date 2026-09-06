@@ -352,6 +352,7 @@ def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
     out.index.name = panel.index.name
     return out
 
+
 def safe_rate(successes: int, n: int) -> float:
     return float(successes / n) if n > 0 else np.nan
 
