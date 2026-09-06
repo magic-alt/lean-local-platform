@@ -331,13 +331,9 @@ def build_return_panel(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
     if frequency == "daily":
         return panel.copy()
-    rule = {"weekly": "W-FRI", "monthly": "ME"}[frequency]
-    try:
-        grouped = panel.resample(rule)
-    except ValueError:
-        # pandas < 2.2 uses M instead of ME.
-        rule = "M" if rule == "ME" else rule
-        grouped = panel.resample(rule)
+
+    period_rule = {"weekly": "W-FRI", "monthly": "M"}[frequency]
+    periods = pd.DatetimeIndex(panel.index).to_period(period_rule)
 
     def compound(x: pd.Series) -> float:
         x = x.dropna()
@@ -345,17 +341,16 @@ def compound_resample(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
             return np.nan
         return float(np.prod(1.0 + x) - 1.0)
 
-    out = grouped.apply(compound)
+    out = panel.groupby(periods, sort=True).agg(compound)
     # 删除全空期；不允许用 0 填补非交易/缺失数据。
     out = out.dropna(how="all")
 
     # 周/月标签使用该期最后一个实际观测日，避免把截至周四或月末前一日的
     # 不完整样本误标成周五/月末已完整收盘。
-    observed_dates = pd.Series(panel.index, index=panel.index).resample(rule).max()
+    observed_dates = pd.Series(panel.index, index=panel.index).groupby(periods, sort=True).max()
     out.index = pd.DatetimeIndex(observed_dates.loc[out.index].to_numpy())
     out.index.name = panel.index.name
     return out
-
 
 def safe_rate(successes: int, n: int) -> float:
     return float(successes / n) if n > 0 else np.nan
