@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **254** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **257** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -347,7 +347,10 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
+| `GET` | `/api/research/capabilities` | Capabilities | - | `200` - |
+| `GET` | `/api/research/imports` | Imported Qlib Runs | `limit` (query)<br>`offset` (query) | `200` - |
 | `POST` | `/api/research/imports/qlib` | Import Qlib Run | body `QlibImportRequest` | `200` - |
+| `GET` | `/api/research/imports/{import_id}` | Imported Qlib Run | `import_id` (path, required) | `200` - |
 | `POST` | `/api/research/runs/{run_id}/lean-validation` | Record Qlib Lean Validation | `run_id` (path, required)<br>body `QlibLeanValidationRequest` | `200` - |
 
 ## settings

@@ -26,14 +26,14 @@ POST /api/research/runs/{run_id}/lean-validation
 
 The GET routes are read-only projections for Web/API preview. The POST import route verifies Artifact Contract v2. LEAN validation verifies the exact imported DataRelease and TargetPortfolio hash against an authoritative LEAN run.
 
-Legacy `app/research/`, `services/ml_research.py`, detached Research container code and historical Celery tasks remain compatibility/history debt only. They may be retained while old evidence and migrations need them, but **no new API, Example Catalog, Experiment Batch or Web entrypoint may create local Research work**. New model research must go through qlib-platform.
+Legacy `app/research/`, `services/ml_research.py`, detached Research container code, historical Celery tasks and service-level example helpers remain compatibility/history debt only. They may be retained while old evidence and migrations need them, but **no public Research API, public Example API, Experiment Batch or Web entrypoint may create local Research work**. New model research must go through qlib-platform.
 
 ## A-share and Hong Kong localization
 
 Market-specific behavior is owned by `app/localization/`, not by a forked LEAN engine. `app/lean_engine/` consumes those profiles to build LEAN-compatible data/market metadata.
 
 - **China A-share**: daily localization is implemented, including explicit morning/afternoon sessions, CNY, board-lot defaults with security overrides, existing PIT/QA/benchmark gates and A-share symbol normalization. Production certification remains a separate evidence decision.
-- **Hong Kong equity**: symbol normalization and data layout are available, but the profile is `partial` / `preview_only`. Per-security board lot, price-tier tick size, exchange-calendar completeness, fees and independent execution-validation evidence are required before authoritative execution is claimed.
+- **Hong Kong equity**: symbol normalization, data layout and preflight/preview are available, but the profile is `partial` / `preview_only`. Per-security board lot, price-tier tick size, exchange-calendar completeness, fees and independent execution-validation evidence are required before authoritative execution is claimed. LEAN execution configuration fails closed while this profile remains preview-only.
 
 The localization capability matrix is machine-readable at `GET /api/research/capabilities`; it must not advertise a market as certified merely because a symbol can be parsed or a LEAN data file can be generated.
 

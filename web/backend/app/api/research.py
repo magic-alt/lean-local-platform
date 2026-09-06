@@ -4,7 +4,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..architecture.platform_contract import platform_capabilities
-from ..services import qlib_import_v2, qlib_promotion, research_interop, research_runs
+from ..services import research_interop, research_runs
+from ..services.qlib_import_v2 import IMPORT_TYPE as QLIB_IMPORT_TYPE
+from ..services.qlib_import_v2 import SCHEMA_VERSION as QLIB_SCHEMA_VERSION
+from ..services.qlib_promotion import record_lean_validation
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -52,8 +55,8 @@ def import_qlib_run(request: QlibImportRequest):
     try:
         payload = request.model_dump(exclude_none=True)
         if (
-            payload.get("schemaVersion") != qlib_import_v2.SCHEMA_VERSION
-            or payload.get("importType") != qlib_import_v2.IMPORT_TYPE
+            payload.get("schemaVersion") != QLIB_SCHEMA_VERSION
+            or payload.get("importType") != QLIB_IMPORT_TYPE
         ):
             raise ValueError(
                 "Only Artifact Contract v2 is supported: schemaVersion=2.0, importType=QLIB_RESEARCH_BUNDLE"
@@ -66,7 +69,7 @@ def import_qlib_run(request: QlibImportRequest):
 @router.post("/runs/{run_id}/lean-validation")
 def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest):
     try:
-        return qlib_promotion.record_lean_validation(
+        return record_lean_validation(
             run_id, lean_backtest_run_id=request.leanBacktestRunId
         )
     except KeyError as exc:
@@ -76,8 +79,8 @@ def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest)
 
 
 def _retired_research_route() -> None:
-    """Keep retired execution surfaces fail-closed and explicit behind the SPA mount."""
-    raise HTTPException(status_code=410, detail=_RETIRED_RESEARCH_DETAIL)
+    """Keep retired execution surfaces non-public and fail-closed."""
+    raise HTTPException(status_code=404, detail=_RETIRED_RESEARCH_DETAIL)
 
 
 @router.api_route(

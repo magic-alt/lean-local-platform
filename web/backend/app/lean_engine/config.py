@@ -38,6 +38,15 @@ def base_config(
     language: str,
     path_layout: LeanPathLayout | None = None,
 ) -> dict[str, Any]:
+    asset_class = str(parameters.get("assetClass") or "equity").strip().lower()
+    market = str(parameters.get("market") or parameters.get("venue") or "").strip().lower()
+    if asset_class == "equity" and market:
+        profile = market_profile(market)
+        if profile.get("execution_scope") == "preview_only":
+            raise LeanPlatformError(
+                f"market_execution_not_certified:{market}:"
+                "localization is preview-only until required per-security market metadata and validation evidence are certified"
+            )
     layout = path_layout or LeanPathLayout.docker(
         include_support=bool(parameters.get("ashareRules") or parameters.get("hkRules"))
     )
@@ -108,12 +117,6 @@ def validate_backtest_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     requested_data_type = data_type_key(str(parameters.get("dataType") or parameters.get("data_type") or "trade"))
     if requested_asset_class == "equity":
         market = market_key(str(parameters.get("market", parameters.get("venue", "usa"))))
-        profile = market_profile(market)
-        if profile.get("execution_scope") == "preview_only":
-            raise LeanPlatformError(
-                f"market_execution_not_certified:{market}:"
-                "localization is preview-only until required per-security market metadata and validation evidence are certified"
-            )
         ticker = normalize_symbol(str(parameters["ticker"]), market).upper()
         venue = market
     else:

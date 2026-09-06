@@ -16,7 +16,7 @@ LEAN Local Platform 不再承载模型研究执行或 Notebook Workspace。Resea
 | 回测、订单/组合仿真、执行验证 | QuantConnect LEAN via lean-local-platform | 权威执行路径 |
 | Paper / OMS / broker / ledger | lean-local-platform | 受独立准入和认证门禁约束 |
 
-历史 `app/research/`、旧 worker task 和历史表仍可保留用于读取旧证据或迁移，但它们不是新 Research 入口。新 UI、Example Catalog、Experiment Batch 和公开 Research API 不得创建本地研究任务。
+历史 `app/research/`、旧 worker task、历史表以及少量 service-level Research example helper 可以继续保留，用于读取旧证据、迁移或兼容测试；它们不是新的产品入口。新 UI、公开 Example API、Experiment Batch 和公开 Research API 都不得创建本地研究任务。
 
 ## 标准闭环
 
@@ -45,7 +45,7 @@ lean-local-platform publishes immutable DataRelease
 | `POST` | `/api/research/imports/qlib` | 导入 Artifact Contract v2 `QLIB_RESEARCH_BUNDLE` |
 | `POST` | `/api/research/runs/{run_id}/lean-validation` | 将成功且通过 execution-validation 的 LEAN run 绑定为研究目标的执行验证 |
 
-旧 `/templates`、本地 `/runs` 创建/预览/重试/取消和 `/workspaces` 路由为退役面，返回 `410 Gone`，不再作为可用 API 出现在 OpenAPI 中。
+旧 `/templates`、本地 `/runs` 创建/预览/重试/取消和 `/workspaces` 路由为退役面，保持 OpenAPI-hidden，并稳定返回 `404 Not Found`。这使调用方不会把历史实现误认为仍受支持的产品 API。
 
 ## Research 页面
 
@@ -63,7 +63,7 @@ Research 页面是交付与验证视图，不是研究 IDE。它展示：
 
 当前 Artifact Contract v2 的 `TARGET_PORTFOLIO` instrument 校验使用 `SH` / `SZ` / `BJ` A股约定，LEAN validation artifact 也仍采用 A股的 CNY / Asia/Shanghai 执行语义。因此当前 qlib handoff 是 **A股优先**。
 
-港股已有本地 symbol/data layout profile，但被明确标记为 `partial` / `preview_only`。在扩展 qlib artifact instrument contract、逐证券 board lot / tick-size、交易日历、费用模型和独立 LEAN 验证证据前，不应把港股研究 bundle 或港股执行称为已认证。
+港股已有本地 symbol/data layout profile，但被明确标记为 `partial` / `preview_only`。港股参数、数据覆盖和本地交易规则可以用于 preflight/preview；真正生成 LEAN 执行配置时仍 fail-closed。在扩展 qlib artifact instrument contract、逐证券 board lot / tick-size、交易日历、费用模型和独立 LEAN 验证证据前，不应把港股研究 bundle 或港股执行称为已认证。
 
 ## 数据与执行不变量
 

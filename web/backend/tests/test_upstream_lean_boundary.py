@@ -23,9 +23,9 @@ def test_platform_contract_preserves_upstream_lean_and_external_research():
     assert research["artifactContractVersion"] == "2.0"
 
 
-def test_cn_hk_localization_profiles_are_explicit_and_fail_closed():
+def test_cn_hk_localization_profiles_are_explicit_and_fail_closed_at_execution():
     from app.architecture.platform_contract import platform_capabilities
-    from app.lean_engine.config import validate_backtest_parameters
+    from app.lean_engine.config import base_config, validate_backtest_parameters
     from app.lean_engine.errors import LeanPlatformError
     from app.lean_engine.symbols import normalize_symbol
 
@@ -64,38 +64,58 @@ def test_cn_hk_localization_profiles_are_explicit_and_fail_closed():
     assert hongkong["lot_size_policy"] == "per_security_board_lot_required"
     assert hongkong["tick_size_policy"] == "per_security_price_tier_required"
     assert normalize_symbol("0700.HK", "hongkong") == "00700"
+
+    hk_parameters = validate_backtest_parameters(
+        {
+            "ticker": "00700",
+            "assetClass": "equity",
+            "market": "hongkong",
+            "resolution": "daily",
+            "dataType": "trade",
+            "start": "2025-01-02",
+            "end": "2025-01-03",
+            "cash": 100000,
+        }
+    )
+    assert hk_parameters["market"] == "hongkong"
+    assert hk_parameters["ticker"] == "00700"
     with pytest.raises(LeanPlatformError, match="market_execution_not_certified:hongkong"):
-        validate_backtest_parameters(
-            {
-                "ticker": "00700",
-                "assetClass": "equity",
-                "market": "hongkong",
-                "resolution": "daily",
-                "dataType": "trade",
-                "start": "2025-01-02",
-                "end": "2025-01-03",
-                "cash": 100000,
-            }
+        base_config(
+            "hk-preview-only",
+            hk_parameters,
+            algorithm_class="Algorithm",
+            algorithm_location="/tmp/algorithm.py",
+            language="Python",
         )
 
 
-def test_local_research_examples_are_no_longer_advertised_or_instantiable():
-    from app.core.errors import NotFoundError
-    from app.services import examples
+def test_local_research_examples_are_hidden_from_public_api():
+    from app.api import examples as example_api
 
-    examples._catalog.cache_clear()
-    assert examples.list_examples("research") == []
-    assert all(item["kind"] in {"backtest", "optimization"} for item in examples.list_examples())
-    with pytest.raises(NotFoundError, match="qlib-platform"):
-        examples.get_example("research", "stock-eda")
+    assert example_api.catalog("research", None) == {"items": [], "count": 0}
+    assert all(
+        item["kind"] in {"backtest", "optimization"}
+        for item in example_api.catalog(None, None)["items"]
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        example_api.detail("research", "stock-eda")
+    assert exc_info.value.status_code == 404
+    assert "qlib-platform" in str(exc_info.value.detail)
+    with pytest.raises(HTTPException) as exc_info:
+        example_api.instantiate(
+            "research",
+            "stock-eda",
+            example_api.ExampleInstantiateRequest(),
+        )
+    assert exc_info.value.status_code == 404
 
 
-def test_retired_local_research_execution_routes_return_gone():
+def test_retired_local_research_execution_routes_return_not_found():
     from app.api import research
 
     with pytest.raises(HTTPException) as exc_info:
         research.retired_templates()
-    assert exc_info.value.status_code == 410
+    assert exc_info.value.status_code == 404
     assert "qlib-platform" in str(exc_info.value.detail)
 
 
