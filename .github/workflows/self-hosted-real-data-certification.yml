@@ -1,0 +1,82 @@
+name: Self-hosted Real Data Certification
+
+on:
+  schedule:
+    - cron: "43 19 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-hosted-real-data-certification
+  cancel-in-progress: false
+
+jobs:
+  real-data-certification:
+    name: Immutable DataRelease and real-data certification
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.RUN_SELF_HOSTED_REAL_DATA_CERTIFICATION == '1' }}
+    runs-on: [self-hosted, lean-real-data]
+    timeout-minutes: 180
+    env:
+      LEAN_REAL_DATA_DIR: ${{ vars.LEAN_REAL_DATA_DIR }}
+      LEAN_REAL_DATA_RELEASE_ID: ${{ vars.LEAN_REAL_DATA_RELEASE_ID }}
+      LEAN_API_AUTH_REQUIRED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements-ml.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - name: Validate external read-only data mount
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ.get("LEAN_REAL_DATA_DIR", "").strip()
+          if not raw:
+              raise SystemExit("LEAN_REAL_DATA_DIR repository variable is required")
+          path = Path(raw).expanduser()
+          if not path.is_absolute():
+              raise SystemExit("LEAN_REAL_DATA_DIR must be an absolute path outside the checkout")
+          if not path.is_dir():
+              raise SystemExit(f"LEAN_REAL_DATA_DIR does not exist: {path}")
+          if not (path / "releases").is_dir():
+              raise SystemExit(f"immutable DataRelease directory is missing: {path / 'releases'}")
+          print(path.resolve())
+          PY
+      - run: pip install --require-hashes -r web/backend/requirements-ml.lock
+      - run: npm ci
+        working-directory: web/frontend
+      - run: npx playwright install chromium
+        working-directory: web/frontend
+      - name: Run real-data certification ladder
+        shell: bash
+        run: |
+          args=(--profile local-data --data-dir "$LEAN_REAL_DATA_DIR")
+          if [[ -n "${LEAN_REAL_DATA_RELEASE_ID:-}" ]]; then
+            args+=(--data-release-id "$LEAN_REAL_DATA_RELEASE_ID")
+          fi
+          python scripts/system_verify.py "${args[@]}"
+      - name: Upload immutable certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-data-certification-${{ github.run_id }}
+          path: |
+            web/runtime/audit/*.json
+            tests/e2e/reports
+          if-no-files-found: warn
+      - name: Cleanup verification stacks
+        if: always()
+        shell: bash
+        run: |
+          docker compose --profile app down --remove-orphans || true
+          docker compose down --remove-orphans || true

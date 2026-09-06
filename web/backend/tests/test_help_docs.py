@@ -14,6 +14,7 @@ def test_help_catalog_metadata_search_and_path_validation():
     items = help_docs.list_articles("maxBatchRuns")
     assert items
     assert {"group", "category", "summary", "status", "snippet"} <= items[0].keys()
+    assert help_docs.list_articles("CELERY_BROKER_URL")
     assert help_docs.article("backtests")["title"] == "单次与批量回测"
     assert help_docs.article("history")["status"] == "historical"
     with pytest.raises(NotFoundError):

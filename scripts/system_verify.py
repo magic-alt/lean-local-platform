@@ -60,7 +60,10 @@ def _run_stage(
             check=False,
             timeout=timeout,
         )
-        output = ((completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")).strip()
+        output = (
+            (completed.stdout or "")
+            + ("\n" + completed.stderr if completed.stderr else "")
+        ).strip()
         return {
             "name": name,
             "passed": completed.returncode == 0,
@@ -71,7 +74,9 @@ def _run_stage(
             "outputTail": output[-12000:],
         }
     except subprocess.TimeoutExpired as exc:
-        output = ((exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else "")).strip()
+        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        output = (stdout + ("\n" + stderr if stderr else "")).strip()
         return {
             "name": name,
             "passed": False,
@@ -97,7 +102,11 @@ def _run_stage(
 
 def _git_sha() -> str | None:
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.stdout.strip() if result.returncode == 0 else None
 
@@ -116,7 +125,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         [python, "scripts/check_oss_governance.py"],
     ]
     for command in governance_commands:
-        stages.append(_run_stage(f"governance:{Path(command[-1]).stem}", command))
+        stages.append(
+            _run_stage(f"governance:{Path(command[-1]).stem}", command)
+        )
 
     stages.append(
         _run_stage(
@@ -167,7 +178,14 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         stages.append(
             _run_stage(
                 "web:e2e-smoke",
-                [npx, "playwright", "test", "--project=chromium", "--grep", "@smoke"],
+                [
+                    npx,
+                    "playwright",
+                    "test",
+                    "--project=chromium",
+                    "--grep",
+                    "@smoke",
+                ],
                 cwd=FRONTEND,
                 env=e2e_base_env,
                 timeout=args.e2e_timeout,
@@ -200,7 +218,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
         else:
-            local_cert_path = ROOT / "web" / "runtime" / "audit" / "local-data-certification.json"
+            local_cert_path = (
+                ROOT / "web" / "runtime" / "audit" / "local-data-certification.json"
+            )
             local_cert_evidence = str(local_cert_path)
             cert_command = [
                 python,
@@ -210,6 +230,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                 "--evidence",
                 str(local_cert_path),
             ]
+            if args.data_release_id:
+                cert_command.extend(["--data-release-id", args.data_release_id])
             if args.local_data_symbol:
                 cert_command.extend(["--symbol", args.local_data_symbol])
             if args.no_pull_image:
@@ -237,7 +259,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                         **e2e_base_env,
                         "E2E_REAL_LOCAL_DATA": "1",
                         "E2E_SKIP_SEED": "1",
-                        "E2E_LEAN_DATA_DIR": str(args.data_dir.expanduser().resolve()),
+                        "E2E_LEAN_DATA_DIR": str(
+                            args.data_dir.expanduser().resolve()
+                        ),
                         "E2E_REQUIRE_LEAN_RUNTIME": "0",
                     },
                     timeout=args.e2e_timeout,
@@ -245,32 +269,47 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     convergence_evidence: str | None = None
-    if args.base_url:
-        convergence_path = ROOT / "web" / "runtime" / "audit" / "release-convergence.json"
+    should_run_convergence = bool(args.base_url) or args.profile in {
+        "full",
+        "local-data",
+    }
+    if should_run_convergence:
+        convergence_path = (
+            ROOT / "web" / "runtime" / "audit" / "release-convergence.json"
+        )
         convergence_evidence = str(convergence_path)
+        convergence_command = [
+            python,
+            "scripts/verify_release_convergence.py",
+            "--evidence",
+            str(convergence_path),
+        ]
+        if args.base_url:
+            convergence_command.extend(["--base-url", args.base_url])
+        else:
+            # Use a scratch mounted lake for convergence. Real local data remains
+            # read-only and is certified independently above.
+            convergence_command.append("--manage-stack")
         stages.append(
             _run_stage(
                 "release:convergence",
-                [
-                    python,
-                    "scripts/verify_release_convergence.py",
-                    "--base-url",
-                    args.base_url,
-                    "--evidence",
-                    str(convergence_path),
-                ],
-                timeout=600,
+                convergence_command,
+                timeout=args.convergence_timeout,
             )
         )
 
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": _utc_now(),
         "gitSha": _git_sha(),
         "profile": args.profile,
-        "dataDir": str(args.data_dir.expanduser().resolve()) if args.data_dir else None,
+        "dataDir": (
+            str(args.data_dir.expanduser().resolve()) if args.data_dir else None
+        ),
+        "dataReleaseId": args.data_release_id,
         "baseUrl": args.base_url,
-        "passed": bool(stages) and all(bool(stage.get("passed")) for stage in stages),
+        "passed": bool(stages)
+        and all(bool(stage.get("passed")) for stage in stages),
         "stages": stages,
         "evidence": {
             "system": str(args.evidence),
@@ -284,14 +323,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run one fail-closed verification ladder for the LEAN Local Platform."
     )
-    parser.add_argument("--profile", choices=("pr", "full", "local-data"), default="pr")
+    parser.add_argument(
+        "--profile", choices=("pr", "full", "local-data"), default="pr"
+    )
     parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--data-release-id")
     parser.add_argument("--local-data-symbol")
-    parser.add_argument("--base-url")
+    parser.add_argument(
+        "--base-url",
+        help=(
+            "Verify an already-running stack instead of the managed convergence stack. "
+            "full/local-data profiles run managed convergence automatically when omitted."
+        ),
+    )
     parser.add_argument("--evidence", type=Path, default=DEFAULT_EVIDENCE)
     parser.add_argument("--backend-timeout", type=int, default=3600)
     parser.add_argument("--e2e-timeout", type=int, default=3600)
     parser.add_argument("--local-data-timeout", type=int, default=7200)
+    parser.add_argument("--convergence-timeout", type=int, default=5400)
     parser.add_argument("--no-pull-image", action="store_true")
     return parser
 
@@ -303,7 +352,7 @@ def main() -> int:
         result = verify(args)
     except Exception as exc:
         result = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "generatedAt": _utc_now(),
             "gitSha": _git_sha(),
             "profile": args.profile,
@@ -311,7 +360,10 @@ def main() -> int:
             "failure": {"type": type(exc).__name__, "detail": str(exc)},
         }
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
-    args.evidence.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    args.evidence.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("passed") else 1
 
