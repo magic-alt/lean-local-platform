@@ -38,7 +38,7 @@ def capabilities():
 
 @router.get("/imports")
 def imported_qlib_runs(limit: int = 20, offset: int = 0):
-    """Read-only preview of research bundles already imported from qlib-platform."""
+    """Read-only preview of research bundles produced by qlib-platform."""
     return research_interop.list_imports(limit=limit, offset=offset)
 
 
