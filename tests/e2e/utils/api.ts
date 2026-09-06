@@ -82,7 +82,7 @@ export async function ensureE2EProject(request: APIRequestContext, overrides?: P
   dataType: string;
 }>): Promise<ProjectRecord> {
   const name = overrides?.name || "E2E_MA_Cross_Test";
-  const existing = await apiGet<ProjectRecord[]>(request, "/api/projects");
+  const existing = await apiGet<ProjectRecord[]>(request, "/api/projects?paged=false&limit=1000");
   const found = existing.find((project) => project.name === name);
   if (found) return found;
   return apiPost<ProjectRecord>(request, "/api/projects", {
@@ -102,7 +102,7 @@ export async function ensureE2EProject(request: APIRequestContext, overrides?: P
 }
 
 export async function listBacktests(request: APIRequestContext): Promise<BacktestRecord[]> {
-  return apiGet<BacktestRecord[]>(request, "/api/backtests");
+  return apiGet<BacktestRecord[]>(request, "/api/backtests?paged=false&limit=1000");
 }
 
 export async function getBacktest(request: APIRequestContext, id: string): Promise<BacktestRecord> {

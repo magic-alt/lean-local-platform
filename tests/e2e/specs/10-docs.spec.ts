@@ -26,7 +26,8 @@ test.describe("10 documentation center @smoke @responsive", () => {
 
     await page.getByRole("link", { name: "快速开始" }).first().click();
     await expect(page).toHaveURL(/#\/docs\/quick-start/);
-    await expect(page.getByRole("heading", { name: "1. 环境要求" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "快速开始" })).toBeVisible();
+    await expect(page.locator(".docs-markdown")).not.toBeEmpty();
     await page.reload();
     await expect(page.getByRole("heading", { name: "快速开始" })).toBeVisible();
 
@@ -35,8 +36,8 @@ test.describe("10 documentation center @smoke @responsive", () => {
     await expect(page.getByText("| Dataset |", { exact: false })).toHaveCount(0);
 
     const search = page.getByPlaceholder("搜索配置、API、操作或错误");
-    await search.fill("maxBatchRuns");
-    await expect(page.locator(".docs-search-results")).toContainText("批量");
+    await search.fill("CELERY_BROKER_URL");
+    await expect(page.locator(".docs-search-results")).toContainText("配置");
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);

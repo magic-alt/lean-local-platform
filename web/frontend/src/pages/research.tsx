@@ -22,7 +22,7 @@ const { Paragraph, Text, Title } = Typography;
 
 export function ResearchPage() {
   return (
-    <Space direction="vertical" size={20} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={20} style={{ width: "100%" }}>
       <div>
         <Space align="center" wrap>
           <Title level={2} style={{ margin: 0 }}>研究交付</Title>
@@ -48,22 +48,22 @@ export function ResearchPage() {
           items={[
             {
               title: "发布数据",
-              description: "platform 发布不可变 DataRelease",
+              content: "platform 发布不可变 DataRelease",
               icon: <DatabaseOutlined />
             },
             {
               title: "外部研究",
-              description: "qlib-platform 完成特征、训练和选择",
+              content: "qlib-platform 完成特征、训练和选择",
               icon: <ExperimentOutlined />
             },
             {
               title: "导入产物",
-              description: "Artifact Contract v2 + content hash",
+              content: "Artifact Contract v2 + content hash",
               icon: <CheckCircleOutlined />
             },
             {
               title: "LEAN 验证",
-              description: "回测与执行侧权威验证",
+              content: "回测与执行侧权威验证",
               icon: <PlayCircleOutlined />
             }
           ]}

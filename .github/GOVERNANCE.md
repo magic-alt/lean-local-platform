@@ -16,7 +16,7 @@ This directory contains the version-controlled part of the GitHub control plane.
 | `repository-metadata.yml` | Canonical Description and Topics desired state. |
 | `repository-policy.json` | Machine-readable desired repository/Ruleset/security state. |
 | `release.yml` | Generated-release-note categories. |
-| `workflows/ci.yml` | Always-on Governance plus opt-in compute-heavy validation. |
+| `workflows/ci.yml` | Mandatory deterministic application gates plus explicitly opt-in runtime-heavy LEAN integration. |
 | `workflows/dependency-review.yml` | Pull-request dependency vulnerability gate. |
 | `workflows/codeql.yml` | Python and JavaScript/TypeScript code scanning. |
 | `workflows/release.yml` | Manual, validated draft software-release workflow. |
@@ -49,7 +49,9 @@ A workflow name is not enough evidence that a control executed. Distinguish:
 - intentionally skipped compute-heavy lane;
 - failed or cancelled run.
 
-Only promote a check to required after it has a stable, non-deadlocking path for the repository contribution model.
+The deterministic merge surface is aggregated by the `Required CI` job. It fails unless Governance, Backend, Frontend, Web E2E smoke, Native contract and Windows native contract all report `success`. Runtime-heavy LEAN Docker/native/parity lanes remain explicitly opt-in and must not be represented as passed when skipped.
+
+The desired main-branch Ruleset keeps the direct `Governance` check and additionally requires `Required CI` and `Dependency Review`. The committed desired state does not prove that GitHub server-side Rulesets are active; verify remote settings separately.
 
 ## Developer automation
 

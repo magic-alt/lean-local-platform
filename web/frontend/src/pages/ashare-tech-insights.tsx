@@ -81,7 +81,7 @@ function readableValue(value: unknown): ReactNode {
     )}</Space>;
   }
   if (typeof value === "object") {
-    return <Space direction="vertical" size={2}>
+    return <Space orientation="vertical" size={2}>
       {Object.entries(value as Record<string, unknown>).map(([key, item]) =>
         <span key={key}><Typography.Text type="secondary">{readableKey(key)}：</Typography.Text>{readableValue(item)}</span>
       )}
@@ -107,7 +107,7 @@ function StageOutputView({ stage }: { stage: AshareTechAgentStage }) {
   const selections = Array.isArray(output.selections) ? output.selections as Array<Record<string, unknown>> : [];
   const rows = stocks.length ? stocks : selections;
   const overview = Object.fromEntries(Object.entries(output).filter(([key]) => !["stocks", "selections"].includes(key)));
-  return <Space direction="vertical" style={{ width: "100%" }} size={12}>
+  return <Space orientation="vertical" style={{ width: "100%" }} size={12}>
     {Object.keys(overview).length > 0 && <StructuredObject value={overview} />}
     {rows.length > 0 && <Table
       rowKey={(item, index) => String(item.symbol || item.rank || index)}
@@ -146,7 +146,7 @@ function StockInsightView({
   }
   for (const evidenceId of signal?.finalSignal.evidenceIds || []) evidenceIds.add(evidenceId);
   const evidenceFacts = facts.filter((item) => evidenceIds.has(String(item.id)));
-  return <Space direction="vertical" style={{ width: "100%" }} size={14}>
+  return <Space orientation="vertical" style={{ width: "100%" }} size={14}>
     <Descriptions bordered size="small" column={4} title={`${insight.name}（${insight.symbol}）`}>
       <Descriptions.Item label="收盘">{number(metrics.close)}</Descriptions.Item>
       <Descriptions.Item label="RSI14">{number(metrics.rsi14)}</Descriptions.Item>
@@ -604,7 +604,7 @@ export function AshareTechInsights() {
       : stage.status === "failed" ? "error" as const
         : stage.status === "running" ? "process" as const
           : "wait" as const,
-    description: <Space direction="vertical" size={0}>
+    content: <Space orientation="vertical" size={0}>
       <Tag color={agentStatusColor(stage.status)}>{stage.status}</Tag>
       <span className="muted">{stage.model || capabilities.data.model || "-"} · {stage.latency_ms == null ? "-" : `${stage.latency_ms}ms`}</span>
     </Space>
@@ -644,7 +644,7 @@ export function AshareTechInsights() {
       >
         <Row gutter={[16, 16]}>
           <Col xs={24} md={6}><Statistic title="生产 Provider / 模型" value={`${capabilities.data.productionProfile?.provider || "未配置"} / ${capabilities.data.productionProfile?.model || "-"}`} /></Col>
-          <Col xs={12} md={4}><Statistic title="连接配置" value={capabilities.data.configured ? "已配置" : "未配置"} valueStyle={{ color: capabilities.data.configured ? "#3f8600" : "#cf1322" }} /></Col>
+          <Col xs={12} md={4}><Statistic title="连接配置" value={capabilities.data.configured ? "已配置" : "未配置"} styles={{ content: { color: capabilities.data.configured ? "#3f8600" : "#cf1322" } }} /></Col>
           <Col xs={12} md={4}><Statistic title="默认模式" value={capabilities.data.defaultAnalysisMode === "hybrid_multi_agent" ? "六阶段 Agent" : "确定性"} /></Col>
           <Col xs={12} md={5}><Statistic title="接口" value={capabilities.data.apiStyle} /></Col>
           <Col xs={12} md={5}><Statistic title="Prompt" value={capabilities.data.agentPromptVersion} /></Col>
@@ -1097,7 +1097,7 @@ export function AshareTechInsights() {
         </>}
         {report?.doNotChase && <><Divider>5. 今日不追高/只观察</Divider><Table rowKey="code" size="small" tableLayout="fixed" dataSource={report.doNotChase} columns={stockColumns} pagination={false} /></>}
         {report?.nextTradingDayWatch && <><Divider>6. 下一交易日观察清单</Divider><ol>{report.nextTradingDayWatch.map((item, index) => <li key={`${item.code}-${index}`}>{item.code} {item.name}：{item.condition}；失效位 {item.invalidation ?? "数据缺失"}</li>)}</ol></>}
-        {report?.finalThreeLines && <><Divider>7. 三行最终结论</Divider><Space direction="vertical"><div>最值得跟踪：{report.finalThreeLines.mostWorthTracking}</div><div>最应回避追高/警惕破位：{report.finalThreeLines.avoidChasingOrBreakdown}</div><div>总体阶段：{report.finalThreeLines.overallStage}</div></Space></>}
+        {report?.finalThreeLines && <><Divider>7. 三行最终结论</Divider><Space orientation="vertical"><div>最值得跟踪：{report.finalThreeLines.mostWorthTracking}</div><div>最应回避追高/警惕破位：{report.finalThreeLines.avoidChasingOrBreakdown}</div><div>总体阶段：{report.finalThreeLines.overallStage}</div></Space></>}
         {report?.disclaimer && <Alert type="info" message={report.disclaimer} style={{ marginTop: 16 }} />}
       </Card>}
       <Modal

@@ -56,6 +56,23 @@ def test_postgres_baseline_is_bound_and_excludes_market_timeseries():
         assert f"create table if not exists {relation.lower()} " not in baseline.lower()
 
 
+def _line_ending_hashes(path: Path) -> set[str]:
+    """Return content hashes for the two historical checkout line-ending forms.
+
+    The legacy manifest was frozen from a Windows CRLF checkout while Git stores
+    the same immutable SQL blobs with LF.  Accept only that byte-for-byte text
+    with either newline encoding; any SQL/content change still changes both
+    hashes and fails closed.
+    """
+    raw = path.read_bytes()
+    lf = raw.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return {
+        hashlib.sha256(lf).hexdigest(),
+        hashlib.sha256(crlf).hexdigest(),
+    }
+
+
 def test_legacy_migration_manifest_is_complete_and_immutable():
     versions = Path(__file__).parents[1] / "app" / "migrations" / "versions"
     manifest = json.loads((versions / "checksums.json").read_text(encoding="utf-8"))
@@ -64,7 +81,7 @@ def test_legacy_migration_manifest_is_complete_and_immutable():
     assert len(manifest["migrations"]) == len(sql_files)
     for entry, path in zip(manifest["migrations"], sql_files, strict=True):
         assert entry["revision"] == path.stem
-        assert entry["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert entry["sha256"] in _line_ending_hashes(path)
 
 
 def test_postgres_backup_is_atomic_and_excludes_celery(tmp_path, monkeypatch):

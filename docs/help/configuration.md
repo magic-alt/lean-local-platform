@@ -26,6 +26,10 @@ LEAN_FILE_OBJECT_STORE_DIR=./data/object-store
 
 Windows 外置盘可使用 `D:\MarketData\platform\data`。不要把个人绝对路径写入通用文档或提交配置。
 
+## Web Settings
+
+Settings 页保存浏览器工作流允许调整的非密钥默认值，例如默认市场、策略、资金、任务超时与批量上限。`maxConcurrentJobs`、`maxBatchRuns`、`jobTimeoutSeconds` 等字段属于应用级 guardrail；它们不会替代 Compose/Native 的 CPU、内存、worker concurrency 或 broker 配置。生产容量调整必须同时通过容量与稳定性验收。
+
 ## 存储边界
 
 - Parquet 保存股票日线、分钟/Tick、复权、每日指标和交易状态等市场事实。

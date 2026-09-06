@@ -13,10 +13,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Governance checks always run. Compute-heavy hosted lanes remain opt-in while
-# GitHub Actions quota is constrained; local validation is authoritative for a
-# lane that is intentionally disabled. Set RUN_GITHUB_ACTIONS=1 to enable the
-# standard hosted lanes without changing this workflow.
+# The merge gate is intentionally split between deterministic always-on lanes
+# and expensive LEAN engine integrations. Required CI aggregates every
+# deterministic lane; actual LEAN Docker/native parity remains opt-in and is
+# exercised by full/local certification where the runtime is available.
 jobs:
   governance:
     name: Governance
@@ -39,7 +39,6 @@ jobs:
   backend:
     name: Backend
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -56,7 +55,6 @@ jobs:
   frontend:
     name: Frontend
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -72,10 +70,56 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  web-e2e-smoke:
+    name: Web E2E smoke
+    needs: governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_PATH: ${{ github.workspace }}/web/frontend/node_modules
+      LEAN_API_AUTH_REQUIRED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/backend/requirements.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - run: pip install --require-hashes -r web/backend/requirements.lock
+      - run: npm ci
+        working-directory: web/frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: web/frontend
+      - name: Run responsive UI audit
+        env:
+          E2E_UI_ONLY: "1"
+        run: >-
+          npx playwright test 15-ui-audit.spec.ts
+          --project=chromium-1280 --project=tablet --project=mobile
+        working-directory: web/frontend
+      - name: Run PostgreSQL/RabbitMQ smoke journey
+        env:
+          E2E_PYTHON: python
+          E2E_REQUIRE_LEAN_RUNTIME: "0"
+          E2E_STOP_STACK: "1"
+        run: npx playwright test --project=chromium --grep @smoke
+        working-directory: web/frontend
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-smoke-${{ github.run_id }}
+          path: tests/e2e/reports
+          if-no-files-found: warn
+
   native-contract:
     name: Native contract
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -93,7 +137,6 @@ jobs:
   windows-native-contract:
     name: Windows native contract
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -137,7 +180,7 @@ jobs:
   docker-backtest:
     name: LEAN Docker integration
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_DOCKER_INTEGRATION == '1' }}
+    if: ${{ vars.RUN_LEAN_DOCKER_INTEGRATION == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -152,7 +195,7 @@ jobs:
   native-backtest:
     name: LEAN native integration
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_NATIVE_INTEGRATION == '1' }}
+    if: ${{ vars.RUN_LEAN_NATIVE_INTEGRATION == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -169,7 +212,7 @@ jobs:
   backend-parity:
     name: Backend parity
     needs: governance
-    if: ${{ vars.RUN_GITHUB_ACTIONS == '1' && vars.RUN_LEAN_BACKEND_PARITY == '1' }}
+    if: ${{ vars.RUN_LEAN_BACKEND_PARITY == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -180,3 +223,41 @@ jobs:
       - run: pip install --require-hashes -r web/backend/requirements.lock
       - run: RUN_LEAN_BACKEND_PARITY=1 python -m pytest -q tests/test_ashare_backend_parity.py
         working-directory: web/backend
+
+  required-ci:
+    name: Required CI
+    if: always()
+    needs:
+      - governance
+      - backend
+      - frontend
+      - web-e2e-smoke
+      - native-contract
+      - windows-native-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every deterministic lane
+        env:
+          GOVERNANCE: ${{ needs.governance.result }}
+          BACKEND: ${{ needs.backend.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          WEB_E2E_SMOKE: ${{ needs.web-e2e-smoke.result }}
+          NATIVE_CONTRACT: ${{ needs.native-contract.result }}
+          WINDOWS_NATIVE_CONTRACT: ${{ needs.windows-native-contract.result }}
+        run: |
+          python - <<'PY'
+          import os
+          checks = {
+              "Governance": os.environ["GOVERNANCE"],
+              "Backend": os.environ["BACKEND"],
+              "Frontend": os.environ["FRONTEND"],
+              "Web E2E smoke": os.environ["WEB_E2E_SMOKE"],
+              "Native contract": os.environ["NATIVE_CONTRACT"],
+              "Windows native contract": os.environ["WINDOWS_NATIVE_CONTRACT"],
+          }
+          failed = {name: result for name, result in checks.items() if result != "success"}
+          if failed:
+              raise SystemExit(f"Required CI failed: {failed}")
+          print("Required CI passed:", checks)
+          PY

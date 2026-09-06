@@ -15,11 +15,11 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
       ["项目", "Projects"],
       ["数据", "Data Library"],
       ["回测", "Backtests"],
-      ["优化", "Optimization"],
+      ["优化", "Optimization Center"],
       ["模拟交易", "模拟账户"],
-      ["研究", "Research"],
+      ["研究", "研究交付"],
       ["报告", "Reports"],
-      ["洞察", "Insights"],
+      ["洞察", "洞察 · A股科技日报"],
       ["任务", "Tasks"],
       ["监控", "Monitoring"],
       ["设置", "Settings"]
@@ -34,11 +34,11 @@ test.describe("01 smoke and navigation @smoke @responsive", () => {
     }
 
     await page.goto("/#/ashare-research");
-    await dashboard.expectHeading("Research");
+    await dashboard.expectHeading("研究交付");
 
     await page.goto("/#/compare");
-    await dashboard.expectHeading("Optimization");
-    await expect(page.getByRole("tab", { name: "Compare Runs" })).toBeVisible();
+    await dashboard.expectHeading("Optimization Center");
+    await expect(page.getByRole("tab", { name: "Compare Results" })).toBeVisible();
 
     await page.goto("/#/object-store");
     await expect(page.getByText("Page Not Found")).toBeVisible();
