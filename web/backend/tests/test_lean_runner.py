@@ -106,8 +106,9 @@ def test_base_config_adds_python_path_for_ashare_rules():
     assert config["python-additional-paths"] == ["/Lean/Run"]
 
 
-def test_lean_runner_mounts_hongkong_execution_support(tmp_path, monkeypatch):
+def test_lean_runner_writes_hongkong_support_before_execution_gate(tmp_path, monkeypatch):
     import app.runners.lean_runner as runner_module
+    from app.lean_engine.errors import LeanPlatformError
 
     captured = {}
 
@@ -121,25 +122,26 @@ def test_lean_runner_mounts_hongkong_execution_support(tmp_path, monkeypatch):
     project_dir.mkdir()
     algorithm_path = project_dir / "custom.py"
     algorithm_path.write_text("class Custom: pass\n", encoding="utf-8")
-    workspace = LeanRunner().prepare(
-        "hk-job",
-        {
-            "ticker": "00700",
-            "assetClass": "equity",
-            "market": "hongkong",
-            "hkRules": True,
-        },
-        run_dir,
-        algorithm_path=algorithm_path,
-        algorithm_class="Custom",
-        language="Python",
-        project_dir=project_dir,
-    )
+
+    with pytest.raises(LeanPlatformError, match="market_execution_not_certified:hongkong"):
+        LeanRunner().prepare(
+            "hk-job",
+            {
+                "ticker": "00700",
+                "assetClass": "equity",
+                "market": "hongkong",
+                "hkRules": True,
+            },
+            run_dir,
+            algorithm_path=algorithm_path,
+            algorithm_class="Custom",
+            language="Python",
+            project_dir=project_dir,
+        )
 
     assert (run_dir / "hk_execution.py").is_file()
-    assert captured["support_dir"] == run_dir
-    assert workspace.algorithm_container_path == "/Lean/Project/custom.py"
-    assert json.loads(workspace.config_path.read_text(encoding="utf-8"))["python-additional-paths"] == ["/Lean/Run"]
+    assert not (run_dir / "config.json").exists()
+    assert captured == {}
 
 
 def test_lean_runner_writes_artifact_manifest_without_result_json(tmp_path, monkeypatch):

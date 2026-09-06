@@ -3,13 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..services import qlib_import_v2, qlib_promotion, research_runs
+from ..architecture.platform_contract import platform_capabilities
+from ..services import research_interop, research_runs
+from ..services.qlib_import_v2 import IMPORT_TYPE as QLIB_IMPORT_TYPE
+from ..services.qlib_import_v2 import SCHEMA_VERSION as QLIB_SCHEMA_VERSION
+from ..services.qlib_promotion import record_lean_validation
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 _RETIRED_RESEARCH_DETAIL = (
     "Platform-owned research execution and notebook workspace routes are retired. "
-    "Run research in qlib-platform and hand results back through Artifact Contract v2."
+    "Run research in qlib-platform and hand immutable results back through Artifact Contract v2."
 )
 
 
@@ -26,13 +30,33 @@ class QlibLeanValidationRequest(BaseModel):
     leanBacktestRunId: str = Field(min_length=1, max_length=64)
 
 
+@router.get("/capabilities")
+def capabilities():
+    """Expose the upstream-LEAN/localization/research ownership contract."""
+    return platform_capabilities()
+
+
+@router.get("/imports")
+def imported_qlib_runs(limit: int = 20, offset: int = 0):
+    """Read-only preview of research bundles produced by qlib-platform."""
+    return research_interop.list_imports(limit=limit, offset=offset)
+
+
+@router.get("/imports/{import_id}")
+def imported_qlib_run(import_id: str):
+    try:
+        return research_interop.get_import(import_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/imports/qlib")
 def import_qlib_run(request: QlibImportRequest):
     try:
         payload = request.model_dump(exclude_none=True)
         if (
-            payload.get("schemaVersion") != qlib_import_v2.SCHEMA_VERSION
-            or payload.get("importType") != qlib_import_v2.IMPORT_TYPE
+            payload.get("schemaVersion") != QLIB_SCHEMA_VERSION
+            or payload.get("importType") != QLIB_IMPORT_TYPE
         ):
             raise ValueError(
                 "Only Artifact Contract v2 is supported: schemaVersion=2.0, importType=QLIB_RESEARCH_BUNDLE"
@@ -45,7 +69,7 @@ def import_qlib_run(request: QlibImportRequest):
 @router.post("/runs/{run_id}/lean-validation")
 def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest):
     try:
-        return qlib_promotion.record_lean_validation(
+        return record_lean_validation(
             run_id, lean_backtest_run_id=request.leanBacktestRunId
         )
     except KeyError as exc:
@@ -55,7 +79,7 @@ def record_qlib_lean_validation(run_id: str, request: QlibLeanValidationRequest)
 
 
 def _retired_research_route() -> None:
-    """Keep retired HTTP surfaces fail-closed and stable behind the SPA mount."""
+    """Keep retired execution surfaces non-public and fail-closed."""
     raise HTTPException(status_code=404, detail=_RETIRED_RESEARCH_DETAIL)
 
 

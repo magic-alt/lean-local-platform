@@ -13,8 +13,10 @@ from ..domain.assets import (
     resolution_key,
     venue_key,
 )
+from ..localization import market_profile
 from .errors import LeanPlatformError
 from .symbols import market_key, normalize_symbol, parse_date
+
 
 def lean_job_parameters(parameters: dict[str, Any]) -> dict[str, str]:
     excluded = {"dockerImage", "fastValues", "slowValues"}
@@ -36,6 +38,18 @@ def base_config(
     language: str,
     path_layout: LeanPathLayout | None = None,
 ) -> dict[str, Any]:
+    asset_class = str(parameters.get("assetClass") or "equity").strip().lower()
+    market = str(parameters.get("market") or parameters.get("venue") or "").strip().lower()
+    if asset_class == "equity" and market:
+        try:
+            profile = market_profile(market)
+        except KeyError:
+            profile = {}
+        if profile.get("execution_scope") == "preview_only":
+            raise LeanPlatformError(
+                f"market_execution_not_certified:{market}:"
+                "localization is preview-only until required per-security market metadata and validation evidence are certified"
+            )
     layout = path_layout or LeanPathLayout.docker(
         include_support=bool(parameters.get("ashareRules") or parameters.get("hkRules"))
     )

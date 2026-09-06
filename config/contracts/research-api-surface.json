@@ -1,7 +1,19 @@
 {
   "schemaVersion": 1,
-  "description": "Public Research API surface owned by platform. Retired execution/workspace tombstones are intentionally excluded from OpenAPI.",
+  "description": "Public Research interop surface owned by platform. Research execution/workspace tombstones are intentionally excluded from OpenAPI; qlib-platform owns research computation.",
   "routes": [
+    {
+      "method": "GET",
+      "path": "/api/research/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/imports"
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/imports/{import_id}"
+    },
     {
       "method": "POST",
       "path": "/api/research/imports/qlib"

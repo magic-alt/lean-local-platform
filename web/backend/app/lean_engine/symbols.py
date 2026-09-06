@@ -5,41 +5,13 @@ from datetime import date, datetime
 from calendar import monthrange
 from typing import Any
 
+from ..localization import MARKET_PROFILES
 from .errors import LeanPlatformError
 
-MARKET_CONFIG: dict[str, dict[str, Any]] = {
-    "usa": {
-        "name": "US Equity",
-        "currency": "USD",
-        "timezone": "America/New_York",
-        "open": "09:30:00",
-        "close": "16:00:00",
-        "lot_size": "1",
-        "tick_size": "0.01",
-        "market_id": 1,
-    },
-    "china": {
-        "name": "China A Share",
-        "currency": "CNY",
-        "timezone": "Asia/Shanghai",
-        "open": "09:30:00",
-        "close": "15:00:00",
-        "lot_size": "100",
-        "tick_size": "0.01",
-        "market_id": 101,
-    },
-    "hongkong": {
-        "name": "Hong Kong Equity",
-        "currency": "HKD",
-        "timezone": "Asia/Hong_Kong",
-        "open": "09:30:00",
-        "close": "16:10:00",
-        "sessions": (("09:30:00", "12:00:00"), ("13:00:00", "16:10:00")),
-        "lot_size": "1",
-        "tick_size": "0.01",
-        "market_id": 102,
-    },
-}
+# Backward-compatible public name used by data-path builders. The authoritative
+# definitions live in app/localization so market semantics are not owned by the
+# LEAN runner module itself.
+MARKET_CONFIG: dict[str, dict[str, Any]] = MARKET_PROFILES
 
 
 def market_key(market: str | None = None) -> str:

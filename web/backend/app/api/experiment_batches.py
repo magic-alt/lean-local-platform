@@ -31,7 +31,9 @@ def _payload(request: ExperimentBatchRequest) -> dict[str, Any]:
     payload = request.model_dump()
     payload.update(request.model_extra or {})
     if str(payload.get("kind") or "").lower() == "research":
-        raise LeanWebError("research_batches_retired: use /api/research/runs")
+        raise LeanWebError(
+            "research_batches_retired: run research in qlib-platform and import Artifact Contract v2 via /api/research/imports/qlib"
+        )
     if str(payload.get("kind") or "").lower() == "optimization":
         raise LeanWebError("optimization_batches_moved: use /api/optimizations")
     source_research_id = str(payload.get("sourceResearchRunId") or "").strip()
@@ -42,12 +44,12 @@ def _payload(request: ExperimentBatchRequest) -> dict[str, Any]:
             raise LeanWebError("Research handoff requires dataScope.")
         source = research_runs.get_run(source_research_id)
         if source["status"] != "success":
-            raise LeanWebError("Only successful research can seed a backtest batch.")
+            raise LeanWebError("Only successful imported research can seed a backtest batch.")
         resolved = data_gateway.resolve(payload["dataScope"])
         if data_gateway.scope_hash(source["scope"]) != resolved["scopeHash"]:
             raise LeanWebError("The batch dataScope does not match the source research run.")
         if source.get("data_fingerprint") and source["data_fingerprint"] != resolved["dataFingerprint"]:
-            raise LeanWebError("Research data has changed; rerun research before creating the batch.")
+            raise LeanWebError("Research data has changed; re-import research before creating the batch.")
         payload["scopeHash"] = resolved["scopeHash"]
         payload["dataFingerprint"] = resolved["dataFingerprint"]
         payload["parameters"] = {

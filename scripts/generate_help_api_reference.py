@@ -95,7 +95,9 @@ def main() -> int:
     args = parser.parse_args()
     content = generate()
     current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
-    changed = current != content
+    # Treat the optional final POSIX newline as formatting-only while keeping
+    # every generated endpoint, schema and summary comparison exact.
+    changed = current.removesuffix("\n") != content.removesuffix("\n")
     if not args.check and changed:
         OUTPUT.write_text(content, encoding="utf-8")
     result = {"path": str(OUTPUT.relative_to(ROOT)), "changed": changed, "ok": not (args.check and changed)}
