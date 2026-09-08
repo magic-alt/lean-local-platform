@@ -42,7 +42,8 @@
     }
   ],
   "security": {
-    "dependency_update_bot": "dependabot",
+    "dependency_update_prs": "manual",
+    "dependabot_security_updates": false,
     "dependency_graph_required": true,
     "dependency_review_required": true,
     "dependency_review_fail_on_severity": "high",
