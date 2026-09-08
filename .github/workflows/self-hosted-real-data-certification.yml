@@ -23,8 +23,8 @@ jobs:
       LEAN_REAL_DATA_RELEASE_ID: ${{ vars.LEAN_REAL_DATA_RELEASE_ID }}
       LEAN_API_AUTH_REQUIRED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -67,7 +67,7 @@ jobs:
           python scripts/system_verify.py "${args[@]}"
       - name: Upload immutable certification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-data-certification-${{ github.run_id }}
           path: |

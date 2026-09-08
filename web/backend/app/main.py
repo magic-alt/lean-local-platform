@@ -1,15 +1,17 @@
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from contextlib import asynccontextmanager
 import hashlib
 import hmac
 import logging
 import os
 import secrets
 import uuid
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api import ashare, ashare_tech_insights, backtests, cbond, compare, data, examples, experiment_batches, factors, futures, health, help_docs, level3plus, maintenance, object_store, observability, optimization, paper_accounts, pit, portfolios, projects, reports, research, settings, strategies, tasks, universes, workflows
 from .core.config import (
@@ -22,11 +24,16 @@ from .core.config import (
 from .core.errors import LeanWebError, error_payload, http_error_code
 from .core.request_context import reset_request_context, set_request_context
 from .db import DatabaseUnavailableError, init_db
-from .services.projects import consolidate_automatic_copies
-from .services.workflows import record_workflow_event
+from .observability.metrics import metrics_middleware
 from .services import api_idempotency
 from .services.backtest_trust import reconcile_backtest_trust
-from .observability.metrics import metrics_middleware
+from .services.projects import consolidate_automatic_copies
+from .services.workflows import record_workflow_event
+
+
+logger = logging.getLogger(__name__)
+_BROWSER_SESSION_COOKIE = "lean_local_session"
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 class SPAStaticFiles(StaticFiles):
@@ -40,7 +47,32 @@ class SPAStaticFiles(StaticFiles):
             raise
 
 
-app = FastAPI(title="Local LEAN Web Platform", redirect_slashes=False)
+def startup() -> None:
+    if os.environ.get("LEAN_STRICT_RUNTIME_V2", "0").lower() in {"1", "true", "yes", "on"}:
+        assert_runtime_v2_environment()
+    try:
+        init_db()
+        trust = reconcile_backtest_trust()
+        if trust["count"]:
+            logger.info("Backtest trust reconciliation: %s", trust["counts"])
+        consolidation = consolidate_automatic_copies()
+        if consolidation["merged"] or consolidation["renamed"]:
+            logger.info("Project copy consolidation: %s", consolidation)
+    except Exception as exc:
+        logger.warning("Database initialization failed at startup; continuing in degraded mode: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    startup()
+    yield
+
+
+app = FastAPI(
+    title="Local LEAN Web Platform",
+    redirect_slashes=False,
+    lifespan=lifespan,
+)
 app.middleware("http")(metrics_middleware)
 app.add_middleware(
     CORSMiddleware,
@@ -49,9 +81,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-logger = logging.getLogger(__name__)
-_BROWSER_SESSION_COOKIE = "lean_local_session"
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _browser_session_token() -> str:
@@ -92,7 +121,6 @@ async def idempotency_middleware(request: Request, call_next):
         digest=digest,
         trace_id=getattr(request.state, "trace_id", None),
     )
-
 
     if record.state == "conflict":
         return JSONResponse(
@@ -270,22 +298,6 @@ async def trace_workflow_middleware(request: Request, call_next):
         except Exception:
             logger.exception("Unable to persist workflow failure event")
     return response
-
-
-@app.on_event("startup")
-def startup() -> None:
-    if os.environ.get("LEAN_STRICT_RUNTIME_V2", "0").lower() in {"1", "true", "yes", "on"}:
-        assert_runtime_v2_environment()
-    try:
-        init_db()
-        trust = reconcile_backtest_trust()
-        if trust["count"]:
-            logger.info("Backtest trust reconciliation: %s", trust["counts"])
-        consolidation = consolidate_automatic_copies()
-        if consolidation["merged"] or consolidation["renamed"]:
-            logger.info("Project copy consolidation: %s", consolidation)
-    except Exception as exc:
-        logger.warning("Database initialization failed at startup; continuing in degraded mode: %s", exc)
 
 
 @app.exception_handler(LeanWebError)

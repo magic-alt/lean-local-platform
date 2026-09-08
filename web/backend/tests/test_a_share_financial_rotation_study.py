@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -40,8 +41,14 @@ def test_compound_resample_labels_last_actual_observation() -> None:
     panel = pd.DataFrame({"bank": [0.01, -0.02, 0.03, 0.01]}, index=index)
     panel.index.name = "trade_date"
 
-    weekly = study.compound_resample(panel, "weekly")
-    monthly = study.compound_resample(panel, "monthly")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error",
+            message=r".*generic.*timedelta.*deprecated.*",
+            category=DeprecationWarning,
+        )
+        weekly = study.compound_resample(panel, "weekly")
+        monthly = study.compound_resample(panel, "monthly")
 
     expected = np.prod(1.0 + panel["bank"]) - 1.0
     assert weekly.index[-1] == pd.Timestamp("2026-07-30")

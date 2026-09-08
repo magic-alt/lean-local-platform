@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import os
@@ -39,18 +40,16 @@ from .lean_engine.research import (
     run_detached_research,
     stop_container as stop_research_container,
 )
-from .runners.docker_runner import DockerRunner
 from .runners.base import ExecutionSpec, LeanPathLayout
+from .runners.docker_runner import DockerRunner
 from .runners.native_runner import NativeLeanBackend
 from .runners.runtime_registry import RuntimeRegistry
 
 
-app = FastAPI(title="Restricted LEAN Runner", docs_url=None, redoc_url=None)
 _native_backends: dict[str, NativeLeanBackend] = {}
 _execution_lock = threading.Lock()
 
 
-@app.on_event("startup")
 def recover_interrupted_runner_jobs() -> None:
     """Fail closed for jobs whose owning runner process no longer exists."""
     now = utc_now()
@@ -65,6 +64,20 @@ def recover_interrupted_runner_jobs() -> None:
             """,
             (now,),
         )
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    recover_interrupted_runner_jobs()
+    yield
+
+
+app = FastAPI(
+    title="Restricted LEAN Runner",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan,
+)
 
 
 class RunnerJob(BaseModel):
