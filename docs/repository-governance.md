@@ -32,10 +32,10 @@ Required rules:
 - require all review conversations to be resolved;
 - require `0` approving reviews while the repository has only one maintainer;
 - do not require CODEOWNERS approval until another eligible maintainer exists;
-- require status checks `Governance` and, after Dependency Graph is enabled and verified, `Dependency Review`;
+- require status checks `Governance`, `Required CI` and, after Dependency Graph is enabled and verified, `Dependency Review`;
 - require the branch to be up to date before merging.
 
-`Governance` is intentionally small and always-on. `Dependency Review` is the supply-chain merge gate after its server-side prerequisite is active. CodeQL is initially advisory rather than a required status check so its code-scanning rollout can stabilize independently and external fork PRs are not deadlocked.
+`Governance` is intentionally small and always-on. `Required CI` aggregates the mandatory runtime/test lanes. `Dependency Review` is the supply-chain merge gate after its server-side prerequisite is active. CodeQL is initially advisory rather than a required status check so its code-scanning rollout can stabilize independently and external fork PRs are not deadlocked.
 
 GitHub supports a pull-request requirement with zero mandatory approvals, which fits a single-maintainer repository while still preventing direct pushes through the ordinary path. Strict required status checks keep the topic branch current with the protected target before merge.
 
@@ -67,27 +67,32 @@ Linear history plus squash/rebase keeps the default branch easier to audit and m
 
 ## Security automation
 
-The repository uses:
+Dependency-update pull requests are intentionally **maintainer-driven**. The repository does not carry `.github/dependabot.yml`; adding that file would re-enable scheduled Dependabot version-update PRs and is rejected by the `Governance` check.
 
-- Dependabot for GitHub Actions, npm, Docker and Docker Compose version updates;
-- Dependabot security monitoring for Python while the hash-lock regeneration process remains manual;
-- Dependency Review on every pull request, with Dependency Graph as its server-side prerequisite;
-- CodeQL for Python and JavaScript/TypeScript on `main`, internal pull requests and a weekly schedule.
+The security baseline uses:
 
-Do not enable Renovate at the same time as Dependabot. Choose one dependency-update authority to avoid duplicate PRs and lockfile churn.
+- GitHub Dependency Graph for dependency inventory and SBOM visibility;
+- Dependency Review on every pull request, failing closed for newly introduced `high` or `critical` known vulnerabilities once Dependency Graph is available;
+- CodeQL for Python and JavaScript/TypeScript on `main`, internal pull requests and a weekly schedule;
+- manual, reviewed dependency upgrade PRs so runtime, lockfile and container-image changes can be tested as deliberate maintenance work.
+
+Dependabot security-update PR creation is also outside this baseline and should remain disabled in the repository's server-side security settings. Security alerts and Dependency Graph visibility can remain enabled without allowing automated dependency-update pull requests.
+
+Do not enable Renovate or another dependency-update bot in parallel. If automated dependency PRs are reintroduced later, update `.github/repository-policy.json`, this document and the governance validator together in a dedicated policy change.
 
 ## Applying the server-side settings
 
-The connected automation surface may not be allowed to mutate Rulesets or repository merge settings. When server-side writes are unavailable, apply the policy in GitHub in this order:
+The connected automation surface may not be allowed to mutate Rulesets or every security/repository setting. When server-side writes are unavailable, apply the policy in GitHub in this order:
 
 1. Enable **Dependency graph** under **Settings → Security → Advanced Security**.
-2. Verify one real `Dependency Review` run.
-3. Open **Settings → Rules → Rulesets**.
-4. Create the `Protect main` branch ruleset using the default branch target and the rules above.
-5. Create the `Protect release tags` tag ruleset for `refs/tags/v*`.
-6. Open **Settings → General → Pull Requests** and align merge methods, head-branch deletion and update-branch behavior with the table above.
-7. Apply the Description and Topics from `.github/repository-metadata.yml` if they are not already synchronized.
-8. Run the remote audit below.
+2. Keep **Dependabot security updates** disabled if the goal is no bot-created dependency PRs; security alerts may remain enabled.
+3. Verify one real `Dependency Review` run.
+4. Open **Settings → Rules → Rulesets**.
+5. Create the `Protect main` branch ruleset using the default branch target and the rules above.
+6. Create the `Protect release tags` tag ruleset for `refs/tags/v*`.
+7. Open **Settings → General → Pull Requests** and align merge methods, head-branch deletion and update-branch behavior with the table above.
+8. Apply the Description and Topics from `.github/repository-metadata.yml` if they are not already synchronized.
+9. Run the remote audit below.
 
 ```bash
 python scripts/audit_repository_settings.py --repository magic-alt/lean-local-platform

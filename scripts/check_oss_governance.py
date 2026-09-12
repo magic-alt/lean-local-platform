@@ -24,7 +24,6 @@ REQUIRED_FILES = (
     ".github/ISSUE_TEMPLATE/feature_request.yml",
     ".github/ISSUE_TEMPLATE/documentation.yml",
     ".github/ISSUE_TEMPLATE/config.yml",
-    ".github/dependabot.yml",
     ".github/release.yml",
     ".github/repository-metadata.yml",
     ".github/repository-policy.json",
@@ -182,8 +181,10 @@ def validate_repository_policy(errors: list[str]) -> None:
     if not tags:
         errors.append("repository policy is missing the Protect release tags ruleset")
     security = policy.get("security") or {}
-    if security.get("dependency_update_bot") != "dependabot":
-        errors.append("repository policy must use Dependabot as the single dependency-update bot")
+    if security.get("dependency_update_prs") != "manual":
+        errors.append("repository policy must keep dependency-update PR creation manual")
+    if security.get("dependabot_security_updates") is not False:
+        errors.append("repository policy must keep Dependabot security-update PRs disabled")
     if security.get("dependency_graph_required") is not True:
         errors.append("repository policy must require GitHub Dependency Graph")
     if security.get("dependency_review_required") is not True:
@@ -192,17 +193,16 @@ def validate_repository_policy(errors: list[str]) -> None:
 
 def validate_dependency_security(errors: list[str]) -> None:
     dependabot = ROOT / ".github/dependabot.yml"
-    if dependabot.is_file():
-        text = dependabot.read_text(encoding="utf-8")
-        for ecosystem in ("github-actions", "npm", "pip", "docker", "docker-compose"):
-            if f"package-ecosystem: {ecosystem}" not in text:
-                errors.append(f"Dependabot is missing ecosystem: {ecosystem}")
+    if dependabot.exists():
+        errors.append(
+            "scheduled Dependabot version-update PRs must remain disabled; remove .github/dependabot.yml"
+        )
 
     review = ROOT / ".github/workflows/dependency-review.yml"
     if review.is_file():
         text = review.read_text(encoding="utf-8")
         required_claims = (
-            "actions/dependency-review-action@v4",
+            "actions/dependency-review-action@v5",
             "fail-on-severity: high",
             "name: Dependency Review",
             "dependency-graph/sbom",

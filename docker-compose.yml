@@ -303,6 +303,7 @@ services:
       LEAN_DOCKER_READ_ONLY: "1"
     volumes:
       - .:/workspace:ro
+      - ./web/runtime:/workspace/web/runtime
       - ${LEAN_HOST_DATA_DIR:-${PWD}/data}:/workspace/data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     secrets: [lean_runner_token]

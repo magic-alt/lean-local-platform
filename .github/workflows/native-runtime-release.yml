@@ -22,11 +22,11 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: 3.11.11
       - name: Build pinned Windows runtime
@@ -93,7 +93,7 @@ jobs:
             --signature-url "$base/$($signature.Name)" `
             --sbom-url "$base/$($sbom.Name)" `
             --output "$releaseDir/lean-native.lock.generated.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-native-runtime-release-candidate
           path: |

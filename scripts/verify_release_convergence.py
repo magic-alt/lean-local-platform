@@ -31,6 +31,16 @@ SERVICES = (
     "lean-runner",
     "beat",
 )
+DIAGNOSTIC_SERVICES = (
+    "lean-runner",
+    "mlflow",
+    "api",
+    "mlflow-db-upgrade",
+    "migration",
+    "postgres-init",
+    "postgres",
+    "rabbitmq",
+)
 REQUIRED_PATHS = {
     "/api/data/releases",
     "/api/data/capabilities",
@@ -236,25 +246,61 @@ def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
     return env, "http://127.0.0.1:18081"
 
 
-def _compose_failure_diagnostics() -> dict[str, Any]:
-    ps = _run("docker", "compose", "--profile", "app", "ps", "-a")
+def _service_failure_diagnostics(service: str) -> dict[str, Any]:
+    located = _run("docker", "compose", "ps", "-q", service)
+    container_id = located.stdout.strip()
     logs = _run(
         "docker",
         "compose",
-        "--profile",
-        "app",
         "logs",
         "--no-color",
         "--tail",
-        "300",
-        "migration",
-        "postgres-init",
-        "postgres",
+        "200",
+        service,
         timeout=120,
     )
+    result: dict[str, Any] = {
+        "containerId": container_id or None,
+        "logs": ((logs.stdout or "") + ("\n" + logs.stderr if logs.stderr else "")).strip()[-16000:],
+    }
+    if located.returncode or not container_id:
+        result["inspectError"] = located.stderr.strip() or "container not found"
+        return result
+
+    inspected = _run("docker", "inspect", container_id, timeout=60)
+    if inspected.returncode:
+        result["inspectError"] = inspected.stderr.strip() or "docker inspect failed"
+        return result
+    try:
+        payload = json.loads(inspected.stdout)
+        container = payload[0] if payload else {}
+        state = container.get("State") or {}
+        health = state.get("Health") or {}
+        result["state"] = {
+            "status": state.get("Status"),
+            "running": state.get("Running"),
+            "restarting": state.get("Restarting"),
+            "exitCode": state.get("ExitCode"),
+            "error": state.get("Error"),
+            "startedAt": state.get("StartedAt"),
+            "finishedAt": state.get("FinishedAt"),
+            "restartCount": container.get("RestartCount"),
+            "healthStatus": health.get("Status"),
+            "healthLog": (health.get("Log") or [])[-5:],
+        }
+    except (json.JSONDecodeError, TypeError, IndexError) as exc:
+        result["inspectError"] = f"unable to parse docker inspect output: {exc}"
+    return result
+
+
+def _compose_failure_diagnostics() -> dict[str, Any]:
+    ps = _run("docker", "compose", "--profile", "app", "ps", "-a")
     return {
         "composePs": ((ps.stdout or "") + ("\n" + ps.stderr if ps.stderr else "")).strip()[-12000:],
-        "migrationLogs": ((logs.stdout or "") + ("\n" + logs.stderr if logs.stderr else "")).strip()[-24000:],
+        "serviceDiagnostics": {
+            service: _service_failure_diagnostics(service)
+            for service in DIAGNOSTIC_SERVICES
+        },
     }
 
 
