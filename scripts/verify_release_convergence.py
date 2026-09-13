@@ -208,6 +208,38 @@ def _ensure_workspace_data_mountpoint() -> tuple[Path, bool]:
     return path, True
 
 
+def _ensure_runtime_mountpoints() -> None:
+    """Create writable runtime leaves before the restricted runner starts.
+
+    The managed convergence stack bind-mounts ``web/runtime`` into several
+    containers. On hosted Docker runners, a service that wins the startup race
+    can otherwise be the first process to create one of these leaves and fail
+    with EACCES under the restricted/read-only runner profile. Pre-creating only
+    the mutable runtime leaves makes the convergence setup deterministic without
+    changing the permissions of an existing operator runtime or its secrets.
+    """
+
+    runtime = ROOT / "web" / "runtime"
+    for relative in (
+        "runs",
+        "uploads",
+        "projects",
+        "research",
+        "object-store",
+        "reports",
+    ):
+        path = runtime / relative
+        if path.exists():
+            if not path.is_dir():
+                raise RuntimeError(f"Compose runtime mountpoint is not a directory: {path}")
+            continue
+        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.chmod(0o777)
+        except OSError:
+            pass
+
+
 def _managed_environment(data_dir: Path | None) -> tuple[dict[str, str], str]:
     sha = _git_sha()
     resolved_data = (
@@ -317,6 +349,7 @@ def verify_managed_stack(data_dir: Path | None) -> dict[str, Any]:
 
     try:
         data_mountpoint, created_data_mountpoint = _ensure_workspace_data_mountpoint()
+        _ensure_runtime_mountpoints()
         for name in ("api_token", "runner_token"):
             path = secrets_root / name
             if _ensure_compose_secret(path):
