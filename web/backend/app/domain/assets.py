@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..core.config import DATA_DIR, REPO_ROOT
 from ..core.errors import LeanWebError
@@ -17,6 +19,7 @@ class AssetDomainError(LeanWebError, ValueError):
 ASSET_CLASSES = {"equity", "crypto", "crypto_future", "future"}
 RESOLUTIONS = {"daily", "hour", "minute", "second", "tick"}
 DATA_TYPES = {"trade", "quote", "openinterest", "open_interest"}
+_DATE_TOKEN = re.compile(r"(?<!\d)(\d{8})(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -250,11 +253,72 @@ def parse_lean_zip_price_series(
     ]
 
 
+def _request_timezone(request: AssetRequest):
+    if request.asset_class in {"crypto", "crypto_future"}:
+        return timezone.utc
+    if request.asset_class == "equity":
+        zones = {
+            "china": "Asia/Shanghai",
+            "hongkong": "Asia/Hong_Kong",
+            "usa": "America/New_York",
+        }
+        name = zones.get(request.venue)
+        if name:
+            return ZoneInfo(name)
+    return timezone.utc
+
+
+def _archive_trade_date(path: Path, member: str) -> date | None:
+    for candidate in (member, path.name, path.parent.name):
+        match = _DATE_TOKEN.search(candidate)
+        if match:
+            return datetime.strptime(match.group(1), "%Y%m%d").date()
+    return None
+
+
+def _parse_bar_timestamp(raw_value: str, *, request: AssetRequest, path: Path, member: str) -> datetime:
+    value = raw_value.strip()
+    tz = _request_timezone(request)
+
+    for fmt in ("%Y%m%d %H:%M:%S.%f", "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M"):
+        try:
+            local = datetime.strptime(value, fmt).replace(tzinfo=tz)
+            return local.astimezone(timezone.utc)
+        except ValueError:
+            pass
+
+    try:
+        trading_date = datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        trading_date = None
+    if trading_date is not None:
+        # Daily bars represent a trading date rather than a globally meaningful
+        # UTC instant, so keep the exchange-local offset instead of inventing a
+        # fixed UTC clock time.
+        return datetime.combine(trading_date, time.min, tzinfo=tz)
+
+    if value.isdigit() and request.resolution in {"minute", "second"}:
+        trading_date = _archive_trade_date(path, member)
+        if trading_date is None:
+            raise ValueError("intraday LEAN offset is missing its archive trading date")
+        local = datetime.combine(trading_date, time.min, tzinfo=tz) + timedelta(milliseconds=int(value))
+        return local.astimezone(timezone.utc)
+
+    raise ValueError(f"unsupported LEAN timestamp: {raw_value!r}")
+
+
 def parse_lean_zip_ohlcv_series(
     request: AssetRequest,
     start_date,
     end_date,
 ) -> list[dict[str, Any]]:
+    if request.data_type != "trade":
+        raise AssetDomainError(
+            f"LEAN OHLCV preview does not support dataType={request.data_type!r}; use a typed codec"
+        )
+    if request.resolution == "tick":
+        raise AssetDomainError("LEAN OHLCV preview does not support tick rows; use a typed tick codec")
+
     points_by_time: dict[str, dict[str, Any]] = {}
     scale = 10000 if request.asset_class == "equity" else 1
     for path in lean_data_paths(request):
@@ -272,7 +336,10 @@ def parse_lean_zip_ohlcv_series(
                             if len(fields) < 5:
                                 continue
                             try:
-                                item_date = datetime.strptime(fields[0].split()[0], "%Y%m%d").date()
+                                timestamp = _parse_bar_timestamp(
+                                    fields[0], request=request, path=path, member=member
+                                )
+                                item_date = timestamp.astimezone(_request_timezone(request)).date()
                                 open_price = float(fields[1]) / scale
                                 high = float(fields[2]) / scale
                                 low = float(fields[3]) / scale
@@ -284,7 +351,6 @@ def parse_lean_zip_ohlcv_series(
                                 continue
                             if end_date and item_date > end_date:
                                 continue
-                            timestamp = datetime(item_date.year, item_date.month, item_date.day, 21, tzinfo=timezone.utc)
                             time_key = timestamp.isoformat()
                             points_by_time[time_key] = {
                                 "time": time_key,
