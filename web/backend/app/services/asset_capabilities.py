@@ -19,6 +19,48 @@ CAPABILITY_SCOPES = (
     ("equity", "china", "china", "tick", "trade"),
 )
 
+# This is an explicit product-support boundary, not a data-discovery rule.
+# Presence of Parquet rows alone must never promote a scope to executable.
+# Additional scopes require their own adapter/rule/certification work before
+# they are added here.
+EXECUTION_ENABLED_SCOPES = frozenset(
+    {
+        ("equity", "china", "china", "daily", "trade"),
+    }
+)
+
+
+def _scope_key(
+    asset_class: str,
+    market: str,
+    venue: str,
+    resolution: str,
+    data_type: str,
+) -> tuple[str, str, str, str, str]:
+    return (
+        asset_class.lower(),
+        market.lower(),
+        venue.lower(),
+        resolution.lower(),
+        data_type.lower(),
+    )
+
+
+def _available_scope_state(
+    *,
+    asset_class: str,
+    market: str,
+    venue: str,
+    resolution: str,
+    data_type: str,
+) -> tuple[str, str | None]:
+    key = _scope_key(asset_class, market, venue, resolution, data_type)
+    if key in EXECUTION_ENABLED_SCOPES:
+        return "executable", None
+    # Preserve the existing public reason code while preventing data presence
+    # from granting execution admission.
+    return "data_ready", "execution_adapter_not_certified"
+
 
 def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, int]:
     if asset_class == "future":
@@ -50,7 +92,13 @@ def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, in
 
 
 def _local_lake_capabilities() -> list[dict[str, Any]]:
-    """Compute executable data scopes straight from the mounted Parquet lake."""
+    """Compute data readiness from the mounted Parquet lake.
+
+    Execution admission is intentionally narrower than data readiness. The
+    allowlist above is the explicit current product boundary; unsupported
+    resolutions and asset classes remain visible as data-ready instead of being
+    promoted merely because files exist.
+    """
     now = utc_now()
     items: list[dict[str, Any]] = []
     for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
@@ -60,14 +108,16 @@ def _local_lake_capabilities() -> list[dict[str, Any]]:
             venue=venue, resolution=resolution, data_type=data_type,
         )
         available = bool(scopes)
-        state = (
-            "executable" if available and asset_class in {"equity", "index"}
-            else "data_ready" if available
-            else "unavailable"
-        )
-        reason = None if state == "executable" else (
-            "execution_adapter_not_certified" if available else "local_parquet_scope_missing"
-        )
+        if available:
+            state, reason = _available_scope_state(
+                asset_class=asset_class,
+                market=market,
+                venue=venue,
+                resolution=resolution,
+                data_type=data_type,
+            )
+        else:
+            state, reason = "unavailable", "local_parquet_scope_missing"
         items.append(
             {
                 "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"local-lake:{asset_class}:{market}:{venue}:{resolution}:{data_type}")),
@@ -86,6 +136,7 @@ def _local_lake_capabilities() -> list[dict[str, Any]]:
                     "localOnly": True,
                     "scopeAvailable": available,
                     "rowCountExact": False,
+                    "executionEnabled": state == "executable",
                 },
                 "refreshed_at": now,
             }
@@ -103,23 +154,25 @@ def refresh_capabilities() -> list[dict[str, Any]]:
     with db() as connection:
         for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
             metadata_count, row_count = _counts(connection, asset_class, resolution)
-            state = (
-                "executable" if row_count > 0 and asset_class in {"equity", "index"}
-                else "data_ready" if row_count > 0
-                else "metadata_only" if metadata_count > 0
-                else "unavailable"
-            )
-            reason = None if state == "executable" else (
-                "execution_adapter_not_certified" if row_count > 0
-                else
-                "canonical_rows_missing" if metadata_count > 0 else "metadata_and_canonical_rows_missing"
-            )
+            if row_count > 0:
+                state, reason = _available_scope_state(
+                    asset_class=asset_class,
+                    market=market,
+                    venue=venue,
+                    resolution=resolution,
+                    data_type=data_type,
+                )
+            elif metadata_count > 0:
+                state, reason = "metadata_only", "canonical_rows_missing"
+            else:
+                state, reason = "unavailable", "metadata_and_canonical_rows_missing"
             key = f"{asset_class}:{market}:{venue}:{resolution}:{data_type}"
             evidence = {
                 "schemaVersion": 1,
                 "metadataCount": metadata_count,
                 "canonicalRowCount": row_count,
                 "derivedFromParquetLake": True,
+                "executionEnabled": state == "executable",
             }
             connection.execute(
                 """
