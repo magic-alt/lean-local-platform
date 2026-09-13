@@ -37,7 +37,7 @@ def test_data_ready_scope_does_not_become_executable_from_presence_alone(
         venue="china",
         resolution=resolution,
         data_type="trade",
-    ) == ("data_ready", "execution_scope_not_enabled")
+    ) == ("data_ready", "execution_adapter_not_certified")
 
 
 def test_require_executable_scope_rejects_minute_data_ready_scope(monkeypatch):
@@ -54,14 +54,14 @@ def test_require_executable_scope_rejects_minute_data_ready_scope(monkeypatch):
                 "state": "data_ready",
                 "metadata_count": 1,
                 "canonical_row_count": 10,
-                "executable_reason": "execution_scope_not_enabled",
+                "executable_reason": "execution_adapter_not_certified",
             }
         ],
     )
 
     with pytest.raises(
         ValueError,
-        match="asset_capability_not_executable:equity:minute:data_ready:execution_scope_not_enabled",
+        match="asset_capability_not_executable:equity:minute:data_ready:execution_adapter_not_certified",
     ):
         asset_capabilities.require_executable_scope(
             {
