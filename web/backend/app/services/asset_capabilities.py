@@ -57,7 +57,9 @@ def _available_scope_state(
     key = _scope_key(asset_class, market, venue, resolution, data_type)
     if key in EXECUTION_ENABLED_SCOPES:
         return "executable", None
-    return "data_ready", "execution_scope_not_enabled"
+    # Preserve the existing public reason code while preventing data presence
+    # from granting execution admission.
+    return "data_ready", "execution_adapter_not_certified"
 
 
 def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, int]:
