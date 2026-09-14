@@ -67,7 +67,7 @@ celery_app = Celery(
     "lean_web",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["app.tasks.worker"],
+    include=["app.tasks.paper_cycle_dispatch", "app.tasks.worker"],
 )
 celery_app.conf.update(
     task_track_started=True,
@@ -111,6 +111,7 @@ celery_app.conf.update(
         "lean_web.reconcile_domain_runs": {"queue": "default"},
         "lean_web.run_paper_execution_cycle": {"queue": "default"},
         "lean_web.finalize_paper_execution_cycle": {"queue": "default"},
+        "lean_web.recover_stale_paper_cycle_dispatches": {"queue": "default"},
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
     },
     worker_prefetch_multiplier=1,
@@ -179,6 +180,10 @@ celery_app.conf.update(
         },
         "recover-orphaned-paper-cycles": {
             "task": "lean_web.recover_orphaned_paper_cycles",
+            "schedule": 60.0,
+        },
+        "recover-stale-paper-cycle-dispatches": {
+            "task": "lean_web.recover_stale_paper_cycle_dispatches",
             "schedule": 60.0,
         },
         "deliver-paper-cycle-notifications": {
