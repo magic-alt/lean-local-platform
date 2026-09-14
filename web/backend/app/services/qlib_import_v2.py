@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
 from typing import Any, Mapping
@@ -14,6 +15,13 @@ SCHEMA_VERSION = "2.0"
 IMPORT_TYPE = "QLIB_RESEARCH_BUNDLE"
 _DATA_RELEASE_ID = re.compile(r"^ds_[0-9a-f]{64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_EXPECTED_ARTIFACT_TYPES = (
+    "MODEL_RELEASE",
+    "STRATEGY_POLICY",
+    "SIGNAL_SNAPSHOT",
+    "TARGET_PORTFOLIO",
+    "VALIDATION_RESULT",
+)
 
 
 def _canonical_json(value: object) -> str:
@@ -34,6 +42,31 @@ def _required_sha256(item: Mapping[str, Any], key: str, *, owner: str) -> str:
     return value
 
 
+def _normalize_signals(payload: object) -> list[dict[str, Any]]:
+    envelope = payload if isinstance(payload, Mapping) else {}
+    raw_signals = envelope.get("signals") if isinstance(envelope.get("signals"), list) else []
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for raw in raw_signals:
+        item = raw if isinstance(raw, Mapping) else {}
+        instrument = str(item.get("instrument") or "").strip().upper()
+        if len(instrument) != 8 or instrument[:2] not in {"SH", "SZ", "BJ"} or not instrument[2:].isdigit():
+            raise ValueError(f"Invalid Qlib signal instrument: {instrument}")
+        if instrument in seen:
+            raise ValueError(f"Duplicate Qlib signal instrument: {instrument}")
+        seen.add(instrument)
+        score = item.get("score")
+        if score is not None:
+            try:
+                finite_score = math.isfinite(float(score))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid signal score for {instrument}") from exc
+            if not finite_score:
+                raise ValueError(f"Invalid signal score for {instrument}")
+        result.append(dict(item))
+    return result
+
+
 def _normalize_targets(payload: object) -> list[dict[str, Any]]:
     envelope = payload if isinstance(payload, Mapping) else {}
     raw_targets = envelope.get("targets") if isinstance(envelope.get("targets"), list) else []
@@ -51,12 +84,23 @@ def _normalize_targets(payload: object) -> list[dict[str, Any]]:
             raise ValueError(f"Duplicate Qlib instrument: {instrument}")
         seen.add(instrument)
         raw_weight = item.get("targetWeight", item.get("target_weight"))
-        weight = float(raw_weight)
-        if weight < 0 or weight > 1:
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid target weight for {instrument}") from exc
+        if not math.isfinite(weight) or weight < 0 or weight > 1:
             raise ValueError(f"Invalid target weight for {instrument}")
+        score = item.get("score")
+        if score is not None:
+            try:
+                finite_score = math.isfinite(float(score))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid target score for {instrument}") from exc
+            if not finite_score:
+                raise ValueError(f"Invalid target score for {instrument}")
         gross += weight
-        result.append({"instrument": instrument, "targetWeight": weight, "score": item.get("score")})
-    if gross > 1.000001:
+        result.append({"instrument": instrument, "targetWeight": weight, "score": score})
+    if not math.isfinite(gross) or gross > 1.000001:
         raise ValueError("Gross target exposure exceeds 1.0")
     return sorted(result, key=lambda item: item["instrument"])
 
@@ -70,6 +114,80 @@ def _one_optional_binding(values: list[str | None], *, name: str) -> str | None:
     if len(unique) != 1:
         raise ValueError(f"All Qlib v2 artifacts must reference one {name}")
     return next(iter(unique))
+
+
+def _expected_artifact_id(item: Mapping[str, Any]) -> str:
+    artifact_type = str(item["artifactType"])
+    identity = {
+        "artifactType": artifact_type,
+        "promotionStatus": item["promotionStatus"],
+        "dataReleaseId": item["dataReleaseId"],
+        "universeReleaseId": item.get("universeReleaseId"),
+        "sourceManifestSha256": str((item.get("metadata") or {}).get("sourceManifestSha256") or "") or None,
+        "payloadSha256": item["payloadSha256"],
+        "parentArtifactIds": list(item["parentArtifactIds"]),
+        "modelReleaseId": None if artifact_type == "MODEL_RELEASE" else item.get("modelReleaseId"),
+        "strategyPolicyId": None
+        if artifact_type in {"MODEL_RELEASE", "STRATEGY_POLICY"}
+        else item.get("strategyPolicyId"),
+    }
+    return "art_" + hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+
+
+def _validate_frozen_graph(artifacts: list[dict[str, Any]], roots: list[str]) -> str:
+    by_type: dict[str, dict[str, Any]] = {}
+    for item in artifacts:
+        artifact_type = str(item["artifactType"])
+        if artifact_type in by_type:
+            raise ValueError(f"Qlib v2 import requires exactly one {artifact_type} artifact")
+        by_type[artifact_type] = item
+    missing = [kind for kind in _EXPECTED_ARTIFACT_TYPES if kind not in by_type]
+    unexpected = sorted(set(by_type) - set(_EXPECTED_ARTIFACT_TYPES))
+    if missing or unexpected or len(artifacts) != len(_EXPECTED_ARTIFACT_TYPES):
+        raise ValueError(
+            "Qlib v2 import must contain exactly the frozen five-artifact graph: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    model = by_type["MODEL_RELEASE"]
+    policy = by_type["STRATEGY_POLICY"]
+    signal = by_type["SIGNAL_SNAPSHOT"]
+    target = by_type["TARGET_PORTFOLIO"]
+    validation = by_type["VALIDATION_RESULT"]
+    model_id = str(model["artifactId"])
+    policy_id = str(policy["artifactId"])
+    signal_id = str(signal["artifactId"])
+    target_id = str(target["artifactId"])
+    validation_id = str(validation["artifactId"])
+    expected_parents = {
+        model_id: [],
+        policy_id: [model_id],
+        signal_id: [model_id, policy_id],
+        target_id: [signal_id, policy_id],
+        validation_id: [target_id],
+    }
+    for item in artifacts:
+        artifact_id = str(item["artifactId"])
+        if item["parentArtifactIds"] != expected_parents[artifact_id]:
+            raise ValueError(f"Artifact parent chain mismatch: {artifact_id}; expected {expected_parents[artifact_id]}")
+    if roots != [validation_id]:
+        raise ValueError("Qlib v2 rootArtifactIds must contain only VALIDATION_RESULT")
+    if model.get("modelReleaseId") != model_id:
+        raise ValueError("MODEL_RELEASE modelReleaseId must equal artifactId")
+    if policy.get("modelReleaseId") != model_id:
+        raise ValueError("STRATEGY_POLICY modelReleaseId must equal MODEL_RELEASE")
+    if policy.get("strategyPolicyId") != policy_id:
+        raise ValueError("STRATEGY_POLICY strategyPolicyId must equal artifactId")
+    for item in (signal, target, validation):
+        if item.get("modelReleaseId") != model_id:
+            raise ValueError(f"Artifact modelReleaseId mismatch: {item['artifactId']}")
+        if item.get("strategyPolicyId") != policy_id:
+            raise ValueError(f"Artifact strategyPolicyId mismatch: {item['artifactId']}")
+    for item in artifacts:
+        expected_id = _expected_artifact_id(item)
+        if item["artifactId"] != expected_id:
+            raise ValueError(f"Artifact identity hash mismatch: {item['artifactId']}; expected {expected_id}")
+    return model_id
 
 
 def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -145,7 +263,6 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             model_artifacts.append(item)
             if item.get("modelReleaseId") not in {None, "", artifact_id}:
                 raise ValueError("MODEL_RELEASE modelReleaseId must equal artifactId when supplied")
-            item["modelReleaseId"] = artifact_id
         normalized.append(item)
     if len(data_release_ids) != 1:
         raise ValueError("All Qlib v2 artifacts must reference one DataRelease")
@@ -156,16 +273,18 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     unknown_roots = sorted(set(map(str, roots)) - ids)
     if unknown_roots:
         raise ValueError(f"Unknown rootArtifactIds: {unknown_roots}")
-    unknown_parents = sorted(
-        {parent for item in normalized for parent in item["parentArtifactIds"] if parent not in ids}
-    )
+    unknown_parents = sorted({parent for item in normalized for parent in item["parentArtifactIds"] if parent not in ids})
     if unknown_parents:
         raise ValueError(f"Artifact parents must be included in the import bundle: {unknown_parents}")
-    model_release_id = str(model_artifacts[0]["artifactId"])
-    for item in normalized:
-        if item["artifactType"] not in {"MODEL_RELEASE", "STRATEGY_POLICY"}:
-            if str(item.get("modelReleaseId") or "") != model_release_id:
-                raise ValueError(f"Artifact modelReleaseId mismatch: {item['artifactId']}")
+    normalized_roots = [str(item) for item in roots]
+    if source_manifest_sha256 is not None:
+        model_release_id = _validate_frozen_graph(normalized, normalized_roots)
+    else:
+        model_release_id = str(model_artifacts[0]["artifactId"])
+        for item in normalized:
+            if item["artifactType"] not in {"MODEL_RELEASE", "STRATEGY_POLICY"}:
+                if str(item.get("modelReleaseId") or "") != model_release_id:
+                    raise ValueError(f"Artifact modelReleaseId mismatch: {item['artifactId']}")
     return {
         "externalRunId": external_run_id,
         "runKind": run_kind,
@@ -173,7 +292,7 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "universeReleaseId": universe_release_id,
         "sourceManifestSha256": source_manifest_sha256,
         "modelReleaseId": model_release_id,
-        "rootArtifactIds": [str(item) for item in roots],
+        "rootArtifactIds": normalized_roots,
         "artifacts": normalized,
     }
 
@@ -190,7 +309,7 @@ def _verified_payloads(artifacts: list[dict[str, Any]]) -> tuple[dict[str, objec
         if actual != payload_ref["sha256"]:
             raise ValueError(f"Artifact checksum mismatch: {key}")
         object_keys.append(key)
-        if item["artifactType"] in {"TARGET_PORTFOLIO", "VALIDATION_RESULT"}:
+        if item["artifactType"] in {"SIGNAL_SNAPSHOT", "TARGET_PORTFOLIO", "VALIDATION_RESULT"}:
             try:
                 payloads[item["artifactId"]] = json.loads(raw)
             except json.JSONDecodeError as exc:
@@ -265,6 +384,9 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
     artifacts = validated["artifacts"]
     payloads, object_keys = _verified_payloads(artifacts)
     _validate_source_manifest_binding(artifacts, payloads, validated["sourceManifestSha256"])
+    for item in artifacts:
+        if item["artifactType"] == "SIGNAL_SNAPSHOT":
+            _normalize_signals(payloads[item["artifactId"]])
     target_items = [item for item in artifacts if item["artifactType"] == "TARGET_PORTFOLIO"]
     target_projections: list[tuple[dict[str, Any], list[dict[str, Any]], str, float]] = []
     for item in target_items:
@@ -283,10 +405,6 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(raw_validation, Mapping):
             metrics = dict(raw_validation.get("metrics") or {})
 
-    # Complete the consumer-owned graph/collision preflight before creating a
-    # research run, registry row, promotion event, dispatchable snapshot, or
-    # any later platform-owned execution/ledger state. The registry repeats
-    # the same preflight inside the write transaction to close the race window.
     with db() as connection:
         artifact_registry.preflight_qlib_artifacts(connection, artifacts)
 
@@ -321,7 +439,6 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
     scope = {"assetClass": "equity", "market": "china", "universe": payload.get("universe")}
     snapshot_id: str | None = None
     with db() as connection:
-        # Re-run preflight in the same transaction immediately before writes.
         artifact_registry.preflight_qlib_artifacts(connection, artifacts)
         connection.execute(
             """insert into research_runs
