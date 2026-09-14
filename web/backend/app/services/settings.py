@@ -15,6 +15,14 @@ from ..core.config import (
 from ..db import db, json_dump, utc_now
 
 
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+_LEGACY_DYNAMIC_END_SENTINEL = "2026-07-13"
+
+
+def _current_shanghai_date() -> str:
+    return datetime.now(_SHANGHAI_TZ).date().isoformat()
+
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "defaultAssetClass": "equity",
     "defaultMarket": "china",
@@ -26,7 +34,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "defaultStrategyTemplate": "ema_cross",
     "defaultCash": 300000,
     "defaultStart": "2024-01-01",
-    "defaultEnd": datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat(),
+    # Kept here for the public/default-settings shape and allowed-key set. The
+    # effective default is resolved in get_settings() so a long-lived process
+    # cannot freeze yesterday's Shanghai calendar date at module import time.
+    "defaultEnd": _current_shanghai_date(),
     "dockerImage": DEFAULT_DOCKER_IMAGE,
     "researchImage": DEFAULT_RESEARCH_IMAGE,
     "chartPointLimit": 1000000,
@@ -41,6 +52,7 @@ ALLOWED_KEYS = set(DEFAULT_SETTINGS)
 
 def get_settings() -> dict[str, Any]:
     values = dict(DEFAULT_SETTINGS)
+    values["defaultEnd"] = _current_shanghai_date()
     with db() as connection:
         rows = connection.execute("select key, value_json from settings").fetchall()
     for row in rows:
@@ -49,8 +61,8 @@ def get_settings() -> dict[str, Any]:
             import json
 
             values[key] = json.loads(row["value_json"])
-    if values.get("defaultEnd") == "2026-07-13":
-        values["defaultEnd"] = DEFAULT_SETTINGS["defaultEnd"]
+    if values.get("defaultEnd") == _LEGACY_DYNAMIC_END_SENTINEL:
+        values["defaultEnd"] = _current_shanghai_date()
     values["deploymentMode"] = LEAN_DEPLOYMENT_MODE
     values["deploymentProfile"] = LEAN_DEPLOYMENT_PROFILE
     values["executionBackend"] = LEAN_EXECUTION_BACKEND
