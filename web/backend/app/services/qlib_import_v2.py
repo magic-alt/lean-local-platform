@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from typing import Any, Mapping
 
@@ -11,6 +12,8 @@ from . import artifact_registry, object_store
 
 SCHEMA_VERSION = "2.0"
 IMPORT_TYPE = "QLIB_RESEARCH_BUNDLE"
+_DATA_RELEASE_ID = re.compile(r"^ds_[0-9a-f]{64}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _canonical_json(value: object) -> str:
@@ -21,6 +24,13 @@ def _required_string(item: Mapping[str, Any], key: str, *, owner: str) -> str:
     value = str(item.get(key) or "").strip()
     if not value:
         raise ValueError(f"{owner}.{key} is required")
+    return value
+
+
+def _required_sha256(item: Mapping[str, Any], key: str, *, owner: str) -> str:
+    value = _required_string(item, key, owner=owner)
+    if not _SHA256.fullmatch(value):
+        raise ValueError(f"{owner}.{key} must be 64 lowercase hex characters")
     return value
 
 
@@ -51,6 +61,17 @@ def _normalize_targets(payload: object) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: item["instrument"])
 
 
+def _one_optional_binding(values: list[str | None], *, name: str) -> str | None:
+    if not any(values):
+        return None
+    if not all(values):
+        raise ValueError(f"All Qlib v2 artifacts must carry the same {name} when it is declared")
+    unique = set(values)
+    if len(unique) != 1:
+        raise ValueError(f"All Qlib v2 artifacts must reference one {name}")
+    return next(iter(unique))
+
+
 def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if str(payload.get("schemaVersion") or "") != SCHEMA_VERSION:
         raise ValueError("Unsupported Qlib import schemaVersion")
@@ -64,6 +85,8 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Qlib v2 import requires artifacts and rootArtifactIds")
     ids: set[str] = set()
     data_release_ids: set[str] = set()
+    universe_release_ids: list[str | None] = []
+    source_manifest_sha256s: list[str | None] = []
     model_artifacts: list[dict[str, Any]] = []
     normalized: list[dict[str, Any]] = []
     for raw in artifacts:
@@ -83,23 +106,36 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         if status not in artifact_registry.QLIB_STATUSES:
             raise ValueError(f"Qlib cannot publish promotion status: {status}")
         data_release_id = _required_string(item, "dataReleaseId", owner=artifact_id)
-        if not data_release_id.startswith("ds_") or len(data_release_id) != 67:
-            raise ValueError(f"Invalid dataReleaseId: {data_release_id}")
+        if not _DATA_RELEASE_ID.fullmatch(data_release_id):
+            raise ValueError(f"Invalid dataReleaseId: {data_release_id}; expected ds_<64 lowercase hex>")
         data_release_ids.add(data_release_id)
-        for field in ("gitCommit", "containerDigest", "asOfTime", "timezone", "currency", "payloadSha256"):
+        universe_release_id = str(item.get("universeReleaseId") or "").strip() or None
+        if universe_release_id and any(character.isspace() for character in universe_release_id):
+            raise ValueError(f"Invalid universeReleaseId: {artifact_id}")
+        universe_release_ids.append(universe_release_id)
+        for field in ("gitCommit", "containerDigest", "asOfTime", "timezone", "currency"):
             _required_string(item, field, owner=artifact_id)
+        payload_sha = _required_sha256(item, "payloadSha256", owner=artifact_id)
         payload_ref = item.get("payloadRef") if isinstance(item.get("payloadRef"), Mapping) else {}
         object_key = _required_string(payload_ref, "objectKey", owner=f"{artifact_id}.payloadRef")
-        ref_sha = _required_string(payload_ref, "sha256", owner=f"{artifact_id}.payloadRef").lower()
-        if len(ref_sha) != 64 or ref_sha != str(item["payloadSha256"]).lower():
+        ref_sha = _required_sha256(payload_ref, "sha256", owner=f"{artifact_id}.payloadRef")
+        if ref_sha != payload_sha:
             raise ValueError(f"Artifact payload hash mismatch: {artifact_id}")
         _required_string(payload_ref, "mediaType", owner=f"{artifact_id}.payloadRef")
+        item["payloadSha256"] = payload_sha
         item["payloadRef"] = {**payload_ref, "objectKey": object_key, "sha256": ref_sha}
         parents = item.get("parentArtifactIds") if isinstance(item.get("parentArtifactIds"), list) else []
         if len(parents) != len(set(map(str, parents))):
             raise ValueError(f"Duplicate artifact parent: {artifact_id}")
         item["parentArtifactIds"] = [str(parent) for parent in parents]
-        item["metadata"] = dict(item.get("metadata") or {})
+        raw_metadata = item.get("metadata")
+        if raw_metadata is not None and not isinstance(raw_metadata, Mapping):
+            raise ValueError(f"Artifact metadata must be an object: {artifact_id}")
+        item["metadata"] = dict(raw_metadata or {})
+        source_manifest_sha256 = str(item["metadata"].get("sourceManifestSha256") or "").strip() or None
+        if source_manifest_sha256 and not _SHA256.fullmatch(source_manifest_sha256):
+            raise ValueError(f"Invalid sourceManifestSha256: {artifact_id}")
+        source_manifest_sha256s.append(source_manifest_sha256)
         if artifact_type in {"SIGNAL_SNAPSHOT", "TARGET_PORTFOLIO"}:
             signal_date = _required_string(item, "signalDate", owner=artifact_id)
             trade_date = _required_string(item, "tradeDate", owner=artifact_id)
@@ -113,6 +149,8 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         normalized.append(item)
     if len(data_release_ids) != 1:
         raise ValueError("All Qlib v2 artifacts must reference one DataRelease")
+    universe_release_id = _one_optional_binding(universe_release_ids, name="UniverseRelease")
+    source_manifest_sha256 = _one_optional_binding(source_manifest_sha256s, name="sourceManifestSha256")
     if len(model_artifacts) != 1:
         raise ValueError("Qlib v2 import requires exactly one MODEL_RELEASE")
     unknown_roots = sorted(set(map(str, roots)) - ids)
@@ -132,6 +170,8 @@ def validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "externalRunId": external_run_id,
         "runKind": run_kind,
         "dataReleaseId": next(iter(data_release_ids)),
+        "universeReleaseId": universe_release_id,
+        "sourceManifestSha256": source_manifest_sha256,
         "modelReleaseId": model_release_id,
         "rootArtifactIds": [str(item) for item in roots],
         "artifacts": normalized,
@@ -158,6 +198,47 @@ def _verified_payloads(artifacts: list[dict[str, Any]]) -> tuple[dict[str, objec
     return payloads, object_keys
 
 
+def _validate_source_manifest_binding(
+    artifacts: list[dict[str, Any]],
+    payloads: Mapping[str, object],
+    expected_sha256: str | None,
+) -> None:
+    if expected_sha256 is None:
+        return
+    validation_items = [item for item in artifacts if item["artifactType"] == "VALIDATION_RESULT"]
+    if len(validation_items) != 1:
+        raise ValueError("sourceManifestSha256 binding requires exactly one VALIDATION_RESULT")
+    validation_payload = payloads.get(validation_items[0]["artifactId"])
+    if not isinstance(validation_payload, Mapping):
+        raise ValueError("VALIDATION_RESULT payload must be a JSON object")
+    actual = str(validation_payload.get("sourceManifestSha256") or "").strip()
+    if actual != expected_sha256:
+        raise ValueError("VALIDATION_RESULT sourceManifestSha256 does not match artifact lineage")
+
+
+def _validate_registered_universe_binding(
+    connection: Any,
+    *,
+    data_release_id: str,
+    universe_release_id: str | None,
+) -> None:
+    if universe_release_id is None:
+        return
+    rows = connection.execute(
+        """select component_release_id from data_release_components
+           where data_release_id=? and role='pit_universe'""",
+        (data_release_id,),
+    ).fetchall()
+    registered = {str(row["component_release_id"] or "").strip() for row in rows if row["component_release_id"]}
+    if len(registered) != 1:
+        raise ValueError("Registered DataRelease must bind exactly one pit_universe component")
+    expected = next(iter(registered))
+    if universe_release_id != expected:
+        raise ValueError(
+            f"UniverseRelease mismatch for DataRelease {data_release_id}: bundle={universe_release_id}, registered={expected}"
+        )
+
+
 def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_payload(payload)
     manifest_json = _canonical_json(payload)
@@ -170,28 +251,20 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
         release = connection.execute(
             "select id,status from data_releases where id=?", (validated["dataReleaseId"],)
         ).fetchone()
+        _validate_registered_universe_binding(
+            connection,
+            data_release_id=validated["dataReleaseId"],
+            universe_release_id=validated["universeReleaseId"],
+        )
     existing_item = row_to_dict(existing)
-    if existing_item:
-        if str(existing_item["manifest_sha256"]) != manifest_sha:
-            raise ValueError("externalRunId already exists with different content")
-        with db() as connection:
-            signal = connection.execute(
-                "select id from qlib_signal_snapshots where research_run_id=? order by created_at desc limit 1",
-                (existing_item["research_run_id"],),
-            ).fetchone()
-        return {
-            "researchRunId": existing_item["research_run_id"],
-            "importId": existing_item["id"],
-            "signalSnapshotId": signal["id"] if signal else None,
-            "replayed": True,
-            "schemaVersion": SCHEMA_VERSION,
-            "warnings": [],
-        }
+    if existing_item and str(existing_item["manifest_sha256"]) != manifest_sha:
+        raise ValueError("externalRunId already exists with different content")
     if not release or str(release["status"]) != "active":
         raise ValueError("Qlib v2 import requires an active registered DataRelease")
 
     artifacts = validated["artifacts"]
     payloads, object_keys = _verified_payloads(artifacts)
+    _validate_source_manifest_binding(artifacts, payloads, validated["sourceManifestSha256"])
     target_items = [item for item in artifacts if item["artifactType"] == "TARGET_PORTFOLIO"]
     target_projections: list[tuple[dict[str, Any], list[dict[str, Any]], str, float]] = []
     for item in target_items:
@@ -210,12 +283,36 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(raw_validation, Mapping):
             metrics = dict(raw_validation.get("metrics") or {})
 
+    # Complete the consumer-owned graph/collision preflight before creating a
+    # research run, registry row, promotion event, dispatchable snapshot, or
+    # any later platform-owned execution/ledger state. The registry repeats
+    # the same preflight inside the write transaction to close the race window.
+    with db() as connection:
+        artifact_registry.preflight_qlib_artifacts(connection, artifacts)
+
+    if existing_item:
+        with db() as connection:
+            signal = connection.execute(
+                "select id from qlib_signal_snapshots where research_run_id=? order by created_at desc limit 1",
+                (existing_item["research_run_id"],),
+            ).fetchone()
+        return {
+            "researchRunId": existing_item["research_run_id"],
+            "importId": existing_item["id"],
+            "signalSnapshotId": signal["id"] if signal else None,
+            "replayed": True,
+            "schemaVersion": SCHEMA_VERSION,
+            "warnings": [],
+        }
+
     run_id, item_id, import_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     now = utc_now()
     result = {
         "schemaVersion": SCHEMA_VERSION,
         "template": "qlib-cross-sectional-v1",
         "dataReleaseId": validated["dataReleaseId"],
+        "universeReleaseId": validated["universeReleaseId"],
+        "sourceManifestSha256": validated["sourceManifestSha256"],
         "dataFingerprint": validated["dataReleaseId"],
         "summary": metrics,
         "rootArtifactIds": validated["rootArtifactIds"],
@@ -224,6 +321,8 @@ def import_run(payload: Mapping[str, Any]) -> dict[str, Any]:
     scope = {"assetClass": "equity", "market": "china", "universe": payload.get("universe")}
     snapshot_id: str | None = None
     with db() as connection:
+        # Re-run preflight in the same transaction immediately before writes.
+        artifact_registry.preflight_qlib_artifacts(connection, artifacts)
         connection.execute(
             """insert into research_runs
                (id,template_key,name,status,scope_json,parameters_json,result_json,summary_json,
