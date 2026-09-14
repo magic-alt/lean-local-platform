@@ -9,6 +9,7 @@ from .ashare_repository import assert_ashare_ready, assert_benchmark_ready, data
 from .benchmark import fetch_and_import_benchmark
 from .data import fetch_and_import_symbol
 from .data_provider_manager import DATA_PROVIDER_MANAGER
+from .qlib_release_scope import assert_qlib_release_scope
 from .source_gate import DEFAULT_PRODUCTION_SOURCE, apply_source_context, resolve_source_context
 from .market_repository import get_instrument, market_data_coverage
 from .trading_config import merge_ashare_trading_config, merge_hk_trading_config
@@ -229,6 +230,7 @@ def _ensure_ready(
 
 def prepare_backtest_request(request_data: dict[str, Any], *, repair: bool = True) -> dict[str, Any]:
     parameters = _parameters(request_data)
+    assert_qlib_release_scope(parameters)
     market = str(parameters.get("market") or parameters.get("venue") or "").lower()
     is_supported_equity = (
         parameters.get("assetClass") == "equity"
