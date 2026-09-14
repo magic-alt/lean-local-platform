@@ -1,6 +1,7 @@
 import os
+from typing import Any
 
-from celery import Celery
+from celery import Celery, Task
 from celery.schedules import crontab
 from celery.signals import before_task_publish, task_postrun, task_prerun
 from kombu import Exchange, Queue
@@ -37,6 +38,77 @@ def _positive_env_int(name: str, default: int) -> int:
         return default
 
 
+def _task_argument(args: tuple[Any, ...], kwargs: dict[str, Any], index: int, name: str) -> str:
+    value = args[index] if len(args) > index else kwargs.get(name)
+    return str(value or "").strip()
+
+
+def _reconcile_terminal_backtest_redelivery(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Turn broker redelivery of an already-terminal backtest into an idempotent replay.
+
+    The backtest row is the durable execution fact. If the worker committed a terminal
+    run and then died before RabbitMQ observed the task acknowledgement, a replacement
+    worker must not acquire another scheduler lease or execute LEAN again. The task row
+    is reconciled only when the previous worker died before persisting its terminal task
+    state; an already-reconciled replay performs no database/log/metric side effect.
+    """
+
+    task_id = _task_argument(args, kwargs, 0, "task_id")
+    run_id = _task_argument(args, kwargs, 1, "run_id")
+    if not task_id or not run_id:
+        return None
+
+    from ..domain.backtest_job import CANCELLED, normalize_status
+    from ..repositories.backtest_repository import get_backtest
+    from ..services.tasks import append_log, get_task, update_task
+
+    existing_run = get_backtest(run_id)
+    if not existing_run:
+        return None
+    try:
+        status = normalize_status(str(existing_run.get("status") or ""))
+    except ValueError:
+        return None
+    if status not in {"success", "failed", CANCELLED}:
+        return None
+
+    existing_task = get_task(task_id)
+    task_status = str((existing_task or {}).get("status") or "").strip().lower()
+    finished_at = existing_run.get("finished_at")
+    error = existing_run.get("error") or existing_run.get("error_message")
+    if status == CANCELLED and not error:
+        error = "Cancellation requested by user."
+
+    if task_status != status or not (existing_task or {}).get("finished_at"):
+        append_log(
+            task_id,
+            f"Backtest {run_id} is already terminal ({status}); reconciling broker redelivery without re-execution.",
+        )
+        update_task(
+            task_id,
+            status=status,
+            error=error,
+            finished_at=finished_at,
+        )
+
+    return {"status": status, "run_id": run_id, "replayed": True}
+
+
+class PlatformTask(Task):
+    """Celery task base that preserves database truth across broker redelivery."""
+
+    abstract = True
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self.name == "lean_web.run_backtest":
+            replay = _reconcile_terminal_backtest_redelivery(args, kwargs)
+            if replay is not None:
+                return replay
+        return super().__call__(*args, **kwargs)
+
+
 @before_task_publish.connect
 def attach_request_context(headers=None, **_kwargs) -> None:
     if headers is None:
@@ -68,6 +140,7 @@ celery_app = Celery(
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
     include=["app.tasks.paper_cycle_dispatch", "app.tasks.worker"],
+    task_cls=PlatformTask,
 )
 celery_app.conf.update(
     task_track_started=True,
@@ -113,6 +186,12 @@ celery_app.conf.update(
         "lean_web.finalize_paper_execution_cycle": {"queue": "default"},
         "lean_web.recover_stale_paper_cycle_dispatches": {"queue": "default"},
         "lean_web.refresh_ashare_tech_evaluations": {"queue": "default"},
+    },
+    task_annotations={
+        "lean_web.run_backtest": {
+            "acks_late": True,
+            "reject_on_worker_lost": True,
+        }
     },
     worker_prefetch_multiplier=1,
     control_queue_durable=True,
