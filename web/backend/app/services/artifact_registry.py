@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Iterable, Mapping
 
@@ -17,20 +18,156 @@ QLIB_STATUSES = {"CANDIDATE", "RESEARCH_REVIEW", "RESEARCH_PROMOTED", "REJECTED"
 PLATFORM_STATUSES = {"LEAN_VALIDATED", "PAPER", "PRODUCTION", "RETIRED"}
 
 
-def register_qlib_artifacts(connection: Any, artifacts: Iterable[Mapping[str, Any]]) -> None:
+def _metadata(value: object) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        loaded = json.loads(value)
+        return dict(loaded) if isinstance(loaded, Mapping) else {}
+    return {}
+
+
+def _source_manifest_sha256(item: Mapping[str, Any]) -> str | None:
+    value = str(_metadata(item.get("metadata")).get("sourceManifestSha256") or "").strip()
+    return value or None
+
+
+def _assert_acyclic(items: list[dict[str, Any]]) -> None:
+    graph = {
+        str(item["artifactId"]): [str(parent) for parent in item.get("parentArtifactIds") or []]
+        for item in items
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(artifact_id: str) -> None:
+        if artifact_id in visited:
+            return
+        if artifact_id in visiting:
+            raise ValueError(f"Artifact lineage cycle detected: {artifact_id}")
+        visiting.add(artifact_id)
+        for parent_id in graph.get(artifact_id, []):
+            if parent_id in graph:
+                visit(parent_id)
+        visiting.remove(artifact_id)
+        visited.add(artifact_id)
+
+    for artifact_id in graph:
+        visit(artifact_id)
+
+
+def preflight_qlib_artifacts(connection: Any, artifacts: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Validate a complete Qlib artifact graph before the first registry write.
+
+    This is a consumer-owned validation boundary. It deliberately does not call
+    qlib-platform code and is run both by the import service and immediately
+    before registry mutation so malformed/colliding graphs fail closed.
+    """
+
     items = [dict(item) for item in artifacts]
-    item_ids = {str(item["artifactId"]) for item in items}
+    if not items:
+        raise ValueError("Qlib artifact graph must not be empty")
+    item_ids = [str(item.get("artifactId") or "") for item in items]
+    if any(not artifact_id for artifact_id in item_ids):
+        raise ValueError("Qlib artifactId is required")
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError("Duplicate Qlib artifactId in registry preflight")
+    ids = set(item_ids)
+
+    data_release_ids: set[str] = set()
+    universe_values: list[str | None] = []
+    source_values: list[str | None] = []
+    for item in items:
+        artifact_id = str(item["artifactId"])
+        artifact_type = str(item.get("artifactType") or "")
+        status = str(item.get("promotionStatus") or "")
+        if artifact_type not in QLIB_TYPES:
+            raise ValueError(f"Qlib cannot register artifact type: {artifact_type}")
+        if status not in QLIB_STATUSES:
+            raise ValueError(f"Qlib cannot register promotion status: {status}")
+        data_release_id = str(item.get("dataReleaseId") or "").strip()
+        if not data_release_id:
+            raise ValueError(f"Qlib artifact missing dataReleaseId: {artifact_id}")
+        data_release_ids.add(data_release_id)
+        universe = str(item.get("universeReleaseId") or "").strip() or None
+        universe_values.append(universe)
+        source_values.append(_source_manifest_sha256(item))
+        parents = [str(parent) for parent in item.get("parentArtifactIds") or []]
+        if len(parents) != len(set(parents)):
+            raise ValueError(f"Duplicate artifact parent: {artifact_id}")
+        if artifact_id in parents:
+            raise ValueError(f"Artifact cannot parent itself: {artifact_id}")
+        item["parentArtifactIds"] = parents
+        item["metadata"] = _metadata(item.get("metadata"))
+
+    if len(data_release_ids) != 1:
+        raise ValueError("Qlib registry graph must reference exactly one DataRelease")
+    if any(universe_values):
+        if not all(universe_values) or len(set(universe_values)) != 1:
+            raise ValueError("Qlib registry graph has inconsistent UniverseRelease binding")
+    if any(source_values):
+        if not all(source_values) or len(set(source_values)) != 1:
+            raise ValueError("Qlib registry graph has inconsistent sourceManifestSha256 binding")
+
+    _assert_acyclic(items)
+
+    for item in items:
+        artifact_id = str(item["artifactId"])
+        requested_parents = set(item["parentArtifactIds"])
+        for parent_id in requested_parents:
+            if parent_id not in ids:
+                exists = connection.execute(
+                    "select artifact_id from artifact_registry where artifact_id=?", (parent_id,)
+                ).fetchone()
+                if not exists:
+                    raise ValueError(f"Artifact parent does not exist: {parent_id}")
+
+        existing = connection.execute(
+            """select artifact_type,payload_sha256,data_release_id,universe_release_id,metadata_json
+               from artifact_registry where artifact_id=?""",
+            (artifact_id,),
+        ).fetchone()
+        if not existing:
+            continue
+        existing_metadata = _metadata(existing["metadata_json"])
+        existing_identity = (
+            str(existing["artifact_type"]),
+            str(existing["payload_sha256"]),
+            str(existing["data_release_id"]),
+            str(existing["universe_release_id"] or "") or None,
+            str(existing_metadata.get("sourceManifestSha256") or "") or None,
+        )
+        requested_identity = (
+            str(item["artifactType"]),
+            str(item["payloadSha256"]),
+            str(item["dataReleaseId"]),
+            str(item.get("universeReleaseId") or "") or None,
+            _source_manifest_sha256(item),
+        )
+        if existing_identity != requested_identity:
+            raise ValueError(f"Artifact ID already exists with different content or lineage: {artifact_id}")
+        existing_parents = {
+            str(row["parent_artifact_id"])
+            for row in connection.execute(
+                "select parent_artifact_id from artifact_lineage_edges where child_artifact_id=?",
+                (artifact_id,),
+            ).fetchall()
+        }
+        if existing_parents != requested_parents:
+            raise ValueError(f"Artifact ID already exists with different parent lineage: {artifact_id}")
+    return items
+
+
+def register_qlib_artifacts(connection: Any, artifacts: Iterable[Mapping[str, Any]]) -> None:
+    items = preflight_qlib_artifacts(connection, artifacts)
     now = utc_now()
     for item in items:
         artifact_id = str(item["artifactId"])
         existing = connection.execute(
-            "select artifact_type,payload_sha256,data_release_id from artifact_registry where artifact_id=?",
+            "select artifact_id from artifact_registry where artifact_id=?",
             (artifact_id,),
         ).fetchone()
         if existing:
-            identity = (item["artifactType"], item["payloadSha256"], item["dataReleaseId"])
-            if tuple(existing[key] for key in ("artifact_type", "payload_sha256", "data_release_id")) != identity:
-                raise ValueError(f"Artifact ID already exists with different content: {artifact_id}")
             continue
         payload_ref = dict(item.get("payloadRef") or {})
         connection.execute(
@@ -74,20 +211,14 @@ def register_qlib_artifacts(connection: Any, artifacts: Iterable[Mapping[str, An
         child = str(item["artifactId"])
         for parent in item.get("parentArtifactIds") or []:
             parent_id = str(parent)
-            if parent_id not in item_ids:
-                exists = connection.execute(
-                    "select artifact_id from artifact_registry where artifact_id=?", (parent_id,)
-                ).fetchone()
-                if not exists:
-                    raise ValueError(f"Artifact parent does not exist: {parent_id}")
             connection.execute(
                 """insert into artifact_lineage_edges
                    (parent_artifact_id,child_artifact_id,created_at) values (?,?,?)
                    on conflict(parent_artifact_id,child_artifact_id) do update
                    set created_at=artifact_lineage_edges.created_at""",
-
                 (parent_id, child, now),
             )
+
 
 def register_platform_artifact(connection: Any, artifact: Mapping[str, Any]) -> None:
     """Register immutable platform-owned evidence for a completed LEAN validation."""
