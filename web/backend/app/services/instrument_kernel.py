@@ -269,7 +269,7 @@ def require_execution_certified(instrument: InstrumentSpec, *, as_of: str) -> di
             "asset_execution_not_certified",
             f"asset execution is not certified: {reason}",
         )
-    instrument.assert_orderable()
+    instrument.assert_orderable(as_of=as_of)
     if instrument.currency != "CNY" or instrument.settlement_currency != "CNY":
         raise InstrumentContractError(
             "cross_currency_not_certified",
