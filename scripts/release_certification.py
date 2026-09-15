@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Build a fail-closed post-migration release-certification bundle.
 
-This command never enables PRODUCTION/Live/P9. It only evaluates the evidence
-required by config/certification/post-migration-v1.json and records machine-
-readable blocked reasons when evidence is absent, stale, malformed, or bound to
-a different release identity.
+The evaluator never enables PRODUCTION/Live/P9. It only verifies evidence
+against the current source identity and emits machine-readable blocked reasons.
 """
 from __future__ import annotations
 
@@ -153,14 +151,15 @@ def build_bundle(
         bindings[name] = _evidence_binding(name, path, payload)
 
     convergence = evidence.get("releaseConvergence") or {}
-    release = ((convergence.get("health") or {}).get("release") or {})
+    health = convergence.get("health") or {}
+    release = health.get("release") or {}
     schema = release.get("schema") or {}
     release_id = str(release.get("releaseId") or "")
     release_git_sha = str(release.get("gitSha") or "")
     openapi_sha = str(release.get("openApiSha256") or "")
     frontend_sha = str(release.get("frontendAssetsSha256") or "")
-    migration = str(schema.get("latestApplied") or "")
-    migration_checksum = str(schema.get("latestAppliedChecksum") or "")
+    migration = str(schema.get("latestAppliedMigration") or "")
+    migration_checksum = str(schema.get("latestAppliedMigrationChecksum") or "")
 
     _require(
         bool(convergence.get("passed")) and bool(convergence.get("managedStack")),
@@ -175,7 +174,7 @@ def build_bundle(
         f"current={current_git_sha},evidence={release_git_sha or 'missing'}",
     )
     _require(
-        bool(release_id) and release_id not in {"dev", "unknown"},
+        bool(release_id) and release_id not in {"dev", "unknown", "local-unversioned"},
         blocked,
         "release_id_missing",
         release_id or "missing",
@@ -186,7 +185,7 @@ def build_bundle(
         and HEX_64_RE.fullmatch(migration_checksum) is not None,
         blocked,
         "migration_identity_invalid",
-        f"migration={migration or 'missing'}",
+        f"migration={migration or 'missing'},checksum={migration_checksum or 'missing'}",
     )
     _require(
         HEX_64_RE.fullmatch(openapi_sha) is not None,
@@ -201,17 +200,16 @@ def build_bundle(
         frontend_sha or "missing",
     )
 
-    dependencies = (convergence.get("health") or {}).get("dependencies") or {}
-    database = dependencies.get("database") or {}
-    broker = dependencies.get("broker") or {}
+    database = health.get("database") or {}
+    broker = health.get("broker") or {}
     _require(
-        database.get("backend") == "postgresql" and bool(database.get("reachable")),
+        database.get("engine") == "postgresql" and database.get("status") == "ready",
         blocked,
         "postgresql_identity_invalid",
         str(database),
     )
     _require(
-        broker.get("backend") == "rabbitmq" and bool(broker.get("reachable")),
+        broker.get("engine") == "rabbitmq" and broker.get("status") == "ready",
         blocked,
         "rabbitmq_identity_invalid",
         str(broker),
@@ -302,6 +300,20 @@ def build_bundle(
         "fault_matrix_failed",
         str(fault.get("status") or "missing"),
     )
+    fault_release_sha = str(fault.get("releaseGitSha") or fault.get("gitSha") or "")
+    _require(
+        fault_release_sha == release_git_sha,
+        blocked,
+        "fault_matrix_git_mismatch",
+        fault_release_sha or "missing",
+    )
+    if fault.get("releaseId") is not None:
+        _require(
+            str(fault.get("releaseId") or "") == release_id,
+            blocked,
+            "fault_matrix_release_id_mismatch",
+            str(fault.get("releaseId") or "missing"),
+        )
     for scenario in policy.get("requiredFaultScenarios") or []:
         item = fault_scenarios.get(scenario) if isinstance(fault_scenarios, dict) else None
         _require(
