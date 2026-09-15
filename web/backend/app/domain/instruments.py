@@ -177,11 +177,23 @@ class InstrumentSpec:
             )
         return matches[0].symbol
 
-    def assert_orderable(self) -> None:
+    def assert_orderable(self, *, as_of: str | None = None) -> None:
         if self.continuous_series or self.identity_kind != "instrument":
             raise InstrumentContractError("continuous_not_orderable", f"{self.instrument_id} is not orderable")
         if not self.tradable:
             raise InstrumentContractError("instrument_not_tradable", f"{self.instrument_id} is not tradable")
+        if as_of is not None:
+            day = _iso_date(as_of, "as_of")
+            if self.listed_from and day < self.listed_from:
+                raise InstrumentContractError(
+                    "instrument_not_listed",
+                    f"{self.instrument_id} is not listed at {day}",
+                )
+            if self.listed_to and day > self.listed_to:
+                raise InstrumentContractError(
+                    "instrument_delisted",
+                    f"{self.instrument_id} is delisted at {day}",
+                )
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -222,6 +234,16 @@ class FutureInstrumentSpec(InstrumentSpec):
         object.__setattr__(self, "multiplier", _positive_decimal(self.multiplier, "multiplier"))
         if not self.expiry:
             raise InstrumentContractError("missing_field", "expiry is required")
+
+    def assert_orderable(self, *, as_of: str | None = None) -> None:
+        super().assert_orderable(as_of=as_of)
+        if as_of is not None:
+            day = _iso_date(as_of, "as_of")
+            if day > self.expiry:
+                raise InstrumentContractError(
+                    "instrument_expired",
+                    f"{self.instrument_id} expired on {self.expiry}",
+                )
 
     def to_manifest(self) -> dict[str, Any]:
         payload = super().to_manifest()

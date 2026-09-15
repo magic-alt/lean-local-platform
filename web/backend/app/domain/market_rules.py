@@ -385,7 +385,7 @@ def market_rule_pack_for(instrument: InstrumentSpec, *, as_of: str) -> MarketRul
         if item.asset_class == instrument.asset_class
         and item.subtype == instrument.subtype
         and item.market == instrument.market
-        and (item.venue == instrument.venue or (item.benchmark_only and instrument.subtype == "index"))
+        and item.venue == instrument.venue
         and item.active_on(as_of)
     ]
     if not candidates:
@@ -396,8 +396,6 @@ def market_rule_pack_for(instrument: InstrumentSpec, *, as_of: str) -> MarketRul
     candidates.sort(key=lambda item: item.version, reverse=True)
     selected = candidates[0]
     if instrument.market_rule_pack_id != selected.rule_pack_id:
-        # Legacy mappers bind the current rule-pack family. As-of resolution is
-        # still versioned; older dates may legitimately select the predecessor.
         family = instrument.market_rule_pack_id.rsplit("_v", 1)[0]
         if not selected.rule_pack_id.startswith(family):
             raise InstrumentContractError(

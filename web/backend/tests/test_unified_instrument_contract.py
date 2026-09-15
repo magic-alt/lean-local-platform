@@ -32,6 +32,7 @@ from app.services.instrument_kernel import (
 
 FIXTURE = Path(__file__).parent / "fixtures" / "instrument_contracts" / "v1_golden.json"
 
+
 ETF_MARKET_DATA_EVIDENCE = {
     "instrumentSubtype": "etf",
     "datasets": {
@@ -195,6 +196,9 @@ def test_alias_windows_preserve_identity_across_rename_and_delisting():
     assert spec.resolve_alias("broker", as_of="2026-06-30", purpose="execution") == "OLD600000"
     assert spec.resolve_alias("broker", as_of="2026-07-01", purpose="execution") == "NEW600000"
     assert spec.instrument_id == "CN.XSHG.EQUITY.600000"
+    spec.assert_orderable(as_of="2030-01-01")
+    with pytest.raises(InstrumentContractError, match="delisted"):
+        spec.assert_orderable(as_of="2030-01-02")
 
 
 def test_future_expiry_and_option_strike_right_are_identity_dimensions():
@@ -206,6 +210,9 @@ def test_future_expiry_and_option_strike_right_are_identity_dimensions():
 
     assert dec.instrument_id != mar.instrument_id
     assert len({call_4000.instrument_id, put_4000.instrument_id, call_4100.instrument_id}) == 3
+    dec.assert_orderable(as_of="2026-12-18")
+    with pytest.raises(InstrumentContractError, match="expired"):
+        dec.assert_orderable(as_of="2026-12-19")
 
 
 def test_continuous_future_is_explicitly_non_orderable():
@@ -297,11 +304,7 @@ def test_current_rules_are_not_retroactively_applied_to_uncovered_history():
 
 def test_etf_validation_kernel_has_separate_lean_mapping_rule_pack_and_risk_budget():
     etf = ashare_etf_instrument("510300.SH", product_profile="stock_etf_t1")
-    payload = etf_validation_kernel(
-        etf,
-        as_of="2026-09-15",
-        market_data_evidence=ETF_MARKET_DATA_EVIDENCE,
-    )
+    payload = etf_validation_kernel(etf, as_of="2026-09-15", market_data_evidence=ETF_MARKET_DATA_EVIDENCE)
 
     assert payload["executionCertified"] is False
     assert payload["instrument"]["subtype"] == "etf"
@@ -332,11 +335,22 @@ def test_etf_validation_requires_subtype_specific_market_data_lineage():
         },
     }
     with pytest.raises(InstrumentContractError, match="coverage is incomplete"):
-        etf_validation_kernel(etf, as_of="2026-09-15", market_data_evidence=incomplete)
+        etf_validation_kernel(
+            etf,
+            as_of="2026-09-15",
+            market_data_evidence=incomplete,
+        )
 
-    wrong_scope = {**ETF_MARKET_DATA_EVIDENCE, "instrumentSubtype": "common_stock"}
+    wrong_scope = {
+        **ETF_MARKET_DATA_EVIDENCE,
+        "instrumentSubtype": "common_stock",
+    }
     with pytest.raises(InstrumentContractError, match="instrumentSubtype=etf"):
-        etf_validation_kernel(etf, as_of="2026-09-15", market_data_evidence=wrong_scope)
+        etf_validation_kernel(
+            etf,
+            as_of="2026-09-15",
+            market_data_evidence=wrong_scope,
+        )
 
 
 def test_cross_currency_etf_cannot_borrow_cn_execution_certification():
@@ -346,11 +360,7 @@ def test_cross_currency_etf_cannot_borrow_cn_execution_certification():
         settlement_currency="USD",
     )
     with pytest.raises(InstrumentContractError, match="CNY/CNY"):
-        etf_validation_kernel(
-            etf,
-            as_of="2026-09-15",
-            market_data_evidence=ETF_MARKET_DATA_EVIDENCE,
-        )
+        etf_validation_kernel(etf, as_of="2026-09-15", market_data_evidence=ETF_MARKET_DATA_EVIDENCE)
 
 
 def test_etf_requires_explicit_certified_product_profile():
@@ -378,6 +388,13 @@ def test_alias_representation_property_keeps_provider_neutral_identity_stable():
             assert Decimal(manifest["price_tick"]) == instrument.price_tick
             assert Decimal(manifest["quantity_increment"]) == instrument.quantity_increment
             assert Decimal(manifest["lot_size"]) == instrument.lot_size
+
+
+def test_market_rule_pack_resolution_is_strictly_venue_scoped():
+    sh_index = ashare_index_instrument("000300.SH")
+    sz_index = ashare_index_instrument("399300.SZ")
+    assert market_rule_pack_for(sh_index, as_of="2026-09-15").venue == "XSHG"
+    assert market_rule_pack_for(sz_index, as_of="2026-09-15").venue == "XSHE"
 
 
 def test_index_is_benchmark_only_and_non_orderable():
