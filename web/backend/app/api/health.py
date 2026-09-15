@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 
 from ..services.broker import check_broker
 from ..core.config import LEAN_EXECUTION_BACKEND, PARQUET_DIR
+from ..services.certification_status import authorization_status, certification_status
 from ..services.dependencies import (
     check_alert_channel,
     check_database,
@@ -13,8 +14,7 @@ from ..services.release_identity import runtime_release_identity
 router = APIRouter(prefix="/api", tags=["health"])
 
 
-@router.get("/health")
-def health(request: Request):
+def _readiness(request: Request) -> dict:
     database = check_database()
     broker_ok = False
     try:
@@ -24,15 +24,17 @@ def health(request: Request):
     release = runtime_release_identity(request.app.openapi())
     notifications = check_alert_channel()
     execution = check_execution_runtime()
-    healthy = bool(
-        release["schema"]["aligned"]
-        and database["ok"]
-        and broker_ok
-        and execution["ok"]
-        and notifications["ok"]
-    )
+    checks = {
+        "schemaAligned": bool(release["schema"]["aligned"]),
+        "databaseReady": bool(database["ok"]),
+        "brokerReady": broker_ok,
+        "executionReady": bool(execution["ok"]),
+        "notificationsReady": bool(notifications["ok"]),
+    }
     return {
-        "status": "ok" if healthy else "degraded",
+        "ready": all(checks.values()),
+        "checks": checks,
+        "release": release,
         "database": {
             "engine": "postgresql",
             "status": "ready" if database["ok"] else "unavailable",
@@ -44,14 +46,42 @@ def health(request: Request):
             "status": "ready" if execution["ok"] else "unavailable",
             "detail": execution["detail"],
         },
+        "notifications": notifications["detail"],
+    }
+
+
+@router.get("/health")
+def health(request: Request):
+    readiness = _readiness(request)
+    return {
+        "status": "ok" if readiness["ready"] else "degraded",
+        "database": readiness["database"],
+        "broker": readiness["broker"],
+        "execution": readiness["execution"],
         "storage": {
             "marketData": "parquet",
             "queryEngine": "duckdb",
             "path": str(PARQUET_DIR),
         },
-        "notifications": notifications["detail"],
-        "release": release,
+        "notifications": readiness["notifications"],
+        "release": readiness["release"],
     }
+
+
+@router.get("/health/readiness")
+def readiness(request: Request):
+    return _readiness(request)
+
+
+@router.get("/health/certification")
+def certification(request: Request):
+    release = runtime_release_identity(request.app.openapi())
+    return certification_status(release)
+
+
+@router.get("/health/authorization")
+def authorization():
+    return authorization_status()
 
 
 @router.get("/health/dependencies")
