@@ -27,19 +27,14 @@ class QmtGatewayService:
 
     @staticmethod
     def _snapshot_at_utc() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     def health(self) -> dict[str, object]:
         try:
             self.client.ensure_connected()
-            return {"status": "ready", "connected": True, "mode": "query_only"}
         except Exception as exc:
-            return {
-                "status": "degraded",
-                "connected": False,
-                "mode": "query_only",
-                "error": str(exc),
-            }
+            return {"status": "degraded", "reason": str(exc), "qmtConnected": False}
+        return {"status": "ready", "qmtConnected": True}
 
     def capability(self) -> dict[str, object]:
         return self.query_client.descriptor.to_manifest()
