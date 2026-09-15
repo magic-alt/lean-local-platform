@@ -68,18 +68,21 @@ def health(request: Request):
     }
 
 
-@router.get("/health/readiness")
+# These are deployment/certification probes rather than public business APIs.
+# Their stable semantics are documented in docs/post-migration-certification.md;
+# keep them out of the generated business API index and its compatibility surface.
+@router.get("/health/readiness", include_in_schema=False)
 def readiness(request: Request):
     return _readiness(request)
 
 
-@router.get("/health/certification")
+@router.get("/health/certification", include_in_schema=False)
 def certification(request: Request):
     release = runtime_release_identity(request.app.openapi())
     return certification_status(release)
 
 
-@router.get("/health/authorization")
+@router.get("/health/authorization", include_in_schema=False)
 def authorization():
     return authorization_status()
 
