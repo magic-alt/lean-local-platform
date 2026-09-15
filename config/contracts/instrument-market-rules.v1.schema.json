@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/magic-alt/lean-local-platform/config/contracts/instrument-market-rules.v1.schema.json",
+  "title": "Unified Instrument and MarketRulePack Contract v1",
+  "type": "object",
+  "required": ["instrument", "marketRulePack"],
+  "properties": {
+    "instrument": {
+      "type": "object",
+      "required": ["schema_version", "instrument_id", "canonical_symbol", "asset_class", "subtype", "market", "venue", "currency", "settlement_currency", "calendar_id", "price_tick", "quantity_increment", "quantity_unit", "lot_size", "tradable", "market_rule_pack_id", "aliases", "identity_kind", "continuous_series"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "instrument_id": {"type": "string", "minLength": 1},
+        "canonical_symbol": {"type": "string", "minLength": 1},
+        "asset_class": {"type": "string", "minLength": 1},
+        "subtype": {"type": "string", "minLength": 1},
+        "market": {"type": "string", "minLength": 1},
+        "venue": {"type": "string", "minLength": 1},
+        "currency": {"type": "string", "minLength": 3},
+        "settlement_currency": {"type": "string", "minLength": 3},
+        "calendar_id": {"type": "string", "minLength": 1},
+        "price_tick": {"type": "string", "pattern": "^[0-9]+(?:\.[0-9]+)?$"},
+        "quantity_increment": {"type": "string", "pattern": "^[0-9]+(?:\.[0-9]+)?$"},
+        "quantity_unit": {"type": "string", "minLength": 1},
+        "lot_size": {"type": "string", "pattern": "^[0-9]+(?:\.[0-9]+)?$"},
+        "tradable": {"type": "boolean"},
+        "market_rule_pack_id": {"type": "string", "minLength": 1},
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "symbol", "purpose"],
+            "properties": {
+              "provider": {"type": "string", "minLength": 1},
+              "symbol": {"type": "string", "minLength": 1},
+              "valid_from": {"type": ["string", "null"], "format": "date"},
+              "valid_to": {"type": ["string", "null"], "format": "date"},
+              "purpose": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "listed_from": {"type": ["string", "null"], "format": "date"},
+        "listed_to": {"type": ["string", "null"], "format": "date"},
+        "identity_kind": {"enum": ["instrument", "root", "continuous"]},
+        "continuous_series": {"type": "boolean"},
+        "underlying_id": {"type": "string"},
+        "expiry": {"type": "string", "format": "date"},
+        "multiplier": {"type": "string", "pattern": "^[0-9]+(?:\.[0-9]+)?$"},
+        "strike": {"type": "string", "pattern": "^[0-9]+(?:\.[0-9]+)?$"},
+        "right": {"enum": ["call", "put"]},
+        "exercise_style": {"type": "string"},
+        "settlement_style": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "marketRulePack": {
+      "type": "object",
+      "required": ["schema_version", "rule_pack_id", "version", "asset_class", "subtype", "market", "venue", "calendar_id", "timezone", "effective_from", "source", "sessions", "settlement", "round_lot", "quantity_increment", "price_limit_policy", "suspension_policy", "corporate_action", "fees", "benchmark_only"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "rule_pack_id": {"type": "string", "minLength": 1},
+        "version": {"type": "integer", "minimum": 1},
+        "asset_class": {"type": "string", "minLength": 1},
+        "subtype": {"type": "string", "minLength": 1},
+        "market": {"type": "string", "minLength": 1},
+        "venue": {"type": "string", "minLength": 1},
+        "calendar_id": {"type": "string", "minLength": 1},
+        "timezone": {"type": "string", "minLength": 1},
+        "effective_from": {"type": "string", "format": "date"},
+        "effective_to": {"type": ["string", "null"], "format": "date"},
+        "source": {"type": "string", "minLength": 1},
+        "sessions": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["open_local", "close_local"],
+            "properties": {"open_local": {"type": "string"}, "close_local": {"type": "string"}},
+            "additionalProperties": false
+          }
+        },
+        "settlement": {
+          "type": "object", "required": ["cash_cycle", "position_cycle", "sellable_cycle"],
+          "properties": {"cash_cycle": {"type": "string"}, "position_cycle": {"type": "string"}, "sellable_cycle": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "round_lot": {"type": "string"},
+        "quantity_increment": {"type": "string"},
+        "price_limit_policy": {"type": "string"},
+        "suspension_policy": {"type": "string"},
+        "corporate_action": {
+          "type": "object", "required": ["adjustment_mode", "effective_time", "source"],
+          "properties": {"adjustment_mode": {"type": "string"}, "effective_time": {"type": "string"}, "source": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "fees": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["code", "side", "rate", "applies", "source"],
+            "properties": {"code": {"type": "string"}, "side": {"enum": ["buy", "sell", "both"]}, "rate": {"type": "string"}, "applies": {"type": "boolean"}, "source": {"type": "string"}},
+            "additionalProperties": false
+          }
+        },
+        "benchmark_only": {"type": "boolean"},
+        "margin_policy": {"type": "string"},
+        "borrow_short_policy": {"type": "string"},
+        "roll_policy": {"type": "string"},
+        "exercise_assignment_policy": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

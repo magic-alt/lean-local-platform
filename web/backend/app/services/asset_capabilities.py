@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from typing import Any
 
 from ..db import database_backend, db, json_dump, rows_to_dicts, utc_now
 from . import market_lake
+from .instrument_kernel import asset_kernel_descriptor
 
 
 CAPABILITY_SCOPES = (
@@ -19,10 +21,8 @@ CAPABILITY_SCOPES = (
     ("equity", "china", "china", "tick", "trade"),
 )
 
-# This is an explicit product-support boundary, not a data-discovery rule.
-# Presence of Parquet rows alone must never promote a scope to executable.
-# Additional scopes require their own adapter/rule/certification work before
-# they are added here.
+# Explicit product-support boundary. Presence of market data is never
+# sufficient to grant execution admission to another instrument subtype.
 EXECUTION_ENABLED_SCOPES = frozenset(
     {
         ("equity", "china", "china", "daily", "trade"),
@@ -57,9 +57,11 @@ def _available_scope_state(
     key = _scope_key(asset_class, market, venue, resolution, data_type)
     if key in EXECUTION_ENABLED_SCOPES:
         return "executable", None
-    # Preserve the existing public reason code while preventing data presence
-    # from granting execution admission.
     return "data_ready", "execution_adapter_not_certified"
+
+
+def _kernel(asset_class: str, venue: str) -> dict[str, Any]:
+    return asset_kernel_descriptor(asset_class, venue=venue)
 
 
 def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, int]:
@@ -76,39 +78,82 @@ def _counts(connection: Any, asset_class: str, resolution: str) -> tuple[int, in
             "select count(*) as count from provider_raw_records where dataset_key='opt_basic'"
         ).fetchone()["count"]
         return int(metadata or 0), 0
-    lake_class = "equity" if asset_class == "etf" else asset_class
+    if asset_class == "etf":
+        # ETF metadata must come from ETF/fund endpoints. The equity Security
+        # Master and equity Parquet carrier are not subtype evidence.
+        metadata = connection.execute(
+            "select count(*) as count from provider_raw_records "
+            "where dataset_key in ('etf_basic','fund_basic')"
+        ).fetchone()["count"]
+        return int(metadata or 0), 0
+
     rows = sum(
         int(market_lake.aggregate(**scope, columns="count(*) as count").get("count") or 0)
         for scope in market_lake.matching_scopes(
-            kind="bars", asset_class=lake_class, resolution=resolution,
+            kind="bars", asset_class=asset_class, resolution=resolution,
         )
     )
-    metadata_class = "equity" if asset_class == "etf" else asset_class
     metadata = connection.execute(
         "select count(*) as count from instruments where asset_class=?",
-        (metadata_class,),
+        (asset_class,),
     ).fetchone()["count"]
     return int(metadata or 0), int(rows or 0)
 
 
-def _local_lake_capabilities() -> list[dict[str, Any]]:
-    """Compute data readiness from the mounted Parquet lake.
+def _decorate(item: dict[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    descriptor = _kernel(str(result["asset_class"]), str(result["venue"]))
+    result["instrument_contract"] = descriptor
+    raw_evidence = result.get("evidence") or result.get("evidence_json") or {}
+    if isinstance(raw_evidence, str):
+        try:
+            raw_evidence = json.loads(raw_evidence)
+        except (TypeError, ValueError):
+            raw_evidence = {}
+    evidence = dict(raw_evidence) if isinstance(raw_evidence, dict) else {}
+    evidence.update(
+        {
+            "instrumentSchemaVersion": 1,
+            "instrumentAssetClass": descriptor["instrumentAssetClass"],
+            "instrumentSubtype": descriptor["instrumentSubtype"],
+            "storageAssetClass": descriptor["storageAssetClass"],
+            "certificationScopeKey": descriptor["certificationScopeKey"],
+            "executionCertified": descriptor["executionCertified"],
+        }
+    )
+    if descriptor["storageAssetClass"] != result["asset_class"]:
+        evidence["sharedStorageCarrierOnly"] = True
+        evidence["subtypeEvidenceRequired"] = True
+    result["evidence"] = evidence
+    return result
 
-    Execution admission is intentionally narrower than data readiness. The
-    allowlist above is the explicit current product boundary; unsupported
-    resolutions and asset classes remain visible as data-ready instead of being
-    promoted merely because files exist.
+
+def _local_lake_capabilities() -> list[dict[str, Any]]:
+    """Compute fail-closed readiness from the mounted Parquet lake.
+
+    A physical storage mapping is not an instrument certification. In
+    particular, ETF bars may ultimately live in the equity carrier, but the
+    generic equity lake cannot prove ETF subtype membership on its own.
     """
+
     now = utc_now()
     items: list[dict[str, Any]] = []
     for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
-        lake_class = "equity" if asset_class == "etf" else asset_class
+        descriptor = _kernel(asset_class, venue)
+        storage_class = str(descriptor["storageAssetClass"])
         scopes = market_lake.matching_scopes(
-            kind="bars", asset_class=lake_class, market=market,
+            kind="bars", asset_class=storage_class, market=market,
             venue=venue, resolution=resolution, data_type=data_type,
         )
-        available = bool(scopes)
-        if available:
+        carrier_available = bool(scopes)
+        shared_carrier = storage_class != asset_class
+
+        if shared_carrier:
+            # Shared carrier presence is visible as evidence but cannot be used
+            # as subtype-specific readiness.
+            state = "unavailable"
+            reason = "instrument_subtype_evidence_missing" if carrier_available else "local_parquet_scope_missing"
+        elif carrier_available:
             state, reason = _available_scope_state(
                 asset_class=asset_class,
                 market=market,
@@ -118,28 +163,37 @@ def _local_lake_capabilities() -> list[dict[str, Any]]:
             )
         else:
             state, reason = "unavailable", "local_parquet_scope_missing"
+
         items.append(
-            {
-                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"local-lake:{asset_class}:{market}:{venue}:{resolution}:{data_type}")),
-                "asset_class": asset_class,
-                "market": market,
-                "venue": venue,
-                "resolution": resolution,
-                "data_type": data_type,
-                "state": state,
-                "metadata_count": 0,
-                "canonical_row_count": 0,
-                "executable_reason": reason,
-                "evidence": {
-                    "schemaVersion": 1,
-                    "derivedFromParquetLake": True,
-                    "localOnly": True,
-                    "scopeAvailable": available,
-                    "rowCountExact": False,
-                    "executionEnabled": state == "executable",
-                },
-                "refreshed_at": now,
-            }
+            _decorate(
+                {
+                    "id": str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"local-lake:{asset_class}:{market}:{venue}:{resolution}:{data_type}",
+                        )
+                    ),
+                    "asset_class": asset_class,
+                    "market": market,
+                    "venue": venue,
+                    "resolution": resolution,
+                    "data_type": data_type,
+                    "state": state,
+                    "metadata_count": 0,
+                    "canonical_row_count": 0,
+                    "executable_reason": reason,
+                    "evidence": {
+                        "schemaVersion": 2,
+                        "derivedFromParquetLake": True,
+                        "localOnly": True,
+                        "scopeAvailable": carrier_available and not shared_carrier,
+                        "sharedStorageScopeAvailable": carrier_available and shared_carrier,
+                        "rowCountExact": False,
+                        "executionEnabled": state == "executable",
+                    },
+                    "refreshed_at": now,
+                }
+            )
         )
     return items
 
@@ -150,6 +204,7 @@ def refresh_capabilities() -> list[dict[str, Any]]:
         and os.environ.get("LEAN_CAPABILITY_BACKEND", "local_parquet").strip().lower() != "database"
     ):
         return _local_lake_capabilities()
+
     now = utc_now()
     with db() as connection:
         for asset_class, market, venue, resolution, data_type in CAPABILITY_SCOPES:
@@ -166,13 +221,20 @@ def refresh_capabilities() -> list[dict[str, Any]]:
                 state, reason = "metadata_only", "canonical_rows_missing"
             else:
                 state, reason = "unavailable", "metadata_and_canonical_rows_missing"
+
             key = f"{asset_class}:{market}:{venue}:{resolution}:{data_type}"
+            descriptor = _kernel(asset_class, venue)
             evidence = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "metadataCount": metadata_count,
                 "canonicalRowCount": row_count,
                 "derivedFromParquetLake": True,
                 "executionEnabled": state == "executable",
+                "instrumentAssetClass": descriptor["instrumentAssetClass"],
+                "instrumentSubtype": descriptor["instrumentSubtype"],
+                "storageAssetClass": descriptor["storageAssetClass"],
+                "certificationScopeKey": descriptor["certificationScopeKey"],
+                "sharedStorageCarrierOnly": descriptor["storageAssetClass"] != asset_class,
             }
             connection.execute(
                 """
@@ -187,15 +249,25 @@ def refresh_capabilities() -> list[dict[str, Any]]:
                     refreshed_at=excluded.refreshed_at
                 """,
                 (
-                    str(uuid.uuid5(uuid.NAMESPACE_URL, key)), asset_class, market, venue,
-                    resolution, data_type, state, metadata_count, row_count, reason,
-                    json_dump(evidence), now,
+                    str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
+                    asset_class,
+                    market,
+                    venue,
+                    resolution,
+                    data_type,
+                    state,
+                    metadata_count,
+                    row_count,
+                    reason,
+                    json_dump(evidence),
+                    now,
                 ),
             )
         rows = connection.execute(
             "select * from asset_capabilities order by asset_class,resolution,market,venue"
         ).fetchall()
-    return rows_to_dicts(rows)
+
+    return [_decorate(item) for item in rows_to_dicts(rows)]
 
 
 def capability_for_scope(
@@ -210,7 +282,8 @@ def capability_for_scope(
     items = refresh_capabilities()
     match = next(
         (
-            item for item in items
+            item
+            for item in items
             if item["asset_class"] == normalized
             and item["market"] == market.lower()
             and item["venue"] == (venue or market).lower()
@@ -219,7 +292,9 @@ def capability_for_scope(
         ),
         None,
     )
-    return match or {
+    if match:
+        return match
+    result = {
         "asset_class": normalized,
         "market": market.lower(),
         "venue": (venue or market).lower(),
@@ -229,12 +304,23 @@ def capability_for_scope(
         "metadata_count": 0,
         "canonical_row_count": 0,
         "executable_reason": "capability_scope_not_registered",
+        "evidence": {"schemaVersion": 2},
     }
+    try:
+        return _decorate(result)
+    except Exception:
+        return result
 
 
 def capability_payload() -> dict[str, Any]:
     items = refresh_capabilities()
-    return {"items": items, "count": len(items), "states": ["unavailable", "metadata_only", "data_ready", "executable"]}
+    return {
+        "schemaVersion": 2,
+        "instrumentSchemaVersion": 1,
+        "items": items,
+        "count": len(items),
+        "states": ["unavailable", "metadata_only", "data_ready", "executable"],
+    }
 
 
 def require_executable_scope(parameters: dict[str, Any]) -> dict[str, Any]:
