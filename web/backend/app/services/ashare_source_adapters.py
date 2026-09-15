@@ -1,8 +1,49 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ..core.errors import LeanWebError
+from .provider_contracts import (
+    CanonicalBatch,
+    CanonicalUnits,
+    ProviderAuthContract,
+    ProviderDataClass,
+    ProviderDescriptor,
+    ProviderErrorCode,
+    ProviderIssue,
+    QuarantinedRecord,
+)
+
+
+BAOSTOCK_DAILY_DESCRIPTOR = ProviderDescriptor(
+    provider="baostock",
+    adapter_version="1",
+    data_classes=(ProviderDataClass.HISTORICAL_DATA,),
+    asset_classes=("equity",),
+    markets=("china",),
+    frequencies=("1d",),
+    historical_coverage="provider_defined",
+    adjustment_modes=("raw", "qfq", "hfq"),
+    pit_availability="end_of_day_provider_snapshot",
+    transports=("historical",),
+    pagination="provider_cursor",
+    rate_limit="provider_defined",
+    license="provider_terms",
+    redistribution="not_asserted_by_adapter",
+    auth=ProviderAuthContract(
+        mode="anonymous_login",
+        required=False,
+        account_scope="anonymous",
+        entitlement_scope=("china_equity_daily",),
+    ),
+    health="runtime_probe_required",
+    cross_source_caveats=(
+        "Baostock is research/cross-source QA only and is not China production-certified.",
+        "Adjustment and volume semantics must be reconciled before cross-provider comparison.",
+    ),
+    production_certified=False,
+)
 
 
 def _date(value: Any) -> str:
@@ -105,6 +146,181 @@ def _normalize_daily_records(symbol: str, rows: list[dict[str, Any]]) -> list[di
     return normalized
 
 
+def _baostock_units(adjust: str) -> CanonicalUnits:
+    return CanonicalUnits(
+        price_currency="CNY",
+        volume_unit="share",
+        amount_unit="CNY",
+        timezone="Asia/Shanghai",
+        adjustment=adjust or "raw",
+    )
+
+
+def _numeric_issue(
+    value: Any,
+    *,
+    field: str,
+    positive: bool,
+    allow_negative: bool = False,
+) -> tuple[float | None, ProviderIssue | None]:
+    if value in (None, ""):
+        return None, ProviderIssue(
+            code=ProviderErrorCode.MISSING_FIELD,
+            message=f"Provider row is missing required numeric field {field}.",
+            field=field,
+        )
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None, ProviderIssue(
+            code=ProviderErrorCode.INVALID_VALUE,
+            message=f"Provider row contains a non-numeric value for {field}.",
+            field=field,
+        )
+    if not math.isfinite(parsed):
+        return None, ProviderIssue(
+            code=ProviderErrorCode.NON_FINITE_VALUE,
+            message=f"Provider row contains a non-finite value for {field}.",
+            field=field,
+        )
+    if positive and parsed <= 0:
+        return None, ProviderIssue(
+            code=ProviderErrorCode.INVALID_VALUE,
+            message=f"Provider row requires {field} to be greater than zero.",
+            field=field,
+        )
+    if not positive and not allow_negative and parsed < 0:
+        return None, ProviderIssue(
+            code=ProviderErrorCode.INVALID_VALUE,
+            message=f"Provider row requires {field} to be non-negative.",
+            field=field,
+        )
+    return parsed, None
+
+
+def _optional_numeric_issue(
+    value: Any,
+    *,
+    field: str,
+    positive: bool = False,
+    allow_negative: bool = False,
+) -> tuple[float | None, ProviderIssue | None]:
+    if value in (None, ""):
+        return None, None
+    return _numeric_issue(
+        value,
+        field=field,
+        positive=positive,
+        allow_negative=allow_negative,
+    )
+
+
+def normalize_baostock_daily_batch(
+    symbol: str,
+    rows: list[dict[str, Any]],
+    *,
+    adjust: str = "raw",
+) -> CanonicalBatch[dict[str, str]]:
+    """Normalize Baostock daily bars without converting invalid values to valid zeros."""
+
+    normalized: list[dict[str, str]] = []
+    quarantined: list[QuarantinedRecord] = []
+    for row_index, row in enumerate(rows):
+        issues: list[ProviderIssue] = []
+        date_value = _first_value(row, "date", "trade_date")
+        normalized_date: str | None = None
+        if date_value in (None, ""):
+            issues.append(
+                ProviderIssue(
+                    code=ProviderErrorCode.MISSING_FIELD,
+                    message="Provider row is missing required date field.",
+                    field="date",
+                )
+            )
+        else:
+            try:
+                normalized_date = _date(date_value)
+            except LeanWebError:
+                issues.append(
+                    ProviderIssue(
+                        code=ProviderErrorCode.INVALID_VALUE,
+                        message="Provider row contains an invalid date value.",
+                        field="date",
+                    )
+                )
+
+        values: dict[str, float | None] = {}
+        numeric_fields = {
+            "open": (_first_value(row, "open"), True),
+            "high": (_first_value(row, "high"), True),
+            "low": (_first_value(row, "low"), True),
+            "close": (_first_value(row, "close"), True),
+            "volume": (_first_value(row, "volume", "vol"), False),
+        }
+        for field, (raw_value, positive) in numeric_fields.items():
+            parsed, issue = _numeric_issue(raw_value, field=field, positive=positive)
+            values[field] = parsed
+            if issue:
+                issues.append(issue)
+
+        optional_fields = {
+            "amount": (_first_value(row, "amount"), False, False),
+            "prev_close": (_first_value(row, "preclose", "prev_close", "pre_close"), True, False),
+            "pct_change": (_first_value(row, "pctChg", "pct_change"), False, True),
+            "turnover_rate": (_first_value(row, "turn", "turnover_rate"), False, False),
+        }
+        for field, (raw_value, positive, allow_negative) in optional_fields.items():
+            parsed, issue = _optional_numeric_issue(
+                raw_value,
+                field=field,
+                positive=positive,
+                allow_negative=allow_negative,
+            )
+            values[field] = parsed
+            if issue:
+                issues.append(issue)
+
+        if issues:
+            quarantined.append(
+                QuarantinedRecord(
+                    row_index=row_index,
+                    issues=tuple(issues),
+                    source_fields=tuple(sorted(str(key) for key in row.keys())),
+                )
+            )
+            continue
+
+        item = {
+            "symbol": _symbol6(symbol),
+            "date": normalized_date or "",
+            "open": str(values["open"]),
+            "high": str(values["high"]),
+            "low": str(values["low"]),
+            "close": str(values["close"]),
+            "volume": str(values["volume"]),
+        }
+        for field in ("amount", "prev_close", "pct_change", "turnover_rate"):
+            if values[field] is not None:
+                item[field] = str(values[field])
+        normalized.append(item)
+
+    normalized.sort(key=lambda item: item["date"])
+    return CanonicalBatch(
+        provider="baostock",
+        operation="historical_daily_bars",
+        descriptor=BAOSTOCK_DAILY_DESCRIPTOR,
+        units=_baostock_units(adjust),
+        records=normalized,
+        quarantined=quarantined,
+        source_metadata={
+            "symbol": _symbol6(symbol),
+            "inputRows": len(rows),
+            "acceptedRows": len(normalized),
+            "quarantinedRows": len(quarantined),
+        },
+    )
+
+
 def fetch_adata_rows(symbol: str, start: str | None = None, end: str | None = None, adjust: str = "raw") -> list[dict[str, str]]:
     if adjust and adjust != "raw":
         raise LeanWebError("AData adapter currently only imports raw A-share daily bars to avoid mixed adjustment modes.")
@@ -133,7 +349,12 @@ def fetch_adata_rows(symbol: str, start: str | None = None, end: str | None = No
     raise LeanWebError(f"AData market API call failed: {last_error}") from last_error
 
 
-def fetch_baostock_rows(symbol: str, start: str | None = None, end: str | None = None, adjust: str = "raw") -> list[dict[str, str]]:
+def fetch_baostock_batch(
+    symbol: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str = "raw",
+) -> CanonicalBatch[dict[str, str]]:
     adjust_map = {"raw": "3", "": "3", "qfq": "2", "hfq": "1"}
     if adjust not in adjust_map:
         raise LeanWebError(f"Unsupported Baostock adjust value: {adjust!r}")
@@ -144,7 +365,14 @@ def fetch_baostock_rows(symbol: str, start: str | None = None, end: str | None =
     login = bs.login()
     try:
         if getattr(login, "error_code", "0") != "0":
-            raise LeanWebError(f"Baostock login failed: {getattr(login, 'error_msg', '')}")
+            raise LeanWebError(
+                f"Baostock login failed: {getattr(login, 'error_msg', '')}",
+                error_code=ProviderErrorCode.UPSTREAM_ERROR.value.upper(),
+                category="data_provider",
+                retryable=True,
+                status_code=503,
+                details={"provider": "baostock", "operation": "login"},
+            )
         result = bs.query_history_k_data_plus(
             _baostock_symbol(symbol),
             "date,code,open,high,low,close,preclose,volume,amount,turn,pctChg",
@@ -154,14 +382,32 @@ def fetch_baostock_rows(symbol: str, start: str | None = None, end: str | None =
             adjustflag=adjust_map[adjust],
         )
         if getattr(result, "error_code", "0") != "0":
-            raise LeanWebError(f"Baostock daily query failed: {getattr(result, 'error_msg', '')}")
+            raise LeanWebError(
+                f"Baostock daily query failed: {getattr(result, 'error_msg', '')}",
+                error_code=ProviderErrorCode.UPSTREAM_ERROR.value.upper(),
+                category="data_provider",
+                retryable=True,
+                status_code=503,
+                details={"provider": "baostock", "operation": "historical_daily_bars"},
+            )
         rows: list[dict[str, Any]] = []
         fields = list(getattr(result, "fields", []))
         while result.next():
             rows.append(dict(zip(fields, result.get_row_data())))
-        return _normalize_daily_records(symbol, rows)
+        return normalize_baostock_daily_batch(symbol, rows, adjust=adjust or "raw")
     finally:
         try:
             bs.logout()
         except Exception:
             pass
+
+
+def fetch_baostock_rows(
+    symbol: str,
+    start: str | None = None,
+    end: str | None = None,
+    adjust: str = "raw",
+) -> list[dict[str, str]]:
+    """Backward-compatible row view over the audited CanonicalBatch adapter."""
+
+    return fetch_baostock_batch(symbol, start=start, end=end, adjust=adjust).records

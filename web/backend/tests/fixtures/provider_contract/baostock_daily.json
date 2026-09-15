@@ -1,0 +1,76 @@
+{
+  "provider": "baostock",
+  "symbol": "600519",
+  "adjust": "raw",
+  "expectedUnits": {
+    "priceCurrency": "CNY",
+    "volumeUnit": "share",
+    "amountUnit": "CNY",
+    "timezone": "Asia/Shanghai",
+    "adjustment": "raw"
+  },
+  "rows": [
+    {
+      "date": "2026-09-07",
+      "code": "sh.600519",
+      "open": "1450.00",
+      "high": "1460.00",
+      "low": "1440.00",
+      "close": "1455.00",
+      "preclose": "1450.00",
+      "volume": "0",
+      "amount": "0",
+      "turn": "0",
+      "pctChg": "0.3448"
+    },
+    {
+      "date": "2026-09-08",
+      "code": "sh.600519",
+      "open": "1455.00",
+      "high": "1470.00",
+      "low": "1450.00",
+      "close": "1466.00",
+      "preclose": "1455.00",
+      "volume": "12345",
+      "amount": "18090000",
+      "turn": "0.0102",
+      "pctChg": "0.7560"
+    },
+    {
+      "date": "2026-09-09",
+      "code": "sh.600519",
+      "open": "not-a-number",
+      "high": "1470.00",
+      "low": "1450.00",
+      "close": "1460.00",
+      "volume": "12000"
+    },
+    {
+      "date": "2026-09-10",
+      "code": "sh.600519",
+      "open": "NaN",
+      "high": "1470.00",
+      "low": "1450.00",
+      "close": "1460.00",
+      "volume": "12000"
+    },
+    {
+      "date": "2026-09-11",
+      "code": "sh.600519",
+      "open": "Inf",
+      "high": "1470.00",
+      "low": "1450.00",
+      "close": "1460.00",
+      "volume": "12000"
+    },
+    {
+      "date": "2026-09-14",
+      "code": "sh.600519",
+      "open": "1450.00",
+      "high": "",
+      "low": "1440.00",
+      "close": "1455.00",
+      "volume": "12000"
+    }
+  ]
+}
