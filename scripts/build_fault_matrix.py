@@ -37,7 +37,9 @@ def _normalize_scenario(name: str, path: Path, payload: dict[str, Any]) -> dict[
         trace = {
             "source": str(path),
             "status": payload.get("status"),
-            "generatedAt": payload.get("generatedAt") or payload.get("testedAt") or payload.get("completedAt"),
+            "generatedAt": payload.get("generatedAt")
+            or payload.get("testedAt")
+            or payload.get("completedAt"),
         }
     if not isinstance(invariants, dict):
         invariants = payload.get("invariantResults")
@@ -76,12 +78,22 @@ def build_matrix(
     required = [str(item) for item in policy.get("requiredFaultScenarios") or []]
     scenarios: dict[str, dict[str, Any]] = {}
     sources: list[dict[str, Any]] = []
+    identity: dict[str, Any] = {
+        "gitSha": None,
+        "releaseGitSha": None,
+        "releaseId": None,
+    }
 
     if service_restart_path is not None:
         service_payload = _load(service_restart_path)
         service_scenarios = service_payload.get("scenarios") or {}
         if not isinstance(service_scenarios, dict):
             raise ValueError("service_restart_scenarios_invalid")
+        identity = {
+            "gitSha": service_payload.get("gitSha"),
+            "releaseGitSha": service_payload.get("releaseGitSha"),
+            "releaseId": service_payload.get("releaseId"),
+        }
         for name, item in service_scenarios.items():
             if not isinstance(item, dict):
                 continue
@@ -96,6 +108,7 @@ def build_matrix(
                 "path": str(service_restart_path),
                 "status": service_payload.get("status"),
                 "passed": service_payload.get("passed"),
+                **identity,
             }
         )
 
@@ -109,6 +122,8 @@ def build_matrix(
                 "path": str(path),
                 "status": payload.get("status"),
                 "passed": scenarios[name]["passed"],
+                "gitSha": payload.get("gitSha"),
+                "releaseId": payload.get("releaseId"),
             }
         )
 
@@ -125,17 +140,29 @@ def build_matrix(
             or not scenarios[name].get("invariants")
         )
     ]
-    passed = bool(required) and not missing and not failed and not incomplete
+    identity_missing = service_restart_path is not None and (
+        not identity.get("releaseId")
+        or not (identity.get("releaseGitSha") or identity.get("gitSha"))
+    )
+    passed = (
+        bool(required)
+        and not missing
+        and not failed
+        and not incomplete
+        and not identity_missing
+    )
     return {
         "schemaVersion": 1,
         "policyId": policy.get("policyId"),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "status": "passed" if passed else "blocked",
         "passed": passed,
+        **identity,
         "requiredScenarios": required,
         "missingScenarios": missing,
         "failedScenarios": failed,
         "incompleteScenarios": incomplete,
+        "identityMissing": identity_missing,
         "scenarios": scenarios,
         "sources": sources,
     }
