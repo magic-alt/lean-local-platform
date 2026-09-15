@@ -35,6 +35,24 @@ INVARIANT_QUERIES = {
     "paperReports": "select count(*) as count from paper_daily_reports",
     "datasetVersions": "select count(*) as count from dataset_versions",
 }
+SCENARIO_BY_SERVICE = {
+    "postgres": "database_short_disconnect",
+    "rabbitmq": "rabbitmq_outage",
+    "worker": "worker_crash",
+}
+
+
+def _git_sha() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode or not completed.stdout.strip():
+        return "unknown"
+    return completed.stdout.strip()
 
 
 def _query_counts(queries: dict[str, str]) -> dict[str, int]:
@@ -71,7 +89,7 @@ def _service_state(project: str, service: str) -> dict[str, Any]:
         payload = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
         return {"service": service, "status": "unknown", "error": "invalid_compose_ps_json"}
-    item = (payload if isinstance(payload, list) else [payload])
+    item = payload if isinstance(payload, list) else [payload]
     row = item[0] if item else {}
     return {
         "service": service,
@@ -94,9 +112,17 @@ def _wait_recovered(project: str, service: str, api_url: str, timeout: int) -> d
     started = time.monotonic()
     last_state: dict[str, Any] = {}
     last_api: dict[str, Any] = {}
+    samples: list[dict[str, Any]] = []
     while time.monotonic() - started < timeout:
         last_state = _service_state(project, service)
         last_api = _api_health(api_url)
+        samples.append(
+            {
+                "atSeconds": round(time.monotonic() - started, 3),
+                "serviceState": last_state,
+                "apiOk": bool(last_api.get("ok")),
+            }
+        )
         service_ready = last_state.get("status") == "running"
         health = last_state.get("health")
         if health:
@@ -107,6 +133,7 @@ def _wait_recovered(project: str, service: str, api_url: str, timeout: int) -> d
                 "seconds": round(time.monotonic() - started, 3),
                 "serviceState": last_state,
                 "apiHealth": last_api,
+                "samples": samples,
             }
         time.sleep(2)
     return {
@@ -114,6 +141,7 @@ def _wait_recovered(project: str, service: str, api_url: str, timeout: int) -> d
         "seconds": round(time.monotonic() - started, 3),
         "serviceState": last_state,
         "apiHealth": last_api,
+        "samples": samples,
     }
 
 
@@ -129,11 +157,14 @@ def main() -> int:
     if args.confirm != "RESTART_LOCAL_SERVICES":
         parser.error("--confirm must be RESTART_LOCAL_SERVICES")
 
+    baseline_health = _api_health(args.api_url)
+    baseline_release = ((baseline_health.get("body") or {}).get("release") or {})
     active = _query_counts(ACTIVE_QUERIES)
     if any(active.values()):
         raise RuntimeError(f"active_work_refuses_fault_injection:{active}")
     before = _query_counts(INVARIANT_QUERIES)
     results: list[dict[str, Any]] = []
+    scenarios: dict[str, dict[str, Any]] = {}
     for service in [item.strip() for item in args.services.split(",") if item.strip()]:
         started_at = datetime.now(timezone.utc).isoformat()
         restart = _compose(args.project, "restart", service)
@@ -160,28 +191,66 @@ def main() -> int:
             }
             recovery["workerPing"] = worker_ping
             recovery["recovered"] = bool(recovery.get("recovered") and worker_ping["ok"])
-        results.append(
-            {
-                "service": service,
-                "startedAt": started_at,
-                "restartExitCode": restart.returncode,
-                "restartError": restart.stderr.strip() if restart.returncode else None,
-                **recovery,
+        scenario_after = _query_counts(INVARIANT_QUERIES) if recovery.get("recovered") else {}
+        result = {
+            "service": service,
+            "startedAt": started_at,
+            "restartExitCode": restart.returncode,
+            "restartError": restart.stderr.strip() if restart.returncode else None,
+            **recovery,
+        }
+        results.append(result)
+        scenario = SCENARIO_BY_SERVICE.get(service)
+        if scenario:
+            invariant_stable = bool(scenario_after) and before == scenario_after
+            scenario_passed = bool(
+                restart.returncode == 0 and recovery.get("recovered") and invariant_stable
+            )
+            scenarios[scenario] = {
+                "passed": scenario_passed,
+                "evidenceMode": "production_shape_service_fault",
+                "trace": {
+                    "service": service,
+                    "startedAt": started_at,
+                    "restartExitCode": restart.returncode,
+                    "recoverySeconds": recovery.get("seconds"),
+                    "samples": recovery.get("samples") or [],
+                    "workerPing": worker_ping,
+                },
+                "invariants": {
+                    "before": before,
+                    "after": scenario_after,
+                    "stable": invariant_stable,
+                },
             }
-        )
     after = _query_counts(INVARIANT_QUERIES)
-    passed = all(item.get("restartExitCode") == 0 and item.get("recovered") for item in results) and before == after
+    passed = (
+        all(item.get("restartExitCode") == 0 and item.get("recovered") for item in results)
+        and before == after
+    )
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "status": "passed" if passed else "failed",
+        "passed": passed,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "gitSha": _git_sha(),
+        "releaseId": baseline_release.get("releaseId"),
+        "releaseGitSha": baseline_release.get("gitSha"),
         "project": args.project,
         "activeWorkBefore": active,
         "invariantsBefore": before,
         "invariantsAfter": after,
         "invariantsStable": before == after,
         "results": results,
+        "scenarios": scenarios,
         "notCovered": [
-            "disk_exhaustion",
+            "duplicate_delivery",
+            "runner_timeout_cancel",
+            "disk_full",
+            "object_corruption",
+            "lease_expiry_stale_worker",
+            "missing_pit_benchmark",
+            "notification_failure",
             "oom_kill",
             "network_partition",
             "in_flight_order_or_fill_boundary",

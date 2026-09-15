@@ -17,6 +17,7 @@
   {"slug":"api-reference","source":"help/api-reference.md","group":"reference","category":"api","order":220,"summary":"根据 FastAPI OpenAPI 自动生成的完整端点索引。"},
   {"slug":"current-state","source":"current-state.md","group":"reference","category":"platform","order":225,"summary":"当前数据库、broker、存储、Research 与部署支持矩阵。"},
   {"slug":"release-status","source":"release-status.md","group":"reference","category":"platform","order":227,"summary":"当前认证状态、证据绑定和历史证书失效规则。"},
+  {"slug":"post-migration-certification","source":"post-migration-certification.md","group":"reference","category":"operations","order":228,"summary":"PostgreSQL/RabbitMQ 迁移后的发布身份、恢复、故障矩阵与 Paper 长稳认证流程。"},
   {"slug":"architecture","source":"architecture.md","group":"reference","category":"platform","order":230,"summary":"组件边界、运行链路、存储所有权和恢复边界。"},
   {"slug":"data-pipeline","source":"data_pipeline.md","group":"reference","category":"data","order":240,"summary":"数据标准化、质量、同步、归档和派生层设计。"},
   {"slug":"market-data-lake","source":"market_data_lake.md","group":"reference","category":"data","order":245,"summary":"本地 data/ Parquet 层次、读写边界和 Qlib 只读约束。"},
