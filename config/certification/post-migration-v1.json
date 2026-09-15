@@ -7,8 +7,16 @@
   "sourceLocks": [
     "web/backend/requirements.lock",
     "web/backend/requirements-ml.lock",
+    "web/backend/Dockerfile",
     "web/frontend/package-lock.json",
     "config/runtime/lean-native.lock.json",
+    "config/contracts/data-release.v2.schema.json",
+    "config/contracts/qlib-research-import.v2.schema.json",
+    "config/contracts/research-api-surface.json",
+    "config/operational-slo.yaml",
+    "config/supply-chain-vulnerability-policy.json",
+    "config/release-signing-public.pem",
+    ".github/repository-policy.json",
     "docker-compose.yml"
   ],
   "profiles": {
