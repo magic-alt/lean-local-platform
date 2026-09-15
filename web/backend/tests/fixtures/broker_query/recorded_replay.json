@@ -1,0 +1,135 @@
+{
+  "account": "recorded:acct-001",
+  "historyStart": "2026-09-14",
+  "historyEnd": "2026-09-15",
+  "snapshotTime": "2026-09-15T07:00:00Z",
+  "operations": {
+    "account": {
+      "sequence": 10,
+      "complete": true,
+      "records": [
+        {"portfolioValue": 1000000.0, "cash": 300000.0, "currency": "CNY"}
+      ]
+    },
+    "positions": {
+      "sequence": 11,
+      "complete": false,
+      "records": [
+        {"instrument": "SH600000", "quantity": 1000.0, "availableQuantity": 900.0}
+      ],
+      "sourceErrors": [
+        {
+          "source": "recorded-secondary-leg",
+          "code": "permission_denied",
+          "message": "one recorded position source was unavailable",
+          "retryable": false
+        }
+      ]
+    },
+    "orders": {
+      "sequence": 20,
+      "complete": true,
+      "records": [
+        {
+          "brokerOrderId": "order-1",
+          "clientRequestId": "intent-partial-cancel",
+          "instrument": "SH600000",
+          "side": "BUY",
+          "quantity": 100.0,
+          "filledQuantity": 0.0,
+          "status": "SUBMITTED",
+          "eventAtUtc": "2026-09-15T01:30:00Z"
+        },
+        {
+          "brokerOrderId": "order-1",
+          "clientRequestId": "intent-partial-cancel",
+          "instrument": "SH600000",
+          "side": "BUY",
+          "quantity": 100.0,
+          "filledQuantity": 0.0,
+          "status": "SUBMITTED",
+          "eventAtUtc": "2026-09-15T01:30:00Z"
+        },
+        {
+          "brokerOrderId": "order-2",
+          "clientRequestId": "intent-unknown-1",
+          "instrument": "SZ000001",
+          "side": "BUY",
+          "quantity": 100.0,
+          "filledQuantity": 0.0,
+          "status": "ACKNOWLEDGED",
+          "eventAtUtc": "2026-09-15T01:31:00Z"
+        },
+        {
+          "brokerOrderId": "order-1",
+          "clientRequestId": "intent-partial-cancel",
+          "instrument": "SH600000",
+          "side": "BUY",
+          "quantity": 100.0,
+          "filledQuantity": 20.0,
+          "status": "CANCELLED",
+          "eventAtUtc": "2026-09-15T01:40:00Z"
+        },
+        {
+          "brokerOrderId": "order-3",
+          "clientRequestId": "intent-fill-before-order",
+          "instrument": "SH510300",
+          "side": "BUY",
+          "quantity": 100.0,
+          "filledQuantity": 100.0,
+          "status": "FILLED",
+          "eventAtUtc": "2026-09-15T01:35:00Z"
+        }
+      ]
+    },
+    "fills": {
+      "sequence": 21,
+      "complete": true,
+      "records": [
+        {
+          "fillId": "fill-1",
+          "brokerOrderId": "order-1",
+          "clientRequestId": "intent-partial-cancel",
+          "instrument": "SH600000",
+          "side": "BUY",
+          "quantity": 20.0,
+          "price": 10.5,
+          "fee": null,
+          "feeCurrency": null,
+          "eventAtUtc": "2026-09-15T01:32:00Z"
+        },
+        {
+          "fillId": "fill-1",
+          "brokerOrderId": "order-1",
+          "clientRequestId": "intent-partial-cancel",
+          "instrument": "SH600000",
+          "side": "BUY",
+          "quantity": 20.0,
+          "price": 10.5,
+          "fee": null,
+          "feeCurrency": null,
+          "eventAtUtc": "2026-09-15T01:32:00Z"
+        },
+        {
+          "fillId": "fill-3",
+          "brokerOrderId": "order-3",
+          "clientRequestId": "intent-fill-before-order",
+          "instrument": "SH510300",
+          "side": "BUY",
+          "quantity": 100.0,
+          "price": 4.2,
+          "fee": 1.0,
+          "feeCurrency": "CNY",
+          "eventAtUtc": "2026-09-15T01:34:00Z"
+        }
+      ]
+    },
+    "quotes": {
+      "sequence": 30,
+      "complete": true,
+      "records": [
+        {"instrument": "SH600000", "price": 10.5, "paused": 0}
+      ]
+    }
+  }
+}
