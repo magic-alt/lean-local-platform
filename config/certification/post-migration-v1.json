@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "policyId": "post-migration-recertification-v1",
+  "minimumPaperObservationCalendarDays": 21,
+  "minimumExternalWebhookObservationHours": 24,
+  "liveActivationAllowed": false,
+  "sourceLocks": [
+    "web/backend/requirements.lock",
+    "web/backend/requirements-ml.lock",
+    "web/frontend/package-lock.json",
+    "config/runtime/lean-native.lock.json",
+    "docker-compose.yml"
+  ],
+  "profiles": {
+    "backtest": {
+      "requiredEvidence": [
+        "releaseConvergence",
+        "localDataCertification",
+        "restoreDrill",
+        "faultMatrix",
+        "supplyChain"
+      ]
+    },
+    "paper": {
+      "requiredEvidence": [
+        "releaseConvergence",
+        "localDataCertification",
+        "restoreDrill",
+        "faultMatrix",
+        "supplyChain",
+        "paperSoak",
+        "externalWebhook"
+      ]
+    }
+  },
+  "runtimes": {
+    "linux-docker": {
+      "requiresWindowsCertificate": false
+    },
+    "windows-native": {
+      "requiresWindowsCertificate": true
+    }
+  },
+  "requiredFaultScenarios": [
+    "database_short_disconnect",
+    "rabbitmq_outage",
+    "duplicate_delivery",
+    "worker_crash",
+    "runner_timeout_cancel",
+    "disk_full",
+    "object_corruption",
+    "lease_expiry_stale_worker",
+    "missing_pit_benchmark",
+    "notification_failure"
+  ]
+}
