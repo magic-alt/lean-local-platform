@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "legacyIdentity": {
+    "symbol": "600000",
+    "legacyUuid": "1b2c42b6-401f-547a-bb2e-7762a5a389ec"
+  },
+  "stock": {
+    "instrument": {
+      "schema_version": 1,
+      "instrument_id": "CN.XSHG.EQUITY.600000",
+      "canonical_symbol": "600000",
+      "asset_class": "equity",
+      "subtype": "common_stock",
+      "market": "CN",
+      "venue": "XSHG",
+      "currency": "CNY",
+      "settlement_currency": "CNY",
+      "calendar_id": "cn_stock_v1",
+      "price_tick": "0.01",
+      "quantity_increment": "1",
+      "quantity_unit": "share",
+      "lot_size": "100",
+      "tradable": true,
+      "market_rule_pack_id": "cn_xshg_common_stock_v1",
+      "aliases": [
+        {"provider": "qlib", "symbol": "SH600000", "valid_from": null, "valid_to": null, "purpose": "market_data"},
+        {"provider": "tushare", "symbol": "600000.SH", "valid_from": null, "valid_to": null, "purpose": "market_data"},
+        {"provider": "lean", "symbol": "600000", "valid_from": null, "valid_to": null, "purpose": "execution"}
+      ],
+      "listed_from": null,
+      "listed_to": null,
+      "identity_kind": "instrument",
+      "continuous_series": false
+    },
+    "rule": {
+      "schema_version": 1,
+      "rule_pack_id": "cn_xshg_common_stock_v1",
+      "version": 1,
+      "asset_class": "equity",
+      "subtype": "common_stock",
+      "market": "CN",
+      "venue": "XSHG",
+      "calendar_id": "cn_stock_v1",
+      "timezone": "Asia/Shanghai",
+      "effective_from": "2023-08-28",
+      "effective_to": null,
+      "source": "platform-versioned-cn-equity-rules",
+      "sessions": [
+        {"open_local": "09:30:00", "close_local": "11:30:00"},
+        {"open_local": "13:00:00", "close_local": "15:00:00"}
+      ],
+      "settlement": {"cash_cycle": "T+1", "position_cycle": "T+0", "sellable_cycle": "T+1"},
+      "round_lot": "100",
+      "quantity_increment": "1",
+      "price_limit_policy": "daily_reference_data_required",
+      "suspension_policy": "daily_trade_status_required",
+      "corporate_action": {
+        "adjustment_mode": "provider_factor",
+        "effective_time": "exchange_effective_date",
+        "source": "provider_corporate_action_and_adjustment_factor"
+      },
+      "fees": [
+        {"code": "stock_stamp_tax", "side": "sell", "rate": "0.0005", "applies": true, "source": "versioned_statutory_tax_profile"}
+      ],
+      "benchmark_only": false,
+      "margin_policy": "unsupported",
+      "borrow_short_policy": "unsupported",
+      "roll_policy": "not_applicable",
+      "exercise_assignment_policy": "not_applicable"
+    }
+  },
+  "etf": {
+    "instrument": {
+      "schema_version": 1,
+      "instrument_id": "CN.XSHG.ETF.510300",
+      "canonical_symbol": "510300",
+      "asset_class": "equity",
+      "subtype": "etf",
+      "market": "CN",
+      "venue": "XSHG",
+      "currency": "CNY",
+      "settlement_currency": "CNY",
+      "calendar_id": "cn_stock_v1",
+      "price_tick": "0.001",
+      "quantity_increment": "1",
+      "quantity_unit": "share",
+      "lot_size": "100",
+      "tradable": true,
+      "market_rule_pack_id": "cn_xshg_stock_etf_v1",
+      "aliases": [
+        {"provider": "qlib", "symbol": "SH510300", "valid_from": null, "valid_to": null, "purpose": "market_data"},
+        {"provider": "tushare", "symbol": "510300.SH", "valid_from": null, "valid_to": null, "purpose": "market_data"},
+        {"provider": "lean", "symbol": "510300", "valid_from": null, "valid_to": null, "purpose": "execution"}
+      ],
+      "listed_from": null,
+      "listed_to": null,
+      "identity_kind": "instrument",
+      "continuous_series": false
+    },
+    "rule": {
+      "schema_version": 1,
+      "rule_pack_id": "cn_xshg_stock_etf_v1",
+      "version": 1,
+      "asset_class": "equity",
+      "subtype": "etf",
+      "market": "CN",
+      "venue": "XSHG",
+      "calendar_id": "cn_stock_v1",
+      "timezone": "Asia/Shanghai",
+      "effective_from": "2023-08-28",
+      "effective_to": null,
+      "source": "platform-versioned-cn-stock-etf-rules",
+      "sessions": [
+        {"open_local": "09:30:00", "close_local": "11:30:00"},
+        {"open_local": "13:00:00", "close_local": "15:00:00"}
+      ],
+      "settlement": {"cash_cycle": "T+1", "position_cycle": "T+0", "sellable_cycle": "T+1"},
+      "round_lot": "100",
+      "quantity_increment": "1",
+      "price_limit_policy": "daily_reference_data_required",
+      "suspension_policy": "daily_trade_status_required",
+      "corporate_action": {
+        "adjustment_mode": "provider_factor",
+        "effective_time": "exchange_effective_date",
+        "source": "provider_corporate_action_and_adjustment_factor"
+      },
+      "fees": [
+        {"code": "stock_stamp_tax", "side": "sell", "rate": "0", "applies": false, "source": "etf_tax_profile_not_stock_transfer"}
+      ],
+      "benchmark_only": false,
+      "margin_policy": "unsupported",
+      "borrow_short_policy": "separate_instrument_entitlement_required",
+      "roll_policy": "not_applicable",
+      "exercise_assignment_policy": "not_applicable"
+    },
+    "capability": {
+      "schemaVersion": 1,
+      "publicAssetClass": "etf",
+      "instrumentAssetClass": "equity",
+      "instrumentSubtype": "etf",
+      "storageAssetClass": "equity",
+      "benchmarkOnly": false,
+      "orderable": true,
+      "leanSecurityType": "Equity",
+      "certificationScopeKey": "equity:etf:CN:XSHG",
+      "operations": ["market_data", "benchmark", "research_validation", "lean_config_validation"],
+      "executionCertified": false,
+      "benchmarkInstrumentId": "CN.XSHG.INDEX.000300",
+      "requiredMarketDataEvidence": ["etf_instrument_master", "etf_daily", "etf_adjustment_factor", "trading_calendar"],
+      "unsupportedReason": "etf_execution_adapter_not_certified"
+    }
+  },
+  "index": {
+    "instrument": {
+      "schema_version": 1,
+      "instrument_id": "CN.XSHG.INDEX.000300",
+      "canonical_symbol": "000300",
+      "asset_class": "index",
+      "subtype": "index",
+      "market": "CN",
+      "venue": "XSHG",
+      "currency": "CNY",
+      "settlement_currency": "CNY",
+      "calendar_id": "cn_stock_v1",
+      "price_tick": "0.01",
+      "quantity_increment": "1",
+      "quantity_unit": "index_point",
+      "lot_size": "1",
+      "tradable": false,
+      "market_rule_pack_id": "cn_xshg_index_benchmark_v1",
+      "aliases": [
+        {"provider": "qlib", "symbol": "SH000300", "valid_from": null, "valid_to": null, "purpose": "market_data"},
+        {"provider": "tushare", "symbol": "000300.SH", "valid_from": null, "valid_to": null, "purpose": "market_data"}
+      ],
+      "listed_from": null,
+      "listed_to": null,
+      "identity_kind": "instrument",
+      "continuous_series": false
+    },
+    "rule": {
+      "schema_version": 1,
+      "rule_pack_id": "cn_xshg_index_benchmark_v1",
+      "version": 1,
+      "asset_class": "index",
+      "subtype": "index",
+      "market": "CN",
+      "venue": "XSHG",
+      "calendar_id": "cn_stock_v1",
+      "timezone": "Asia/Shanghai",
+      "effective_from": "2005-04-08",
+      "effective_to": null,
+      "source": "platform-benchmark-only-index-rules",
+      "sessions": [
+        {"open_local": "09:30:00", "close_local": "11:30:00"},
+        {"open_local": "13:00:00", "close_local": "15:00:00"}
+      ],
+      "settlement": {"cash_cycle": "not_applicable", "position_cycle": "not_applicable", "sellable_cycle": "not_applicable"},
+      "round_lot": "1",
+      "quantity_increment": "1",
+      "price_limit_policy": "not_applicable",
+      "suspension_policy": "benchmark_availability_required",
+      "corporate_action": {
+        "adjustment_mode": "index_methodology",
+        "effective_time": "provider_available_at",
+        "source": "index_provider_methodology"
+      },
+      "fees": [],
+      "benchmark_only": true,
+      "margin_policy": "unsupported",
+      "borrow_short_policy": "unsupported",
+      "roll_policy": "not_applicable",
+      "exercise_assignment_policy": "not_applicable"
+    }
+  }
+}
