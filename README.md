@@ -27,6 +27,16 @@ English · [简体中文](README.zh-CN.md)
 > [!IMPORTANT]
 > **Current release status: NOT CERTIFIED.** The PostgreSQL/RabbitMQ architecture migration invalidated earlier certification evidence. **Live trading / P9 activation is disabled.** Live broker writes remain disabled. Read [Current Release Status](docs/release-status.md) before using the platform in any production-like environment.
 
+## Real product UI
+
+<p align="center">
+  <a href="docs/help/backtests.md">
+    <img src="docs/help/assets/backtest-workbench.png" alt="LEAN Local Platform backtest workbench captured from the reproducible Playwright E2E demo environment" width="100%">
+  </a>
+</p>
+
+<p align="center"><sub><strong>Reproducible product evidence.</strong> This screenshot is generated from the isolated E2E demo environment with <code>cd web/frontend && npm run docs:screenshots</code>. It demonstrates the UI only; it is not release-certification or live-trading evidence.</sub></p>
+
 ## What is LEAN Local Platform?
 
 LEAN Local Platform is a local-first **execution plane / control plane** built around [QuantConnect LEAN](https://github.com/QuantConnect/Lean). It turns governed A-share data and versioned research artifacts into reproducible LEAN validation, backtests, optimization runs, paper-account state, and audit-ready evidence.
