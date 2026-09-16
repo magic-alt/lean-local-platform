@@ -1,27 +1,159 @@
 {
   "key": "etf_rotation",
-  "name": "ETF Momentum Rotation",
-  "description": "Rotate into the strongest ETF by rolling momentum.",
+  "name": "Certified ETF Momentum / Risk-Parity Rotation",
+  "version": 2,
+  "description": "Deterministic ETF momentum selection with inverse-volatility risk parity, an unlevered volatility target, turnover controls, and LEAN-native fee/slippage models.",
+  "assetClasses": [
+    "equity"
+  ],
+  "markets": [
+    "usa"
+  ],
+  "resolutions": [
+    "daily"
+  ],
+  "riskLevel": "medium",
   "parameters": [
     {
       "key": "symbols",
       "label": "ETF Symbols",
       "type": "text",
-      "default": "SPY,QQQ,IWM"
+      "default": "SPY,QQQ,IWM,IEF,GLD",
+      "required": true
     },
     {
       "key": "lookback",
-      "label": "Momentum Lookback",
+      "label": "Momentum Lookback (trading sessions)",
       "type": "number",
       "default": 63,
-      "min": 2
+      "min": 2,
+      "max": 504,
+      "step": 1,
+      "required": true
     },
     {
       "key": "rebalanceDays",
-      "label": "Rebalance Days",
+      "label": "Rebalance Interval (fresh trading sessions)",
       "type": "number",
       "default": 21,
-      "min": 1
+      "min": 1,
+      "max": 126,
+      "step": 1,
+      "required": true
+    },
+    {
+      "key": "selectionCount",
+      "label": "Selected ETFs",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "max": 20,
+      "step": 1,
+      "required": true
+    },
+    {
+      "key": "volatilityLookback",
+      "label": "Volatility Lookback (trading sessions)",
+      "type": "number",
+      "default": 60,
+      "min": 2,
+      "max": 252,
+      "step": 1,
+      "required": true
+    },
+    {
+      "key": "targetVolatility",
+      "label": "Annualized Volatility Target",
+      "type": "number",
+      "default": 0.1,
+      "min": 0.01,
+      "max": 1.0,
+      "step": 0.01,
+      "required": true
+    },
+    {
+      "key": "maxWeight",
+      "label": "Maximum ETF Weight",
+      "type": "number",
+      "default": 0.6,
+      "min": 0.01,
+      "max": 1.0,
+      "step": 0.01,
+      "required": true
+    },
+    {
+      "key": "maxTurnover",
+      "label": "Maximum One-Rebalance Turnover",
+      "type": "number",
+      "default": 0.25,
+      "min": 0.01,
+      "max": 1.0,
+      "step": 0.01,
+      "required": true
+    },
+    {
+      "key": "commissionPerOrder",
+      "label": "Commission per Order (USD)",
+      "type": "number",
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01,
+      "required": true
+    },
+    {
+      "key": "slippageBps",
+      "label": "Constant Slippage (bps)",
+      "type": "number",
+      "default": 2.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.1,
+      "required": true
+    },
+    {
+      "key": "costModelId",
+      "label": "Cost Model Identity",
+      "type": "text",
+      "default": "lean-constant-fee-slippage-v1",
+      "required": true
     }
+  ],
+  "expectedArtifacts": [
+    "result.json",
+    "summary.json",
+    "order-events.json",
+    "etf-rotation-certification.json"
+  ],
+  "minimumData": {
+    "bars": 505,
+    "benchmark": true,
+    "normalization": "adjusted",
+    "freshTradingSessions": true
+  },
+  "costModel": {
+    "id": "lean-constant-fee-slippage-v1",
+    "commissionParameter": "commissionPerOrder",
+    "slippageParameter": "slippageBps",
+    "application": "LEAN Security.SetFeeModel + Security.SetSlippageModel",
+    "pnlAdjustmentInStrategy": false
+  },
+  "certification": {
+    "schemaVersion": "etf-rotation-certification.v1",
+    "baseline": "static_equal_weight",
+    "requiredMetrics": [
+      "sharpe",
+      "maxDrawdown",
+      "turnover",
+      "tradeCount"
+    ],
+    "deterministicTieBreak": "momentum_desc_then_ticker_asc",
+    "volatilityEstimate": "diagonal_annualized_252",
+    "volatilityTargetLeverage": "disabled",
+    "zeroCandidatePolicy": "move_toward_cash_subject_to_maxTurnover",
+    "suspensionPolicy": "preserve_non_tradable_weight"
+  },
+  "instrumentTypes": [
+    "ETF"
   ]
 }
