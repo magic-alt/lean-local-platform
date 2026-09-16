@@ -28,13 +28,25 @@ CORE_RESEARCH_COMPONENTS = frozenset(
         "benchmark",
     }
 )
+US_ETF_CERTIFICATION_COMPONENTS = frozenset(
+    {
+        "bars",
+        "adjustment_factors",
+        "corporate_actions",
+        "security_master",
+        "trading_calendar",
+        "benchmark",
+    }
+)
 REQUIRED_RESEARCH_COMPONENTS = CORE_RESEARCH_COMPONENTS
 QLIB_RESEARCH_PROFILE = "ashare_qlib_research_v1"
 QLIB_RESEARCH_PROFILE_V2 = "ashare_qlib_research_v2"
+US_ETF_CERTIFICATION_PROFILE = "us-etf-daily-certification-v1"
 DATA_RELEASE_PROFILES = {
     "cn-equity-daily-research-v2": CORE_RESEARCH_COMPONENTS,
     QLIB_RESEARCH_PROFILE: CORE_RESEARCH_COMPONENTS | {"qlib_staging", "industry_classification_pit"},
     QLIB_RESEARCH_PROFILE_V2: CORE_RESEARCH_COMPONENTS | {"qlib_staging", "industry_classification_pit"},
+    US_ETF_CERTIFICATION_PROFILE: US_ETF_CERTIFICATION_COMPONENTS,
 }
 
 PROFILE_COMPONENT_SCHEMAS = {
@@ -44,6 +56,14 @@ PROFILE_COMPONENT_SCHEMAS = {
         "qlib_staging": "qlib-staging-v2",
     }
 }
+PROFILE_SCOPES = {
+    US_ETF_CERTIFICATION_PROFILE: {
+        "assetClass": "equity",
+        "market": "usa",
+    }
+}
+
+
 def required_components_for_profile(profile: str) -> frozenset[str]:
     if profile not in DATA_RELEASE_PROFILES:
         raise ValueError(f"Unknown DataRelease profile: {profile}")
@@ -256,7 +276,7 @@ def _persist(manifest: Mapping[str, Any], manifest_path: Path, *, root: Path) ->
 def publish_data_release(
     spec: Mapping[str, Any], data_root: str | Path, *, persist: bool = True
 ) -> dict[str, Any]:
-    """Freeze a complete research dataset into an immutable shared-filesystem release."""
+    """Freeze a complete governed dataset into an immutable shared-filesystem release."""
 
     root = Path(data_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -274,6 +294,14 @@ def publish_data_release(
         raise ValueError(
             "DataRelease profile, scope, benchmark and asOfTime are required"
         )
+    expected_scope = PROFILE_SCOPES.get(profile, {})
+    scope_drift = {
+        key: {"expected": expected, "actual": required.get(key)}
+        for key, expected in expected_scope.items()
+        if str(required.get(key) or "").lower() != str(expected).lower()
+    }
+    if scope_drift:
+        raise ValueError(f"DataRelease profile scope mismatch: {scope_drift}")
     required_components = required_components_for_profile(profile)
     components = _prepare_components(spec, root, required_components)
     expected_schemas = PROFILE_COMPONENT_SCHEMAS.get(profile, {})
@@ -284,7 +312,7 @@ def publish_data_release(
         }
         for component in components
         if str(component["role"]) in expected_schemas
-        and str(component["schemaVersion"]) != expected_schemas[str(component["role"]) ]
+        and str(component["schemaVersion"]) != expected_schemas[str(component["role"])]
     }
     if schema_drift:
         raise ValueError(f"DataRelease profile component schema mismatch: {schema_drift}")
@@ -374,5 +402,3 @@ def get_data_release(release_id: str) -> dict[str, Any] | None:
             "select * from data_releases where id=?", (release_id,)
         ).fetchone()
     return row_to_dict(row)
-
-
