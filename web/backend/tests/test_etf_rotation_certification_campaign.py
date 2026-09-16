@@ -7,6 +7,7 @@ import pytest
 
 from app.services import etf_rotation_certification_campaign as campaign
 from app.services import strategies
+from app.services.data_releases import US_ETF_CERTIFICATION_PROFILE
 from app.services.etf_rotation_execution_attribution import build_execution_attribution
 
 
@@ -41,7 +42,7 @@ def _campaign_config() -> dict:
     }
 
 
-def test_campaign_freezes_explicit_release_and_never_selects_latest(monkeypatch):
+def _patch_valid_project(monkeypatch):
     monkeypatch.setattr(
         campaign,
         "get_project",
@@ -54,21 +55,44 @@ def test_campaign_freezes_explicit_release_and_never_selects_latest(monkeypatch)
             },
         },
     )
+
+
+def _patch_valid_release(monkeypatch):
     monkeypatch.setattr(
         campaign,
         "get_data_release",
         lambda release_id: {
             "id": release_id,
             "status": "active",
+            "profile": US_ETF_CERTIFICATION_PROFILE,
             "market": "usa",
             "coverage_start": "2019-01-01",
             "coverage_end": "2025-12-31",
         },
     )
+    monkeypatch.setattr(
+        campaign,
+        "_release_components",
+        lambda _release_id: {
+            "bars": "legacy-us-etf-bars-release-v1",
+            "adjustment_factors": "adjust-v1",
+            "corporate_actions": "actions-v1",
+            "security_master": "master-v1",
+            "trading_calendar": "calendar-v1",
+            "benchmark": "benchmark-v1",
+        },
+    )
+
+
+def test_campaign_freezes_explicit_release_and_never_selects_latest(monkeypatch):
+    _patch_valid_project(monkeypatch)
+    _patch_valid_release(monkeypatch)
     frozen = campaign._normalize_config(_campaign_config())
     assert frozen["dataReleaseId"] == "ds_real_pinned_001"
     assert frozen["parameters"]["dataReleaseId"] == "ds_real_pinned_001"
     assert frozen["symbols"] == ["SPY", "QQQ", "IWM"]
+    release = campaign._validate_release(frozen)
+    assert release["executableDatasetReleaseId"] == "legacy-us-etf-bars-release-v1"
 
     invalid = _campaign_config()
     invalid.pop("dataReleaseId")
@@ -86,27 +110,114 @@ def test_campaign_rejects_non_etf_project_and_non_us_release(monkeypatch):
     with pytest.raises(ValueError, match="templateKey=etf_rotation"):
         campaign._normalize_config(config)
 
-    monkeypatch.setattr(
-        campaign,
-        "get_project",
-        lambda project_id: {
-            "id": project_id,
-            "config": {"templateKey": "etf_rotation", "market": "usa", "parameters": {}},
-        },
-    )
+    _patch_valid_project(monkeypatch)
     monkeypatch.setattr(
         campaign,
         "get_data_release",
         lambda release_id: {
             "id": release_id,
             "status": "active",
+            "profile": US_ETF_CERTIFICATION_PROFILE,
             "market": "china",
             "coverage_start": "2019-01-01",
             "coverage_end": "2025-12-31",
         },
     )
+    monkeypatch.setattr(
+        campaign,
+        "_release_components",
+        lambda _release_id: {"bars": "legacy-us-etf-bars-release-v1"},
+    )
     with pytest.raises(ValueError, match="requires a USA DataRelease"):
         campaign._normalize_config(config)
+
+
+def test_campaign_rejects_wrong_release_profile_or_missing_executable_component(monkeypatch):
+    _patch_valid_project(monkeypatch)
+    monkeypatch.setattr(
+        campaign,
+        "get_data_release",
+        lambda release_id: {
+            "id": release_id,
+            "status": "active",
+            "profile": "ashare_qlib_research_v2",
+            "market": "usa",
+            "coverage_start": "2019-01-01",
+            "coverage_end": "2025-12-31",
+        },
+    )
+    monkeypatch.setattr(campaign, "_release_components", lambda _release_id: {})
+    with pytest.raises(ValueError, match="requires profile"):
+        campaign._normalize_config(_campaign_config())
+
+    monkeypatch.setattr(
+        campaign,
+        "get_data_release",
+        lambda release_id: {
+            "id": release_id,
+            "status": "active",
+            "profile": US_ETF_CERTIFICATION_PROFILE,
+            "market": "usa",
+            "coverage_start": "2019-01-01",
+            "coverage_end": "2025-12-31",
+        },
+    )
+    with pytest.raises(ValueError, match="bars componentReleaseId"):
+        campaign._normalize_config(_campaign_config())
+
+
+def test_terminal_backtest_requires_actual_executable_dataset_release(monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "get_backtest",
+        lambda _run_id: {
+            "id": "run-1",
+            "status": "success",
+            "dataset_release_id": "wrong-release",
+        },
+    )
+    recorded = []
+    monkeypatch.setattr(campaign, "_event", lambda *args, **kwargs: recorded.append((args, kwargs)) or {})
+    state, run = campaign._ensure_terminal_backtest(
+        "campaign-1",
+        [{"action": "canonical_dispatched", "details": {"runId": "run-1"}}],
+        dispatch_action="canonical_dispatched",
+        complete_action="canonical_completed",
+        role="canonical",
+        expected_dataset_release_id="expected-release",
+    )
+    assert state == "failed"
+    assert run["dataset_release_id"] == "wrong-release"
+    assert recorded[-1][0][2] == "canonical_dataset_release_mismatch"
+
+
+def test_paper_session_can_be_attached_after_campaign_creation(monkeypatch):
+    persisted = [
+        {
+            "action": "campaign_created",
+            "details": {"config": _campaign_config()},
+            "stage": "campaign",
+            "status": "created",
+        }
+    ]
+    monkeypatch.setattr(campaign, "_events", lambda _campaign_id: list(persisted))
+
+    def record(campaign_id, stage, action, status, **details):
+        persisted.append(
+            {
+                "workflow_id": campaign_id,
+                "stage": stage,
+                "action": action,
+                "status": status,
+                "details": details,
+            }
+        )
+        return persisted[-1]
+
+    monkeypatch.setattr(campaign, "_event", record)
+    result = campaign.attach_paper_session("campaign-1", "paper-session-1")
+    assert result["paperSessionId"] == "paper-session-1"
+    assert persisted[-1]["action"] == "paper_session_attached"
 
 
 def test_static_equal_weight_baseline_is_independent_lean_template():
