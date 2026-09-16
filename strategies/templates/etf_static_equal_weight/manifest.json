@@ -1,0 +1,66 @@
+{
+  "key": "etf_static_equal_weight",
+  "name": "Certified ETF Static Equal-Weight Baseline",
+  "version": 1,
+  "description": "Independent buy-and-hold equal-weight ETF baseline for certification comparisons on the same pinned U.S. data release and cost model.",
+  "assetClasses": ["equity"],
+  "markets": ["usa"],
+  "resolutions": ["daily"],
+  "riskLevel": "medium",
+  "parameters": [
+    {
+      "key": "symbols",
+      "label": "ETF Symbols",
+      "type": "text",
+      "default": "SPY,QQQ,IWM,IEF,GLD",
+      "required": true
+    },
+    {
+      "key": "commissionPerOrder",
+      "label": "Commission per Order (USD)",
+      "type": "number",
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01,
+      "required": true
+    },
+    {
+      "key": "slippageBps",
+      "label": "Constant Slippage (bps)",
+      "type": "number",
+      "default": 2.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.1,
+      "required": true
+    },
+    {
+      "key": "costModelId",
+      "label": "Cost Model Identity",
+      "type": "text",
+      "default": "lean-constant-fee-slippage-v1",
+      "required": true
+    }
+  ],
+  "expectedArtifacts": ["result.json", "summary.json", "order-events.json"],
+  "minimumData": {
+    "bars": 2,
+    "benchmark": true,
+    "normalization": "adjusted",
+    "freshTradingSessions": true
+  },
+  "costModel": {
+    "id": "lean-constant-fee-slippage-v1",
+    "commissionParameter": "commissionPerOrder",
+    "slippageParameter": "slippageBps",
+    "application": "LEAN Security.SetFeeModel + Security.SetSlippageModel",
+    "pnlAdjustmentInStrategy": false
+  },
+  "certification": {
+    "role": "static_equal_weight_baseline",
+    "rebalancePolicy": "initial_equal_weight_then_hold",
+    "weightTieBreak": "ticker_asc"
+  },
+  "instrumentTypes": ["ETF"]
+}
