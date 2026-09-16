@@ -90,3 +90,37 @@ The command exits with status `2` when the metric/lineage/determinism gates fail
 A passing synthetic regression fixture is engineering evidence only; it is not a
 production-readiness claim and does not replace live/paper acceptance evidence
 required by Issue #67.
+
+## Real-execution certification
+
+The second #67 certification layer is
+`web/backend/app/services/etf_rotation_execution_certification.py`. It consumes
+existing authoritative platform records instead of creating a parallel executor
+or ledger. A real-execution certificate is fail-closed unless all of these are
+present and mutually consistent:
+
+- canonical ETF and static-weight baseline LEAN runs bound to the same immutable
+  `dataReleaseId`, code version and cost-model identity;
+- complete fee, slippage, cash-drag and capacity-impact attribution;
+- the existing experiment service's frozen train/validation/OOS walk-forward
+  lineage and ordered, fingerprinted folds;
+- Paper order intents plus worker constraint decisions, transitions, fills,
+  append-only ledger entries, deterministic projection and reconciliation;
+- explicit duplicate-replay/idempotency evidence proving the ledger entry count
+  and identity do not change on replay;
+- an existing strategy admission at `admission_passed` or `paper_validated`;
+- real before/after runtime resource snapshots with CPU/RSS evidence and the
+  persisted backtest duration.
+
+Build an audit report with:
+
+```bash
+python scripts/certify_etf_rotation_execution.py \
+  --input path/to/real-execution-evidence.json \
+  --output web/runtime/audit/etf-rotation-execution-certification.json
+```
+
+A failed report is still useful audit evidence and exits with status `2`, but it
+cannot be registered as a platform certification artifact. Only a fully passing
+report can be registered as `ETF_EXECUTION_CERTIFICATION / LEAN_VALIDATED` in
+the existing immutable `artifact_registry`; this never enables live/P9 trading.

@@ -1,0 +1,104 @@
+{
+  "dataReleaseId": "ds_pinned_001",
+  "deterministicFingerprints": ["rerun-same", "rerun-same"],
+  "gates": {
+    "minimumSharpe": 0.5,
+    "maximumDrawdown": 0.2,
+    "maximumTurnover": 3.0,
+    "sharpeVsBaselineTolerance": 0.0,
+    "drawdownVsBaselineTolerance": 0.0
+  },
+  "candidate": {
+    "runId": "candidate-1",
+    "present": true,
+    "status": "success",
+    "validationPassed": true,
+    "dataReleaseId": "ds_pinned_001",
+    "codeVersion": "abc123",
+    "costModelId": "etf-realistic-v1",
+    "metrics": {"sharpe": 1.2, "maxDrawdown": 0.1, "turnover": 1.8, "tradeCount": 24},
+    "costAttribution": {"fees": 120.0, "slippage": 85.0, "cashDrag": 30.0, "capacityImpact": 12.0, "complete": true},
+    "durationSeconds": 42.5,
+    "canonicalConfigSha256": "cfg-candidate",
+    "runFingerprint": "run-candidate"
+  },
+  "baseline": {
+    "runId": "baseline-1",
+    "present": true,
+    "status": "success",
+    "validationPassed": true,
+    "dataReleaseId": "ds_pinned_001",
+    "codeVersion": "abc123",
+    "costModelId": "etf-realistic-v1",
+    "metrics": {"sharpe": 0.8, "maxDrawdown": 0.14, "turnover": 0.6, "tradeCount": 12},
+    "costAttribution": {"fees": 60.0, "slippage": 40.0, "cashDrag": 35.0, "capacityImpact": 8.0, "complete": true},
+    "durationSeconds": 35.0,
+    "canonicalConfigSha256": "cfg-baseline",
+    "runFingerprint": "run-baseline"
+  },
+  "walkForward": {
+    "present": true,
+    "status": "COMPLETED",
+    "lineageStatus": "complete",
+    "datasetVersion": "ds_pinned_001",
+    "universeVersion": "etf-us-v1",
+    "adjustmentContract": "adjusted-v1",
+    "featurePipelineVersion": "etf-rotation-v2",
+    "windows": [
+      {
+        "fold": 1,
+        "train_start": "2018-01-01",
+        "train_end": "2020-12-31",
+        "validation_start": "2021-01-01",
+        "validation_end": "2021-06-30",
+        "oos_start": "2021-07-01",
+        "oos_end": "2021-12-31",
+        "fold_fingerprint": "fold-1",
+        "dataset_version": "ds_pinned_001",
+        "status": "OOS_COMPLETED"
+      },
+      {
+        "fold": 2,
+        "train_start": "2019-01-01",
+        "train_end": "2021-12-31",
+        "validation_start": "2022-01-01",
+        "validation_end": "2022-06-30",
+        "oos_start": "2022-07-01",
+        "oos_end": "2022-12-31",
+        "fold_fingerprint": "fold-2",
+        "dataset_version": "ds_pinned_001",
+        "status": "OOS_COMPLETED"
+      }
+    ]
+  },
+  "paper": {
+    "sessionId": "paper-1",
+    "intents": [{"id": "intent-buy"}, {"id": "intent-reject"}],
+    "constraintDecisions": [
+      {"intent_id": "intent-buy", "decision": "ACCEPT"},
+      {"intent_id": "intent-reject", "decision": "REJECT"}
+    ],
+    "fills": [{"id": "fill-1", "intent_id": "intent-buy"}],
+    "ledgerEntries": [
+      {"id": "l1", "fill_id": "fill-1"},
+      {"id": "l2", "fill_id": "fill-1"},
+      {"id": "l3", "fill_id": "fill-1"}
+    ],
+    "reconciliations": [{"status": "passed", "passed": true}],
+    "ledgerProjection": {"cash": 99000.0, "positions": [{"symbol": "SPY", "quantity": 10}], "entryCount": 3},
+    "idempotency": {"entryCountBefore": 3, "entryCountAfter": 3, "sameDigest": true}
+  },
+  "admission": {"stage": "paper_validated"},
+  "resources": {
+    "evidenceType": "runtime_snapshot",
+    "durationSeconds": 42.5,
+    "before": {
+      "memory": {"usedBytes": 1000000, "processRssBytes": 200000},
+      "cpu": {"cpuCount": 8, "usedPercent": 20.0}
+    },
+    "after": {
+      "memory": {"usedBytes": 1200000, "processRssBytes": 240000},
+      "cpu": {"cpuCount": 8, "usedPercent": 30.0}
+    }
+  }
+}
