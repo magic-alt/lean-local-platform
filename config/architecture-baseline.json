@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0",
+  "capturedFrom": {
+    "branch": "main",
+    "commit": "dbe7f4313e98504bc4b9adc7b5e4c0cc5a5def64"
+  },
+  "hotspots": {
+    "app/services/data_sync.py": {
+      "bytes": 275499,
+      "role": "data ingestion orchestration compatibility facade"
+    },
+    "app/services/experiment_batches.py": {
+      "bytes": 87784,
+      "role": "experiment orchestration and recovery"
+    },
+    "app/db.py": {
+      "bytes": 67741,
+      "role": "database compatibility/bootstrap surface"
+    },
+    "app/runner_service.py": {
+      "bytes": 34152,
+      "role": "restricted runner service compatibility surface"
+    }
+  },
+  "policy": {
+    "hotspotAnchorMode": "explicit-update-required",
+    "sizeIsNotASuccessMetric": true,
+    "canonicalWriterRule": "one table or irreversible effect has one declared writer",
+    "domainRule": "domain may not import API/task/use-case/runtime adapters or provider/broker SDKs"
+  },
+  "runtimePerformanceBaseline": {
+    "status": "pending-production-like-evidence",
+    "trackedBy": "#61 and subsequent #66 extraction slices",
+    "requiredMetrics": [
+      "latencyP50Ms",
+      "latencyP95Ms",
+      "peakRssBytes",
+      "queueThroughputPerSecond",
+      "databaseTransactionCount",
+      "databaseRetryCount",
+      "outputSha256",
+      "outputRowCount",
+      "dataReleaseId"
+    ],
+    "note": "Static source metrics are frozen by this baseline. Runtime performance numbers must be collected on fixed fixtures with the production-like PostgreSQL/RabbitMQ profile before performance-sensitive extraction is accepted."
+  }
+}

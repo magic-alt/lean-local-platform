@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Establish the first #66 modular-monolith remediation baseline with reproducible AST dependency/complexity evidence, frozen hotspot anchors, Governance CI boundary checks, and negative tests that reject domain vendor/framework imports, API/task direct protected-state SQL, and duplicate canonical writers; runtime performance evidence remains explicitly gated on the production-like PostgreSQL/RabbitMQ fixture before hot-path extraction.
+
 - Add a single read-only integrated research-to-Paper workflow contract over existing Qlib Artifact v2, LEAN validation, and Paper ownership, with correlated identities, explicit blocked/readiness/certification/authorization views, deterministic crash/redelivery decisions, and matching TypeScript/Python/CLI clients; keep all state transitions on existing canonical writers and Live/P9 disabled.
 
 - Add a portable `datactl` operations CLI for managed data status/update/repair/validation, remove the hard-coded Windows `D:` requirement from TuShare current recovery, keep explicit local data-root overrides coherent across Parquet/market/spool paths, and modernize archive reconciliation terminology for the current managed bulk dataset set.

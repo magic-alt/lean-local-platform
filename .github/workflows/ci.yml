@@ -30,6 +30,24 @@ jobs:
         run: python scripts/check_repository_hygiene.py
       - name: Validate developer automation
         run: python scripts/check_developer_governance.py
+      - name: Validate architecture boundaries
+        run: python scripts/check_architecture_boundaries.py
+      - name: Validate architecture baseline
+        run: >-
+          python scripts/architecture_baseline.py
+          --baseline config/architecture-baseline.json
+          --check
+          --output web/runtime/audit/architecture-baseline.json
+          --mermaid-output web/runtime/audit/architecture-dependencies.mmd
+      - name: Upload architecture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: architecture-baseline-${{ github.run_id }}
+          path: |
+            web/runtime/audit/architecture-baseline.json
+            web/runtime/audit/architecture-dependencies.mmd
+          if-no-files-found: warn
       - name: Validate frontend API contract
         run: python scripts/check_frontend_api_contract.py
       - name: Validate open-source governance
