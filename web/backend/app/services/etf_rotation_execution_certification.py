@@ -17,6 +17,7 @@ from .paper_order_pipeline import (
     list_reconciliations,
     list_transitions,
 )
+from .artifact_registry import register_platform_artifact
 from .resource_pressure import collect_resource_snapshot
 from .strategy_admission import get_admission
 
@@ -235,7 +236,8 @@ def collect_admission_evidence(
     }
 
 
-def collect_resource_evidence() -> dict[str, Any]:
+def collect_resource_snapshot_evidence() -> dict[str, Any]:
+    """Capture one diagnostic snapshot; certification requires before and after."""
     return {
         "evidenceType": "runtime_snapshot",
         "snapshot": collect_resource_snapshot(),
@@ -259,7 +261,11 @@ def _walk_forward_check(
     data_release_id: str,
 ) -> tuple[bool, list[str], dict[str, Any]]:
     failures: list[str] = []
-    windows = [dict(item) for item in _sequence(evidence.get("windows")) if isinstance(item, Mapping)]
+    windows = [
+        dict(item)
+        for item in _sequence(evidence.get("windows"))
+        if isinstance(item, Mapping)
+    ]
     if not evidence.get("present"):
         failures.append("walk_forward_missing")
     if not windows:
@@ -311,7 +317,12 @@ def _walk_forward_check(
             and validation_end
             and oos_start
             and oos_end
-            and train_start <= train_end < validation_start <= validation_end < oos_start <= oos_end
+            and train_start
+            <= train_end
+            < validation_start
+            <= validation_end
+            < oos_start
+            <= oos_end
         )
         if not ordered:
             failures.append(f"walk_forward_fold_{fold}_window_order")
@@ -337,19 +348,39 @@ def _walk_forward_check(
 
 def _paper_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     failures: list[str] = []
-    intents = [dict(item) for item in _sequence(evidence.get("intents")) if isinstance(item, Mapping)]
-    decisions = [dict(item) for item in _sequence(evidence.get("constraintDecisions")) if isinstance(item, Mapping)]
-    fills = [dict(item) for item in _sequence(evidence.get("fills")) if isinstance(item, Mapping)]
-    ledger = [dict(item) for item in _sequence(evidence.get("ledgerEntries")) if isinstance(item, Mapping)]
+    intents = [
+        dict(item)
+        for item in _sequence(evidence.get("intents"))
+        if isinstance(item, Mapping)
+    ]
+    decisions = [
+        dict(item)
+        for item in _sequence(evidence.get("constraintDecisions"))
+        if isinstance(item, Mapping)
+    ]
+    fills = [
+        dict(item)
+        for item in _sequence(evidence.get("fills"))
+        if isinstance(item, Mapping)
+    ]
+    ledger = [
+        dict(item)
+        for item in _sequence(evidence.get("ledgerEntries"))
+        if isinstance(item, Mapping)
+    ]
     reconciliations = [
-        dict(item) for item in _sequence(evidence.get("reconciliations")) if isinstance(item, Mapping)
+        dict(item)
+        for item in _sequence(evidence.get("reconciliations"))
+        if isinstance(item, Mapping)
     ]
 
     if not intents:
         failures.append("paper_intents_missing")
     decisions_by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for decision in decisions:
-        decisions_by_intent[_text(decision.get("intent_id") or decision.get("intentId"))].append(decision)
+        decisions_by_intent[
+            _text(decision.get("intent_id") or decision.get("intentId"))
+        ].append(decision)
     fills_by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for fill in fills:
         fills_by_intent[_text(fill.get("intent_id") or fill.get("intentId"))].append(fill)
@@ -365,11 +396,15 @@ def _paper_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str
             failures.append(f"paper_intent_{intent_id}_constraint_decision_missing")
             continue
         outcomes = {
-            _text(item.get("decision") or item.get("outcome") or item.get("status")).upper()
+            _text(
+                item.get("decision") or item.get("outcome") or item.get("status")
+            ).upper()
             for item in related
         }
         is_rejected = bool(outcomes.intersection({"REJECT", "REJECTED", "BLOCKED"}))
-        is_accepted = bool(outcomes.intersection({"ACCEPT", "ACCEPTED", "APPROVED", "PASS", "PASSED"}))
+        is_accepted = bool(
+            outcomes.intersection({"ACCEPT", "ACCEPTED", "APPROVED", "PASS", "PASSED"})
+        )
         if is_rejected:
             rejected += 1
             if fills_by_intent.get(intent_id):
@@ -405,7 +440,12 @@ def _paper_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str
         before = idempotency.get("entryCountBefore")
         after = idempotency.get("entryCountAfter")
         same_digest = bool(idempotency.get("sameDigest") or idempotency.get("sameIds"))
-        if before is None or after is None or int(before) != int(after) or not same_digest:
+        if (
+            before is None
+            or after is None
+            or int(before) != int(after)
+            or not same_digest
+        ):
             failures.append("ledger_idempotency_not_proven")
 
     return (
@@ -424,13 +464,17 @@ def _paper_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str
 
 def _resource_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     failures: list[str] = []
-    snapshots: list[dict[str, Any]] = []
-    for key in ("before", "after", "snapshot"):
-        value = evidence.get(key)
-        if isinstance(value, Mapping):
-            snapshots.append(dict(value))
+    before = evidence.get("before")
+    after = evidence.get("after")
+    snapshots = [
+        dict(value)
+        for value in (before, after)
+        if isinstance(value, Mapping)
+    ]
     if _text(evidence.get("evidenceType")) != "runtime_snapshot":
         failures.append("resource_evidence_not_runtime_snapshot")
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        failures.append("resource_before_after_snapshots_required")
     if not snapshots:
         failures.append("resource_snapshot_missing")
         return False, failures, {"snapshotCount": 0}
@@ -455,7 +499,10 @@ def _resource_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[
     duration = _finite(evidence.get("durationSeconds"))
     if duration is None or duration < 0:
         failures.append("resource_duration_missing")
-    return not failures, failures, {"snapshotCount": len(snapshots), "durationSeconds": duration}
+    return not failures, failures, {
+        "snapshotCount": len(snapshots),
+        "durationSeconds": duration,
+    }
 
 
 def _admission_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
@@ -489,7 +536,11 @@ def build_execution_certification(
     check("pinned_data_release_present", bool(release_id), dataReleaseId=release_id)
 
     for label, payload in (("candidate", candidate), ("baseline", baseline)):
-        check(f"{label}_run_present", bool(payload.get("present")), runId=payload.get("runId"))
+        check(
+            f"{label}_run_present",
+            bool(payload.get("present")),
+            runId=payload.get("runId"),
+        )
         check(
             f"{label}_run_success",
             _passed_status(payload.get("status")),
@@ -509,14 +560,19 @@ def build_execution_certification(
         metrics = dict(payload.get("metrics") or {})
         check(
             f"{label}_metrics_complete",
-            all(_finite(metrics.get(key)) is not None for key in ("sharpe", "maxDrawdown", "turnover", "tradeCount")),
+            all(
+                _finite(metrics.get(key)) is not None
+                for key in ("sharpe", "maxDrawdown", "turnover", "tradeCount")
+            ),
             metrics=metrics,
         )
         cost = _mapping(payload.get("costAttribution"))
         check(
             f"{label}_cost_attribution_complete",
             bool(cost.get("complete"))
-            and all(_finite(cost.get(key)) is not None for key in REQUIRED_COST_FIELDS),
+            and all(
+                _finite(cost.get(key)) is not None for key in REQUIRED_COST_FIELDS
+            ),
             costAttribution=cost,
         )
 
@@ -540,18 +596,40 @@ def build_execution_certification(
     wf_passed, wf_failures, wf_summary = _walk_forward_check(
         walk_forward, data_release_id=release_id
     )
-    check("walk_forward_complete", wf_passed, failureReasons=wf_failures, **wf_summary)
+    check(
+        "walk_forward_complete",
+        wf_passed,
+        failureReasons=wf_failures,
+        **wf_summary,
+    )
 
     paper_passed, paper_failures, paper_summary = _paper_check(paper)
-    check("paper_execution_chain_complete", paper_passed, failureReasons=paper_failures, **paper_summary)
+    check(
+        "paper_execution_chain_complete",
+        paper_passed,
+        failureReasons=paper_failures,
+        **paper_summary,
+    )
 
     admission_passed, admission_failures, admission_summary = _admission_check(admission)
-    check("admission_passed", admission_passed, failureReasons=admission_failures, **admission_summary)
+    check(
+        "admission_passed",
+        admission_passed,
+        failureReasons=admission_failures,
+        **admission_summary,
+    )
 
     resources_with_duration = dict(resources)
     resources_with_duration.setdefault("durationSeconds", candidate.get("durationSeconds"))
-    resource_passed, resource_failures, resource_summary = _resource_check(resources_with_duration)
-    check("resource_evidence_complete", resource_passed, failureReasons=resource_failures, **resource_summary)
+    resource_passed, resource_failures, resource_summary = _resource_check(
+        resources_with_duration
+    )
+    check(
+        "resource_evidence_complete",
+        resource_passed,
+        failureReasons=resource_failures,
+        **resource_summary,
+    )
 
     failures = list(dict.fromkeys(failures))
     deterministic = {
@@ -576,7 +654,9 @@ def build_execution_certification(
         "paper": paper_summary,
         "admission": admission_summary,
         "resources": resource_summary,
-        "checks": [{"name": item["name"], "passed": item["passed"]} for item in checks],
+        "checks": [
+            {"name": item["name"], "passed": item["passed"]} for item in checks
+        ],
     }
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -595,3 +675,59 @@ def build_execution_certification(
         },
         "artifactFingerprint": canonical_fingerprint(deterministic),
     }
+
+
+def register_execution_certification_artifact(
+    report: Mapping[str, Any],
+    *,
+    git_commit: str,
+    container_digest: str,
+    as_of_time: str,
+    timezone: str = "UTC",
+    currency: str = "USD",
+    object_key: str | None = None,
+) -> dict[str, Any]:
+    """Register immutable platform evidence only after every critical gate passes."""
+    if not report.get("certified"):
+        raise ValueError(
+            "uncertified ETF execution evidence cannot enter artifact_registry"
+        )
+    release_id = _text(report.get("dataReleaseId"))
+    if not release_id:
+        raise ValueError("certified ETF execution evidence requires dataReleaseId")
+    fingerprint = _text(report.get("artifactFingerprint"))
+    if not fingerprint:
+        raise ValueError("certified ETF execution evidence requires artifactFingerprint")
+    artifact_id = f"etf_exec_cert_{fingerprint[:24]}"
+    evidence = _mapping(report.get("evidence"))
+    candidate = _mapping(evidence.get("candidate"))
+    baseline = _mapping(evidence.get("baseline"))
+    artifact = {
+        "artifactId": artifact_id,
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactType": "ETF_EXECUTION_CERTIFICATION",
+        "promotionStatus": "LEAN_VALIDATED",
+        "dataReleaseId": release_id,
+        "gitCommit": _text(git_commit),
+        "containerDigest": _text(container_digest),
+        "asOfTime": _text(as_of_time),
+        "timezone": _text(timezone) or "UTC",
+        "currency": _text(currency) or "USD",
+        "payloadSha256": canonical_fingerprint(dict(report)),
+        "payloadRef": {
+            "objectKey": object_key,
+            "mediaType": "application/json",
+        },
+        "metadata": {
+            "artifactFingerprint": fingerprint,
+            "candidateRunId": candidate.get("runId"),
+            "baselineRunId": baseline.get("runId"),
+            "failureReasons": [],
+        },
+    }
+    for key in ("gitCommit", "containerDigest", "asOfTime"):
+        if not artifact[key]:
+            raise ValueError(f"certification artifact requires {key}")
+    with db() as connection:
+        register_platform_artifact(connection, artifact)
+    return artifact
