@@ -16,6 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.services.backtest_service import mark_backtest_queued  # noqa: E402
 from app.services.etf_rotation_certification_campaign import (  # noqa: E402
     advance_campaign,
+    attach_paper_session,
     campaign_status,
     start_campaign,
 )
@@ -28,13 +29,17 @@ from app.tasks.worker import (  # noqa: E402
 
 BLOCKING_ACTIONS = {
     "canonical_failed",
+    "canonical_dataset_release_mismatch",
     "canonical_attribution_incomplete",
     "rerun_failed",
+    "rerun_dataset_release_mismatch",
     "rerun_attribution_incomplete",
     "deterministic_replay_failed",
     "baseline_failed",
+    "baseline_dataset_release_mismatch",
     "baseline_attribution_incomplete",
     "walk_forward_failed",
+    "walk_forward_dataset_release_mismatch",
     "walk_forward_evidence_missing",
     "waiting_paper_evidence",
     "paper_evidence_incomplete",
@@ -76,6 +81,7 @@ def _compact(status: dict[str, Any]) -> dict[str, Any]:
         "stage": status.get("stage"),
         "action": status.get("action"),
         "dataReleaseId": status.get("dataReleaseId"),
+        "paperSessionId": status.get("paperSessionId"),
         "details": status.get("details") or {},
     }
 
@@ -99,6 +105,13 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="Read persisted campaign workflow evidence.")
     status.add_argument("--campaign-id", required=True)
 
+    attach = commands.add_parser(
+        "attach-paper",
+        help="Attach an authoritative Paper-v2 session after LEAN/walk-forward evidence is ready.",
+    )
+    attach.add_argument("--campaign-id", required=True)
+    attach.add_argument("--session-id", required=True)
+
     advance = commands.add_parser("advance", help="Advance one idempotent campaign step.")
     advance.add_argument("--campaign-id", required=True)
 
@@ -117,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "status":
         status = campaign_status(args.campaign_id)
+        _print(status)
+        return 0
+    if args.command == "attach-paper":
+        status = attach_paper_session(args.campaign_id, args.session_id)
         _print(status)
         return 0
     if args.command == "advance":
