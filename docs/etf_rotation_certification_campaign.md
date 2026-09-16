@@ -2,6 +2,19 @@
 
 Issue #67 is closed only by real platform evidence. The campaign runner coordinates existing authoritative LEAN, experiment, Paper, admission, resource and artifact services; it does not create a shadow executor or enable Live/P9.
 
+## Immutable U.S. ETF DataRelease
+
+The campaign requires the governed composite profile `us-etf-daily-certification-v1`. The normal `publish_data_release()` path enforces `assetClass=equity`, `market=usa`, and freezes all of these components:
+
+- `bars`;
+- `adjustment_factors`;
+- `corporate_actions`;
+- `security_master`;
+- `trading_calendar`;
+- `benchmark`.
+
+The `bars.componentReleaseId` is not descriptive metadata: it must identify the executable certified dataset release that LEAN actually resolves. Every canonical, deterministic-rerun, baseline, and walk-forward child backtest must persist that exact value in `backtest_runs.dataset_release_id`, otherwise the campaign fails with a dataset-release lineage mismatch.
+
 ## Frozen input
 
 Create a JSON configuration with an explicit immutable `dataReleaseId`. The runner never selects a mutable `latest` release.
@@ -9,7 +22,7 @@ Create a JSON configuration with an explicit immutable `dataReleaseId`. The runn
 ```json
 {
   "projectId": "<project created from etf_rotation>",
-  "dataReleaseId": "<immutable DataRelease id>",
+  "dataReleaseId": "<immutable us-etf-daily-certification-v1 DataRelease id>",
   "symbols": ["SPY", "QQQ", "IWM", "IEF", "GLD"],
   "symbol": "SPY",
   "benchmarkSymbol": "SPY",
@@ -49,7 +62,7 @@ Create a JSON configuration with an explicit immutable `dataReleaseId`. The runn
 
 `paperSessionId` must identify an authoritative Paper-v2 session. Do not substitute fixture data or a second ledger. The current canonical ETF template is U.S.-market scoped; until U.S. daily ETF Paper-v2 is certified, the campaign intentionally stops at `waiting_paper_evidence`.
 
-## Run
+## Run and resume
 
 ```bash
 python scripts/run_etf_rotation_certification_campaign.py start --config campaign.json
@@ -57,22 +70,32 @@ python scripts/run_etf_rotation_certification_campaign.py run --campaign-id <cam
 python scripts/run_etf_rotation_certification_campaign.py status --campaign-id <campaign-id>
 ```
 
-The campaign is resumable because step state and child resource IDs are stored as append-only `workflow_events`. Real trading facts remain in their existing canonical tables.
+When LEAN/walk-forward evidence is already complete but the campaign is waiting for a real Paper-v2 session, attach the authoritative session without restarting the earlier work:
+
+```bash
+python scripts/run_etf_rotation_certification_campaign.py attach-paper \
+  --campaign-id <campaign-id> \
+  --session-id <paper-v2-session-id>
+python scripts/run_etf_rotation_certification_campaign.py run --campaign-id <campaign-id>
+```
+
+The campaign is resumable because step state and child resource IDs are stored as append-only `workflow_events`. Real trading facts remain in their existing canonical tables. An already-certified campaign is immutable and refuses Paper replacement.
 
 ## Stages
 
 The state machine executes or verifies, in order:
 
-1. explicit active U.S. `DataRelease` pin and coverage check;
-2. canonical ETF rotation LEAN run;
-3. deterministic rerun from the canonical strategy snapshot;
-4. independent `etf_static_equal_weight` LEAN baseline;
-5. post-run execution attribution persisted through `backtest_repository.save_result`;
-6. formal `experiment_batches` walk-forward using Train → Validation → OOS and the same DataRelease identity;
-7. authoritative Paper-v2 evidence with worker constraint decisions, ACCEPT and REJECT cases, fills, ledger and reconciliation;
-8. duplicate finalization replay proving ledger count/digest stability;
-9. before/after runtime resource envelope plus persisted LEAN duration;
-10. `certify_etf_rotation_execution` and immutable artifact registration.
+1. explicit active `us-etf-daily-certification-v1` DataRelease pin and coverage check;
+2. composite `bars.componentReleaseId` ↔ actual LEAN `dataset_release_id` binding;
+3. canonical ETF rotation LEAN run;
+4. deterministic rerun from the canonical strategy snapshot;
+5. independent `etf_static_equal_weight` LEAN baseline;
+6. post-run execution attribution persisted through `backtest_repository.save_result`;
+7. formal `experiment_batches` walk-forward using Train → Validation → OOS and the same composite/executable release identities;
+8. authoritative Paper-v2 evidence with worker constraint decisions, ACCEPT and REJECT cases, fills, ledger and reconciliation;
+9. duplicate finalization replay proving ledger count/digest stability;
+10. before/after runtime resource envelope plus persisted LEAN duration;
+11. `certify_etf_rotation_execution` and immutable artifact registration.
 
 A child backtest or batch is created once. Re-running the CLI reads the persisted IDs and continues instead of creating duplicate work.
 
@@ -90,5 +113,7 @@ Missing source evidence remains `null`. No value is replaced by synthetic zero, 
 ## Paper and Live boundary
 
 The campaign never submits a live broker order. It only accepts Paper-v2 records produced by the existing execution pipeline. A rejected worker constraint decision must have no fill. Duplicate replay calls the existing terminal Paper finalizer and requires unchanged ledger entry count and digest.
+
+The existing authoritative `lean_walkforward_v2` Paper implementation is currently China/Hong Kong daily-equity scoped. U.S. ETF support must be added inside that same Paper-v2 pipeline—with USD/cost semantics and the existing worker risk/ledger writers—before a real U.S. ETF campaign can pass this stage. The campaign deliberately does not create a parallel simulator to bypass that gap.
 
 The `ETF_EXECUTION_CERTIFICATION / LEAN_VALIDATED` artifact is registered only when every gate returns `certified=true`. Live/P9 stays disabled.
