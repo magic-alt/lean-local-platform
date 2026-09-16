@@ -1,0 +1,172 @@
+{
+  "schemaVersion": "etf-rotation-certification.v1",
+  "parameters": {
+    "lookback": 3,
+    "rebalanceDays": 2,
+    "selectionCount": 2,
+    "volatilityLookback": 3,
+    "targetVolatility": 0.1,
+    "maxWeight": 0.65,
+    "maxTurnover": 0.25,
+    "commissionPerOrder": 1.0,
+    "slippageBps": 2.0
+  },
+  "tradingCalendarFixture": {
+    "freshSessionFlags": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "rebalanceDays": 2,
+    "expectedDueIndexes": [
+      3,
+      6
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "deterministic_tie_break",
+      "prices": {
+        "QQQ": [100, 101, 103, 104],
+        "SPY": [100, 102, 101, 104],
+        "IWM": [100, 99, 101, 102]
+      },
+      "currentWeights": {},
+      "tradableSymbols": ["SPY", "QQQ", "IWM"],
+      "expected": {
+        "selected": ["QQQ", "SPY"],
+        "failureReasons": [],
+        "appliedTurnover": 0.25
+      }
+    },
+    {
+      "id": "zero_volatility_exclusion",
+      "prices": {
+        "SPY": [100, 101, 102.01, 103.0301],
+        "QQQ": [100, 101, 99, 104],
+        "IWM": [100, 99, 101, 102]
+      },
+      "currentWeights": {},
+      "tradableSymbols": ["SPY", "QQQ", "IWM"],
+      "expected": {
+        "selected": ["QQQ", "IWM"],
+        "excluded": {
+          "SPY": "invalid_or_zero_volatility"
+        }
+      }
+    },
+    {
+      "id": "insufficient_history_exclusion",
+      "prices": {
+        "SPY": [100, 102, 101, 104],
+        "QQQ": [100, 101, 103],
+        "IWM": [100, 99, 101, 102]
+      },
+      "currentWeights": {},
+      "tradableSymbols": ["SPY", "QQQ", "IWM"],
+      "expected": {
+        "selected": ["SPY", "IWM"],
+        "excluded": {
+          "QQQ": "insufficient_momentum_history"
+        }
+      }
+    },
+    {
+      "id": "zero_candidate_risk_off",
+      "prices": {
+        "SPY": [100, 99, 98, 97],
+        "QQQ": [100, 101, 98, 96],
+        "IWM": [100, 99, 100, 98]
+      },
+      "currentWeights": {
+        "SPY": 0.4,
+        "QQQ": 0.4
+      },
+      "tradableSymbols": ["SPY", "QQQ", "IWM"],
+      "expected": {
+        "selected": [],
+        "failureReasons": ["zero_eligible_candidates"],
+        "appliedTurnover": 0.25,
+        "grossExposure": 0.3
+      }
+    },
+    {
+      "id": "suspension_preserves_frozen_weight",
+      "prices": {
+        "SPY": [100, 102, 101, 104],
+        "QQQ": [100, 101, 103, 104],
+        "IWM": [100, 99, 101, 102]
+      },
+      "currentWeights": {
+        "SPY": 0.4,
+        "QQQ": 0.2
+      },
+      "tradableSymbols": ["QQQ", "IWM"],
+      "expected": {
+        "selected": ["QQQ", "IWM"],
+        "frozenWeights": {
+          "SPY": 0.4
+        },
+        "grossExposure": 1.0
+      }
+    },
+    {
+      "id": "adjusted_corporate_action_boundary",
+      "prices": {
+        "SPY": [100, 102, 101, 104],
+        "QQQ": [50, 51, 49.5, 52],
+        "IWM": [80, 79, 81, 82]
+      },
+      "currentWeights": {},
+      "tradableSymbols": ["SPY", "QQQ", "IWM"],
+      "expected": {
+        "normalization": "adjusted",
+        "failureReasons": []
+      }
+    }
+  ],
+  "certificationFixture": {
+    "baseline": {
+      "metrics": {
+        "sharpe": 0.72,
+        "maxDrawdown": 0.18,
+        "turnover": 1.4,
+        "tradeCount": 24
+      },
+      "lineage": {
+        "codeVersion": "baseline-static-v1",
+        "dataReleaseId": "fixture-release-2026-09-16",
+        "costModelId": "lean-constant-fee-slippage-v1"
+      }
+    },
+    "candidate": {
+      "metrics": {
+        "sharpe": 0.81,
+        "maxDrawdown": 0.16,
+        "turnover": 1.2,
+        "tradeCount": 30
+      },
+      "lineage": {
+        "codeVersion": "candidate-etf-rotation-v2",
+        "dataReleaseId": "fixture-release-2026-09-16",
+        "costModelId": "lean-constant-fee-slippage-v1"
+      }
+    },
+    "gates": {
+      "minimumSharpe": 0.0,
+      "maximumDrawdown": 0.25,
+      "maximumTurnover": 2.0,
+      "minimumTradeCount": 1,
+      "sharpeVsBaselineTolerance": 0.0,
+      "drawdownVsBaselineTolerance": 0.0
+    },
+    "deterministicFingerprints": [
+      "same-run-fingerprint",
+      "same-run-fingerprint"
+    ]
+  }
+}
