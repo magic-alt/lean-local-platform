@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from ..db import db, row_to_dict, rows_to_dicts
 from ..repositories.backtest_repository import get_backtest, get_result
+from .artifact_registry import register_platform_artifact
 from .etf_rotation_certification import build_certification_report, canonical_fingerprint
 from .paper_order_pipeline import (
     ledger_projection,
@@ -17,28 +18,29 @@ from .paper_order_pipeline import (
     list_reconciliations,
     list_transitions,
 )
-from .artifact_registry import register_platform_artifact
 from .resource_pressure import collect_resource_snapshot
 from .strategy_admission import get_admission
 
 SCHEMA_VERSION = "etf-rotation-execution-certification.v1"
-SUCCESS_STATES = {"success", "succeeded", "completed", "complete", "passed"}
+SUCCESS_STATES = {
+    "success", "succeeded", "completed", "complete", "passed", "oos_completed"
+}
 REQUIRED_COST_FIELDS = ("fees", "slippage", "cashDrag", "capacityImpact")
 
 
-def _mapping(value: Any) -> dict[str, Any]:
+def _map(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     if isinstance(value, str) and value.strip():
         try:
-            loaded = json.loads(value)
+            parsed = json.loads(value)
         except json.JSONDecodeError:
             return {}
-        return dict(loaded) if isinstance(loaded, Mapping) else {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
     return {}
 
 
-def _sequence(value: Any) -> list[Any]:
+def _list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, (list, tuple)) else []
 
 
@@ -46,82 +48,70 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _finite(value: Any) -> float | None:
+def _number(value: Any) -> float | None:
     try:
-        number = float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return None
-    return number if math.isfinite(number) else None
+    return result if math.isfinite(result) else None
 
 
-def _passed_status(value: Any) -> bool:
+def _success(value: Any) -> bool:
     return _text(value).lower() in SUCCESS_STATES
 
 
-def _nested_number(sources: Sequence[Mapping[str, Any]], aliases: Sequence[str]) -> float | None:
-    lowered = {alias.lower(): alias for alias in aliases}
+def _find_number(sources: Sequence[Mapping[str, Any]], aliases: Sequence[str]) -> float | None:
+    wanted = {name.lower() for name in aliases}
     for source in sources:
         for key, value in source.items():
-            if str(key).lower() in lowered:
-                number = _finite(value)
-                if number is not None:
-                    return number
+            if str(key).lower() in wanted and (number := _number(value)) is not None:
+                return number
     return None
 
 
-def _validation_passed(run: Mapping[str, Any]) -> bool:
-    validation = _mapping(run.get("validation") or run.get("validation_json"))
-    return bool(validation.get("passed"))
-
-
-def _data_release_id(run: Mapping[str, Any]) -> str:
-    parameters = _mapping(run.get("parameters") or run.get("parameters_json"))
+def _release_id(run: Mapping[str, Any]) -> str:
+    params = _map(run.get("parameters") or run.get("parameters_json"))
     return _text(
         run.get("data_release_id")
         or run.get("dataset_release_id")
-        or parameters.get("dataReleaseId")
-        or parameters.get("datasetReleaseId")
+        or params.get("dataReleaseId")
+        or params.get("datasetReleaseId")
     )
 
 
-def _metrics(result: Mapping[str, Any]) -> dict[str, Any]:
-    summary = _mapping(result.get("summary_metrics") or result.get("summary_metrics_json"))
-    stats = _mapping(result.get("statistics") or result.get("statistics_json"))
-    performance = _mapping(result.get("performance") or result.get("performance_json"))
+def _result_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _map(result.get("summary_metrics") or result.get("summary_metrics_json"))
+    stats = _map(result.get("statistics") or result.get("statistics_json"))
+    performance = _map(result.get("performance") or result.get("performance_json"))
     sources = (summary, stats, performance)
-    sharpe = _nested_number(sources, ("sharpe", "sharpe ratio", "sharperatio"))
-    drawdown = _nested_number(
-        sources, ("maxDrawdown", "maximum drawdown", "drawdown", "max_drawdown")
-    )
-    turnover = _nested_number(
-        sources, ("turnover", "portfolio turnover", "portfolioTurnover", "totalTurnover")
-    )
-    trades = _nested_number(
-        sources, ("tradeCount", "total trades", "totalTrades", "trades")
-    )
+    trades = _find_number(sources, ("tradeCount", "total trades", "totalTrades", "trades"))
     if trades is None:
-        trades = float(len(_sequence(result.get("trades") or result.get("trades_json"))))
+        trades = float(len(_list(result.get("trades") or result.get("trades_json"))))
     return {
-        "sharpe": sharpe,
-        "maxDrawdown": drawdown,
-        "turnover": turnover,
+        "sharpe": _find_number(sources, ("sharpe", "sharpe ratio", "sharperatio")),
+        "maxDrawdown": _find_number(
+            sources, ("maxDrawdown", "maximum drawdown", "drawdown", "max_drawdown")
+        ),
+        "turnover": _find_number(
+            sources, ("turnover", "portfolio turnover", "portfolioTurnover", "totalTurnover")
+        ),
         "tradeCount": trades,
     }
 
 
-def _cost_attribution(result: Mapping[str, Any]) -> dict[str, Any]:
-    performance = _mapping(result.get("performance") or result.get("performance_json"))
-    summary = _mapping(result.get("summary_metrics") or result.get("summary_metrics_json"))
-    attribution = _mapping(
+def _costs(result: Mapping[str, Any]) -> dict[str, Any]:
+    performance = _map(result.get("performance") or result.get("performance_json"))
+    summary = _map(result.get("summary_metrics") or result.get("summary_metrics_json"))
+    attribution = _map(
         performance.get("executionAttribution")
         or performance.get("execution_attribution")
         or summary.get("executionAttribution")
     )
     values = {
-        "fees": _nested_number((attribution,), ("fees", "feeCost", "commission")),
-        "slippage": _nested_number((attribution,), ("slippage", "slippageCost")),
-        "cashDrag": _nested_number((attribution,), ("cashDrag", "cash_drag")),
-        "capacityImpact": _nested_number(
+        "fees": _find_number((attribution,), ("fees", "feeCost", "commission")),
+        "slippage": _find_number((attribution,), ("slippage", "slippageCost")),
+        "cashDrag": _find_number((attribution,), ("cashDrag", "cash_drag")),
+        "capacityImpact": _find_number(
             (attribution,), ("capacityImpact", "capacity_impact", "marketImpact")
         ),
     }
@@ -133,34 +123,28 @@ def _cost_attribution(result: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def collect_backtest_run_evidence(
-    run_id: str,
-    *,
-    code_version: str,
-    cost_model_id: str,
+    run_id: str, *, code_version: str, cost_model_id: str
 ) -> dict[str, Any]:
     run = get_backtest(run_id)
     if not run:
-        return {
-            "runId": run_id,
-            "present": False,
-            "failureReason": "backtest_run_missing",
-        }
+        return {"runId": run_id, "present": False, "failureReason": "backtest_run_missing"}
     result = get_result(run_id) or {}
-    metrics = _metrics(result)
-    fingerprint = _mapping(run.get("fingerprint") or run.get("fingerprint_json"))
-    runtime = _mapping(run.get("runtime_identity") or run.get("runtime_identity_json"))
+    validation = _map(run.get("validation") or run.get("validation_json"))
+    fingerprint = _map(run.get("fingerprint") or run.get("fingerprint_json"))
     return {
         "runId": run_id,
         "present": True,
         "status": run.get("status"),
-        "validationPassed": _validation_passed(run),
-        "dataReleaseId": _data_release_id(run),
+        "validationPassed": bool(validation.get("passed")),
+        "dataReleaseId": _release_id(run),
         "codeVersion": _text(code_version),
         "costModelId": _text(cost_model_id),
-        "metrics": metrics,
-        "costAttribution": _cost_attribution(result),
-        "durationSeconds": _finite(run.get("duration_seconds")),
-        "runtimeIdentity": runtime,
+        "metrics": _result_metrics(result),
+        "costAttribution": _costs(result),
+        "durationSeconds": _number(run.get("duration_seconds")),
+        "runtimeIdentity": _map(
+            run.get("runtime_identity") or run.get("runtime_identity_json")
+        ),
         "canonicalConfigSha256": _text(run.get("canonical_config_sha256")),
         "runFingerprint": _text(
             fingerprint.get("fingerprint")
@@ -173,18 +157,20 @@ def collect_backtest_run_evidence(
 
 def collect_walk_forward_evidence(walk_forward_run_id: str) -> dict[str, Any]:
     with db() as connection:
-        run_row = connection.execute(
-            "select * from walk_forward_runs where id=?", (walk_forward_run_id,)
-        ).fetchone()
-        rows = connection.execute(
-            """
-            select * from walk_forward_windows
-            where walk_forward_run_id=? order by fold,project_id,symbol
-            """,
-            (walk_forward_run_id,),
-        ).fetchall()
-    run = row_to_dict(run_row) or {}
-    windows = rows_to_dicts(rows)
+        run = row_to_dict(
+            connection.execute(
+                "select * from walk_forward_runs where id=?", (walk_forward_run_id,)
+            ).fetchone()
+        ) or {}
+        windows = rows_to_dicts(
+            connection.execute(
+                """
+                select * from walk_forward_windows
+                where walk_forward_run_id=? order by fold,project_id,symbol
+                """,
+                (walk_forward_run_id,),
+            ).fetchall()
+        )
     return {
         "runId": walk_forward_run_id,
         "present": bool(run),
@@ -200,35 +186,26 @@ def collect_walk_forward_evidence(walk_forward_run_id: str) -> dict[str, Any]:
 
 def collect_paper_evidence(session_id: str) -> dict[str, Any]:
     intents = list_intents(session_id)
-    decisions = list_constraint_decisions(session_id)
-    fills = list_fills(session_id)
-    ledger = list_ledger_entries(session_id)
-    reconciliations = list_reconciliations(session_id)
-    transitions = {
-        _text(item.get("id")): list_transitions(_text(item.get("id")))
-        for item in intents
-        if _text(item.get("id"))
-    }
     return {
         "sessionId": session_id,
         "intents": intents,
-        "constraintDecisions": decisions,
-        "fills": fills,
-        "ledgerEntries": ledger,
-        "transitionsByIntent": transitions,
-        "reconciliations": reconciliations,
+        "constraintDecisions": list_constraint_decisions(session_id),
+        "fills": list_fills(session_id),
+        "ledgerEntries": list_ledger_entries(session_id),
+        "transitionsByIntent": {
+            _text(item.get("id")): list_transitions(_text(item.get("id")))
+            for item in intents
+            if _text(item.get("id"))
+        },
+        "reconciliations": list_reconciliations(session_id),
         "ledgerProjection": ledger_projection(session_id),
     }
 
 
 def collect_admission_evidence(
-    strategy_id: str,
-    parameter_hash: str,
-    *,
-    profile_name: str = "institutional",
+    strategy_id: str, parameter_hash: str, *, profile_name: str = "institutional"
 ) -> dict[str, Any]:
-    admission = get_admission(strategy_id, parameter_hash, profile_name)
-    return admission or {
+    return get_admission(strategy_id, parameter_hash, profile_name) or {
         "strategy_id": strategy_id,
         "parameters_sha256": parameter_hash,
         "profile_name": profile_name,
@@ -237,14 +214,10 @@ def collect_admission_evidence(
 
 
 def collect_resource_snapshot_evidence() -> dict[str, Any]:
-    """Capture one diagnostic snapshot; certification requires before and after."""
-    return {
-        "evidenceType": "runtime_snapshot",
-        "snapshot": collect_resource_snapshot(),
-    }
+    return {"evidenceType": "runtime_snapshot", "snapshot": collect_resource_snapshot()}
 
 
-def _normalized_backtest_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _cert_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "metrics": dict(payload.get("metrics") or {}),
         "lineage": {
@@ -256,35 +229,33 @@ def _normalized_backtest_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _walk_forward_check(
-    evidence: Mapping[str, Any],
-    *,
-    data_release_id: str,
-) -> tuple[bool, list[str], dict[str, Any]]:
+    evidence: Mapping[str, Any], data_release_id: str
+) -> tuple[list[str], dict[str, Any]]:
     failures: list[str] = []
     windows = [
-        dict(item)
-        for item in _sequence(evidence.get("windows"))
-        if isinstance(item, Mapping)
+        dict(item) for item in _list(evidence.get("windows")) if isinstance(item, Mapping)
     ]
     if not evidence.get("present"):
         failures.append("walk_forward_missing")
-    if not windows:
-        failures.append("walk_forward_windows_missing")
+    if not _success(evidence.get("status")):
+        failures.append("walk_forward_run_not_completed")
+    if _text(evidence.get("datasetVersion")) != data_release_id:
+        failures.append("walk_forward_data_release_mismatch")
     if _text(evidence.get("lineageStatus")).lower() not in {"complete", "passed"}:
         failures.append("walk_forward_lineage_incomplete")
+    if not windows:
+        failures.append("walk_forward_windows_missing")
 
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for window in windows:
         try:
-            fold = int(window.get("fold"))
+            grouped[int(window.get("fold"))].append(window)
         except (TypeError, ValueError):
             failures.append("walk_forward_fold_invalid")
-            continue
-        grouped[fold].append(window)
 
-    fold_summaries: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
     for fold, items in sorted(grouped.items()):
-        boundary_sets = {
+        boundaries = {
             (
                 _text(item.get("train_start")),
                 _text(item.get("train_end")),
@@ -297,219 +268,148 @@ def _walk_forward_check(
             )
             for item in items
         }
-        if len(boundary_sets) != 1:
+        if len(boundaries) != 1:
             failures.append(f"walk_forward_fold_{fold}_boundary_drift")
             continue
-        (
-            train_start,
-            train_end,
-            validation_start,
-            validation_end,
-            oos_start,
-            oos_end,
-            fold_fingerprint,
-            dataset_version,
-        ) = next(iter(boundary_sets))
+        train_start, train_end, val_start, val_end, oos_start, oos_end, digest, release = next(iter(boundaries))
         ordered = bool(
-            train_start
-            and train_end
-            and validation_start
-            and validation_end
-            and oos_start
-            and oos_end
-            and train_start
-            <= train_end
-            < validation_start
-            <= validation_end
-            < oos_start
-            <= oos_end
+            train_start and train_end and val_start and val_end and oos_start and oos_end
+            and train_start <= train_end < val_start <= val_end < oos_start <= oos_end
         )
         if not ordered:
             failures.append(f"walk_forward_fold_{fold}_window_order")
-        if not fold_fingerprint:
+        if not digest:
             failures.append(f"walk_forward_fold_{fold}_fingerprint_missing")
-        if dataset_version and dataset_version != data_release_id:
+        if release != data_release_id:
             failures.append(f"walk_forward_fold_{fold}_data_release_mismatch")
         statuses = {_text(item.get("status")).lower() for item in items}
-        if statuses and not statuses.intersection(SUCCESS_STATES):
+        if not statuses or not statuses.intersection(SUCCESS_STATES):
             failures.append(f"walk_forward_fold_{fold}_oos_not_completed")
-        fold_summaries.append(
+        summaries.append(
             {
                 "fold": fold,
                 "train": [train_start, train_end],
-                "validation": [validation_start, validation_end],
+                "validation": [val_start, val_end],
                 "oos": [oos_start, oos_end],
-                "foldFingerprint": fold_fingerprint,
+                "foldFingerprint": digest,
                 "statuses": sorted(statuses),
             }
         )
-    return not failures, failures, {"folds": fold_summaries, "count": len(grouped)}
+    return failures, {"folds": summaries, "count": len(grouped)}
 
 
-def _paper_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+def _paper_check(evidence: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
     failures: list[str] = []
-    intents = [
-        dict(item)
-        for item in _sequence(evidence.get("intents"))
-        if isinstance(item, Mapping)
-    ]
+    intents = [dict(x) for x in _list(evidence.get("intents")) if isinstance(x, Mapping)]
     decisions = [
-        dict(item)
-        for item in _sequence(evidence.get("constraintDecisions"))
-        if isinstance(item, Mapping)
+        dict(x) for x in _list(evidence.get("constraintDecisions")) if isinstance(x, Mapping)
     ]
-    fills = [
-        dict(item)
-        for item in _sequence(evidence.get("fills"))
-        if isinstance(item, Mapping)
-    ]
+    fills = [dict(x) for x in _list(evidence.get("fills")) if isinstance(x, Mapping)]
     ledger = [
-        dict(item)
-        for item in _sequence(evidence.get("ledgerEntries"))
-        if isinstance(item, Mapping)
+        dict(x) for x in _list(evidence.get("ledgerEntries")) if isinstance(x, Mapping)
     ]
     reconciliations = [
-        dict(item)
-        for item in _sequence(evidence.get("reconciliations"))
-        if isinstance(item, Mapping)
+        dict(x) for x in _list(evidence.get("reconciliations")) if isinstance(x, Mapping)
     ]
-
     if not intents:
         failures.append("paper_intents_missing")
-    decisions_by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for decision in decisions:
-        decisions_by_intent[
-            _text(decision.get("intent_id") or decision.get("intentId"))
-        ].append(decision)
+
+    by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
     fills_by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for fill in fills:
-        fills_by_intent[_text(fill.get("intent_id") or fill.get("intentId"))].append(fill)
     ledger_by_fill: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for entry in ledger:
-        ledger_by_fill[_text(entry.get("fill_id") or entry.get("fillId"))].append(entry)
+    for item in decisions:
+        by_intent[_text(item.get("intent_id") or item.get("intentId"))].append(item)
+    for item in fills:
+        fills_by_intent[_text(item.get("intent_id") or item.get("intentId"))].append(item)
+    for item in ledger:
+        ledger_by_fill[_text(item.get("fill_id") or item.get("fillId"))].append(item)
 
     accepted = rejected = 0
     for intent in intents:
         intent_id = _text(intent.get("id"))
-        related = decisions_by_intent.get(intent_id, [])
+        related = by_intent.get(intent_id, [])
         if not related:
             failures.append(f"paper_intent_{intent_id}_constraint_decision_missing")
             continue
-        outcomes = {
-            _text(
-                item.get("decision") or item.get("outcome") or item.get("status")
-            ).upper()
-            for item in related
-        }
-        is_rejected = bool(outcomes.intersection({"REJECT", "REJECTED", "BLOCKED"}))
-        is_accepted = bool(
-            outcomes.intersection({"ACCEPT", "ACCEPTED", "APPROVED", "PASS", "PASSED"})
-        )
-        if is_rejected:
+        outcomes = {_text(item.get("decision")).upper() for item in related}
+        if "REJECT" in outcomes:
             rejected += 1
             if fills_by_intent.get(intent_id):
                 failures.append(f"paper_intent_{intent_id}_rejection_has_fill")
-        if is_accepted:
+        if "ACCEPT" in outcomes:
             accepted += 1
-
     for fill in fills:
         fill_id = _text(fill.get("id"))
         if len(ledger_by_fill.get(fill_id, [])) < 3:
             failures.append(f"paper_fill_{fill_id}_ledger_incomplete")
-
     if fills and not ledger:
         failures.append("paper_ledger_missing")
+
     if not reconciliations:
         failures.append("paper_reconciliation_missing")
-    else:
-        for item in reconciliations:
-            status = _text(item.get("status") or item.get("result")).lower()
-            passed = item.get("passed")
-            if passed is False or (status and status not in SUCCESS_STATES):
-                failures.append("paper_reconciliation_failed")
-                break
-
-    projection = _mapping(evidence.get("ledgerProjection"))
-    if not projection or projection.get("error"):
+    elif any(
+        item.get("passed") is False
+        or (
+            _text(item.get("status") or item.get("result"))
+            and not _success(item.get("status") or item.get("result"))
+        )
+        for item in reconciliations
+    ):
+        failures.append("paper_reconciliation_failed")
+    if not _map(evidence.get("ledgerProjection")):
         failures.append("ledger_projection_missing_or_invalid")
 
-    idempotency = _mapping(evidence.get("idempotency"))
-    if not idempotency:
+    idem = _map(evidence.get("idempotency"))
+    if not idem:
         failures.append("ledger_idempotency_evidence_missing")
     else:
-        before = idempotency.get("entryCountBefore")
-        after = idempotency.get("entryCountAfter")
-        same_digest = bool(idempotency.get("sameDigest") or idempotency.get("sameIds"))
+        before, after = idem.get("entryCountBefore"), idem.get("entryCountAfter")
         if (
             before is None
             or after is None
             or int(before) != int(after)
-            or not same_digest
+            or not bool(idem.get("sameDigest") or idem.get("sameIds"))
         ):
             failures.append("ledger_idempotency_not_proven")
-
-    return (
-        not failures,
-        failures,
-        {
-            "intentCount": len(intents),
-            "acceptedIntentCount": accepted,
-            "rejectedIntentCount": rejected,
-            "fillCount": len(fills),
-            "ledgerEntryCount": len(ledger),
-            "reconciliationCount": len(reconciliations),
-        },
-    )
-
-
-def _resource_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
-    failures: list[str] = []
-    before = evidence.get("before")
-    after = evidence.get("after")
-    snapshots = [
-        dict(value)
-        for value in (before, after)
-        if isinstance(value, Mapping)
-    ]
-    if _text(evidence.get("evidenceType")) != "runtime_snapshot":
-        failures.append("resource_evidence_not_runtime_snapshot")
-    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
-        failures.append("resource_before_after_snapshots_required")
-    if not snapshots:
-        failures.append("resource_snapshot_missing")
-        return False, failures, {"snapshotCount": 0}
-
-    memory_complete = any(
-        _finite(_mapping(item.get("memory")).get("usedBytes")) is not None
-        and (
-            _finite(_mapping(item.get("memory")).get("processRssBytes")) is not None
-            or _finite(_mapping(item.get("memory")).get("rssBytes")) is not None
-        )
-        for item in snapshots
-    )
-    cpu_complete = any(
-        _finite(_mapping(item.get("cpu")).get("cpuCount")) is not None
-        and _finite(_mapping(item.get("cpu")).get("usedPercent")) is not None
-        for item in snapshots
-    )
-    if not memory_complete:
-        failures.append("resource_memory_evidence_incomplete")
-    if not cpu_complete:
-        failures.append("resource_cpu_evidence_incomplete")
-    duration = _finite(evidence.get("durationSeconds"))
-    if duration is None or duration < 0:
-        failures.append("resource_duration_missing")
-    return not failures, failures, {
-        "snapshotCount": len(snapshots),
-        "durationSeconds": duration,
+    return failures, {
+        "intentCount": len(intents),
+        "acceptedIntentCount": accepted,
+        "rejectedIntentCount": rejected,
+        "fillCount": len(fills),
+        "ledgerEntryCount": len(ledger),
+        "reconciliationCount": len(reconciliations),
     }
 
 
-def _admission_check(evidence: Mapping[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
-    stage = _text(evidence.get("stage") or evidence.get("status")).lower()
-    passed = stage in {"admission_passed", "paper_validated"}
-    failures = [] if passed else ["strategy_admission_not_passed"]
-    return passed, failures, {"stage": stage}
+def _resource_check(evidence: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    failures: list[str] = []
+    before, after = evidence.get("before"), evidence.get("after")
+    snapshots = [dict(x) for x in (before, after) if isinstance(x, Mapping)]
+    if _text(evidence.get("evidenceType")) != "runtime_snapshot":
+        failures.append("resource_evidence_not_runtime_snapshot")
+    if len(snapshots) != 2:
+        failures.append("resource_before_after_snapshots_required")
+    if not snapshots:
+        return failures + ["resource_snapshot_missing"], {"snapshotCount": 0}
+    if not any(
+        _number(_map(x.get("memory")).get("usedBytes")) is not None
+        and (
+            _number(_map(x.get("memory")).get("processRssBytes")) is not None
+            or _number(_map(x.get("memory")).get("rssBytes")) is not None
+        )
+        for x in snapshots
+    ):
+        failures.append("resource_memory_evidence_incomplete")
+    if not any(
+        _number(_map(x.get("cpu")).get("cpuCount")) is not None
+        and _number(_map(x.get("cpu")).get("usedPercent")) is not None
+        for x in snapshots
+    ):
+        failures.append("resource_cpu_evidence_incomplete")
+    duration = _number(evidence.get("durationSeconds"))
+    if duration is None or duration < 0:
+        failures.append("resource_duration_missing")
+    return failures, {"snapshotCount": len(snapshots), "durationSeconds": duration}
 
 
 def build_execution_certification(
@@ -534,18 +434,9 @@ def build_execution_certification(
             failures.append(name)
 
     check("pinned_data_release_present", bool(release_id), dataReleaseId=release_id)
-
     for label, payload in (("candidate", candidate), ("baseline", baseline)):
-        check(
-            f"{label}_run_present",
-            bool(payload.get("present")),
-            runId=payload.get("runId"),
-        )
-        check(
-            f"{label}_run_success",
-            _passed_status(payload.get("status")),
-            status=payload.get("status"),
-        )
+        check(f"{label}_run_present", bool(payload.get("present")), runId=payload.get("runId"))
+        check(f"{label}_run_success", _success(payload.get("status")), status=payload.get("status"))
         check(
             f"{label}_validation_passed",
             bool(payload.get("validationPassed")),
@@ -561,26 +452,24 @@ def build_execution_certification(
         check(
             f"{label}_metrics_complete",
             all(
-                _finite(metrics.get(key)) is not None
+                _number(metrics.get(key)) is not None
                 for key in ("sharpe", "maxDrawdown", "turnover", "tradeCount")
             ),
             metrics=metrics,
         )
-        cost = _mapping(payload.get("costAttribution"))
+        cost = _map(payload.get("costAttribution"))
         check(
             f"{label}_cost_attribution_complete",
             bool(cost.get("complete"))
-            and all(
-                _finite(cost.get(key)) is not None for key in REQUIRED_COST_FIELDS
-            ),
+            and all(_number(cost.get(key)) is not None for key in REQUIRED_COST_FIELDS),
             costAttribution=cost,
         )
 
-    base_report: dict[str, Any] | None = None
+    strategy_report: dict[str, Any] | None = None
     try:
-        base_report = build_certification_report(
-            candidate=_normalized_backtest_payload(candidate),
-            baseline=_normalized_backtest_payload(baseline),
+        strategy_report = build_certification_report(
+            candidate=_cert_payload(candidate),
+            baseline=_cert_payload(baseline),
             gates=gates or {},
             deterministic_fingerprints=deterministic_fingerprints,
         )
@@ -589,44 +478,33 @@ def build_execution_certification(
     else:
         check(
             "strategy_metric_certification_valid",
-            bool(base_report.get("passed")),
-            failureReasons=base_report.get("failureReasons") or [],
+            bool(strategy_report.get("passed")),
+            failureReasons=strategy_report.get("failureReasons") or [],
         )
 
-    wf_passed, wf_failures, wf_summary = _walk_forward_check(
-        walk_forward, data_release_id=release_id
-    )
-    check(
-        "walk_forward_complete",
-        wf_passed,
-        failureReasons=wf_failures,
-        **wf_summary,
-    )
-
-    paper_passed, paper_failures, paper_summary = _paper_check(paper)
+    wf_failures, wf_summary = _walk_forward_check(walk_forward, release_id)
+    check("walk_forward_complete", not wf_failures, failureReasons=wf_failures, **wf_summary)
+    paper_failures, paper_summary = _paper_check(paper)
     check(
         "paper_execution_chain_complete",
-        paper_passed,
+        not paper_failures,
         failureReasons=paper_failures,
         **paper_summary,
     )
-
-    admission_passed, admission_failures, admission_summary = _admission_check(admission)
+    admission_stage = _text(admission.get("stage") or admission.get("status")).lower()
+    admission_ok = admission_stage in {"admission_passed", "paper_validated"}
     check(
         "admission_passed",
-        admission_passed,
-        failureReasons=admission_failures,
-        **admission_summary,
+        admission_ok,
+        failureReasons=[] if admission_ok else ["strategy_admission_not_passed"],
+        stage=admission_stage,
     )
-
-    resources_with_duration = dict(resources)
-    resources_with_duration.setdefault("durationSeconds", candidate.get("durationSeconds"))
-    resource_passed, resource_failures, resource_summary = _resource_check(
-        resources_with_duration
-    )
+    runtime = dict(resources)
+    runtime.setdefault("durationSeconds", candidate.get("durationSeconds"))
+    resource_failures, resource_summary = _resource_check(runtime)
     check(
         "resource_evidence_complete",
-        resource_passed,
+        not resource_failures,
         failureReasons=resource_failures,
         **resource_summary,
     )
@@ -635,28 +513,24 @@ def build_execution_certification(
     deterministic = {
         "dataReleaseId": release_id,
         "candidate": {
-            "runId": candidate.get("runId"),
-            "dataReleaseId": candidate.get("dataReleaseId"),
-            "metrics": candidate.get("metrics"),
-            "costAttribution": candidate.get("costAttribution"),
-            "canonicalConfigSha256": candidate.get("canonicalConfigSha256"),
-            "runFingerprint": candidate.get("runFingerprint"),
+            key: candidate.get(key)
+            for key in (
+                "runId", "dataReleaseId", "metrics", "costAttribution",
+                "canonicalConfigSha256", "runFingerprint",
+            )
         },
         "baseline": {
-            "runId": baseline.get("runId"),
-            "dataReleaseId": baseline.get("dataReleaseId"),
-            "metrics": baseline.get("metrics"),
-            "costAttribution": baseline.get("costAttribution"),
-            "canonicalConfigSha256": baseline.get("canonicalConfigSha256"),
-            "runFingerprint": baseline.get("runFingerprint"),
+            key: baseline.get(key)
+            for key in (
+                "runId", "dataReleaseId", "metrics", "costAttribution",
+                "canonicalConfigSha256", "runFingerprint",
+            )
         },
         "walkForward": wf_summary,
         "paper": paper_summary,
-        "admission": admission_summary,
+        "admission": {"stage": admission_stage},
         "resources": resource_summary,
-        "checks": [
-            {"name": item["name"], "passed": item["passed"]} for item in checks
-        ],
+        "checks": [{"name": x["name"], "passed": x["passed"]} for x in checks],
     }
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -664,7 +538,7 @@ def build_execution_certification(
         "failureReasons": failures,
         "dataReleaseId": release_id,
         "checks": checks,
-        "strategyCertification": base_report,
+        "strategyCertification": strategy_report,
         "evidence": {
             "candidate": dict(candidate),
             "baseline": dict(baseline),
@@ -687,23 +561,15 @@ def register_execution_certification_artifact(
     currency: str = "USD",
     object_key: str | None = None,
 ) -> dict[str, Any]:
-    """Register immutable platform evidence only after every critical gate passes."""
     if not report.get("certified"):
-        raise ValueError(
-            "uncertified ETF execution evidence cannot enter artifact_registry"
-        )
+        raise ValueError("uncertified ETF execution evidence cannot enter artifact_registry")
     release_id = _text(report.get("dataReleaseId"))
-    if not release_id:
-        raise ValueError("certified ETF execution evidence requires dataReleaseId")
     fingerprint = _text(report.get("artifactFingerprint"))
-    if not fingerprint:
-        raise ValueError("certified ETF execution evidence requires artifactFingerprint")
-    artifact_id = f"etf_exec_cert_{fingerprint[:24]}"
-    evidence = _mapping(report.get("evidence"))
-    candidate = _mapping(evidence.get("candidate"))
-    baseline = _mapping(evidence.get("baseline"))
+    if not release_id or not fingerprint:
+        raise ValueError("certification artifact requires dataReleaseId and artifactFingerprint")
+    evidence = _map(report.get("evidence"))
     artifact = {
-        "artifactId": artifact_id,
+        "artifactId": f"etf_exec_cert_{fingerprint[:24]}",
         "schemaVersion": SCHEMA_VERSION,
         "artifactType": "ETF_EXECUTION_CERTIFICATION",
         "promotionStatus": "LEAN_VALIDATED",
@@ -714,14 +580,11 @@ def register_execution_certification_artifact(
         "timezone": _text(timezone) or "UTC",
         "currency": _text(currency) or "USD",
         "payloadSha256": canonical_fingerprint(dict(report)),
-        "payloadRef": {
-            "objectKey": object_key,
-            "mediaType": "application/json",
-        },
+        "payloadRef": {"objectKey": object_key, "mediaType": "application/json"},
         "metadata": {
             "artifactFingerprint": fingerprint,
-            "candidateRunId": candidate.get("runId"),
-            "baselineRunId": baseline.get("runId"),
+            "candidateRunId": _map(evidence.get("candidate")).get("runId"),
+            "baselineRunId": _map(evidence.get("baseline")).get("runId"),
             "failureReasons": [],
         },
     }
