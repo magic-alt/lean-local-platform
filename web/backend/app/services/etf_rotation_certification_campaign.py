@@ -9,7 +9,7 @@ from typing import Any, Callable, Mapping
 from ..db import db
 from ..repositories.backtest_repository import get_backtest, get_result
 from .backtest_service import create_backtest_job
-from .data_releases import get_data_release
+from .data_releases import US_ETF_CERTIFICATION_PROFILE, get_data_release
 from .etf_rotation_certification import canonical_fingerprint
 from .etf_rotation_execution_attribution import materialize_execution_attribution
 from .etf_rotation_execution_certification import (
@@ -91,6 +91,24 @@ def _normalize_symbols(value: Any) -> list[str]:
     return symbols
 
 
+def _release_components(release_id: str) -> dict[str, str]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select role,component_release_id
+            from data_release_components
+            where data_release_id=?
+            order by role
+            """,
+            (release_id,),
+        ).fetchall()
+    return {
+        str(row["role"]): str(row["component_release_id"])
+        for row in rows
+        if row["role"] and row["component_release_id"]
+    }
+
+
 def _validate_release(config: Mapping[str, Any]) -> dict[str, Any]:
     release_id = _text(config.get("dataReleaseId"))
     if not release_id:
@@ -100,9 +118,15 @@ def _validate_release(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Immutable DataRelease not found: {release_id}")
     if _text(release.get("status")).lower() != "active":
         raise ValueError(f"DataRelease is not active: {release_id}")
+    profile = _text(release.get("profile"))
+    if profile != US_ETF_CERTIFICATION_PROFILE:
+        raise ValueError(
+            "ETF certification requires profile="
+            f"{US_ETF_CERTIFICATION_PROFILE}, got {profile or 'missing'}."
+        )
     market = _text(release.get("market")).lower()
-    if market and market != "usa":
-        raise ValueError(f"ETF certification requires a USA DataRelease, got {market}.")
+    if market != "usa":
+        raise ValueError(f"ETF certification requires a USA DataRelease, got {market or 'missing'}.")
     start = _text(config.get("start"))
     end = _text(config.get("end"))
     coverage_start = _text(release.get("coverage_start"))
@@ -111,7 +135,15 @@ def _validate_release(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Campaign start {start} precedes DataRelease coverage {coverage_start}.")
     if coverage_end and end and end > coverage_end:
         raise ValueError(f"Campaign end {end} exceeds DataRelease coverage {coverage_end}.")
-    return release
+    components = _release_components(release_id)
+    executable_dataset_release_id = _text(components.get("bars"))
+    if not executable_dataset_release_id:
+        raise ValueError("ETF certification DataRelease is missing the executable bars componentReleaseId.")
+    return {
+        **release,
+        "componentReleaseIds": components,
+        "executableDatasetReleaseId": executable_dataset_release_id,
+    }
 
 
 def _normalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -176,10 +208,43 @@ def start_campaign(config: Mapping[str, Any]) -> dict[str, Any]:
         config=frozen,
         dataRelease={
             key: release.get(key)
-            for key in ("id", "profile", "market", "coverage_start", "coverage_end", "as_of_time", "manifest_sha256")
+            for key in (
+                "id",
+                "profile",
+                "market",
+                "coverage_start",
+                "coverage_end",
+                "as_of_time",
+                "manifest_sha256",
+                "componentReleaseIds",
+                "executableDatasetReleaseId",
+            )
         },
     )
     return campaign_status(campaign_id)
+
+
+def attach_paper_session(campaign_id: str, session_id: str) -> dict[str, Any]:
+    events = _events(campaign_id)
+    _campaign_config(events)
+    value = _text(session_id)
+    if not value:
+        raise ValueError("paper session id is required.")
+    if _action_event(events, "artifact_registered"):
+        raise ValueError("Certified campaigns are immutable; Paper evidence cannot be replaced.")
+    _event(
+        campaign_id,
+        "paper",
+        "paper_session_attached",
+        "success",
+        sessionId=value,
+    )
+    return campaign_status(campaign_id)
+
+
+def _paper_session_id(events: list[dict[str, Any]], config: Mapping[str, Any]) -> str:
+    attached = _action_event(events, "paper_session_attached")
+    return _text(_details(attached).get("sessionId")) or _text(config.get("paperSessionId"))
 
 
 def _base_request(config: Mapping[str, Any], project_id: str, *, name: str) -> dict[str, Any]:
@@ -235,6 +300,7 @@ def _result_fingerprint(run_id: str) -> str:
         {
             "canonicalConfigSha256": run.get("canonical_config_sha256"),
             "dataReleaseId": run.get("data_release_id") or (run.get("parameters") or {}).get("dataReleaseId"),
+            "datasetReleaseId": run.get("dataset_release_id"),
             "statistics": result.get("statistics") or {},
             "summaryMetrics": result.get("summary_metrics") or {},
             "orders": result.get("orders") or [],
@@ -251,6 +317,7 @@ def _ensure_terminal_backtest(
     dispatch_action: str,
     complete_action: str,
     role: str,
+    expected_dataset_release_id: str,
 ) -> tuple[str, dict[str, Any] | None]:
     event = _action_event(events, dispatch_action)
     run_id = _text(_details(event).get("runId"))
@@ -263,6 +330,20 @@ def _ensure_terminal_backtest(
     if status != "success":
         if not _action_event(events, f"{role}_failed"):
             _event(campaign_id, "backtest", f"{role}_failed", "failed", runId=run_id, status=status, error=run.get("error_message") or run.get("error"))
+        return "failed", run
+    actual_dataset_release_id = _text(run.get("dataset_release_id"))
+    if actual_dataset_release_id != expected_dataset_release_id:
+        action = f"{role}_dataset_release_mismatch"
+        if not _action_event(events, action):
+            _event(
+                campaign_id,
+                "lineage",
+                action,
+                "failed",
+                runId=run_id,
+                expectedDatasetReleaseId=expected_dataset_release_id,
+                actualDatasetReleaseId=actual_dataset_release_id or None,
+            )
         return "failed", run
     materialized = materialize_execution_attribution(run_id)
     if not materialized.get("complete"):
@@ -277,6 +358,7 @@ def _ensure_terminal_backtest(
             "success",
             role=role,
             runId=run_id,
+            datasetReleaseId=actual_dataset_release_id,
             resultFingerprint=_result_fingerprint(run_id),
             attribution=materialized,
         )
@@ -361,6 +443,41 @@ def _walk_forward_run_id(batch_id: str) -> str | None:
     return str(row["id"]) if row else None
 
 
+def _verify_batch_dataset_release(batch_id: str, expected_dataset_release_id: str) -> dict[str, Any]:
+    with db() as connection:
+        rows = connection.execute(
+            """
+            select item.id,item.status,item.related_id,run.dataset_release_id
+            from experiment_batch_items item
+            left join backtest_runs run on run.id=item.related_id
+            where item.batch_id=?
+            order by item.item_index
+            """,
+            (batch_id,),
+        ).fetchall()
+    observed = []
+    failures = []
+    for row in rows:
+        related_id = _text(row["related_id"])
+        dataset_release_id = _text(row["dataset_release_id"])
+        observed.append(
+            {
+                "itemId": str(row["id"]),
+                "runId": related_id or None,
+                "status": row["status"],
+                "datasetReleaseId": dataset_release_id or None,
+            }
+        )
+        if not related_id or dataset_release_id != expected_dataset_release_id:
+            failures.append(str(row["id"]))
+    return {
+        "passed": bool(rows) and not failures,
+        "expectedDatasetReleaseId": expected_dataset_release_id,
+        "failedItemIds": failures,
+        "items": observed,
+    }
+
+
 def _ledger_digest(session_id: str) -> tuple[int, str]:
     rows = list_ledger_entries(session_id)
     identity = [
@@ -415,13 +532,19 @@ def _container_digest(run: Mapping[str, Any]) -> str:
     fingerprint = dict(run.get("fingerprint") or {})
     docker = fingerprint.get("docker") if isinstance(fingerprint.get("docker"), Mapping) else {}
     runtime = run.get("runtime_identity") if isinstance(run.get("runtime_identity"), Mapping) else {}
-    return _text((docker or {}).get("digest") or (docker or {}).get("image") or (runtime or {}).get("runtimeSha256") or run.get("docker_image"))
+    return _text(
+        (docker or {}).get("digest")
+        or (docker or {}).get("image")
+        or (runtime or {}).get("artifactSha256")
+        or (runtime or {}).get("runtimeSha256")
+        or run.get("docker_image")
+    )
 
 
 def _git_commit(run: Mapping[str, Any]) -> str:
     fingerprint = dict(run.get("fingerprint") or {})
     git = fingerprint.get("git") if isinstance(fingerprint.get("git"), Mapping) else {}
-    return _text((git or {}).get("commit"))
+    return _text((git or {}).get("commit") or fingerprint.get("git_commit"))
 
 
 def campaign_status(campaign_id: str) -> dict[str, Any]:
@@ -437,6 +560,7 @@ def campaign_status(campaign_id: str) -> dict[str, Any]:
         "action": latest.get("action"),
         "dataReleaseId": config.get("dataReleaseId"),
         "projectId": config.get("projectId"),
+        "paperSessionId": _paper_session_id(events, config) or None,
         "details": details,
         "events": events,
     }
@@ -451,6 +575,7 @@ def advance_campaign(
     events = _events(campaign_id)
     config = _campaign_config(events)
     release = _validate_release(config)
+    executable_dataset_release_id = str(release["executableDatasetReleaseId"])
     if _action_event(events, "artifact_registered"):
         return campaign_status(campaign_id)
 
@@ -474,6 +599,7 @@ def advance_campaign(
         dispatch_action="canonical_dispatched",
         complete_action="canonical_completed",
         role="canonical",
+        expected_dataset_release_id=executable_dataset_release_id,
     )
     if state != "success" or not candidate:
         return campaign_status(campaign_id)
@@ -483,7 +609,7 @@ def advance_campaign(
         _event(campaign_id, "resources", "resource_after_captured", "success", snapshot=collect_resource_snapshot(), scope="platform_runtime_envelope", durationSeconds=candidate.get("duration_seconds"))
         events = _events(campaign_id)
 
-    rerun = _dispatch_backtest(
+    _dispatch_backtest(
         campaign_id,
         events,
         action="rerun_dispatched",
@@ -498,6 +624,7 @@ def advance_campaign(
         dispatch_action="rerun_dispatched",
         complete_action="rerun_completed",
         role="rerun",
+        expected_dataset_release_id=executable_dataset_release_id,
     )
     if state != "success" or not rerun:
         return campaign_status(campaign_id)
@@ -537,6 +664,7 @@ def advance_campaign(
         dispatch_action="baseline_dispatched",
         complete_action="baseline_completed",
         role="baseline",
+        expected_dataset_release_id=executable_dataset_release_id,
     )
     if state != "success" or not baseline:
         return campaign_status(campaign_id)
@@ -557,15 +685,20 @@ def advance_campaign(
         if not _action_event(events, "walk_forward_failed"):
             _event(campaign_id, "walk_forward", "walk_forward_failed", "failed", batchId=batch_id, status=batch_status, summary=batch.get("summary") or {})
         return campaign_status(campaign_id)
+    lineage = _verify_batch_dataset_release(batch_id, executable_dataset_release_id)
+    if not lineage["passed"]:
+        if not _action_event(events, "walk_forward_dataset_release_mismatch"):
+            _event(campaign_id, "lineage", "walk_forward_dataset_release_mismatch", "failed", batchId=batch_id, lineage=lineage)
+        return campaign_status(campaign_id)
     walk_forward_run_id = _walk_forward_run_id(batch_id)
     if not walk_forward_run_id:
         _event(campaign_id, "walk_forward", "walk_forward_evidence_missing", "failed", batchId=batch_id)
         return campaign_status(campaign_id)
     if not _action_event(events, "walk_forward_completed"):
-        _event(campaign_id, "walk_forward", "walk_forward_completed", "success", batchId=batch_id, walkForwardRunId=walk_forward_run_id)
+        _event(campaign_id, "walk_forward", "walk_forward_completed", "success", batchId=batch_id, walkForwardRunId=walk_forward_run_id, executableDatasetReleaseId=executable_dataset_release_id)
         events = _events(campaign_id)
 
-    paper_session_id = _text(config.get("paperSessionId"))
+    paper_session_id = _paper_session_id(events, config)
     if not paper_session_id:
         if not _action_event(events, "waiting_paper_evidence"):
             _event(
