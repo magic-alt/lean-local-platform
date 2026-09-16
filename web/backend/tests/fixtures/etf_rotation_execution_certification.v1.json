@@ -1,9 +1,6 @@
 {
   "dataReleaseId": "ds_pinned_001",
-  "deterministicFingerprints": [
-    "rerun-same",
-    "rerun-same"
-  ],
+  "deterministicFingerprints": ["rerun-same", "rerun-same"],
   "gates": {
     "minimumSharpe": 0.5,
     "maximumDrawdown": 0.2,
@@ -19,19 +16,8 @@
     "dataReleaseId": "ds_pinned_001",
     "codeVersion": "abc123",
     "costModelId": "etf-realistic-v1",
-    "metrics": {
-      "sharpe": 1.2,
-      "maxDrawdown": 0.1,
-      "turnover": 1.8,
-      "tradeCount": 24
-    },
-    "costAttribution": {
-      "fees": 120.0,
-      "slippage": 85.0,
-      "cashDrag": 30.0,
-      "capacityImpact": 12.0,
-      "complete": true
-    },
+    "metrics": {"sharpe": 1.2, "maxDrawdown": 0.1, "turnover": 1.8, "tradeCount": 24},
+    "costAttribution": {"fees": 120.0, "slippage": 85.0, "cashDrag": 30.0, "capacityImpact": 12.0, "complete": true},
     "durationSeconds": 42.5,
     "canonicalConfigSha256": "cfg-candidate",
     "runFingerprint": "run-candidate"
@@ -44,26 +30,15 @@
     "dataReleaseId": "ds_pinned_001",
     "codeVersion": "abc123",
     "costModelId": "etf-realistic-v1",
-    "metrics": {
-      "sharpe": 0.8,
-      "maxDrawdown": 0.14,
-      "turnover": 0.6,
-      "tradeCount": 12
-    },
-    "costAttribution": {
-      "fees": 60.0,
-      "slippage": 40.0,
-      "cashDrag": 35.0,
-      "capacityImpact": 8.0,
-      "complete": true
-    },
+    "metrics": {"sharpe": 0.8, "maxDrawdown": 0.14, "turnover": 0.6, "tradeCount": 12},
+    "costAttribution": {"fees": 60.0, "slippage": 40.0, "cashDrag": 35.0, "capacityImpact": 8.0, "complete": true},
     "durationSeconds": 35.0,
     "canonicalConfigSha256": "cfg-baseline",
     "runFingerprint": "run-baseline"
   },
   "walkForward": {
     "present": true,
-    "status": "complete",
+    "status": "COMPLETED",
     "lineageStatus": "complete",
     "datasetVersion": "ds_pinned_001",
     "universeVersion": "etf-us-v1",
@@ -80,7 +55,7 @@
         "oos_end": "2021-12-31",
         "fold_fingerprint": "fold-1",
         "dataset_version": "ds_pinned_001",
-        "status": "success"
+        "status": "OOS_COMPLETED"
       },
       {
         "fold": 2,
@@ -92,45 +67,28 @@
         "oos_end": "2022-12-31",
         "fold_fingerprint": "fold-2",
         "dataset_version": "ds_pinned_001",
-        "status": "success"
+        "status": "OOS_COMPLETED"
       }
     ]
   },
   "paper": {
     "sessionId": "paper-1",
-    "intents": [
-      {"id": "intent-buy"},
-      {"id": "intent-reject"}
-    ],
+    "intents": [{"id": "intent-buy"}, {"id": "intent-reject"}],
     "constraintDecisions": [
-      {"intent_id": "intent-buy", "decision": "ACCEPTED"},
-      {"intent_id": "intent-reject", "decision": "REJECTED"}
+      {"intent_id": "intent-buy", "decision": "ACCEPT"},
+      {"intent_id": "intent-reject", "decision": "REJECT"}
     ],
-    "fills": [
-      {"id": "fill-1", "intent_id": "intent-buy"}
-    ],
+    "fills": [{"id": "fill-1", "intent_id": "intent-buy"}],
     "ledgerEntries": [
       {"id": "l1", "fill_id": "fill-1"},
       {"id": "l2", "fill_id": "fill-1"},
       {"id": "l3", "fill_id": "fill-1"}
     ],
-    "reconciliations": [
-      {"status": "passed", "passed": true}
-    ],
-    "ledgerProjection": {
-      "cash": 99000.0,
-      "positions": [{"symbol": "SPY", "quantity": 10}],
-      "entryCount": 3
-    },
-    "idempotency": {
-      "entryCountBefore": 3,
-      "entryCountAfter": 3,
-      "sameDigest": true
-    }
+    "reconciliations": [{"status": "passed", "passed": true}],
+    "ledgerProjection": {"cash": 99000.0, "positions": [{"symbol": "SPY", "quantity": 10}], "entryCount": 3},
+    "idempotency": {"entryCountBefore": 3, "entryCountAfter": 3, "sameDigest": true}
   },
-  "admission": {
-    "stage": "paper_validated"
-  },
+  "admission": {"stage": "paper_validated"},
   "resources": {
     "evidenceType": "runtime_snapshot",
     "durationSeconds": 42.5,
