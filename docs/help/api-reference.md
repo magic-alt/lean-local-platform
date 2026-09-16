@@ -3,7 +3,7 @@
 > 本文由 `scripts/generate_help_api_reference.py` 根据 FastAPI OpenAPI 确定性生成。
 > 业务语义、完整示例和错误处理请参阅 [API 使用指南](../api.md)。
 
-当前共收录 **257** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
+当前共收录 **262** 个公开业务操作。交互式 Schema 以 `/docs` 和 `/openapi.json` 为准。
 
 ## ashare
 
@@ -396,6 +396,11 @@
 
 | Method | Path | Summary | Input | Success |
 | --- | --- | --- | --- | --- |
+| `GET` | `/api/integrated-workflows/compare` | Integrated Compare | `left` (query, required)<br>`right` (query, required) | `200` - |
+| `GET` | `/api/integrated-workflows/{import_id}/explain` | Integrated Explain | `import_id` (path, required) | `200` - |
+| `GET` | `/api/integrated-workflows/{import_id}/plan` | Integrated Plan | `import_id` (path, required) | `200` - |
+| `POST` | `/api/integrated-workflows/{import_id}/resume` | Integrated Resume | `import_id` (path, required)<br>`Idempotency-Key` (header, required) | `200` - |
+| `GET` | `/api/integrated-workflows/{import_id}/status` | Integrated Status | `import_id` (path, required) | `200` - |
 | `GET` | `/api/lineage/{resource_type}/{resource_id}` | Lineage | `resource_type` (path, required)<br>`resource_id` (path, required) | `200` - |
 | `GET` | `/api/verifications` | Verifications | `limit` (query)<br>`offset` (query) | `200` `PageEnvelope` |
 | `GET` | `/api/verifications/{run_id}` | Verification | `run_id` (path, required) | `200` - |
