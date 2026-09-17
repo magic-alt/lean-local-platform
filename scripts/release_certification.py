@@ -300,20 +300,20 @@ def build_bundle(
         "fault_matrix_failed",
         str(fault.get("status") or "missing"),
     )
-    fault_release_sha = str(fault.get("releaseGitSha") or fault.get("gitSha") or "")
+    fault_git_sha = str(fault.get("gitSha") or "")
+    fault_release_sha = str(fault.get("releaseGitSha") or "")
     _require(
-        fault_release_sha == release_git_sha,
+        fault_git_sha == release_git_sha and fault_release_sha == release_git_sha,
         blocked,
         "fault_matrix_git_mismatch",
-        fault_release_sha or "missing",
+        f"gitSha={fault_git_sha or 'missing'},releaseGitSha={fault_release_sha or 'missing'}",
     )
-    if fault.get("releaseId") is not None:
-        _require(
-            str(fault.get("releaseId") or "") == release_id,
-            blocked,
-            "fault_matrix_release_id_mismatch",
-            str(fault.get("releaseId") or "missing"),
-        )
+    _require(
+        str(fault.get("releaseId") or "") == release_id,
+        blocked,
+        "fault_matrix_release_id_mismatch",
+        str(fault.get("releaseId") or "missing"),
+    )
     for scenario in policy.get("requiredFaultScenarios") or []:
         item = fault_scenarios.get(scenario) if isinstance(fault_scenarios, dict) else None
         _require(
@@ -328,6 +328,20 @@ def build_bundle(
                 blocked,
                 "fault_scenario_evidence_incomplete",
                 str(scenario),
+            )
+            scenario_git_sha = str(item.get("gitSha") or "")
+            scenario_release_git_sha = str(item.get("releaseGitSha") or "")
+            _require(
+                scenario_git_sha == release_git_sha
+                and scenario_release_git_sha == release_git_sha
+                and str(item.get("releaseId") or "") == release_id,
+                blocked,
+                "fault_scenario_identity_mismatch",
+                (
+                    f"{scenario}:gitSha={scenario_git_sha or 'missing'},"
+                    f"releaseGitSha={scenario_release_git_sha or 'missing'},"
+                    f"releaseId={item.get('releaseId') or 'missing'}"
+                ),
             )
 
     supply = evidence.get("supplyChain") or {}

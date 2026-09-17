@@ -100,7 +100,12 @@ Collect dedicated JSON evidence for the remaining policy scenarios:
 - missing PIT/benchmark;
 - notification failure.
 
-Each scenario must contain a pass/fail result plus non-empty `trace` and `invariants`. Assemble the final matrix:
+Each scenario must contain a pass/fail result, non-empty `trace` and `invariants`,
+and the exact `gitSha`/`releaseId` identity of the release under test. If an
+evidence producer distinguishes its checkout from the running release, it must
+also emit `releaseGitSha`, and both SHAs must agree. Mixed-release evidence,
+missing identities, and duplicate scenario bindings are rejected. Assemble the
+final matrix:
 
 ```bash
 python scripts/build_fault_matrix.py \

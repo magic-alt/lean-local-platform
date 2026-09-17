@@ -59,6 +59,9 @@ def _normalize_scenario(name: str, path: Path, payload: dict[str, Any]) -> dict[
     return {
         "passed": passed,
         "source": str(path),
+        "gitSha": payload.get("gitSha"),
+        "releaseGitSha": payload.get("releaseGitSha") or payload.get("gitSha"),
+        "releaseId": payload.get("releaseId"),
         "evidenceMode": payload.get("evidenceMode") or "fault_acceptance",
         "trace": trace,
         "invariants": invariants,
@@ -78,27 +81,68 @@ def build_matrix(
     required = [str(item) for item in policy.get("requiredFaultScenarios") or []]
     scenarios: dict[str, dict[str, Any]] = {}
     sources: list[dict[str, Any]] = []
+    identity_errors: list[dict[str, str]] = []
+    duplicate_scenarios: list[str] = []
     identity: dict[str, Any] = {
         "gitSha": None,
         "releaseGitSha": None,
         "releaseId": None,
     }
 
+    def bind_identity(source: str, payload: dict[str, Any]) -> dict[str, str]:
+        source_git_sha = str(payload.get("gitSha") or "")
+        release_git_sha = str(payload.get("releaseGitSha") or source_git_sha)
+        release_id = str(payload.get("releaseId") or "")
+        resolved = {
+            "gitSha": source_git_sha,
+            "releaseGitSha": release_git_sha,
+            "releaseId": release_id,
+        }
+        for field, value in resolved.items():
+            if not value:
+                identity_errors.append(
+                    {
+                        "source": source,
+                        "code": "identity_missing",
+                        "detail": field,
+                    }
+                )
+        if source_git_sha and release_git_sha and source_git_sha != release_git_sha:
+            identity_errors.append(
+                {
+                    "source": source,
+                    "code": "source_runtime_git_mismatch",
+                    "detail": f"gitSha={source_git_sha},releaseGitSha={release_git_sha}",
+                }
+            )
+        if not identity["releaseGitSha"] and release_git_sha and release_id:
+            identity.update(resolved)
+        elif identity["releaseGitSha"]:
+            for field in ("gitSha", "releaseGitSha", "releaseId"):
+                expected = str(identity.get(field) or "")
+                actual = resolved[field]
+                if expected and actual and expected != actual:
+                    identity_errors.append(
+                        {
+                            "source": source,
+                            "code": "identity_mismatch",
+                            "detail": f"{field}:expected={expected},actual={actual}",
+                        }
+                    )
+        return resolved
+
     if service_restart_path is not None:
         service_payload = _load(service_restart_path)
         service_scenarios = service_payload.get("scenarios") or {}
         if not isinstance(service_scenarios, dict):
             raise ValueError("service_restart_scenarios_invalid")
-        identity = {
-            "gitSha": service_payload.get("gitSha"),
-            "releaseGitSha": service_payload.get("releaseGitSha"),
-            "releaseId": service_payload.get("releaseId"),
-        }
+        service_identity = bind_identity(str(service_restart_path), service_payload)
         for name, item in service_scenarios.items():
             if not isinstance(item, dict):
                 continue
             scenarios[str(name)] = {
                 **item,
+                **service_identity,
                 "source": str(service_restart_path),
                 "scenario": str(name),
             }
@@ -108,12 +152,16 @@ def build_matrix(
                 "path": str(service_restart_path),
                 "status": service_payload.get("status"),
                 "passed": service_payload.get("passed"),
-                **identity,
+                **service_identity,
             }
         )
 
     for name, path in scenario_paths:
         payload = _load(path)
+        scenario_identity = bind_identity(str(path), payload)
+        if name in scenarios:
+            duplicate_scenarios.append(name)
+            continue
         scenarios[name] = _normalize_scenario(name, path, payload)
         sources.append(
             {
@@ -122,8 +170,7 @@ def build_matrix(
                 "path": str(path),
                 "status": payload.get("status"),
                 "passed": scenarios[name]["passed"],
-                "gitSha": payload.get("gitSha"),
-                "releaseId": payload.get("releaseId"),
+                **scenario_identity,
             }
         )
 
@@ -140,9 +187,10 @@ def build_matrix(
             or not scenarios[name].get("invariants")
         )
     ]
-    identity_missing = service_restart_path is not None and (
+    identity_missing = (
         not identity.get("releaseId")
-        or not (identity.get("releaseGitSha") or identity.get("gitSha"))
+        or not identity.get("releaseGitSha")
+        or not identity.get("gitSha")
     )
     passed = (
         bool(required)
@@ -150,9 +198,11 @@ def build_matrix(
         and not failed
         and not incomplete
         and not identity_missing
+        and not identity_errors
+        and not duplicate_scenarios
     )
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "policyId": policy.get("policyId"),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "status": "passed" if passed else "blocked",
@@ -163,6 +213,8 @@ def build_matrix(
         "failedScenarios": failed,
         "incompleteScenarios": incomplete,
         "identityMissing": identity_missing,
+        "identityErrors": identity_errors,
+        "duplicateScenarios": sorted(set(duplicate_scenarios)),
         "scenarios": scenarios,
         "sources": sources,
     }
