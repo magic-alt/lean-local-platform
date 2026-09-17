@@ -320,6 +320,20 @@ def test_external_webhook_acceptance_requires_public_endpoint(monkeypatch):
         raise AssertionError("private webhook endpoint should not certify")
 
 
+def test_external_webhook_endpoint_evidence_redacts_path_query_and_userinfo():
+    module = _load_script(
+        "audit_external_webhook_endpoint_redaction",
+        "scripts/run_external_webhook_acceptance.py",
+    )
+
+    assert (
+        module._safe_endpoint(
+            "https://webhook-user:webhook-password@example.test:8443/private-token?signature=value"
+        )
+        == "https://example.test:8443/<REDACTED>"
+    )
+
+
 def test_daily_shadow_audit_api_includes_bearer(monkeypatch, tmp_path):
     module = _load_script(
         "audit_external_webhook_contract_auth",
@@ -454,7 +468,7 @@ def test_external_webhook_acceptance_requires_persisted_2xx(monkeypatch):
 
     assert result["status"] == "EXTERNAL_WEBHOOK_PASS"
     assert result["responseCode"] == 202
-    assert result["endpoint"] == "https://notifications.example.test/lean"
+    assert result["endpoint"] == "https://notifications.example.test/<REDACTED>"
 
 
 def test_external_webhook_acceptance_fails_without_delivered_persisted_success(monkeypatch):
