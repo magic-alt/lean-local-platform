@@ -100,7 +100,12 @@ Collect dedicated JSON evidence for the remaining policy scenarios:
 - missing PIT/benchmark;
 - notification failure.
 
-Each scenario must contain a pass/fail result plus non-empty `trace` and `invariants`. Assemble the final matrix:
+Each scenario must contain a pass/fail result, non-empty `trace` and `invariants`,
+and the exact `gitSha`/`releaseId` identity of the release under test. If an
+evidence producer distinguishes its checkout from the running release, it must
+also emit `releaseGitSha`, and both SHAs must agree. Mixed-release evidence,
+missing identities, and duplicate scenario bindings are rejected. Assemble the
+final matrix:
 
 ```bash
 python scripts/build_fault_matrix.py \
@@ -204,3 +209,65 @@ For `windows-native`, pass the actual Windows certificate with `--windows-certif
 ## Closure rule for Issue #61
 
 Issue #61 is not complete merely because the code and CI pass. Close it only after the current release has a complete, identity-matched evidence bundle and the operational activities above have actually executed. In particular, a historical replay or one-day accelerated simulation must never be relabeled as the required 21-day production-shape Paper observation.
+
+## Resumable background campaign
+
+`scripts/run_post_migration_certification_campaign.py` coordinates the real
+activities above without introducing a second ledger or evidence format. It:
+
+- freezes one Git SHA, release ID, immutable DataRelease ID/manifest digest,
+  and explicit Paper account set;
+- starts the real 24-hour third-party webhook observer without putting the
+  endpoint or credentials in command arguments, config, state, or logs;
+- starts and periodically samples the real 21-day Paper observer;
+- creates a PostgreSQL backup, performs the isolated restore/projection drill,
+  then executes the bounded PostgreSQL/RabbitMQ/worker restart faults;
+- assembles the fault matrix only from identity-matched scenario evidence;
+- issues the Paper certificate only after every required artifact passes.
+
+Initialize a campaign only after the intended release is deployed and frozen:
+
+```bash
+python scripts/run_post_migration_certification_campaign.py init \
+  --config web/runtime/audit/issue61-campaign.json \
+  --state web/runtime/audit/issue61-campaign-state.json \
+  --confirm RUN_POST_MIGRATION_CERTIFICATION_CAMPAIGN \
+  --release-id <CURRENT_RELEASE_ID> \
+  --data-release-id <DATA_RELEASE_ID> \
+  --data-release-manifest-sha256 <64_HEX_SHA256> \
+  --paper-account-id <PAPER_ACCOUNT_ID> \
+  --release-convergence web/runtime/audit/release-convergence.json \
+  --local-data-certification web/runtime/audit/local-data-certification.json \
+  --supply-chain web/runtime/audit/supply-chain.json \
+  --scenario duplicate_delivery=<REAL_EVIDENCE_PATH> \
+  --scenario runner_timeout_cancel=<REAL_EVIDENCE_PATH> \
+  --scenario disk_full=<REAL_EVIDENCE_PATH> \
+  --scenario object_corruption=<REAL_EVIDENCE_PATH> \
+  --scenario lease_expiry_stale_worker=<REAL_EVIDENCE_PATH> \
+  --scenario missing_pit_benchmark=<REAL_EVIDENCE_PATH> \
+  --scenario notification_failure=<REAL_EVIDENCE_PATH>
+```
+
+`LEAN_ALERT_WEBHOOK_URL` and any related authentication remain in the process
+environment or the existing secret store. They must not be passed as campaign
+arguments or written into the JSON config. Launch and inspect the hidden
+background process with:
+
+```bash
+python scripts/run_post_migration_certification_campaign.py launch \
+  --config web/runtime/audit/issue61-campaign.json \
+  --state web/runtime/audit/issue61-campaign-state.json
+
+python scripts/run_post_migration_certification_campaign.py status \
+  --state web/runtime/audit/issue61-campaign-state.json
+```
+
+The campaign stays `WAITING_PREREQUISITES` while the local API is unavailable.
+Release identity drift blocks it. An interrupted backup/restore/fault step is
+marked `INDETERMINATE` and is never automatically repeated; create a new
+campaign after investigating the partial operation. Missing dedicated evidence
+for the seven non-service fault scenarios remains a machine-readable blocker.
+The automated restart activity currently targets the real Linux/Docker Compose
+stack only. A Windows-native certificate still requires a separately implemented
+and independently executed Windows-native service-fault campaign; Linux evidence
+is never inherited across runtimes.

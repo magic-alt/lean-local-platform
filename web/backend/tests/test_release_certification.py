@@ -119,11 +119,17 @@ def _evidence(tmp_path: Path) -> dict[str, Path]:
         "scenarios": {
             "database_short_disconnect": {
                 "passed": True,
+                "gitSha": GIT_SHA,
+                "releaseGitSha": GIT_SHA,
+                "releaseId": "release-test",
                 "trace": {"service": "postgres"},
                 "invariants": {"stable": True},
             },
             "duplicate_delivery": {
                 "passed": True,
+                "gitSha": GIT_SHA,
+                "releaseGitSha": GIT_SHA,
+                "releaseId": "release-test",
                 "trace": {"deliveryCount": 2},
                 "invariants": {"logicalExecutionCount": 1},
             },
@@ -287,6 +293,8 @@ def test_fault_matrix_fails_closed_until_every_required_scenario_has_evidence(tm
         tmp_path / "duplicate.json",
         {
             "passed": True,
+            "gitSha": GIT_SHA,
+            "releaseId": "release-test",
             "trace": {"deliveries": 2},
             "invariants": {"logicalExecutions": 1},
         },
@@ -297,5 +305,91 @@ def test_fault_matrix_fails_closed_until_every_required_scenario_has_evidence(tm
         scenario_paths=[("duplicate_delivery", duplicate)],
     )
     assert passed["passed"] is True
+    assert passed["schemaVersion"] == 2
     assert passed["releaseId"] == "release-test"
     assert passed["releaseGitSha"] == GIT_SHA
+
+
+def test_fault_matrix_rejects_cross_release_and_duplicate_scenario_evidence(tmp_path):
+    policy = _write(
+        tmp_path / "fault-policy.json",
+        {
+            "policyId": "fault-test",
+            "requiredFaultScenarios": [
+                "database_short_disconnect",
+                "duplicate_delivery",
+            ],
+        },
+    )
+    service = _write(
+        tmp_path / "service.json",
+        {
+            "status": "passed",
+            "passed": True,
+            "gitSha": GIT_SHA,
+            "releaseGitSha": GIT_SHA,
+            "releaseId": "release-test",
+            "scenarios": {
+                "database_short_disconnect": {
+                    "passed": True,
+                    "trace": {"service": "postgres"},
+                    "invariants": {"stable": True},
+                }
+            },
+        },
+    )
+    stale = _write(
+        tmp_path / "stale.json",
+        {
+            "passed": True,
+            "gitSha": "f" * 40,
+            "releaseId": "stale-release",
+            "trace": {"deliveries": 2},
+            "invariants": {"logicalExecutions": 1},
+        },
+    )
+    duplicate = _write(
+        tmp_path / "duplicate-service.json",
+        {
+            "passed": True,
+            "gitSha": GIT_SHA,
+            "releaseId": "release-test",
+            "trace": {"service": "postgres"},
+            "invariants": {"stable": True},
+        },
+    )
+
+    matrix = build_fault_matrix.build_matrix(
+        policy_path=policy,
+        service_restart_path=service,
+        scenario_paths=[
+            ("duplicate_delivery", stale),
+            ("database_short_disconnect", duplicate),
+        ],
+    )
+
+    assert matrix["passed"] is False
+    assert matrix["duplicateScenarios"] == ["database_short_disconnect"]
+    assert any(item["code"] == "identity_mismatch" for item in matrix["identityErrors"])
+    assert matrix["scenarios"]["database_short_disconnect"]["source"] == str(service)
+
+
+def test_release_bundle_rejects_unbound_fault_scenario_identity(tmp_path, monkeypatch):
+    policy = _policy(tmp_path)
+    evidence = _evidence(tmp_path)
+    matrix = json.loads(evidence["faultMatrix"].read_text(encoding="utf-8"))
+    matrix["scenarios"]["duplicate_delivery"].pop("releaseId")
+    matrix["scenarios"]["duplicate_delivery"]["gitSha"] = "f" * 40
+    _write(evidence["faultMatrix"], matrix)
+    monkeypatch.setattr(release_certification, "_git_sha", lambda _root: GIT_SHA)
+
+    bundle = release_certification.build_bundle(
+        root=tmp_path,
+        policy_path=policy,
+        profile="backtest",
+        runtime="linux-docker",
+        evidence_paths=evidence,
+    )
+
+    assert bundle["certified"] is False
+    assert "fault_scenario_identity_mismatch" in _codes(bundle)

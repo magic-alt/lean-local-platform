@@ -28,7 +28,12 @@ from app.services.alerts import delivery_max_attempts, emit_alert  # noqa: E402
 
 def _safe_endpoint(url: str) -> str:
     parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    hostname = parts.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname if parts.port is None else f"{hostname}:{parts.port}"
+    redacted_path = "/<REDACTED>" if parts.path not in {"", "/"} else parts.path
+    return urlunsplit((parts.scheme, netloc, redacted_path, "", ""))
 
 
 def _api_token() -> str:
